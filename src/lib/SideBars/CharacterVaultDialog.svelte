@@ -1,0 +1,702 @@
+<script lang="ts">
+    import {
+        ArchiveIcon,
+        CheckIcon,
+        CopyIcon,
+        FolderIcon,
+        FolderOpenIcon,
+        ImageIcon,
+        PinIcon,
+        SearchIcon,
+        UserRoundIcon,
+    } from '@lucide/svelte'
+    import { v4 } from 'uuid'
+    import ShDialog from '../UI/GUI/ShDialog.svelte'
+    import ShButton from '../UI/GUI/ShButton.svelte'
+    import SolarBoldIcon from '../UI/Icons/SolarBoldIcon.svelte'
+    import { DBState, selectedCharID } from 'src/ts/stores.svelte'
+    import type { folder } from 'src/ts/storage/database.svelte'
+    import {
+        createCharacterVaultFolder,
+        createCharacterVaultClones,
+        applyCharacterVaultClones,
+        deleteCharacterVaultFolder,
+        getCharacterVaultQuickAccess,
+        moveCharactersToVaultFolder,
+        sortCharacterVaultCharacters,
+        trashCharacterVaultCharacters,
+        toggleCharacterVaultQuickAccess,
+        type CharacterVaultSortDirection,
+        type CharacterVaultSortKey,
+        type CharacterVaultShortcut,
+    } from 'src/ts/characterVault'
+    import {
+        requestImmediateSave,
+        forageStorage,
+        getFileSrc,
+        requiresFullEncoderReload,
+        saveAsset,
+    } from 'src/ts/globalApi.svelte'
+    import { selectSingleFile } from 'src/ts/util'
+    import { getCharImage } from 'src/ts/characters'
+    import { alertConfirm, alertInput } from 'src/ts/alert'
+    import {
+        completeMemoryWikiFork,
+        forkMemoryWiki,
+    } from 'src/ts/risubard/memoryWikiFork'
+
+    interface Props {
+        open: boolean
+        onOpenChange(open: boolean): void
+        onSelectCharacter?(index: number): void
+    }
+
+    let { open, onOpenChange, onSelectCharacter }: Props = $props()
+    let query = $state('')
+    let activeScope = $state('all')
+    let selectedIds = $state<string[]>([])
+    let moveTarget = $state('__unfiled__')
+    let folderSort = $state<'manual' | 'name' | 'count'>('manual')
+    let characterSort = $state<CharacterVaultSortKey>('name')
+    let characterSortDirection = $state<CharacterVaultSortDirection>('asc')
+    let coverCharacterId = $state('')
+    let notice = $state('')
+    let revision = $state(0)
+    let cloning = $state(false)
+    const imageCache = new Map<string, Promise<string | null>>()
+
+    let folders = $derived.by(() => {
+        revision
+        const result = DBState.db.characterOrder.filter(
+            (entry): entry is folder => typeof entry !== 'string'
+        )
+        if (folderSort === 'name') {
+            return [...result].sort((a, b) => a.name.localeCompare(b.name))
+        }
+        if (folderSort === 'count') {
+            return [...result].sort((a, b) =>
+                b.data.length - a.data.length || a.name.localeCompare(b.name)
+            )
+        }
+        return result
+    })
+
+    let activeFolder = $derived.by(() => {
+        revision
+        return folders.find((entry) => entry.id === activeScope) ?? null
+    })
+
+    let quickKeys = $derived.by(() => {
+        revision
+        return new Set(getCharacterVaultQuickAccess(DBState.db).map((entry) =>
+            `${entry.kind}:${entry.id}`
+        ))
+    })
+
+    let visibleCharacters = $derived.by(() => {
+        revision
+        const normalizedQuery = query.trim().toLocaleLowerCase()
+        const unfiled = new Set(DBState.db.characterOrder.filter(
+            (entry): entry is string => typeof entry === 'string'
+        ))
+        const folderCharacters = activeFolder ? new Set(activeFolder.data) : null
+        const items = DBState.db.characters
+            .map((character, index) => ({ character, index }))
+            .filter(({ character }) => {
+                if (character.trashTime) return false
+                if (activeScope === '__unfiled__' && !unfiled.has(character.chaId)) {
+                    return false
+                }
+                if (folderCharacters && !folderCharacters.has(character.chaId)) {
+                    return false
+                }
+                return !normalizedQuery
+                    || character.name.toLocaleLowerCase().includes(normalizedQuery)
+            })
+        const itemsById = new Map(items.map((item) => [item.character.chaId, item]))
+        return sortCharacterVaultCharacters(
+            items.map((item) => item.character),
+            characterSort,
+            characterSortDirection
+        ).map((character) => itemsById.get(character.chaId)!)
+    })
+
+    function commit(message: string) {
+        revision += 1
+        notice = message
+        void requestImmediateSave()
+    }
+
+    function toggleSelected(id: string) {
+        selectedIds = selectedIds.includes(id)
+            ? selectedIds.filter((value) => value !== id)
+            : [...selectedIds, id]
+    }
+
+    function toggleAllVisible() {
+        const visibleIds = visibleCharacters.map((item) => item.character.chaId)
+        const visibleSet = new Set(visibleIds)
+        const allSelected = visibleIds.length > 0
+            && visibleIds.every((id) => selectedIds.includes(id))
+        selectedIds = allSelected
+            ? selectedIds.filter((id) => !visibleSet.has(id))
+            : [...new Set([...selectedIds, ...visibleIds])]
+    }
+
+    function toggleQuick(shortcut: CharacterVaultShortcut, label: string) {
+        const added = toggleCharacterVaultQuickAccess(DBState.db, shortcut)
+        commit(`${label} · 퀵 인벤토리${added ? '에 추가됨' : '에서 제거됨'}`)
+    }
+
+    function moveSelected() {
+        if (selectedIds.length === 0) return
+        moveCharactersToVaultFolder(
+            DBState.db,
+            selectedIds,
+            moveTarget === '__unfiled__' ? null : moveTarget
+        )
+        const count = selectedIds.length
+        selectedIds = []
+        activeScope = moveTarget === '__unfiled__' ? '__unfiled__' : moveTarget
+        commit(`${count}개 캐릭터 이동 완료`)
+    }
+
+    async function createFolder() {
+        const name = await alertInput('새 폴더 이름', [], '새 폴더')
+        if (!name) return
+        const created = createCharacterVaultFolder(DBState.db, name, v4())
+        if (!created) return
+        activeScope = created.id
+        coverCharacterId = ''
+        commit(`${created.name} 폴더 생성 완료`)
+    }
+
+    function renameActiveFolder(event: Event) {
+        if (!activeFolder) return
+        const name = (event.currentTarget as HTMLInputElement).value.trim()
+        if (!name || name === activeFolder.name) return
+        activeFolder.name = name
+        commit('폴더 이름 변경 완료')
+    }
+
+    function recolorActiveFolder(color: string) {
+        if (!activeFolder || !color) return
+        activeFolder.color = color
+        commit('폴더 색상 변경 완료')
+    }
+
+    function useCharacterCover() {
+        if (!activeFolder || !coverCharacterId) return
+        const character = DBState.db.characters.find((entry) =>
+            entry.chaId === coverCharacterId
+        )
+        if (!character?.image) return
+        activeFolder.imgFile = character.image
+        activeFolder.img = ''
+        commit(`${character.name} 이미지를 폴더 커버로 지정`)
+    }
+
+    async function uploadFolderCover() {
+        if (!activeFolder) return
+        const file = await selectSingleFile(['png', 'jpg', 'jpeg', 'webp', 'gif'])
+        if (!file) return
+        const stored = await saveAsset(file.data)
+        activeFolder.imgFile = stored
+        activeFolder.img = await getFileSrc(stored)
+        commit('폴더 커버 업로드 완료')
+    }
+
+    async function deleteActiveFolder() {
+        if (!activeFolder) return
+        const name = activeFolder.name
+        if (!await alertConfirm(`${name} 폴더를 삭제할까요? 캐릭터는 미분류로 이동합니다.`)) {
+            return
+        }
+        deleteCharacterVaultFolder(DBState.db, activeFolder.id)
+        activeScope = '__unfiled__'
+        coverCharacterId = ''
+        commit(`${name} 폴더 삭제 완료`)
+    }
+
+    async function trashSelected() {
+        const count = selectedIds.length
+        if (count === 0) return
+        if (!await alertConfirm(`선택한 ${count}명의 캐릭터를 휴지통으로 이동할까요?`)) {
+            return
+        }
+        const trashed = trashCharacterVaultCharacters(DBState.db, selectedIds)
+        if (trashed === 0) return
+        selectedIds = []
+        selectedCharID.set(-1)
+        requiresFullEncoderReload.state = true
+        commit(`${trashed}명 캐릭터를 휴지통으로 이동`)
+    }
+
+    async function cloneSelected(withChats: boolean) {
+        if (selectedIds.length === 0 || cloning) return
+        cloning = true
+        notice = ''
+        const previousCharacters = [...DBState.db.characters]
+        const previousOrder = DBState.db.characterOrder
+        const staged: {
+            characterId: string
+            destinationChatId: string
+            forkToken: string
+        }[] = []
+        let applied = false
+        try {
+            if (withChats) {
+                for (const source of DBState.db.characters) {
+                    if (!selectedIds.includes(source.chaId)) continue
+                    for (let index = 0; index < source.chats.length; index += 1) {
+                        if (source.chats[index]?._placeholder) {
+                            const { ensureChatHydrated } = await import(
+                                'src/ts/storage/chatStorage'
+                            )
+                            await ensureChatHydrated(source.chats, index, source.chaId)
+                        }
+                        if (source.chats[index]?._placeholder) {
+                            throw new Error(`${source.name}의 챗을 불러오지 못했습니다.`)
+                        }
+                    }
+                }
+            }
+            const plans = createCharacterVaultClones(DBState.db, selectedIds, {
+                withChats,
+                createId: v4,
+            })
+            for (const plan of plans) {
+                for (const chat of plan.chatForks) {
+                    const receipt = await forkMemoryWiki({
+                        characterId: plan.sourceCharacterId,
+                        destinationCharacterId: plan.clone.chaId,
+                        sourceChatId: chat.sourceChatId,
+                        destinationChatId: chat.destinationChatId,
+                        mode: 'copy',
+                        fetchImpl: fetch,
+                        createAuth: () => forageStorage.createAuth(),
+                    })
+                    staged.push({
+                        characterId: plan.clone.chaId,
+                        destinationChatId: chat.destinationChatId,
+                        forkToken: receipt.forkToken,
+                    })
+                }
+            }
+            applyCharacterVaultClones(DBState.db, plans)
+            applied = true
+            await requestImmediateSave({
+                forceFullWrite: true,
+                rejectOnFailure: true,
+            })
+            const finalized = await Promise.allSettled(staged.map((fork) =>
+                completeMemoryWikiFork({
+                    ...fork,
+                    action: 'finalize',
+                    fetchImpl: fetch,
+                    createAuth: () => forageStorage.createAuth(),
+                })
+            ))
+            const finalizeFailures = finalized.filter((result) =>
+                result.status === 'rejected'
+            ).length
+            selectedIds = []
+            revision += 1
+            requiresFullEncoderReload.state = true
+            notice = `${plans.length}명 캐릭터 복제 완료${
+                finalizeFailures > 0
+                    ? ` · BardWiki 마무리 실패 ${finalizeFailures}건`
+                    : ''
+            }`
+        }
+        catch (cause) {
+            if (applied) {
+                DBState.db.characters = previousCharacters
+                DBState.db.characterOrder = previousOrder
+            }
+            await Promise.allSettled(staged.map((fork) =>
+                completeMemoryWikiFork({
+                    ...fork,
+                    action: 'discard',
+                    fetchImpl: fetch,
+                    createAuth: () => forageStorage.createAuth(),
+                })
+            ))
+            if (applied) void requestImmediateSave({ forceFullWrite: true })
+            notice = `캐릭터 복제 실패: ${cause instanceof Error
+                ? cause.message
+                : String(cause)}`
+        }
+        finally {
+            cloning = false
+        }
+    }
+
+    function openCharacter(index: number) {
+        onSelectCharacter?.(index)
+        onOpenChange(false)
+    }
+
+    function characterImage(id: string, image: string): Promise<string | null> {
+        const key = `${id}:${image}`
+        const cached = imageCache.get(key)
+        if (cached) return cached
+        const request = getCharImage(image, 'plain')
+        imageCache.set(key, request)
+        return request
+    }
+</script>
+
+<ShDialog
+    {open}
+    {onOpenChange}
+    closeOnEscape
+    size="xl"
+    tier="base"
+    contentClass="character-vault-dialog"
+    bodyClass="character-vault-body"
+    contentStyle="max-width:min(72rem,calc(100vw - 2rem));height:min(48rem,calc(100vh - 2rem));"
+>
+    {#snippet title()}
+        <span class="vault-title"><ArchiveIcon size={19} /> Character Vault</span>
+    {/snippet}
+    {#snippet description()}
+        전체 캐릭터를 보관하고 정리합니다. 사이드바에는 퀵 인벤토리만 표시됩니다.
+    {/snippet}
+
+    <div class="vault-shell">
+        <aside class="vault-rail" aria-label="캐릭터 폴더">
+            <div class="rail-heading">
+                <span>보관 위치</span>
+                <div class="rail-actions">
+                    <button
+                        type="button"
+                        aria-label="새 폴더 만들기"
+                        onclick={() => void createFolder()}
+                    ><SolarBoldIcon name="add-folder" size={15} /></button>
+                    <button
+                        type="button"
+                        aria-label="선택한 폴더 삭제"
+                        disabled={!activeFolder}
+                        onclick={() => void deleteActiveFolder()}
+                    ><SolarBoldIcon name="remove-folder" size={15} /></button>
+                </div>
+            </div>
+            <select class="folder-sort" aria-label="폴더 정렬" bind:value={folderSort}>
+                <option value="manual">기본순</option>
+                <option value="name">이름순</option>
+                <option value="count">개수순</option>
+            </select>
+            <button
+                type="button"
+                class:active={activeScope === 'all'}
+                onclick={() => activeScope = 'all'}
+            >
+                <ArchiveIcon size={15} /><span>전체 캐릭터</span>
+                <small>{DBState.db.characters.length}</small>
+            </button>
+            <button
+                type="button"
+                class:active={activeScope === '__unfiled__'}
+                onclick={() => activeScope = '__unfiled__'}
+            >
+                <UserRoundIcon size={15} /><span>미분류</span>
+                <small>{DBState.db.characterOrder.filter((entry) => typeof entry === 'string').length}</small>
+            </button>
+            <div class="folder-list">
+                {#each folders as folderEntry (folderEntry.id)}
+                    <div class="folder-row" style={`--folder-accent:${folderEntry.color || 'var(--color-borderc)'}`}>
+                        <button
+                            type="button"
+                            class:active={activeScope === folderEntry.id}
+                            aria-label={`${folderEntry.name} 폴더 열기`}
+                            onclick={() => {
+                                activeScope = folderEntry.id
+                                coverCharacterId = folderEntry.data[0] ?? ''
+                            }}
+                        >
+                            {#if activeScope === folderEntry.id}<FolderOpenIcon size={15} />
+                            {:else}<FolderIcon size={15} />{/if}
+                            <span>{folderEntry.name}</span><small>{folderEntry.data.length}</small>
+                        </button>
+                        <button
+                            type="button"
+                            class="folder-pin"
+                            class:pinned={quickKeys.has(`folder:${folderEntry.id}`)}
+                            aria-label={`${folderEntry.name} 퀵 인벤토리 전환`}
+                            aria-pressed={quickKeys.has(`folder:${folderEntry.id}`)}
+                            onclick={() => toggleQuick(
+                                { kind: 'folder', id: folderEntry.id }, folderEntry.name
+                            )}
+                        ><PinIcon size={12} /></button>
+                    </div>
+                {/each}
+            </div>
+        </aside>
+
+        <main class="vault-main">
+            <div class="vault-toolbar">
+                <label class="vault-search">
+                    <SearchIcon size={16} />
+                    <input
+                        aria-label="캐릭터 검색"
+                        bind:value={query}
+                        placeholder="이름으로 캐릭터 찾기"
+                    />
+                </label>
+                <div class="character-sort">
+                    <select
+                        aria-label="캐릭터 정렬 기준"
+                        value={characterSort}
+                        onchange={(event) => characterSort =
+                            (event.currentTarget as HTMLSelectElement).value as CharacterVaultSortKey}
+                    >
+                        <option value="name">이름</option>
+                        <option value="lastInteraction">마지막 사용</option>
+                        <option value="creationDate">생성/임포트</option>
+                    </select>
+                    <button
+                        type="button"
+                        aria-label={`정렬 방향: ${characterSortDirection === 'asc' ? '오름차' : '내림차'}`}
+                        onclick={() => characterSortDirection = characterSortDirection === 'asc'
+                            ? 'desc'
+                            : 'asc'}
+                    >{characterSortDirection === 'asc' ? '오름차' : '내림차'}</button>
+                </div>
+                <ShButton
+                    size="xs"
+                    variant="secondary"
+                    aria-label="현재 목록 전체 선택"
+                    onclick={toggleAllVisible}
+                    disabled={visibleCharacters.length === 0}
+                ><CheckIcon /> 전체 선택</ShButton>
+                <span>{visibleCharacters.length}명</span>
+            </div>
+
+            {#if activeFolder}
+                <section class="folder-editor" aria-label="활성 폴더 편집">
+                    <label>
+                        <span>폴더 이름</span>
+                        <input
+                            aria-label="폴더 이름"
+                            value={activeFolder.name}
+                            onchange={renameActiveFolder}
+                        />
+                    </label>
+                    <label>
+                        <span>강조색</span>
+                        <div class="color-line">
+                            {#each ['red','yellow','green','blue','indigo','purple','pink','default'] as color}
+                                <button
+                                    type="button"
+                                    class="color-chip color-{color}"
+                                    class:active={activeFolder.color === color}
+                                    aria-label={`${color} 폴더 색상`}
+                                    onclick={() => recolorActiveFolder(color)}
+                                ></button>
+                            {/each}
+                            <input
+                                type="color"
+                                aria-label="폴더 사용자 지정 색상"
+                                value={activeFolder.color.startsWith('#') ? activeFolder.color : '#8b6a34'}
+                                oninput={(event) => recolorActiveFolder(
+                                    (event.currentTarget as HTMLInputElement).value
+                                )}
+                            />
+                        </div>
+                    </label>
+                    <label class="cover-control">
+                        <span>커버</span>
+                        <select bind:value={coverCharacterId} aria-label="폴더 커버 캐릭터">
+                            <option value="">캐릭터 선택</option>
+                            {#each activeFolder.data as id}
+                                {@const character = DBState.db.characters.find((entry) => entry.chaId === id)}
+                                {#if character}<option value={id}>{character.name}</option>{/if}
+                            {/each}
+                        </select>
+                        <ShButton size="xs" variant="secondary" onclick={useCharacterCover} disabled={!coverCharacterId}>
+                            <ImageIcon /> 캐릭터 이미지
+                        </ShButton>
+                        <ShButton size="xs" variant="secondary" onclick={() => void uploadFolderCover()}>
+                            업로드
+                        </ShButton>
+                    </label>
+                </section>
+            {/if}
+
+            <div class="character-grid" aria-label="캐릭터 목록">
+                {#each visibleCharacters as item (item.character.chaId)}
+                    <article class:selected={selectedIds.includes(item.character.chaId)}>
+                        <div class="portrait">
+                            {#await characterImage(
+                                item.character.chaId,
+                                item.character.image ?? ''
+                            )}
+                                <UserRoundIcon size={24} />
+                            {:then image}
+                                {#if image}<img src={image} alt="" />
+                                {:else}<UserRoundIcon size={24} />{/if}
+                            {/await}
+                            <button
+                                type="button"
+                                class="select-character"
+                                aria-label={`${item.character.name} 선택`}
+                                aria-pressed={selectedIds.includes(item.character.chaId)}
+                                onclick={() => toggleSelected(item.character.chaId)}
+                            >
+                                {#if selectedIds.includes(item.character.chaId)}<CheckIcon size={14} />{/if}
+                            </button>
+                            <button
+                                type="button"
+                                class="pin-character"
+                                class:pinned={quickKeys.has(`character:${item.character.chaId}`)}
+                                aria-label={`${item.character.name} 퀵 인벤토리 전환`}
+                                aria-pressed={quickKeys.has(`character:${item.character.chaId}`)}
+                                onclick={() => toggleQuick(
+                                    { kind: 'character', id: item.character.chaId },
+                                    item.character.name
+                                )}
+                            ><PinIcon size={13} /></button>
+                            <button
+                                type="button"
+                                class="open-character"
+                                aria-label={`${item.character.name} 열기`}
+                                onclick={() => openCharacter(item.index)}
+                            ><SolarBoldIcon name="play-circle" size={16} /></button>
+                        </div>
+                        <div class="character-caption">
+                            <strong>{item.character.name}</strong>
+                        </div>
+                    </article>
+                {:else}
+                    <div class="empty-vault">
+                        <SearchIcon size={22} /> 조건에 맞는 캐릭터가 없습니다.
+                    </div>
+                {/each}
+            </div>
+
+            {#if selectedIds.length > 0}
+                <div class="bulk-dock">
+                    <strong>{selectedIds.length}명 선택</strong>
+                    <select
+                        aria-label="선택 캐릭터 이동"
+                        value={moveTarget}
+                        onchange={(event) => moveTarget =
+                            (event.currentTarget as HTMLSelectElement).value}
+                    >
+                        <option value="__unfiled__">미분류로 이동</option>
+                        {#each folders as folderEntry}
+                            <option value={folderEntry.id}>{folderEntry.name}</option>
+                        {/each}
+                    </select>
+                    <ShButton size="sm" variant="primary" aria-label="선택 항목 이동" onclick={moveSelected}>
+                        선택 항목 이동
+                    </ShButton>
+                    <ShButton
+                        size="sm"
+                        variant="secondary"
+                        aria-label="선택 캐릭터 챗 포함 복제"
+                        disabled={cloning}
+                        onclick={() => void cloneSelected(true)}
+                    ><CopyIcon size={15} /> 챗 포함 복제</ShButton>
+                    <ShButton
+                        size="sm"
+                        variant="secondary"
+                        aria-label="선택 캐릭터 챗 제외 복제"
+                        disabled={cloning}
+                        onclick={() => void cloneSelected(false)}
+                    ><CopyIcon size={15} /> 챗 제외 복제</ShButton>
+                    <ShButton
+                        size="sm"
+                        variant="destructive"
+                        aria-label="선택 캐릭터 삭제"
+                        onclick={() => void trashSelected()}
+                    >
+                        <SolarBoldIcon name="trash-bin-trash" size={15} /> 휴지통
+                    </ShButton>
+                </div>
+            {/if}
+        </main>
+    </div>
+    <p class="vault-notice" aria-live="polite">{notice}</p>
+</ShDialog>
+
+<style>
+    :global(.character-vault-dialog) {
+        overflow: hidden;
+        background:
+            linear-gradient(145deg, color-mix(in srgb, var(--color-darkbg) 94%, #b79255 6%), var(--color-darkbg));
+    }
+    :global(.character-vault-body) { min-height: 0; flex: 1; }
+    .vault-title { display: inline-flex; align-items: center; gap: .45rem; font-family: Georgia, serif; letter-spacing: .02em; }
+    .vault-shell { display: grid; grid-template-columns: 13.5rem minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; border: 1px solid var(--color-darkborderc); border-radius: .7rem; }
+    .vault-rail { display: flex; min-height: 0; flex-direction: column; gap: .25rem; padding: .65rem; border-right: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-darkbg) 87%, #b79255 13%); }
+    .rail-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: .35rem; color: var(--color-textcolor2); font-size: .66rem; letter-spacing: .12em; text-transform: uppercase; }
+    .rail-actions { display: flex; gap: .25rem; }
+    .rail-actions button { display: grid; width: 1.75rem; height: 1.75rem; place-items: center; border: 1px solid var(--color-darkborderc); border-radius: .35rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); color: var(--color-textcolor2); }
+    .rail-actions button:hover:not(:disabled) { border-color: var(--color-borderc); color: var(--color-textcolor); }
+    .rail-actions button:disabled { cursor: not-allowed; opacity: .35; }
+    .folder-sort { width: 100%; margin-bottom: .2rem; padding: .3rem .4rem; border: 1px solid var(--color-darkborderc); border-radius: .3rem; background: var(--color-darkbg); color: var(--color-textcolor2); font-size: .65rem; }
+    .vault-rail > button, .folder-row > button:first-child { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .42rem; padding: .48rem .5rem; border-radius: .42rem; color: var(--color-textcolor2); text-align: left; font-size: .76rem; transition: background 120ms ease, color 120ms ease; }
+    .vault-rail button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vault-rail button small { font: 600 .64rem ui-monospace, monospace; opacity: .7; }
+    .vault-rail button:hover, .vault-rail button.active { color: var(--color-textcolor); background: color-mix(in srgb, var(--color-selected) 75%, transparent); }
+    .folder-list { min-height: 0; overflow-y: auto; padding-top: .2rem; }
+    .folder-row { position: relative; display: flex; align-items: center; border-left: 2px solid var(--folder-accent); }
+    .folder-pin { flex: none; padding: .25rem; border-radius: .3rem; color: var(--color-textcolor2); opacity: .45; }
+    .folder-pin:hover, .folder-pin.pinned { color: #d6ae69; opacity: 1; }
+    .vault-main { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; background: color-mix(in srgb, var(--color-darkbg) 97%, black); }
+    .vault-toolbar { display: flex; align-items: center; gap: .7rem; padding: .7rem; border-bottom: 1px solid var(--color-darkborderc); }
+    .vault-toolbar > span { color: var(--color-textcolor2); font: 600 .72rem ui-monospace, monospace; }
+    .vault-search { display: flex; min-width: 0; flex: 1; align-items: center; gap: .45rem; padding: .45rem .55rem; border: 1px solid var(--color-darkborderc); border-radius: .48rem; background: color-mix(in srgb, var(--color-darkbg) 90%, black); color: var(--color-textcolor2); }
+    .vault-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--color-textcolor); font-size: .8rem; }
+    .character-sort { display: flex; height: 2rem; overflow: hidden; border: 1px solid var(--color-darkborderc); border-radius: .4rem; background: var(--color-darkbg); }
+    .character-sort select, .character-sort button { border: 0; background: transparent; color: var(--color-textcolor2); font-size: .7rem; }
+    .character-sort select { padding: 0 .4rem; }
+    .character-sort button { min-width: 3.5rem; padding: 0 .45rem; border-left: 1px solid var(--color-darkborderc); }
+    .character-sort button:hover { color: var(--color-textcolor); background: color-mix(in srgb, var(--color-selected) 45%, transparent); }
+    .folder-editor { display: grid; grid-template-columns: minmax(8rem, 1fr) auto minmax(15rem, 1.3fr); align-items: end; gap: .55rem; padding: .55rem .7rem; border-bottom: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-selected) 35%, transparent); }
+    .folder-editor label { display: grid; gap: .25rem; color: var(--color-textcolor2); font-size: .64rem; }
+    .folder-editor input:not([type=color]), .folder-editor select, .bulk-dock select { min-width: 0; height: 2rem; padding: 0 .45rem; border: 1px solid var(--color-darkborderc); border-radius: .35rem; background: var(--color-darkbg); color: var(--color-textcolor); font-size: .72rem; }
+    .color-line { display: flex; align-items: center; gap: .22rem; }
+    .color-chip { width: .95rem; height: .95rem; border: 1px solid rgb(255 255 255 / .18); border-radius: 50%; }
+    .color-chip.active { outline: 2px solid var(--color-textcolor); outline-offset: 1px; }
+    .color-red { background:#b91c1c }.color-yellow { background:#a16207 }.color-green { background:#15803d }.color-blue { background:#1d4ed8 }.color-indigo { background:#4338ca }.color-purple { background:#7e22ce }.color-pink { background:#be185d }.color-default { background:#64748b }
+    input[type=color] { width: 1.25rem; height: 1.25rem; padding: 0; border: 0; background: transparent; }
+    .cover-control { grid-template-columns: minmax(6rem, 1fr) auto auto; }
+    .cover-control > span { grid-column: 1 / -1; }
+    .character-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: repeat(auto-fill, minmax(12rem, 13rem)); align-content: start; gap: .65rem; overflow-y: auto; padding: .75rem; padding-bottom: 5rem; }
+    article { overflow: hidden; border: 1px solid var(--color-darkborderc); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); transition: border-color 120ms ease, transform 120ms ease; }
+    article:hover { transform: translateY(-1px); border-color: var(--color-borderc); }
+    article.selected { border-color: #d6ae69; box-shadow: inset 0 0 0 1px rgb(214 174 105 / .35); }
+    .portrait { position: relative; display: grid; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--color-selected) 45%, var(--color-darkbg)); color: var(--color-textcolor2); }
+    .portrait img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+    .select-character, .pin-character, .open-character { position: absolute; display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border: 1px solid rgb(255 255 255 / .22); border-radius: .38rem; background: rgb(10 10 10 / .62); color: white; backdrop-filter: blur(6px); }
+    .select-character { left: .38rem; }
+    .select-character, .pin-character { top: .38rem; }
+    .pin-character, .open-character { right: .38rem; }
+    .open-character { bottom: .38rem; }
+    .open-character:hover { border-color: #d6ae69; color: #f0c979; }
+    .select-character[aria-pressed=true] { border-color: #d6ae69; background: #8b6a34; }
+    .pin-character.pinned { color: #f0c979; }
+    .character-caption { padding: .5rem .55rem; }
+    .character-caption strong { display: block; overflow: hidden; color: var(--color-textcolor); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+    .empty-vault { grid-column: 1 / -1; display: flex; min-height: 12rem; align-items: center; justify-content: center; gap: .45rem; color: var(--color-textcolor2); font-size: .8rem; }
+    .bulk-dock { position: absolute; right: .75rem; bottom: .75rem; left: .75rem; display: flex; align-items: center; gap: .5rem; padding: .55rem; border: 1px solid color-mix(in srgb, #d6ae69 45%, var(--color-darkborderc)); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 91%, #b79255 9%); box-shadow: 0 .9rem 2.4rem rgb(0 0 0 / .36); }
+    .bulk-dock strong { color: var(--color-textcolor); font-size: .74rem; white-space: nowrap; }
+    .bulk-dock select { width: 9rem; }
+    .vault-notice { min-height: 1rem; margin: 0; color: var(--color-textcolor2); font-size: .7rem; }
+    @media (max-width: 720px) {
+        :global(.character-vault-dialog) { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh; border-radius: 0; }
+        .vault-shell { grid-template-columns: 1fr; }
+        .vault-rail { max-height: 10rem; border-right: 0; border-bottom: 1px solid var(--color-darkborderc); }
+        .folder-list { display: flex; gap: .25rem; overflow-x: auto; }
+        .folder-row { min-width: 9rem; }
+        .folder-editor { grid-template-columns: 1fr 1fr; }
+        .cover-control { grid-column: 1 / -1; }
+        .vault-toolbar { flex-wrap: wrap; }
+        .vault-search { flex-basis: 100%; }
+        .bulk-dock { flex-wrap: wrap; }
+        .character-grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); }
+    }
+</style>

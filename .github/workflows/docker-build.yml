@@ -1,0 +1,290 @@
+name: Build and publish Docker image
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Lowercase image name
+        id: lower
+        run: echo "image_name=${IMAGE_NAME,,}" >> $GITHUB_OUTPUT
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Platform slug
+        id: slug
+        run: echo "pair=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> $GITHUB_OUTPUT
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ steps.slug.outputs.pair }}
+          cache-to: type=gha,scope=${{ steps.slug.outputs.pair }},mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ steps.slug.outputs.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Lowercase image name
+        id: lower
+        run: echo "image_name=${IMAGE_NAME,,}" >> $GITHUB_OUTPUT
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v(.+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            MINOR="${VERSION%.*}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "minor=$MINOR" >> $GITHUB_OUTPUT
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        shell: bash
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}"
+          TAGS=""
+          if [[ "${{ steps.version.outputs.is_tag }}" == "true" ]]; then
+            TAGS="-t ${IMAGE}:latest"
+            TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.version }}"
+            TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.minor }}"
+          else
+            TAGS="-t ${IMAGE}:${{ steps.version.outputs.version }}"
+          fi
+          docker buildx imagetools create $TAGS \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      # Dual publish to legacy GHCR path for v1.5.x Docker users
+      # (ghcr.io/mrbart3885/risuai-nodeonly). PAT belongs to mrbart3885 account.
+      # Required: if the PAT is missing/rotated, this step fails loudly so we don't
+      # silently leave existing Docker users on a stale image. Verify GHCR_LEGACY_PAT
+      # is set before tagging a release.
+      - name: Log in to legacy GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: mrbart3885
+          password: ${{ secrets.GHCR_LEGACY_PAT }}
+
+      - name: Create legacy manifest list and push
+        working-directory: /tmp/digests
+        shell: bash
+        run: |
+          NEW="${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}"
+          LEGACY="${{ env.REGISTRY }}/mrbart3885/risuai-nodeonly"
+          TAGS=""
+          if [[ "${{ steps.version.outputs.is_tag }}" == "true" ]]; then
+            TAGS="-t ${LEGACY}:latest"
+            TAGS="$TAGS -t ${LEGACY}:v${{ steps.version.outputs.version }}"
+            TAGS="$TAGS -t ${LEGACY}:v${{ steps.version.outputs.minor }}"
+          else
+            TAGS="-t ${LEGACY}:${{ steps.version.outputs.version }}"
+          fi
+          docker buildx imagetools create $TAGS \
+            $(printf "${NEW}@sha256:%s " *)
+
+  cleanup-old-images:
+    needs: merge
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete orphaned untagged versions
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const pkg = context.repo.repo.toLowerCase();
+
+            // Detect owner type — Organization vs User — to use the matching package API.
+            // PocketRisu/PocketRisu is an Organization, the previous mrbart3885/* was a User.
+            const { data: ownerInfo } = await github.rest.users.getByUsername({ username: owner });
+            const isOrg = ownerInfo.type === 'Organization';
+            core.info(`Owner '${owner}' type: ${ownerInfo.type}`);
+
+            // 1. Get all package versions
+            const listFn = isOrg
+              ? github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg
+              : github.rest.packages.getAllPackageVersionsForPackageOwnedByUser;
+            const listParams = isOrg
+              ? { package_type: 'container', package_name: pkg, org: owner, per_page: 100 }
+              : { package_type: 'container', package_name: pkg, username: owner, per_page: 100 };
+            const versions = await github.paginate(listFn, listParams);
+
+            const tagged = versions.filter(v => v.metadata?.container?.tags?.length > 0);
+            const untagged = versions.filter(v => !v.metadata?.container?.tags?.length);
+            core.info(`Total: ${versions.length} versions (${tagged.length} tagged, ${untagged.length} untagged)`);
+
+            if (tagged.length === 0) {
+              core.warning('No tagged versions found — aborting cleanup');
+              return;
+            }
+
+            // 2. Get ghcr.io auth token (Basic auth for private support)
+            let token;
+            try {
+              const basicAuth = Buffer.from(`${owner}:${process.env.GITHUB_TOKEN}`).toString('base64');
+              const tokenResp = await fetch(
+                `https://ghcr.io/token?scope=repository:${owner}/${pkg}:pull`,
+                { headers: { 'Authorization': `Basic ${basicAuth}` } }
+              );
+              if (!tokenResp.ok) throw new Error(`token endpoint returned ${tokenResp.status}`);
+              token = (await tokenResp.json()).token;
+            } catch (e) {
+              core.error(`Failed to get ghcr.io token: ${e.message} — aborting cleanup`);
+              return;
+            }
+
+            // 3. Collect digests referenced by tagged manifest lists
+            const referencedDigests = new Set();
+            let fetchFailures = 0;
+            const acceptHeader = [
+              'application/vnd.oci.image.index.v1+json',
+              'application/vnd.docker.distribution.manifest.list.v2+json',
+              'application/vnd.oci.image.manifest.v1+json',
+              'application/vnd.docker.distribution.manifest.v2+json'
+            ].join(',');
+            for (const v of tagged) {
+              try {
+                const resp = await fetch(
+                  `https://ghcr.io/v2/${owner}/${pkg}/manifests/${v.name}`,
+                  { headers: { 'Authorization': `Bearer ${token}`, 'Accept': acceptHeader } }
+                );
+                if (!resp.ok) {
+                  fetchFailures++;
+                  core.warning(`Manifest fetch failed for ${v.metadata.container.tags}: HTTP ${resp.status}`);
+                  continue;
+                }
+                const manifest = await resp.json();
+                // manifest list → collect child digests; single manifest → no children
+                if (manifest.manifests) {
+                  for (const m of manifest.manifests) {
+                    referencedDigests.add(m.digest);
+                  }
+                }
+              } catch (e) {
+                fetchFailures++;
+                core.warning(`Manifest fetch error for ${v.name}: ${e.message}`);
+              }
+            }
+            core.info(`Referenced digests: ${referencedDigests.size}, fetch failures: ${fetchFailures}`);
+
+            // 4. Safety: abort if ANY manifest list fetch failed
+            if (fetchFailures > 0) {
+              core.error(`${fetchFailures} manifest fetch(es) failed — aborting to prevent data loss`);
+              return;
+            }
+            if (referencedDigests.size === 0) {
+              core.info('No multi-platform manifests found — nothing to clean up');
+              return;
+            }
+
+            // 5. Delete untagged versions NOT referenced by any manifest list
+            const orphaned = untagged.filter(v => !referencedDigests.has(v.name));
+            core.info(`Orphaned: ${orphaned.length}, Referenced: ${untagged.length - orphaned.length}`);
+
+            let deleted = 0;
+            for (const v of orphaned) {
+              core.info(`DELETE ${v.name.substring(0, 27)}...`);
+              try {
+                if (isOrg) {
+                  await github.rest.packages.deletePackageVersionForOrg({
+                    package_type: 'container',
+                    package_name: pkg,
+                    org: owner,
+                    package_version_id: v.id
+                  });
+                } else {
+                  await github.rest.packages.deletePackageVersionForUser({
+                    package_type: 'container',
+                    package_name: pkg,
+                    username: owner,
+                    package_version_id: v.id
+                  });
+                }
+                deleted++;
+              } catch (e) {
+                core.warning(`Failed to delete ${v.id}: ${e.message}`);
+              }
+            }
+            core.info(`Cleanup done: deleted ${deleted} orphaned versions`);
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,301 @@
+import { writable } from 'svelte/store'
+import { describe, expect, it, vi } from 'vitest'
+
+const { mockDBState, mockModuleSources, mockDownloadFile, mockSelectSingleFile } = vi.hoisted(() => ({
+    mockDBState: { db: {} as any },
+    mockModuleSources: [] as Array<{ scopeId: string; entry: any }>,
+    mockDownloadFile: vi.fn(),
+    mockSelectSingleFile: vi.fn(),
+}))
+
+vi.mock('../stores.svelte', () => ({
+    DBState: mockDBState,
+    selectedCharID: writable(0),
+}))
+vi.mock('../tokenizer', () => ({
+    tokenize: vi.fn(async () => 1),
+}))
+vi.mock('../parser/parser.svelte', () => ({
+    risuChatParser: (value: string) => value,
+}))
+vi.mock('../util', () => ({
+    findCharacterbyId: vi.fn(),
+    pickHashRand: vi.fn(() => 1),
+    selectSingleFile: mockSelectSingleFile,
+}))
+vi.mock('../alert', () => ({
+    alertError: vi.fn(),
+    notifySuccess: vi.fn(),
+}))
+vi.mock('../../lang', () => ({
+    getCurrentLocale: () => 'en',
+    language: {},
+}))
+vi.mock('../globalApi.svelte', () => ({
+    downloadFile: mockDownloadFile,
+    saveAsset: vi.fn(),
+}))
+vi.mock('./modules', () => ({
+    getModuleLorebooks: () => [],
+    getModuleLorebooksWithSources: () => mockModuleSources,
+}))
+
+import { convertImportedLorebook, exportLoreBook, importLoreBook, loadLoreBookV3Prompt } from './lorebook.svelte'
+
+function lore(comment: string, key: string, content: string) {
+    return {
+        comment,
+        key,
+        content,
+        mode: 'normal',
+        insertorder: 100,
+        alwaysActive: false,
+        secondkey: '',
+        selective: false,
+        useRegex: false,
+    }
+}
+
+function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((done) => { resolve = done })
+    return { promise, resolve }
+}
+
+function importedFile(comment: string) {
+    return {
+        data: Buffer.from(JSON.stringify({
+            type: 'risu',
+            data: [lore(comment, comment, `${comment} content`)],
+        })),
+    }
+}
+
+describe('lorebook recursion steps', () => {
+    it('does not activate newly discovered keys during the same sweep', async () => {
+        mockModuleSources.length = 0
+        mockDBState.db = {
+            username: 'user',
+            loreBookDepth: 5,
+            loreBookToken: 8000,
+            characters: [{
+                name: 'storywriter',
+                chatPage: 0,
+                globalLore: [
+                    lore('alice', 'alice', 'bobby'),
+                    lore('bobby', 'bobby', 'toby'),
+                    lore('toby', 'toby', 'controls people'),
+                ],
+                chats: [{
+                    localLore: [],
+                    message: [{ role: 'user', data: 'alice' }],
+                }],
+                loreSettings: {
+                    tokenBudget: 8000,
+                    scanDepth: 5,
+                    recursiveScanning: true,
+                    maxRecursionSteps: 1,
+                    matchingMode: 'partial',
+                },
+            }],
+        }
+
+        const result = await loadLoreBookV3Prompt()
+
+        expect(result.actives.map((entry) => entry.source)).toEqual(['alice'])
+    })
+
+    it('filters disabled entries without losing character, chat, or module source identity', async () => {
+        const enabledCharacter = { ...lore('Enabled character', '', 'Character prompt'), alwaysActive: true }
+        const enabledChat = { ...lore('Enabled chat', '', 'Chat prompt'), alwaysActive: true }
+        const enabledModule = { ...lore('Enabled module', '', 'Module prompt'), alwaysActive: true }
+        mockModuleSources.splice(0, mockModuleSources.length,
+            {
+                scopeId: 'module:module-1',
+                entry: { ...lore('Disabled module', '', 'Disabled module prompt'), alwaysActive: true, enabled: false },
+            },
+            { scopeId: 'module:module-1', entry: enabledModule },
+        )
+        mockDBState.db = {
+            username: 'user',
+            loreBookDepth: 5,
+            loreBookToken: 8000,
+            characters: [{
+                chaId: 'character-1',
+                name: 'storywriter',
+                chatPage: 0,
+                globalLore: [
+                    { ...lore('Disabled character', '', 'Disabled character prompt'), alwaysActive: true, enabled: false },
+                    enabledCharacter,
+                ],
+                chats: [{
+                    id: 'chat-1',
+                    localLore: [
+                        { ...lore('Disabled chat', '', 'Disabled chat prompt'), alwaysActive: true, enabled: false },
+                        enabledChat,
+                    ],
+                    message: [],
+                }],
+                loreSettings: {
+                    tokenBudget: 8000,
+                    scanDepth: 5,
+                    recursiveScanning: false,
+                    maxRecursionSteps: 1,
+                    matchingMode: 'partial',
+                },
+            }],
+        }
+
+        const result = await loadLoreBookV3Prompt()
+
+        expect(result.actives.map(({ source, prompt }) => ({ source, prompt }))).toEqual(expect.arrayContaining([
+            { source: 'Enabled character', prompt: 'Character prompt' },
+            { source: 'Enabled chat', prompt: 'Chat prompt' },
+            { source: 'Enabled module', prompt: 'Module prompt' },
+        ]))
+        expect(result.actives.map((entry) => entry.prompt).join('\n')).not.toContain('Disabled')
+        expect(result.activeSources.map(({ sourceIdentity }) => ({
+            scopeId: sourceIdentity.scopeId,
+            source: sourceIdentity.entry.comment,
+        }))).toEqual([
+            { scopeId: 'character:character-1', source: 'Enabled character' },
+            { scopeId: 'chat:chat-1', source: 'Enabled chat' },
+            { scopeId: 'module:module-1', source: 'Enabled module' },
+        ])
+    })
+})
+
+describe('Risu lorebook import compatibility', () => {
+    it('preserves enabled state, numeric IDs, and unknown fields without backfilling missing enabled', () => {
+        const rawEntries = [
+            { ...lore('Disabled raw', 'raw', 'Raw disabled'), id: 17, enabled: false, unknownField: { keep: true } },
+            { ...lore('Legacy raw', 'legacy', 'Raw legacy'), id: 18, unknownField: 'legacy' },
+        ]
+
+        const imported = convertImportedLorebook({ type: 'risu', data: rawEntries })
+
+        expect(imported).toEqual(rawEntries)
+        expect(imported.map((entry) => entry.enabled)).toEqual([false, undefined])
+        expect(imported.map((entry) => entry.id)).toEqual([17, 18])
+    })
+
+    it('maps external disabled entries while keeping missing enabled active', () => {
+        const imported = convertImportedLorebook({
+            entries: {
+                disabled: {
+                    enabled: false,
+                    key: ['disabled'],
+                    comment: 'Disabled external',
+                    content: 'Disabled external content',
+                    order: 10,
+                    constant: false,
+                } as never,
+                legacy: {
+                    key: ['legacy'],
+                    comment: 'Legacy external',
+                    content: 'Legacy external content',
+                    order: 20,
+                    constant: false,
+                } as never,
+            },
+        })
+
+        expect(imported.map((entry) => entry.enabled)).toEqual([false, true])
+    })
+
+    it('serializes raw Risu enabled state, numeric IDs, and unknown fields unchanged', async () => {
+        const rawEntries = [
+            { ...lore('Raw export', 'raw', 'Raw export content'), id: 91, enabled: false, unknownField: { keep: true } },
+        ]
+        mockDBState.db = {
+            characters: [{
+                chatPage: 0,
+                globalLore: rawEntries,
+                chats: [{ localLore: [] }],
+            }],
+        }
+        mockDownloadFile.mockReset()
+
+        await exportLoreBook('global')
+
+        expect(mockDownloadFile).toHaveBeenCalledOnce()
+        const exported = JSON.parse(Buffer.from(mockDownloadFile.mock.calls[0][1]).toString('utf-8'))
+        expect(exported).toMatchObject({ type: 'risu', ver: 1 })
+        expect(exported.data).toEqual(rawEntries)
+    })
+})
+
+describe('Risu lorebook import owner routing', () => {
+    it('appends to the captured character current lore after character reorder and concurrent edit', async () => {
+        const target = { chaId: 'char-a', chatPage: 0, globalLore: [lore('old', 'old', 'old')], chats: [] }
+        const other = { chaId: 'char-b', chatPage: 0, globalLore: [], chats: [] }
+        mockDBState.db = { characters: [target, other], loreBook: [{ id: 'page', data: [] }], loreBookPage: 0 }
+        const picker = deferred<{ data: Buffer }>()
+        mockSelectSingleFile.mockReturnValueOnce(picker.promise)
+
+        const pending = importLoreBook('global')
+        mockDBState.db.characters.reverse()
+        target.globalLore = [lore('concurrent', 'concurrent', 'concurrent')]
+        picker.resolve(importedFile('imported'))
+        await pending
+
+        expect(target.globalLore.map((entry) => entry.comment)).toEqual(['concurrent', 'imported'])
+        expect(other.globalLore).toEqual([])
+    })
+
+    it('appends to the captured chat current lore after chat reorder and concurrent edit', async () => {
+        const targetChat = { id: 'chat-a', localLore: [lore('old', 'old', 'old')] }
+        const otherChat = { id: 'chat-b', localLore: [] }
+        const character = {
+            chaId: 'char-a',
+            chatPage: 0,
+            globalLore: [],
+            chats: [targetChat, otherChat],
+        }
+        mockDBState.db = { characters: [character], loreBook: [{ id: 'page', data: [] }], loreBookPage: 0 }
+        const picker = deferred<{ data: Buffer }>()
+        mockSelectSingleFile.mockReturnValueOnce(picker.promise)
+
+        const pending = importLoreBook('local')
+        character.chats.reverse()
+        targetChat.localLore = [lore('concurrent', 'concurrent', 'concurrent')]
+        picker.resolve(importedFile('imported'))
+        await pending
+
+        expect(targetChat.localLore.map((entry) => entry.comment)).toEqual(['concurrent', 'imported'])
+        expect(otherChat.localLore).toEqual([])
+    })
+
+    it('appends to the captured global page current lore after page reorder', async () => {
+        const targetPage = { id: 'page-a', name: 'A', data: [lore('old', 'old', 'old')] }
+        const otherPage = { id: 'page-b', name: 'B', data: [] }
+        mockDBState.db = { characters: [], loreBook: [targetPage, otherPage], loreBookPage: 0 }
+        const picker = deferred<{ data: Buffer }>()
+        mockSelectSingleFile.mockReturnValueOnce(picker.promise)
+
+        const pending = importLoreBook('sglobal')
+        mockDBState.db.loreBook.reverse()
+        targetPage.data = [lore('concurrent', 'concurrent', 'concurrent')]
+        picker.resolve(importedFile('imported'))
+        await pending
+
+        expect(targetPage.data.map((entry) => entry.comment)).toEqual(['concurrent', 'imported'])
+        expect(otherPage.data).toEqual([])
+    })
+
+    it('aborts when the captured owner was deleted or replaced while the picker was open', async () => {
+        const target = { chaId: 'char-a', chatPage: 0, globalLore: [], chats: [] }
+        mockDBState.db = { characters: [target], loreBook: [{ id: 'page', data: [] }], loreBookPage: 0 }
+        const picker = deferred<{ data: Buffer }>()
+        mockSelectSingleFile.mockReturnValueOnce(picker.promise)
+
+        const pending = importLoreBook('global')
+        const replacement = { chaId: 'char-a', chatPage: 0, globalLore: [], chats: [] }
+        mockDBState.db.characters = [replacement]
+        picker.resolve(importedFile('orphaned'))
+        await pending
+
+        expect(target.globalLore).toEqual([])
+        expect(replacement.globalLore).toEqual([])
+    })
+})

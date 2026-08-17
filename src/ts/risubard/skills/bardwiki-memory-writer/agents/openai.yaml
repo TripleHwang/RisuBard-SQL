@@ -1,0 +1,4 @@
+interface:
+  display_name: "BardWiki Memory Writer"
+  short_description: "Extract durable story memory into a validated event draft"
+  default_prompt: "Extract only established story facts and state changes from the supplied accepted manuscript or confirmed turn."
