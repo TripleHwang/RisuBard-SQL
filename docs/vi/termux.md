@@ -25,7 +25,7 @@ Hướng dẫn này giải thích cách xây dựng và chạy PocketRisu trực
 | **RAM**             | 2 GB            | 4 GB trở lên                           |
 | **Dung lượng trống** | 2 GB            | 4 GB trở lên (bao gồm bản build)       |
 
-PocketRisu không cung cấp tệp nhị phân biên dịch sẵn cho Termux, vì vậy điện thoại tự xây dựng mọi thứ. Bao gồm các module gốc như `better-sqlite3`, quá trình xây dựng mất khoảng **10 đến 40 phút**, tùy theo hiệu năng điện thoại.
+PocketRisu được xây dựng trên điện thoại. Runtime không còn phụ thuộc vào SQLite native hoặc `better-sqlite3`, loại bỏ rào cản biên dịch SQLite trước đây.
 
 
 ---

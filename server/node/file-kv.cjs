@@ -1,0 +1,221 @@
+'use strict';
+
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { atomicWriteJson, moveToTrash, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
+
+const MANIFEST_PATH = 'kv/manifest.json';
+const HEX_MIGRATION_MARKER = 'migration/legacy-hex-save-folder.json';
+
+function digest(data) {
+    return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+function writeObject(dataRoot, hash, data) {
+    const directory = path.join(dataRoot, 'kv', 'objects');
+    const target = path.join(directory, hash);
+    if (fs.existsSync(target)) return;
+    fs.mkdirSync(directory, { recursive: true });
+    const temp = path.join(directory, `.${hash}.${crypto.randomUUID()}.tmp`);
+    const fd = fs.openSync(temp, 'wx', 0o600);
+    try {
+        fs.writeFileSync(fd, data);
+        fs.fsyncSync(fd);
+    } finally {
+        fs.closeSync(fd);
+    }
+    if (digest(fs.readFileSync(temp)) !== hash) {
+        fs.unlinkSync(temp);
+        throw new Error(`Content object checksum verification failed: ${hash}`);
+    }
+    try {
+        fs.renameSync(temp, target);
+    } catch (error) {
+        if (fs.existsSync(target)) fs.unlinkSync(temp);
+        else throw error;
+    }
+}
+
+function createFileKv(options = {}) {
+    const dataRoot = path.resolve(options.dataRoot || path.join(process.cwd(), 'save'));
+    fs.mkdirSync(dataRoot, { recursive: true });
+    recoverTransactions(dataRoot);
+
+    let manifest = fs.existsSync(path.join(dataRoot, MANIFEST_PATH))
+        ? readVerifiedJson(dataRoot, MANIFEST_PATH)
+        : { schemaVersion: 1, updatedAt: 0, entries: {} };
+    if (!manifest || manifest.schemaVersion !== 1 || typeof manifest.entries !== 'object') {
+        throw new Error('Unsupported or corrupt file KV manifest');
+    }
+
+    function saveManifest() {
+        manifest.updatedAt = Date.now();
+        atomicWriteJson(dataRoot, MANIFEST_PATH, manifest, {
+            validate: value => value?.schemaVersion === 1 && typeof value?.entries === 'object',
+        });
+    }
+
+    function kvGet(key) {
+        const entry = manifest.entries[key];
+        if (!entry) return null;
+        const objectPath = path.join(dataRoot, 'kv', 'objects', entry.object);
+        let value;
+        try { value = fs.readFileSync(objectPath); } catch { return null; }
+        if (digest(value) !== entry.object) throw new Error(`Content object checksum mismatch for ${key}`);
+        return value;
+    }
+
+    function kvSet(key, value) {
+        const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+        const hash = digest(data);
+        writeObject(dataRoot, hash, data);
+        manifest.entries[key] = { object: hash, size: data.length, updatedAt: Date.now() };
+        saveManifest();
+    }
+
+    function prepareEntries(entries) {
+        return entries.map(({ key, value }) => {
+            const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+            const hash = digest(data);
+            writeObject(dataRoot, hash, data);
+            return [key, { object: hash, size: data.length, updatedAt: Date.now() }];
+        });
+    }
+
+    function kvSetMany(entries) {
+        for (const [key, entry] of prepareEntries(entries)) manifest.entries[key] = entry;
+        if (entries.length) saveManifest();
+    }
+
+    function kvReplacePrefixes(entries, prefixes) {
+        const next = { ...manifest.entries };
+        for (const key of Object.keys(next)) {
+            if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
+        }
+        for (const [key, entry] of prepareEntries(entries)) next[key] = entry;
+        manifest.entries = next;
+        saveManifest();
+    }
+
+    function kvReplaceAll(entries) {
+        manifest.entries = Object.fromEntries(prepareEntries(entries));
+        saveManifest();
+    }
+
+    function kvDel(key) {
+        if (!(key in manifest.entries)) return;
+        delete manifest.entries[key];
+        saveManifest();
+    }
+
+    function kvSize(key) {
+        return manifest.entries[key]?.size ?? 0;
+    }
+
+    function kvGetUpdatedAt(key) {
+        return manifest.entries[key]?.updatedAt ?? null;
+    }
+
+    function kvCopyValue(source, destination) {
+        const entry = manifest.entries[source];
+        if (!entry) return;
+        manifest.entries[destination] = { ...entry, updatedAt: Date.now() };
+        saveManifest();
+    }
+
+    function kvDelPrefix(prefix) {
+        let changed = false;
+        for (const key of Object.keys(manifest.entries)) {
+            if (key.startsWith(prefix)) {
+                delete manifest.entries[key];
+                changed = true;
+            }
+        }
+        if (changed) saveManifest();
+    }
+
+    function kvList(prefix = '') {
+        return Object.keys(manifest.entries).filter(key => key.startsWith(prefix)).sort();
+    }
+
+    function kvListWithSizes(prefix = '') {
+        return kvList(prefix).map(key => ({ key, size: manifest.entries[key].size }));
+    }
+
+    function referencedObjects() {
+        return new Set(Object.values(manifest.entries).map(entry => entry.object));
+    }
+
+    function reclaimableObjects() {
+        const directory = path.join(dataRoot, 'kv', 'objects');
+        if (!fs.existsSync(directory)) return [];
+        const referenced = referencedObjects();
+        return fs.readdirSync(directory)
+            .filter(name => /^[a-f0-9]{64}$/.test(name) && !referenced.has(name));
+    }
+
+    function reclaimableChunkBytes() {
+        return reclaimableObjects().reduce((total, name) => {
+            try { return total + fs.statSync(path.join(dataRoot, 'kv', 'objects', name)).size; }
+            catch { return total; }
+        }, 0);
+    }
+
+    function gcChunks() {
+        const objects = reclaimableObjects();
+        for (const name of objects) moveToTrash(dataRoot, path.join('kv', 'objects', name));
+        return objects.length;
+    }
+
+    function snapshotFootprint(key) {
+        const entry = manifest.entries[key];
+        if (!entry) return 0;
+        const live = manifest.entries['database/database.bin'];
+        return live && live.object === entry.object ? 0 : entry.size;
+    }
+
+    function migrateLegacyHexFiles() {
+        if (fs.existsSync(path.join(dataRoot, HEX_MIGRATION_MARKER))) return;
+        const files = fs.readdirSync(dataRoot, { withFileTypes: true })
+            .filter(entry => entry.isFile() && /^[a-fA-F0-9]+$/.test(entry.name) && entry.name.length % 2 === 0);
+        let imported = 0;
+        for (const entry of files) {
+            const key = Buffer.from(entry.name, 'hex').toString('utf8');
+            if (!key || key in manifest.entries) continue;
+            const data = fs.readFileSync(path.join(dataRoot, entry.name));
+            const hash = digest(data);
+            writeObject(dataRoot, hash, data);
+            manifest.entries[key] = { object: hash, size: data.length, updatedAt: fs.statSync(path.join(dataRoot, entry.name)).mtimeMs };
+            imported += 1;
+        }
+        if (imported) saveManifest();
+        atomicWriteJson(dataRoot, HEX_MIGRATION_MARKER, { schemaVersion: 1, imported, completedAt: Date.now() });
+    }
+
+    migrateLegacyHexFiles();
+
+    return {
+        dataRoot,
+        kvGet,
+        kvSet,
+        kvSetMany,
+        kvReplacePrefixes,
+        kvReplaceAll,
+        kvDel,
+        kvSize,
+        kvGetUpdatedAt,
+        kvCopyValue,
+        kvDelPrefix,
+        kvList,
+        kvListWithSizes,
+        checkpointWal: () => [],
+        gcChunks,
+        reclaimableChunkBytes,
+        isDbBlobChunked: () => false,
+        snapshotFootprint,
+        clearEntities: () => {},
+    };
+}
+
+module.exports = { createFileKv };

@@ -2336,24 +2336,24 @@ export const languageKorean = {
     `PocketRisu 합계: ${(size / 1024 / 1024).toFixed(1)} MB`,
 
   // 항목별 라벨 (분포 리스트의 ⓘ 설명)
-  storageRowDbFile: "risuai.db",
+  storageRowDbFile: "파일 데이터 루트",
   storageRowDbFileDesc:
-    "PocketRisu의 메인 SQLite 데이터베이스 파일. 모든 채팅·캐릭터·에셋·설정이 여기 들어갑니다.",
+    "사용자 정본 JSON·JSONL·Markdown과 content-addressed 오브젝트 파일이 저장됩니다.",
   storageRowWal: "WAL (Write-Ahead Log)",
   storageRowWalDesc:
     "임시 트랜잭션 로그. 저장이 먼저 여기 기록된 뒤 본 파일에 통합됩니다. 사용 중엔 정상적으로 존재.",
   storageRowShm: "SHM (공유 메모리)",
   storageRowShmDesc:
-    "WAL용 SQLite 공유 메모리 인덱스. 작고 휘발성이며 필요 시 재생성됩니다.",
+    "레거시 서버 호환용 값입니다. 파일 정본 저장소는 이 파일을 만들지 않습니다.",
   storageRowFileBackups: "디스크 백업 (.bin)",
   storageRowFileBackupsDesc:
     "수동으로 export한 백업 파일. backups/ 폴더에 보관됩니다.",
-  storageRowKvDatabase: "database.bin (활성)",
+  storageRowKvDatabase: "호환 투영본",
   storageRowKvDatabaseDesc:
-    "risuai.db 내부에 있는 단일 BLOB 행. 캐릭터 메타·채팅·설정이 통째로 들어갑니다. 2 GB 단일 BLOB 한계의 적용 대상.",
-  storageRowKvDbBackups: "DB 백업 (인프로세스)",
+    "기존 클라이언트와 내보내기를 위해 재생성하는 database.bin 투영본입니다. 사용자 정본은 분리 파일에 있습니다.",
+  storageRowKvDbBackups: "호환 스냅샷",
   storageRowKvDbBackupsDesc:
-    "risuai.db 내부에 자동으로 보관되는 database.bin 스냅샷. 약 500 MB 한도로 자동 로테이션.",
+    "구형 클라이언트를 위해 보존하는 재생성 가능한 투영본이며 사용자 데이터 정본이 아닙니다.",
   storageRowKvAssets: "캐릭터 에셋",
   storageRowKvAssetsDesc:
     "캐릭터 카드, 이모션 이미지, 추가 에셋, 페르소나 아이콘 등.",
@@ -2367,12 +2367,12 @@ export const languageKorean = {
   storageRowKvUncategorized: "기타 데이터",
   storageRowKvUncategorizedDesc:
     "위 분류에 들어가지 않는 키. 마이그레이션 잔여물이나 임시 항목 등이 여기 잡힙니다.",
-  storageRowSqliteOverhead: "SQLite 오버헤드 (구조)",
+  storageRowSqliteOverhead: "파일 메타데이터",
   storageRowSqliteOverheadDesc:
-    "인덱스, 페이지 헤더, 정렬 패딩 등 SQLite가 항상 들고 있는 구조적 영역입니다. 사용자 데이터가 아니며 정리로 제거되지 않습니다 (데이터 양에 비례해 자연 증가).",
-  storageRowReclaimablePages: "SQLite 오버헤드 (회수 가능)",
+    "강제 종료 안전 저장을 위한 작은 manifest·index·checksum·transaction journal입니다.",
+  storageRowReclaimablePages: "미참조 오브젝트",
   storageRowReclaimablePagesDesc:
-    '삭제된 데이터가 남긴 빈 페이지로, SQLite 오버헤드 중 정리로 회수 가능한 부분입니다. 아래 "SQLite 오버헤드 정리"의 막대 노란색 부분과 같은 값이며, 정리 실행 시 모두 회수됩니다.',
+    "manifest에서 더 이상 참조하지 않는 content-addressed 파일입니다. 정리는 이 재생성 가능하거나 고아가 된 파일만 제거합니다.",
   storageRowReclaimable: (size: number) =>
     `${(size / 1024 / 1024).toFixed(1)} MB 회수 가능 — Optimize로 압축.`,
   storageInternalOnly: "저장공간과 함께보기",
@@ -2380,9 +2380,9 @@ export const languageKorean = {
     "끄면 PocketRisu 내부 항목만, 켜면 기타 시스템·여유 공간까지 디스크 전체 기준으로 표시합니다.",
 
   // 2 GB BLOB 한계 (별도 섹션)
-  storageBlobLimit: "2 GB BLOB 한계",
+  storageBlobLimit: "호환 투영본 크기",
   storageBlobLimitDesc:
-    "SQLite는 단일 행 값을 약 2 GB까지만 허용합니다. database.bin이 하나의 행이라 채팅·설정 합계가 이 값을 넘을 수 없으며, 한계에 가까워지면 저장이 실패하기 시작합니다.",
+    "기존 클라이언트용 투영본은 유지하지만 채팅과 엔터티 정본은 여러 파일로 분리되어 SQLite 단일 행 한계를 받지 않습니다.",
   storageBlobThreshold: (used: number, max: number, pct: number) =>
     `2 GB 중 ${pct.toFixed(1)}% (${(used / 1024 / 1024 / 1024).toFixed(2)} / ${(max / 1024 / 1024 / 1024).toFixed(2)} GB)`,
   storageBlobThresholdWarn:
@@ -2397,9 +2397,9 @@ export const languageKorean = {
   storageOptimizeBarUsed: "사용 중",
   storageOptimizeBarReclaimable: "회수 가능",
   storageOptimizeWhat:
-    "캐릭터·채팅·에셋을 삭제해도 데이터베이스는 그 자리를 빈 공간으로 표시할 뿐 파일 크기는 줄어들지 않습니다. 정리는 이 빈 공간을 제거해 파일을 다시 써서 실제 크기를 줄입니다. 데이터는 변경되지 않습니다.",
+    "활성 manifest를 검증한 뒤 참조되지 않는 content-addressed 오브젝트만 제거합니다. 사용자 정본 파일은 변경하지 않습니다.",
   storageOptimizeWhen:
-    "큰 삭제 작업 후나 위 막대의 빈 공간이 많이 쌓였을 때 실행하면 효과가 큽니다. 정리 중에는 서버 저장이 잠시 멈춥니다 (보통 수 초, 매우 큰 DB는 수십 초까지).",
+    "큰 삭제나 가져오기 뒤 미참조 오브젝트가 쌓였을 때 실행합니다. manifest를 확인하는 동안 저장이 잠시 멈춥니다.",
   storageOptimizeConfirm: "지금 정리할까요? 서버 저장이 수 초간 멈춥니다.",
   storageOptimizeNeedsSpace: (need: number, free: number) =>
     `디스크 여유가 부족합니다. 약 ${(need / 1024 / 1024).toFixed(0)} MB 필요, 여유 ${(free / 1024 / 1024).toFixed(0)} MB.`,
@@ -2407,15 +2407,15 @@ export const languageKorean = {
     `${(reclaimed / 1024 / 1024).toFixed(1)} MB 회수 (${(ms / 1000).toFixed(1)}초).`,
   storageOptimizeFailed: "정리 실패",
 
-  storageCleanup: "SQLite 오버헤드 정리",
+  storageCleanup: "미참조 오브젝트 정리",
 
   storageWalCleanup: "WAL 수동 정리",
   storageWalCleanupHeader: (walSize: number) =>
     `현재 WAL ${(walSize / 1024 / 1024).toFixed(1)} MB`,
   storageWalCleanupWhat:
-    "SQLite의 WAL 파일(risuai.db-wal)은 최근 변경분이 본 DB로 합쳐지기 전 임시로 모아두는 영역입니다. 5분 주기로 자동 정리되지만 백업 임포트나 큰 에셋 업로드 직후 일시적으로 부풀 수 있습니다.",
+    "레거시 write-ahead log를 보고하는 구형 서버에 연결했을 때만 표시되는 호환 기능입니다.",
   storageWalCleanupWhen:
-    "WAL 파일이 커진 상태에서 디스크 공간을 즉시 회수하고 싶을 때 사용합니다. Optimize와 달리 수 밀리초로 끝나고 추가 디스크 공간도 필요하지 않습니다. 데이터는 변경되지 않습니다.",
+    "파일 정본 서버는 원자 rename journal을 사용하므로 WAL을 만들지 않습니다.",
   storageWalCleanup_btn: "WAL 정리",
   storageWalCleanuping: "WAL 정리 중...",
   storageWalCleanupConfirm: "WAL을 지금 정리할까요? 서버 저장이 잠시 멈춥니다.",
@@ -2426,9 +2426,9 @@ export const languageKorean = {
 
   storageBackups: "백업",
   storageBackupsManage: "백업 관리",
-  storageBackupsAuto: "스냅샷 (DB만)",
+  storageBackupsAuto: "호환 스냅샷",
   storageBackupsAutoDesc:
-    "주기적으로 자동 생성되는 빠른 복구용 스냅샷입니다. risuai.db 안에 저장되며, 설정된 한도에 따라 오래된 것부터 자동으로 정리됩니다. 캐릭터 에셋과 inlay는 포함되지 않습니다.",
+    "구형 클라이언트를 위한 재생성 가능한 투영본입니다. 전체 백업은 사용자 정본 파일 트리·에셋·BardWiki를 포함합니다.",
   storageBackupsManual: "서버 백업",
   storageBackupsManualDesc:
     "캐릭터 에셋과 inlay 이미지를 모두 포함하는 풀 백업입니다. 서버 스토리지에 직접 저장되며, 보관 위치는 변경 가능합니다.",

@@ -25,7 +25,7 @@ Diese Anleitung erklärt, wie PocketRisu direkt auf einem Android-Telefon über 
 | **RAM**            | 2 GB            | 4 GB oder mehr                  |
 | **Freier Speicher** | 2 GB            | 4 GB oder mehr (mit Build)      |
 
-PocketRisu liefert keine vorkompilierten Binärdateien für Termux, daher baut das Telefon alles selbst. Einschließlich nativer Module wie `better-sqlite3` dauert der Build etwa **10 bis 40 Minuten**, je nach Telefonleistung.
+PocketRisu wird auf dem Telefon gebaut. Die Laufzeit benötigt weder natives SQLite noch `better-sqlite3`, wodurch die frühere SQLite-Kompilierung entfällt.
 
 
 ---

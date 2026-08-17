@@ -178,7 +178,7 @@ describe('model-jobs', () => {
         expect(streamRes.headers.get('x-model-job-upstream-status')).toBe('200')
         expect(streamRes.headers.get('content-type')).toContain('text/event-stream')
 
-        const journal = fs.readFileSync(path.join(saveDir, 'model-jobs', `${jobId}.journal`))
+        const journal = fs.readFileSync(path.join(saveDir, 'model-jobs', jobId, 'response.journal'))
         expect(journal.toString('utf-8')).toBe(expected)
 
         // Recorder contract: upstream is asked for identity encoding and never
@@ -374,14 +374,7 @@ describe('model-jobs', () => {
         upstream.contentType = 'text/event-stream'
     })
 
-    it('never persists auth headers to SQLite or disk', async () => {
-        // Checkpoint WAL so all rows are in the main db file, then scan every
-        // file under the save dir for the secret used in every job above.
-        const raw = require('better-sqlite3')
-        const db = new raw(path.join(saveDir, 'model-jobs.db'))
-        db.pragma('wal_checkpoint(TRUNCATE)')
-        db.close()
-
+    it('never persists auth headers or creates a SQLite database', async () => {
         const files: string[] = []
         const walk = (dir: string) => {
             for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -392,6 +385,7 @@ describe('model-jobs', () => {
         }
         walk(saveDir)
         expect(files.length).toBeGreaterThan(0)
+        expect(fs.existsSync(path.join(saveDir, 'model-jobs.db'))).toBe(false)
         for (const file of files) {
             const content = fs.readFileSync(file)
             expect(content.includes(SECRET_KEY), `secret found in ${file}`).toBe(false)
@@ -520,13 +514,15 @@ describe('model-jobs', () => {
 
     it('expired pending sends are swept by the cleanup pass', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-jobs-ps-'))
-        const localStore = createModelJobs({ saveDir: dir })
+        let localStore = createModelJobs({ saveDir: dir })
         localStore.registerPendingSend({ chatId: 'old-chat', generationId: 'g' })
         // Backdate past the 48h window.
-        const raw = require('better-sqlite3')
-        const db = new raw(path.join(dir, 'model-jobs.db'))
-        db.prepare(`UPDATE pending_sends SET created_at = ?`).run(Date.now() - 3 * 24 * 60 * 60 * 1000)
-        db.close()
+        localStore.close()
+        const pendingPath = path.join(dir, 'model-jobs', 'pending-sends.json')
+        const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8'))
+        pending.items[0].created_at = Date.now() - 3 * 24 * 60 * 60 * 1000
+        fs.writeFileSync(pendingPath, JSON.stringify(pending))
+        localStore = createModelJobs({ saveDir: dir })
         localStore.registerPendingSend({ chatId: 'fresh-chat', generationId: 'g' })
         localStore.cleanupTerminalJobs()
         const left = localStore.listPendingSends().map((p: { chatId: string }) => p.chatId)
@@ -570,27 +566,33 @@ describe('model-jobs rotation', () => {
         saveDir: string,
         rows: { id: string; claimed: number; endedAt: number; kind?: string }[],
     ) {
-        const raw = require('better-sqlite3')
-        const db = new raw(path.join(saveDir, 'model-jobs.db'))
-        const stmt = db.prepare(`
-            INSERT INTO model_jobs (id, chat_id, kind, streaming, status, created_at, ended_at, bytes, claimed)
-            VALUES (?, ?, ?, 0, 'done', ?, ?, 0, ?)
-        `)
         for (const row of rows) {
-            stmt.run(row.id, `chat-${row.id}`, row.kind ?? 'main', row.endedAt - 1000, row.endedAt, row.claimed)
+            const dir = path.join(saveDir, 'model-jobs', row.id)
+            fs.mkdirSync(dir, { recursive: true })
+            fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({
+                schemaVersion: 1,
+                id: row.id,
+                chat_id: `chat-${row.id}`,
+                kind: row.kind ?? 'main',
+                streaming: 0,
+                status: 'done',
+                created_at: row.endedAt - 1000,
+                ended_at: row.endedAt,
+                bytes: 0,
+                claimed: row.claimed,
+            }))
         }
-        db.close()
     }
 
     it('age expiry deletes only claimed terminal jobs', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-jobs-rot-'))
-        const store = createModelJobs({ saveDir: dir })
         const old = Date.now() - 8 * DAY
         seedTerminal(dir, [
             { id: 'old-claimed', claimed: 1, endedAt: old },
             { id: 'old-unclaimed', claimed: 0, endedAt: old },
             { id: 'fresh-claimed', claimed: 1, endedAt: Date.now() },
         ])
+        const store = createModelJobs({ saveDir: dir })
         store.cleanupTerminalJobs()
         expect(store.getJob('old-claimed')).toBeNull()
         // An unclaimed response is never age-expired — an offline client must
@@ -603,12 +605,12 @@ describe('model-jobs rotation', () => {
 
     it('age expiry also deletes unclaimed AUX jobs — nothing ever recovers them', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-jobs-rot-'))
-        const store = createModelJobs({ saveDir: dir })
         const old = Date.now() - 8 * DAY
         seedTerminal(dir, [
             { id: 'old-unclaimed-aux', claimed: 0, endedAt: old, kind: 'aux' },
             { id: 'old-unclaimed-main', claimed: 0, endedAt: old },
         ])
+        const store = createModelJobs({ saveDir: dir })
         store.cleanupTerminalJobs()
         expect(store.getJob('old-unclaimed-aux')).toBeNull()
         expect(store.getJob('old-unclaimed-main')).not.toBeNull()
@@ -618,7 +620,6 @@ describe('model-jobs rotation', () => {
 
     it('overflow eviction removes claimed jobs before unclaimed ones', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-jobs-rot-'))
-        const store = createModelJobs({ saveDir: dir })
         const now = Date.now()
         const rows: { id: string; claimed: number; endedAt: number }[] = []
         for (let i = 0; i < 30; i++) {
@@ -626,6 +627,7 @@ describe('model-jobs rotation', () => {
             rows.push({ id: `claimed-${i}`, claimed: 1, endedAt: now - i * 1000 })
         }
         seedTerminal(dir, rows)
+        const store = createModelJobs({ saveDir: dir })
         store.cleanupTerminalJobs()
         // 60 terminal jobs, cap 50 → 10 evicted. Keep order is unclaimed-first
         // then newest, so ALL 30 unclaimed survive and the 10 oldest claimed go.

@@ -4,12 +4,12 @@
  * Flow:  seed → import → export → import(new server) → export → compare
  *
  * These tests spin up real server instances in temp directories, so they
- * exercise the actual backup/import code paths including SQLite, KV layer,
+ * exercise the actual file-store backup/import and compatibility encoding,
  * and binary encoding.
  */
 import { describe, test, expect, afterAll } from 'vitest'
 import path from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { spawnServer, type ServerHandle } from './helpers/spawnServer.js'
 import { createClient } from './helpers/client.js'
 import { createSeedBackup } from './helpers/seed.js'
@@ -151,6 +151,36 @@ describe('asset round-trip', () => {
 
     // Both count and content (sha256) must match
     expect(afterFingerprints).toEqual(beforeFingerprints)
+  })
+})
+
+describe('canonical file-tree round-trip', () => {
+  test('includes BardWiki and canonical entities while upstream export stays compatible', async () => {
+    const source = await spawnServer()
+    servers.push(source)
+    const sourceClient = await createClient(source.port, source.password)
+    await sourceClient.importBackup(createSeedBackup({ characterCount: 1, chatsPerCharacter: 1 }))
+
+    const wikiRelative = path.join('risubard', 'characters', 'id-char', 'chats', 'id-chat', 'wiki', 'notes', 'canon.md')
+    const wikiAbsolute = path.join(source.cwd, 'save', wikiRelative)
+    await mkdir(path.dirname(wikiAbsolute), { recursive: true })
+    await writeFile(wikiAbsolute, '# Canon\n\nBardWiki source of truth.\n', 'utf8')
+
+    const full = await sourceClient.exportBackup()
+    const fullNames = decodeBackup(full).map(entry => entry.name)
+    expect(fullNames).toContain(`risubard-data/${wikiRelative.split(path.sep).join('/')}`)
+    expect(fullNames).toContain('risubard-data/index/sidebar.json')
+    expect(fullNames.some(name => name.endsWith('.sha256'))).toBe(false)
+
+    const upstream = Buffer.from(await (await sourceClient.fetch('/api/backup/export?target=upstream')).arrayBuffer())
+    expect(decodeBackup(upstream).some(entry => entry.name.startsWith('risubard-data/'))).toBe(false)
+
+    const destination = await spawnServer()
+    servers.push(destination)
+    const destinationClient = await createClient(destination.port, destination.password)
+    await destinationClient.importBackup(full)
+    expect(await readFile(path.join(destination.cwd, 'save', wikiRelative), 'utf8'))
+      .toBe('# Canon\n\nBardWiki source of truth.\n')
   })
 })
 

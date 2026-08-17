@@ -23,7 +23,7 @@ This guide explains how to build and run PocketRisu directly on an Android phone
 | **RAM**           | 2 GB            | 4 GB or more               |
 | **Free storage** | 2 GB            | 4 GB or more (with build)  |
 
-PocketRisu does not ship pre-compiled binaries for Termux, so the phone builds everything itself. Including native modules such as `better-sqlite3`, the build takes roughly **10 to 40 minutes** depending on phone performance.
+PocketRisu builds on the phone. The runtime no longer depends on native SQLite or `better-sqlite3`, which removes the former SQLite compilation barrier on Termux.
 
 
 ---
@@ -94,6 +94,8 @@ http://localhost:6001
 The PocketRisu UI should load. `localhost` is automatically treated as a secure context by the browser, so clipboard, `crypto.subtle`, and other secure-context APIs work normally.
 
 Stop the server with `Ctrl + C`.
+
+User data defaults to Termux-internal `$HOME/.local/share/risubard`. You may set another internal absolute path with `RISUBARD_DATA_ROOT`, but `/sdcard` and `/storage/emulated` are rejected as canonical roots. Use shared storage only for completed backup copies. See [File-native user data](file-native-storage.md).
 
 
 ---

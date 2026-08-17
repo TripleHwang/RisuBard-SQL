@@ -25,7 +25,7 @@ Esta guía explica cómo compilar y ejecutar PocketRisu directamente en un telé
 | **RAM**               | 2 GB          | 4 GB o más                             |
 | **Espacio libre**     | 2 GB          | 4 GB o más (incluida la compilación)   |
 
-PocketRisu no proporciona binarios precompilados para Termux, por lo que el teléfono compila todo por sí mismo. Incluyendo módulos nativos como `better-sqlite3`, la compilación tarda aproximadamente **de 10 a 40 minutos**, dependiendo del rendimiento del teléfono.
+PocketRisu se compila en el teléfono. El entorno de ejecución ya no depende de SQLite nativo ni de `better-sqlite3`, eliminando la antigua barrera de compilación de SQLite.
 
 
 ---

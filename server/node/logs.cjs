@@ -1,56 +1,46 @@
 'use strict';
 
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { atomicWriteFile, atomicWriteJson, readVerifiedJson } = require('./file-store.cjs');
+const { resolveDataRoot } = require('./data-root.cjs');
 
 const MAX_ROWS = 5000;
 const MAX_DESCRIPTION_BYTES = 10 * 1024; // 10KB per entry
 const MAX_BATCH_SIZE = 1000;             // per addLogBatch / per /api/logs request
 const ROTATE_EVERY_N_ROWS = 100;         // amortize DELETE cost
 
-const saveDir = path.join(process.cwd(), 'save');
-if (!fs.existsSync(saveDir)) {
-    fs.mkdirSync(saveDir, { recursive: true });
+const dataRoot = resolveDataRoot();
+const logRoot = path.join(dataRoot, 'logs');
+const logFile = path.join(logRoot, 'system.jsonl');
+const stateFile = path.join(logRoot, 'state.json');
+fs.mkdirSync(logRoot, { recursive: true });
+let rowsCache = null;
+let logState = fs.existsSync(stateFile)
+    ? readVerifiedJson(logRoot, 'state.json')
+    : { schemaVersion: 1, nextId: 1 };
+
+function loadRows() {
+    if (rowsCache) return rowsCache;
+    if (!fs.existsSync(logFile)) return rowsCache = [];
+    return rowsCache = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 }
-const dbPath = path.join(saveDir, 'logs.db');
-const db = new Database(dbPath);
 
-db.pragma('journal_mode = WAL');
-db.pragma('synchronous = NORMAL');
-db.pragma('busy_timeout = 5000');
+function appendRows(rows) {
+    if (!rows.length) return;
+    const cache = loadRows();
+    const fd = fs.openSync(logFile, 'a', 0o600);
+    try { fs.writeSync(fd, rows.map(row => JSON.stringify(row)).join('\n') + '\n', null, 'utf8'); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    cache.push(...rows);
+    atomicWriteJson(logRoot, 'state.json', logState);
+}
 
-db.exec(`
-    CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp INTEGER NOT NULL,
-        level TEXT NOT NULL,
-        origin TEXT NOT NULL,
-        message TEXT NOT NULL,
-        description TEXT,
-        source TEXT,
-        count INTEGER NOT NULL DEFAULT 1,
-        platform TEXT,
-        client_id TEXT,
-        user_agent TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp DESC);
-    CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
-`);
-
-const stmtInsert = db.prepare(`
-    INSERT INTO logs
-        (timestamp, level, origin, message, description, source, count, platform, client_id, user_agent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`);
-
-const stmtRotate = db.prepare(`
-    DELETE FROM logs
-    WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT ?)
-`);
-
-const stmtClearAll = db.prepare(`DELETE FROM logs`);
+function rewriteRows(rows) {
+    rowsCache = rows;
+    atomicWriteFile(logRoot, 'system.jsonl', Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8'));
+}
 
 // Sources captured by monkey-patched console / window handlers / Express
 // middleware rather than explicit logger calls. Mirrors the client-side
@@ -124,12 +114,10 @@ function insertEntry(entry) {
     const clientId = entry.clientId ? String(entry.clientId).slice(0, 64) : null;
     const userAgent = entry.userAgent ? String(entry.userAgent).slice(0, 512) : null;
 
-    stmtInsert.run(timestamp, level, origin, message, description, source, count, platform, clientId, userAgent);
+    return { id: logState.nextId++, timestamp, level, origin, message, description, source, count, platform, clientId, userAgent };
 }
 
-const insertMany = db.transaction((entries) => {
-    for (const e of entries) insertEntry(e);
-});
+const insertMany = entries => appendRows(entries.map(insertEntry));
 
 let insertedSinceRotate = 0;
 
@@ -154,7 +142,8 @@ function addLogBatch(entries) {
 function maybeRotate() {
     if (insertedSinceRotate < ROTATE_EVERY_N_ROWS) return;
     insertedSinceRotate = 0;
-    stmtRotate.run(MAX_ROWS);
+    const rows = loadRows();
+    if (rows.length > MAX_ROWS) rewriteRows(rows.slice(-MAX_ROWS));
 }
 
 // ─── Server-side logger ──────────────────────────────────────────────────────
@@ -172,16 +161,6 @@ function nodePlatformLabel() {
     }
 }
 const serverPlatform = `Node · ${nodePlatformLabel()}`;
-
-// Backfill historic rows that were stored with `Node · <hostname>` (the old
-// format leaked the user's machine name when sharing logs). Idempotent —
-// after the first boot every matching row is normalized, subsequent boots
-// scan and find no work. Cost on a 10k-row logs table is sub-ms.
-try {
-    db.prepare(
-        `UPDATE logs SET platform = ? WHERE platform LIKE 'Node · %' AND platform != ?`
-    ).run(serverPlatform, serverPlatform);
-} catch { /* logs table may not exist yet on a fresh install — ignore */ }
 
 function formatErrorWithCause(err) {
     // Walk the cause chain so we don't lose context when a caller switches
@@ -290,41 +269,27 @@ function buildFilterWhere({ level, origin, since, excludeLevels, excludeOrigins,
 }
 
 function queryLogs(opts = {}) {
-    const { beforeId, limit } = opts;
-    const { conditions, params } = buildFilterWhere(opts);
-    // Cursor is id (not timestamp): aligns with ORDER BY id DESC so burst-written rows
-    // sharing a timestamp paginate deterministically instead of being skipped.
-    if (typeof beforeId === 'number') { conditions.push(`id < ?`); params.push(beforeId); }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const { beforeId, limit, level, origin, since, excludeLevels, excludeOrigins, excludeBackground } = opts;
     const lim = Math.min(Math.max(Number(limit) || 500, 1), 5000);
-    const sql = `SELECT * FROM logs ${where} ORDER BY id DESC LIMIT ?`;
-    const rows = db.prepare(sql).all(...params, lim);
-    return rows.map(r => ({
-        id: r.id,
-        timestamp: r.timestamp,
-        level: r.level,
-        origin: r.origin,
-        message: r.message,
-        description: r.description,
-        source: r.source,
-        count: r.count,
-        platform: r.platform,
-        clientId: r.client_id,
-        userAgent: r.user_agent,
-    }));
+    return loadRows().filter(row => {
+        if (level && row.level !== level) return false;
+        if (origin && row.origin !== origin) return false;
+        if (typeof since === 'number' && row.timestamp < since) return false;
+        if (Array.isArray(excludeLevels) && excludeLevels.includes(row.level)) return false;
+        if (Array.isArray(excludeOrigins) && excludeOrigins.includes(row.origin)) return false;
+        if (excludeBackground && BACKGROUND_SOURCES.includes(row.source)) return false;
+        if (typeof beforeId === 'number' && row.id >= beforeId) return false;
+        return true;
+    }).slice().sort((a, b) => b.id - a.id).slice(0, lim);
 }
 
 function clearLogs() {
-    stmtClearAll.run();
+    rewriteRows([]);
     insertedSinceRotate = 0;
 }
 
 function countLogs(opts = {}) {
-    const { conditions, params } = buildFilterWhere(opts);
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const sql = `SELECT COUNT(*) as n FROM logs ${where}`;
-    const row = db.prepare(sql).get(...params);
-    return row ? row.n : 0;
+    return queryLogs({ ...opts, limit: MAX_ROWS }).length;
 }
 
 // ─── Global error handlers ──────────────────────────────────────────────────
@@ -347,7 +312,7 @@ function installProcessHandlers() {
         } catch {}
         console.error('[uncaughtException]', err);
         // Preserve Node's default: terminate after uncaught exception.
-        // better-sqlite3 writes synchronously, so the log entry above is already on disk.
+        // JSONL append is fsynced synchronously, so the log entry is already on disk.
         process.exit(1);
     });
 

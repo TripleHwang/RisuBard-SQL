@@ -108,7 +108,7 @@ export interface AssetFingerprint {
 export function fingerprintAssets(bin: Buffer): AssetFingerprint[] {
   const { createHash } = require('node:crypto') as typeof import('node:crypto')
   return decodeBackup(bin)
-    .filter(e => e.name !== 'database.risudat')
+    .filter(e => e.name !== 'database.risudat' && !e.name.startsWith('risubard-data/'))
     .map(e => ({
       name: e.name,
       hash: createHash('sha256').update(e.data).digest('hex'),

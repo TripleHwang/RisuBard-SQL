@@ -4,7 +4,6 @@ import express from 'express'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import Database from 'better-sqlite3'
 import pkg from './request-logs.cjs'
 
 const { createRequestLogs, truncateBody, truncateTail, dayKey } = pkg as {
@@ -149,30 +148,10 @@ describe('insert and query', () => {
     })
 })
 
-describe('schema migration', () => {
-    it('adds chat evidence columns to an existing request log database', () => {
+describe('file-native schema', () => {
+    it('persists chat evidence without creating a SQLite database', () => {
         const legacyDir = path.join(tmpDir, 'legacy')
         fs.mkdirSync(legacyDir)
-        const legacy = new Database(path.join(legacyDir, 'request-logs.db'))
-        legacy.exec(`
-            CREATE TABLE requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp INTEGER NOT NULL, category TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'other', chat_id TEXT,
-                generation_id TEXT, model TEXT, provider TEXT,
-                url TEXT NOT NULL, method TEXT, status INTEGER,
-                success INTEGER NOT NULL, aborted INTEGER NOT NULL DEFAULT 0,
-                route TEXT, streaming INTEGER NOT NULL DEFAULT 0,
-                duration_ms INTEGER, first_token_ms INTEGER,
-                input_tokens INTEGER, output_tokens INTEGER,
-                cached_tokens INTEGER, reasoning_tokens INTEGER,
-                request_headers TEXT, request_body TEXT, response_body TEXT,
-                response_type TEXT, error_message TEXT,
-                truncated INTEGER NOT NULL DEFAULT 0,
-                size_bytes INTEGER NOT NULL DEFAULT 0, client_id TEXT
-            )
-        `)
-        legacy.close()
 
         const migrated = createRequestLogs({ saveDir: legacyDir })
         try {
@@ -185,6 +164,8 @@ describe('schema migration', () => {
             })])).toBe(1)
             const [row] = migrated.queryRequestLogs({ sessionChatId: 'migrated-chat' })
             expect(row.injectionManifest.items[0].name).toBe('current-scene')
+            expect(fs.existsSync(path.join(legacyDir, 'request-logs.db'))).toBe(false)
+            expect(fs.existsSync(path.join(legacyDir, 'request-logs', 'requests.jsonl'))).toBe(true)
         } finally {
             migrated.close()
         }
@@ -402,25 +383,13 @@ describe('url masking', () => {
         expect(row.url).toContain('generativelanguage.googleapis.com')
     })
 
-    it('re-masks urls written before the column was masked', () => {
-        // Simulate a row from the leaky build by writing straight to the table.
-        const dbFile = path.join(tmpDir, 'request-logs.db')
-        expect(fs.existsSync(dbFile)).toBe(true)
+    it('keeps masked urls after a JSONL restart', () => {
         logs.addRequestLogBatch([entry()])
         logs.close()
-
-        const Database = require('better-sqlite3')
-        const raw = new Database(dbFile)
-        raw.prepare(`UPDATE requests SET url = ?`).run(
-            'https://x.test/v1?key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456',
-        )
-        raw.close()
-
-        // Reopening runs the startup backfill.
         logs = createRequestLogs({ saveDir: tmpDir })
         const [row] = logs.queryRequestLogs({})
-        expect(row.url).not.toContain('AIzaSy')
-        expect(row.url).toContain('REDACTED')
+        expect(row.url).toBe('https://api.example.com/v1/chat/completions')
+        expect(fs.existsSync(path.join(tmpDir, 'request-logs.db'))).toBe(false)
     })
 })
 

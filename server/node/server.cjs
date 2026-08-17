@@ -23,14 +23,16 @@ const getVips = () => {
     }
     return _vipsPromise
 }
-const { kvGet, kvSet, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities, checkpointWal,
-        gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, db: sqliteDb } = require('./db.cjs');
+const { kvGet, kvSet, kvSetMany, kvReplacePrefixes, kvReplaceAll, kvDel, kvList,
+        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities,
+        gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
     logger, installProcessHandlers, expressErrorMiddleware,
 } = require('./logs.cjs');
 const { createRequestLogs } = require('./request-logs.cjs');
+const { resolveDataRoot } = require('./data-root.cjs');
+const { commitTransaction, moveToTrash } = require('./file-store.cjs');
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
 const { openServerBrowser } = require('./open-server-browser.cjs');
 const {
@@ -233,6 +235,7 @@ async function flushPendingDb() {
                 const dbObj = normalizeJSON(await decodeRisuSave(raw));
                 const fullDb = reassembleFullDb(stripChatsFromDb(dbObj));
                 kvSet('database/database.bin', Buffer.from(encodeRisuSaveLegacy(fullDb)));
+                persistCanonicalProjection(fullDb);
             }
         }
         createBackupAndRotate();
@@ -242,6 +245,7 @@ async function flushPendingDb() {
 function invalidateDbCache() {
     delete dbCache[DB_HEX_KEY];
     fullChatStore = null;
+    canonicalProjectionReady = false;
     if (saveTimers[DB_HEX_KEY]) {
         clearTimeout(saveTimers[DB_HEX_KEY]);
         delete saveTimers[DB_HEX_KEY];
@@ -322,12 +326,16 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
 
     if (needsPersist) {
         kvSet('database/database.bin', Buffer.from(encodeRisuSaveLegacy(dbObj)));
+        persistCanonicalProjection(dbObj);
         if (createBackup) {
             createBackupAndRotate();
         }
     }
     if (migrationResult) {
         migrationResult.coldStorageFailed = coldRestoreResult.failed;
+    }
+    if (!canonicalProjectionReady) {
+        persistCanonicalProjection(dbObj);
     }
     return dbObj;
 }
@@ -537,10 +545,10 @@ async function migrateRemoteBlocksIfNeeded() {
     // decode and the backup is effectively dead. The orphans don't grow
     // (NodeOnly's disableRemoteSaving = true on writes), so leaving them
     // costs a few MB of disk for full backup recoverability.
-    sqliteDb.transaction(() => {
-        kvSet('database/database.bin', Buffer.from(reEncoded));
-        markRemoteMigrationDone();
-    })();
+    kvSetMany([
+        { key: 'database/database.bin', value: Buffer.from(reEncoded) },
+        { key: REMOTE_MIGRATION_MARKER_KEY, value: Buffer.from(new Date().toISOString()) },
+    ]);
 
     // Reset in-memory caches whose contents were derived from the pre-migration
     // bytes — next reader recomputes from the migrated database.bin.
@@ -708,9 +716,10 @@ async function persistDbCacheWithChats(filePath, decodedKey) {
     const data = Buffer.from(encodeRisuSaveLegacy(fullDb));
     try {
         kvSet(decodedKey, data);
+        if (decodedKey === 'database/database.bin') persistCanonicalProjection(fullDb);
     } catch (err) {
         // Tag with BLOB size so the visibility layer can surface it to the user.
-        // The dominant failure mode (better-sqlite3 INT_MAX) is size-driven.
+        // Oversized compatibility blobs are rejected before allocating copies.
         if (err && typeof err === 'object') {
             try { err.attemptedSize = data.length; } catch {}
         }
@@ -787,9 +796,15 @@ const hubURL = 'https://sv.risuai.xyz';
 let password = ''
 
 // Ensure /save/ exists for password file and migration source
-const savePath = path.join(process.cwd(), "save")
+const savePath = resolveDataRoot()
 if(!existsSync(savePath)){
     mkdirSync(savePath)
+}
+let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
+function persistCanonicalProjection(databaseObject) {
+    const result = userDataRepository.importLegacyDatabase(databaseObject, { mode: 'sync' })
+    canonicalProjectionReady = true
+    return result
 }
 
 // Server-side backup directory (outside save/ to avoid bloating updater copies).
@@ -837,7 +852,7 @@ if(!existsSync(backupsDir)){
 writeBackupPathMarker(backupsDir);
 const BACKUP_FILENAME_REGEX = /^risu-backup-\d+\.bin$/;
 
-const passwordPath = path.join(process.cwd(), 'save', '__password')
+const passwordPath = path.join(savePath, '__password')
 if(existsSync(passwordPath)){
     password = readFileSync(passwordPath, 'utf-8')
 }
@@ -867,7 +882,7 @@ if (existsSync(instanceIdPath)) {
     writeFileSync(instanceIdPath, instanceId, 'utf-8')
 }
 
-const authCodePath = path.join(process.cwd(), 'save', '__authcode')
+const authCodePath = path.join(savePath, '__authcode')
 const inlayDir = path.join(savePath, 'inlays')
 const inlayMigrationMarker = path.join(inlayDir, '.migrated_to_fs')
 const hexRegex = /^[0-9a-fA-F]+$/;
@@ -1385,7 +1400,7 @@ async function fetchLatestRelease(lang) {
 // <img src="/api/asset/..."> cannot send custom headers, so we use a session
 // cookie issued after initial JWT auth. Single-user environment: Map is fine.
 // Sessions are persisted to disk so they survive server restarts.
-const SESSION_FILE = path.join(process.cwd(), 'save', '__sessions')
+const SESSION_FILE = path.join(savePath, '__sessions')
 const sessions = new Map() // token → expiresAt (ms)
 
 function loadSessions() {
@@ -1442,7 +1457,7 @@ const ASSET_EXT_MIME = {
 
 async function checkDiskSpace(requiredBytes) {
     try {
-        const saveDir = path.join(process.cwd(), 'save');
+        const saveDir = savePath;
         const stats = await fs.statfs(saveDir);
         const availableBytes = stats.bavail * stats.bsize;
         return { ok: availableBytes >= requiredBytes, available: availableBytes };
@@ -1938,6 +1953,42 @@ function encodeBackupEntry(name, data) {
     return Buffer.concat([nameLength, encodedName, dataLength, data]);
 }
 
+const CANONICAL_BACKUP_PREFIX = 'risubard-data/';
+const CANONICAL_BACKUP_DIRECTORIES = [
+    'settings', 'secrets', 'presets', 'modules', 'personas', 'lorebooks',
+    'characters', 'index', 'risubard', 'trash', 'logs', 'request-logs',
+    'model-jobs',
+];
+
+async function listCanonicalBackupEntries() {
+    const entries = [];
+    async function walk(relativeDirectory) {
+        const absolute = path.join(savePath, relativeDirectory);
+        let children;
+        try { children = await fs.readdir(absolute, { withFileTypes: true }); }
+        catch { return; }
+        for (const child of children) {
+            if (child.name.endsWith('.tmp') || child.name.endsWith('.sha256')) continue;
+            const relativePath = path.join(relativeDirectory, child.name);
+            if (child.isDirectory()) await walk(relativePath);
+            else if (child.isFile()) {
+                const sourcePath = path.join(savePath, relativePath);
+                const stat = await fs.stat(sourcePath);
+                const portable = relativePath.split(path.sep).join('/');
+                entries.push({
+                    kind: 'canonical',
+                    sourcePath,
+                    backupName: `${CANONICAL_BACKUP_PREFIX}${portable}`,
+                    sortKey: `${CANONICAL_BACKUP_PREFIX}${portable}`,
+                    size: stat.size,
+                });
+            }
+        }
+    }
+    for (const directory of CANONICAL_BACKUP_DIRECTORIES) await walk(directory);
+    return entries.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+}
+
 function isInvalidBackupPathSegment(name) {
     return (
         !name ||
@@ -2174,6 +2225,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     let assetsRestored = 0;
     let bytesReceived = 0;
     let batchCount = 0;
+    const stagedKvEntries = [];
     const seenEntryNames = new Set();
     const importedInlayIds = new Set();
     const importedSidecarIds = new Set();
@@ -2182,9 +2234,13 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
 
     const stagingDir = path.join(savePath, 'inlays_import_staging');
     const backupInlayDir = path.join(savePath, 'inlays_import_backup');
+    const canonicalStagingDir = path.join(savePath, '.canonical_import_staging');
     await fs.rm(stagingDir, { recursive: true, force: true });
     await fs.rm(backupInlayDir, { recursive: true, force: true });
+    await fs.rm(canonicalStagingDir, { recursive: true, force: true });
     await fs.mkdir(stagingDir, { recursive: true });
+    await fs.mkdir(canonicalStagingDir, { recursive: true });
+    let canonicalEntriesRestored = 0;
 
     function stagingInlayFilePath(id, ext) {
         return path.join(stagingDir, `${id}.${normalizeInlayExt(ext)}`);
@@ -2218,31 +2274,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     await flushPendingDb();
     createBackupAndRotate();
 
-    sqliteDb.pragma('synchronous = OFF');
-
-    sqliteDb.exec('BEGIN');
-    kvDelPrefix('assets/');
-    kvDelPrefix('inlay/');
-    kvDelPrefix('inlay_thumb/');
-    kvDelPrefix('inlay_meta/');
-    kvDelPrefix('inlay_info/');
-    kvDelPrefix('coldstorage/');
-    // Composer drafts are session/device-local and not carried in the backup;
-    // wipe stale ones so an old snapshot's chats don't resurrect later drafts.
-    kvDelPrefix('drafts/');
-    // Same reasoning as clearExistingData (save-folder import path): wipe stale
-    // remote payloads from the prior user before this backup's contents land.
-    // .bin backups never carry REMOTE blocks today, so the migration won't
-    // resolveRemote on them — but keeping the two import paths consistent
-    // avoids a contamination regression if that ever changes (upstream sync,
-    // plugin-generated buffers, etc.).
-    kvDelPrefix('remotes/');
-    // Allow remote-block migration to re-evaluate against the new database.bin.
-    // (.bin backups themselves never carry REMOTE blocks — legacy msgpack
-    // format only — but a fresh import is a clear "data changed" signal.)
-    kvDel(REMOTE_MIGRATION_MARKER_KEY);
-    clearEntities();
-
     try {
         for await (const chunk of dataSource) {
             bytesReceived += chunk.length;
@@ -2270,7 +2301,21 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 const inlayRaw = parseInlayBackupName(name);
                 const inlaySidecar = parseInlaySidecarBackupName(name);
 
-                if (inlayRaw) {
+                if (name.startsWith(CANONICAL_BACKUP_PREFIX)) {
+                    const portable = name.slice(CANONICAL_BACKUP_PREFIX.length);
+                    if (!portable || portable.includes('\\') || portable.startsWith('/')
+                        || portable.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+                        throw new Error(`Invalid canonical backup entry name: ${name}`);
+                    }
+                    const target = path.resolve(canonicalStagingDir, ...portable.split('/'));
+                    const relative = path.relative(canonicalStagingDir, target);
+                    if (relative === '..' || relative.startsWith(`..${path.sep}`)) {
+                        throw new Error(`Canonical backup entry escapes staging: ${name}`);
+                    }
+                    mkdirSync(path.dirname(target), { recursive: true });
+                    writeFileSync(target, data);
+                    canonicalEntriesRestored += 1;
+                } else if (inlayRaw) {
                     importedInlayIds.add(inlayRaw.id);
                     if (inlayRaw.ext) {
                         writeStagingInlayFileSync(inlayRaw.id, inlayRaw.ext, data, legacyInlayInfoMap.get(inlayRaw.id) || { ext: inlayRaw.ext, name: inlayRaw.id, type: 'image' });
@@ -2334,7 +2379,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                             parseColdStorageJsonBuffer(data, name, { allowPlainJson: true }).coldData
                         )
                         : data;
-                    kvSet(storageKey, storageValue);
+                    stagedKvEntries.push({ key: storageKey, value: Buffer.from(storageValue) });
                     if (storageKey === 'database/database.bin') {
                         hasDatabase = true;
                     } else {
@@ -2343,11 +2388,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 }
 
                 batchCount++;
-                if (batchCount >= BATCH_SIZE) {
-                    sqliteDb.exec('COMMIT');
-                    sqliteDb.exec('BEGIN');
-                    batchCount = 0;
-                }
             });
 
             if (remaining.length === 0) {
@@ -2381,15 +2421,38 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 writeStagingSidecarSync(id, info);
             }
         }
-        sqliteDb.exec('COMMIT');
+        kvReplacePrefixes(stagedKvEntries, [
+            'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
+            'coldstorage/', 'drafts/', 'remotes/', REMOTE_MIGRATION_MARKER_KEY,
+        ]);
+        if (canonicalEntriesRestored > 0) {
+            const operations = [];
+            async function collect(relativeDirectory = '') {
+                const absolute = path.join(canonicalStagingDir, relativeDirectory);
+                for (const entry of await fs.readdir(absolute, { withFileTypes: true })) {
+                    const relativePath = path.join(relativeDirectory, entry.name);
+                    if (entry.isDirectory()) await collect(relativePath);
+                    else if (entry.isFile()) operations.push({
+                        path: relativePath,
+                        data: await fs.readFile(path.join(canonicalStagingDir, relativePath)),
+                    });
+                }
+            }
+            await collect();
+            for (const directory of CANONICAL_BACKUP_DIRECTORIES) {
+                if (directory === 'trash') continue;
+                const current = path.join(savePath, directory);
+                if (existsSync(current)) moveToTrash(savePath, directory);
+            }
+            commitTransaction(savePath, operations);
+        }
     } catch (error) {
-        try { sqliteDb.exec('ROLLBACK'); } catch (_) {}
         await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
         await fs.rm(backupInlayDir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
         throw error;
-    } finally {
-        sqliteDb.pragma('synchronous = NORMAL');
     }
+    await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
 
     await ensureInlayDir();
     try {
@@ -2424,7 +2487,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     }
 
     try {
-        checkpointWal('TRUNCATE');
     } catch (checkpointError) {
         logger.warn('[Backup Import] WAL checkpoint after import failed:', checkpointError);
     }
@@ -3478,8 +3540,8 @@ app.delete('/api/logs', async (req, res, next) => {
 });
 
 // ─── /api/request-logs — provider request log + token usage statistics ───────
-// Own SQLite file (save/request-logs.db) with its own rotation policy; see
-// server/node/request-logs.cjs. Registered with the same auth the /api/logs
+// Rotating JSONL files with their own lifecycle; see request-logs.cjs.
+// Registered with the same auth the /api/logs
 // endpoints use.
 const requestLogs = createRequestLogs({ saveDir: savePath });
 requestLogs.registerRoutes(app, { auth: checkAuth, activeSession: checkActiveSession });
@@ -3577,6 +3639,7 @@ app.post('/api/write', async (req, res, next) => {
                     // Re-init chat store from merged result
                     initChatStore(fullDb);
                     kvSet(key, mergedContent);
+                    persistCanonicalProjection(fullDb);
                 } catch (e) {
                     logger.error('[Write] Failed to merge chats into database.bin:', e.message);
                     // Do NOT write stubs-only to disk — that would permanently
@@ -3878,12 +3941,10 @@ app.post('/api/assets/bulk-write', async (req, res, next) => {
         }
         for(let i = 0; i < entries.length; i += BULK_BATCH){
             const batch = entries.slice(i, i + BULK_BATCH);
-            const writeBatch = sqliteDb.transaction(() => {
-                for(const { key, value } of batch){
-                    kvSet(key, Buffer.from(value, 'base64'));
-                }
-            });
-            writeBatch();
+            kvSetMany(batch.map(({ key, value }) => ({
+                key,
+                value: Buffer.from(value, 'base64'),
+            })));
         }
         res.json({ success: true, count: entries.length });
     } catch(error){ next(error); }
@@ -4055,6 +4116,9 @@ app.get('/api/backup/export', async (req, res, next) => {
             sortKey: entry.key,
             size: entry.size,
         }));
+        const canonicalEntries = !settingsOnly && target === 'nodeonly'
+            ? await listCanonicalBackupEntries()
+            : [];
         const namespacedEntries = [
             ...kvListWithSizes('assets/')
                 // Settings-only keeps just the assets the trimmed DB still
@@ -4075,6 +4139,7 @@ app.get('/api/backup/export', async (req, res, next) => {
             ...inlayMetaEntries,
             ...inlayEntries,
             ...sidecarEntries.filter(Boolean),
+            ...canonicalEntries,
         ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
         const dbSize = settingsOnly ? settingsDbValue.length : kvSize('database/database.bin');
         const totalBytes = namespacedEntries.reduce((sum, entry) => {
@@ -4316,6 +4381,7 @@ app.post('/api/backup/server/save', async (req, res, next) => {
             ...kvListWithSizes('inlay_meta/').map((e) => ({ kind: 'kv', key: e.key, backupName: e.key, size: e.size })),
             ...inlayEntries,
             ...sidecarEntries,
+            ...await listCanonicalBackupEntries(),
         ];
 
         const totalEntries = namespacedEntries.length + 1; // +1 for database
@@ -4771,6 +4837,7 @@ app.post('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
                             const encoded = Buffer.from(encodeRisuSaveLegacy(fullDb));
                             try {
                                 kvSet('database/database.bin', encoded);
+                                persistCanonicalProjection(fullDb);
                             } catch (err) {
                                 if (err && typeof err === 'object') {
                                     try { err.attemptedSize = encoded.length; } catch {}
@@ -4863,23 +4930,10 @@ async function importHexFilesFromDir(dirPath) {
     createBackupAndRotate();
     invalidateDbCache();
 
-    const insert = sqliteDb.prepare(
-        `INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)`
-    );
-    const now = Date.now();
-
-    const run = sqliteDb.transaction(() => {
-        clearExistingData();
-        for (const hexFile of hexFiles) {
-            const key = Buffer.from(hexFile, 'hex').toString('utf-8');
-            const value = readFileSync(path.join(dirPath, hexFile));
-            // Chunk the DB blob so an oversized database.bin imports instead of
-            // failing the BLOB bind limit; other keys keep the bulk fast path.
-            if (key === DB_BLOB_KEY) { kvSet(key, value); continue; }
-            insert.run(key, value, now);
-        }
-    });
-    run();
+    kvReplaceAll(hexFiles.map(hexFile => ({
+        key: Buffer.from(hexFile, 'hex').toString('utf-8'),
+        value: readFileSync(path.join(dirPath, hexFile)),
+    })));
 
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
     return { imported: hexFiles.length };
@@ -4894,21 +4948,7 @@ async function importHexEntries(entries) {
     createBackupAndRotate();
     invalidateDbCache();
 
-    const insert = sqliteDb.prepare(
-        `INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, ?)`
-    );
-    const now = Date.now();
-
-    const run = sqliteDb.transaction(() => {
-        clearExistingData();
-        for (const { key, value } of entries) {
-            // Chunk the DB blob so an oversized database.bin imports instead of
-            // failing the BLOB bind limit; other keys keep the bulk fast path.
-            if (key === DB_BLOB_KEY) { kvSet(key, value); continue; }
-            insert.run(key, value, now);
-        }
-    });
-    run();
+    kvReplaceAll(entries);
 
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
     return { imported: entries.length };
@@ -5193,6 +5233,7 @@ async function estimateServerBackupSize() {
     for (const it of kvListWithSizes('assets/')) total += it.size;
     for (const it of kvListWithSizes('inlay_meta/')) total += it.size;
     for (const e of listColdStorageBackupEntries()) total += e.size;
+    for (const e of await listCanonicalBackupEntries()) total += e.size;
     total += await sumInlayFsBytes();
     return total;
 }
@@ -5200,15 +5241,12 @@ async function estimateServerBackupSize() {
 app.get('/api/db/stats', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     try {
-        const saveDir = path.join(process.cwd(), 'save');
-        const dbFilePath = path.join(saveDir, 'risuai.db');
-        const walPath = dbFilePath + '-wal';
-        const shmPath = dbFilePath + '-shm';
-
+        const saveDir = savePath;
+        const fileStoreBytes = kvListWithSizes('').reduce((sum, item) => sum + item.size, 0);
         const files = {
-            db: statSafe(dbFilePath)?.size ?? 0,
-            wal: statSafe(walPath)?.size ?? 0,
-            shm: statSafe(shmPath)?.size ?? 0,
+            db: fileStoreBytes,
+            wal: 0,
+            shm: 0,
         };
 
         const disk = await diskFreeStat(saveDir);
@@ -5232,19 +5270,19 @@ app.get('/api/db/stats', async (req, res, next) => {
             backupDisk = { ...bDisk, path: backupsDir, sameAsSaveDir };
         }
 
-        const pageSize = sqliteDb.pragma('page_size', { simple: true });
-        const pageCount = sqliteDb.pragma('page_count', { simple: true });
-        const freelistCount = sqliteDb.pragma('freelist_count', { simple: true });
-        const journalMode = sqliteDb.pragma('journal_mode', { simple: true });
-        const autoVacuum = sqliteDb.pragma('auto_vacuum', { simple: true });
-        const reclaimable = freelistCount * pageSize;
+        const pageSize = 0;
+        const pageCount = 0;
+        const freelistCount = 0;
+        const journalMode = 'atomic-rename';
+        const autoVacuum = 'file-gc';
+        const reclaimable = reclaimableChunkBytes();
 
         const dbBlobSize = kvSize(DB_BLOB_KEY) || 0;
 
         // Physical storage of the chunked DB blob (and all snapshots, which share
         // chunks). This is where the blob bytes actually live post-chunking — kv
         // holds only a tiny marker, so the chart must count this table separately.
-        const chunkStat = sqliteDb.prepare('SELECT COUNT(*) AS c, COALESCE(SUM(LENGTH(data)), 0) AS b FROM chunks').get();
+        const chunkStat = { c: 0, b: 0 };
         // Bytes the next gc() would reclaim (true orphans + chunks pinned only by
         // stale/raw-overwritten manifests) — drives the Optimize button.
         const orphanChunkBytes = reclaimableChunkBytes();
@@ -5274,8 +5312,9 @@ app.get('/api/db/stats', async (req, res, next) => {
             prefixes[p] = { totalSize: total, count: items.length };
         }
 
-        const kvRows = sqliteDb.prepare('SELECT COUNT(*) AS c FROM kv').get().c;
-        const kvTotalBytes = sqliteDb.prepare('SELECT COALESCE(SUM(LENGTH(value)), 0) AS s FROM kv').get().s;
+        const allKvRows = kvListWithSizes('');
+        const kvRows = allKvRows.length;
+        const kvTotalBytes = allKvRows.reduce((sum, item) => sum + item.size, 0);
 
         let fileBackups = { count: 0, totalSize: 0, oldest: null, newest: null };
         try {
@@ -5500,14 +5539,13 @@ app.post('/api/db/optimize', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
     try {
-        const saveDir = path.join(process.cwd(), 'save');
-        const dbFilePath = path.join(saveDir, 'risuai.db');
-        const preDbSize = statSafe(dbFilePath)?.size ?? 0;
+        const saveDir = savePath;
+        const preDbSize = kvListWithSizes('').reduce((sum, item) => sum + item.size, 0);
 
         const { free } = await diskFreeStat(saveDir);
         if (preDbSize > 0 && free != null && free < preDbSize * 1.2) {
             return res.status(400).json({
-                error: 'Insufficient disk space for VACUUM',
+                error: 'Insufficient disk space for file-store optimization',
                 required: Math.ceil(preDbSize * 1.2),
                 free,
             });
@@ -5516,18 +5554,10 @@ app.post('/api/db/optimize', async (req, res, next) => {
         const result = await queueStorageOperation(async () => {
             await flushPendingDb();
             const t0 = Date.now();
-            // Reclaim chunks orphaned by edits/snapshot rotation before VACUUM, so
-            // their pages get compacted in the same pass. Serialized with saves by
-            // the surrounding queueStorageOperation.
             let gcDeleted = 0;
-            try { gcDeleted = gcChunks(); } catch (e) { logger.warn('[Optimize] chunk gc failed:', e?.message || e); }
-            try { checkpointWal('TRUNCATE'); } catch (e) { logger.warn('[Optimize] checkpoint failed:', e?.message || e); }
-            sqliteDb.exec('VACUUM');
-            // VACUUM streams the whole DB through the WAL; without this checkpoint the
-            // -wal file stays inflated until the next 5-min background TRUNCATE.
-            try { checkpointWal('TRUNCATE'); } catch (e) { logger.warn('[Optimize] post-VACUUM checkpoint failed:', e?.message || e); }
+            try { gcDeleted = gcChunks(); } catch (e) { logger.warn('[Optimize] object gc failed:', e?.message || e); }
             const elapsed = Date.now() - t0;
-            const postDbSize = statSafe(dbFilePath)?.size ?? 0;
+            const postDbSize = kvListWithSizes('').reduce((sum, item) => sum + item.size, 0);
             return {
                 ok: true,
                 elapsedMs: elapsed,
@@ -5545,16 +5575,14 @@ app.post('/api/db/wal-checkpoint', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
     try {
-        const saveDir = path.join(process.cwd(), 'save');
-        const walFilePath = path.join(saveDir, 'risuai.db-wal');
-        const preWalSize = statSafe(walFilePath)?.size ?? 0;
+        const saveDir = savePath;
+        const preWalSize = 0;
 
         const result = await queueStorageOperation(async () => {
             await flushPendingDb();
             const t0 = Date.now();
-            checkpointWal('TRUNCATE');
             const elapsed = Date.now() - t0;
-            const postWalSize = statSafe(walFilePath)?.size ?? 0;
+            const postWalSize = 0;
             return {
                 ok: true,
                 elapsedMs: elapsed,
@@ -6138,7 +6166,6 @@ app.post('/api/self-update', async (req, res) => {
             try {
             console.log(`[Update] Self-update to v${targetVersion} complete. Restarting...`);
             try { await flushPendingDb(); } catch {}
-            try { checkpointWal('TRUNCATE'); } catch {}
 
             const port = process.env.PORT || 6001;
 
@@ -6442,7 +6469,6 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
         console.log(`[Server] Received ${sig}, flushing pending data...`);
         stopTunnel();
         try { await flushPendingDb(); } catch (e) { logger.error('[Server] Flush error:', e); }
-        try { checkpointWal('TRUNCATE'); } catch { /* non-fatal */ }
         process.exit(0);
     });
 }
@@ -6466,13 +6492,5 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
     }, PROXY_STREAM_GC_INTERVAL_MS);
 
     await startServer();
-
-    // Periodically checkpoint WAL to reclaim disk space.
-    // TRUNCATE (vs RESTART) shrinks the -wal file on disk, not just the writer
-    // pointer — required for journal_size_limit to actually take effect.
-    setInterval(() => {
-        try { checkpointWal('TRUNCATE'); }
-        catch { /* non-fatal */ }
-    }, 5 * 60 * 1000); // every 5 minutes
 
 })();

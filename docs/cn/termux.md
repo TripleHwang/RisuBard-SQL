@@ -25,7 +25,7 @@
 | **内存**     | 2 GB         | 4 GB 或以上             |
 | **可用存储** | 2 GB         | 4 GB 或以上(含构建产物) |
 
-PocketRisu 不为 Termux 提供预编译的二进制文件,因此由手机自行构建。包括 `better-sqlite3` 等原生模块在内,构建大约需要 **10 至 40 分钟**,具体取决于手机性能。
+PocketRisu 直接在手机上构建。运行时不再依赖原生 SQLite 或 `better-sqlite3`，移除了原有的 SQLite 编译障碍。
 
 
 ---

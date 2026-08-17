@@ -25,7 +25,7 @@
 | **記憶體**   | 2 GB         | 4 GB 或以上               |
 | **可用空間** | 2 GB         | 4 GB 或以上(含建置產物)   |
 
-PocketRisu 不為 Termux 提供預先編譯的二進位檔,因此由手機自行建置。包括 `better-sqlite3` 等原生模組在內,建置大約需要 **10 至 40 分鐘**,具體取決於手機效能。
+PocketRisu 直接在手機上建置。執行階段不再依賴原生 SQLite 或 `better-sqlite3`，移除了原有的 SQLite 編譯障礙。
 
 
 ---

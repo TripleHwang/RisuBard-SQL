@@ -242,17 +242,15 @@
         const p = stats.prefixes
         const get = (k: string) => p[k]?.totalSize ?? 0
         // Two separate quantities for inlay:
-        //  - inlayKvTotal: bytes inside the SQLite kv table (counts against
+        //  - inlayKvTotal: bytes inside the compatibility object store (counts against
         //    kvTotalBytes for uncategorized accounting).
         //  - inlayTotal:   what we display in the chart, includes fs payload
         //    that lives in save/inlays/ post-migration.
         const inlayKvTotal = get('inlay/') + get('inlay_thumb/') + get('inlay_meta/') + get('inlay_info/')
         const inlayFsBytes = stats.inlayFsBytes ?? 0
         const inlayTotal = inlayKvTotal + inlayFsBytes
-        // The DB blob is chunked: its bytes (and those of every snapshot, which
-        // share chunks) live in the `chunks` table, not in kv. kv holds only a
-        // tiny marker, so the chart counts the chunk table's physical size here
-        // and excludes database.bin / dbbackup from kv accounting.
+        // database.bin is a rebuildable compatibility projection. Large values
+        // are content-addressed objects, so count their physical size here.
         const chunkedDbBytes = stats.chunks?.bytes ?? 0
         // A small DB (≤ chunk threshold) stays a raw kv value rather than chunks,
         // so count it here — otherwise the database row reads 0 and its bytes get
@@ -267,10 +265,8 @@
         const knownKv =
             get('assets/') + inlayKvTotal + get('remotes/') + get('coldstorage/') + rawDbBlob
         const uncategorizedKv = Math.max(0, stats.kvTotalBytes - knownKv)
-        // SQLite overhead splits into "structural" (always present — indexes,
-        // page headers, alignment) and "reclaimable" (the freelist, removable
-        // by VACUUM). Subtract the chunk table too — it lives in the file but
-        // not in kvTotalBytes, otherwise it would inflate "overhead".
+        // File-store structural metadata and unreachable content-addressed
+        // objects are reported through the legacy-compatible stats shape.
         const reclaimable = stats.sqlite.reclaimable
         const structuralOverhead = Math.max(0, stats.files.db - stats.kvTotalBytes - chunkedDbBytes - reclaimable)
         const rows: DiskRow[] = [
@@ -352,7 +348,7 @@
     const modSlice = $derived(modules?.modules.slice(0, modShown) ?? [])
     const modRemaining = $derived((modules?.modules.length ?? 0) - modShown)
 
-    // Used vs reclaimable inside risuai.db, for the cleanup section bar.
+    // Referenced vs reclaimable file objects for the cleanup section bar.
     const overheadUsed = $derived(stats ? Math.max(0, stats.files.db - stats.sqlite.reclaimable) : 0)
 
     // ⓘ button: opens a small markdown modal. Works on touch (where hover
@@ -516,7 +512,8 @@
         </div>
     </div>
 
-    <!-- ② Manual WAL cleanup ────────────────────────────────────────────── -->
+    <!-- Legacy servers can still expose a WAL. File-native servers report 0. -->
+    {#if stats.files.wal > 0}
     <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
         <div class="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
             <div class="flex items-center gap-2 text-textcolor">
@@ -536,8 +533,9 @@
             </ShButton>
         </div>
     </div>
+    {/if}
 
-    <!-- ③ SQLite overhead cleanup ──────────────────────────────────────── -->
+    <!-- ③ File-object cleanup ──────────────────────────────────────────── -->
     <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
         <div class="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
             <div class="flex items-center gap-2 text-textcolor">
@@ -549,7 +547,7 @@
             </span>
         </div>
 
-        <!-- Used vs reclaimable inside risuai.db -->
+        <!-- Referenced vs unreachable file objects -->
         <div class="flex h-7 bg-bgcolor border border-darkborderc rounded-md overflow-hidden mb-3">
             <Tooltip.Root>
                 <Tooltip.Trigger>
@@ -790,13 +788,10 @@
     <!-- ⑧ Debug ─────────────────────────────────────────────────────────── -->
     <ShAccordion name={language.storageDebug} variant="card">
         <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-textcolor2 text-sm font-mono">
-            <div>journal_mode</div><div class="text-textcolor">{stats.sqlite.journalMode}</div>
-            <div>page_size</div><div class="text-textcolor tabular-nums">{stats.sqlite.pageSize}</div>
-            <div>page_count</div><div class="text-textcolor tabular-nums">{stats.sqlite.pageCount.toLocaleString()}</div>
-            <div>freelist_count</div><div class="text-textcolor tabular-nums">{stats.sqlite.freelistCount.toLocaleString()}</div>
-            <div>auto_vacuum</div><div class="text-textcolor">{stats.sqlite.autoVacuum}</div>
-            <div>kv rows</div><div class="text-textcolor tabular-nums">{stats.kvRows.toLocaleString()}</div>
-            <div>kv total bytes</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.kvTotalBytes)}</div>
+            <div>storage_mode</div><div class="text-textcolor">{stats.sqlite.journalMode}</div>
+            <div>object_count</div><div class="text-textcolor tabular-nums">{stats.kvRows.toLocaleString()}</div>
+            <div>object_bytes</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.kvTotalBytes)}</div>
+            <div>reclaimable</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.sqlite.reclaimable)}</div>
             <div>etag</div><div class="text-textcolor truncate">{stats.etag ?? '—'}</div>
         </div>
     </ShAccordion>

@@ -9,7 +9,6 @@
 // (+ live tail while the job is still running) to recover the response.
 // See .agent/notes/model-preset-server-side-requests.md (v2 design).
 
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -19,6 +18,7 @@ const nodeCrypto = require('crypto');
 const { setTimeout: sleep } = require('timers/promises');
 const { once } = require('events');
 const { normalizeForwardHeaders } = require('./utils.cjs');
+const { atomicWriteJson } = require('./file-store.cjs');
 
 const MODEL_JOB_DEFAULT_TIMEOUT_MS = 600000;
 const MODEL_JOB_MAX_TIMEOUT_MS = 3600000;
@@ -132,131 +132,51 @@ function requestUpstreamStream(targetUrl, arg) {
     });
 }
 
-// Factory bound to a save directory. server.cjs wires the real save/ path;
-// tests wire a temp dir. Metadata lives in its own SQLite file
-// (save/model-jobs.db) rather than logs.db — the logs module opens its DB at
-// module load against process.cwd(), and job metadata has a different
-// lifecycle (rotation by job, not by row count), so a dedicated file keeps
-// the two domains independent and testable.
+// Factory bound to a save directory. Each job owns state/event/journal files,
+// keeping recovery independent and testable without a native database.
 function createModelJobs(opts = {}) {
     const saveDir = opts.saveDir || path.join(process.cwd(), 'save');
     const journalDir = path.join(saveDir, 'model-jobs');
     fs.mkdirSync(journalDir, { recursive: true });
-
-    const db = new Database(path.join(saveDir, 'model-jobs.db'));
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('busy_timeout = 5000');
-
-    // SECURITY: no target URL, no request headers, no request body in this
-    // schema — auth material lives only in memory for the lifetime of the
-    // upstream request. Only non-sensitive job metadata is persisted.
-    //
-    // `kind`: 'main' = a chat generation. Its journal decodes to a chat message,
-    // so it participates in boot recovery and the per-chat single-job guard.
-    // 'aux' = a pipeline side request (translate / memory summarization / …)
-    // riding the job transport ONLY for its reconnectable stream: relay-only,
-    // excluded from recovery lists (its journal is NOT a chat message) and from
-    // the per-chat guard (aux runs sequentially within a send anyway).
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS model_jobs (
-            id TEXT PRIMARY KEY,
-            chat_id TEXT NOT NULL,
-            generation_id TEXT,
-            adapter_kind TEXT,
-            model TEXT,
-            target_origin TEXT,
-            kind TEXT NOT NULL DEFAULT 'main',
-            streaming INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL,
-            upstream_status INTEGER,
-            content_type TEXT,
-            error TEXT,
-            created_at INTEGER NOT NULL,
-            ended_at INTEGER,
-            bytes INTEGER NOT NULL DEFAULT 0,
-            claimed INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_model_jobs_chat ON model_jobs(chat_id, status);
-    `);
-    // Pre-`kind` databases (feature-branch builds only; never shipped): add the
-    // column in place. Errors mean it already exists.
-    try {
-        db.exec(`ALTER TABLE model_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'main'`);
-    } catch { /* column already present */ }
-    // Added for request-log parity on recovered jobs. `target_origin` is
-    // origin+pathname ONLY — the query string is dropped because that is where
-    // Gemini and query-auth profiles carry the API key, so the SECURITY rule
-    // above (no credentials at rest) still holds.
-    try {
-        db.exec(`ALTER TABLE model_jobs ADD COLUMN model TEXT`);
-    } catch { /* column already present */ }
-    try {
-        db.exec(`ALTER TABLE model_jobs ADD COLUMN target_origin TEXT`);
-    } catch { /* column already present */ }
-
-    // Resumable sends: one tombstone per chat marking "a send was started here
-    // and has not concluded". Holds NO pipeline state — the send's durable
-    // ingredients live elsewhere (user message in chat data, hypa partials in
-    // hypaV3Data, the main response in the job journal). A returning client
-    // lists these, applies its idempotency checks, and re-runs the send when
-    // the response truly never made it. See the design note §C.
-    db.exec(`
-        CREATE TABLE IF NOT EXISTS pending_sends (
-            chat_id TEXT PRIMARY KEY,
-            generation_id TEXT,
-            created_at INTEGER NOT NULL
-        );
-    `);
-
-    const stmtInsert = db.prepare(`
-        INSERT INTO model_jobs (id, chat_id, generation_id, adapter_kind, model, target_origin, kind, streaming, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
-    `);
-    const stmtGet = db.prepare(`SELECT * FROM model_jobs WHERE id = ?`);
-    const stmtRunningForChat = db.prepare(`SELECT id FROM model_jobs WHERE chat_id = ? AND status = 'running' AND kind = 'main' LIMIT 1`);
-    const stmtSetUpstream = db.prepare(`UPDATE model_jobs SET upstream_status = ?, content_type = ? WHERE id = ?`);
-    const stmtFinalize = db.prepare(`UPDATE model_jobs SET status = ?, error = ?, ended_at = ?, bytes = ? WHERE id = ?`);
-    const stmtClaim = db.prepare(`UPDATE model_jobs SET claimed = 1 WHERE id = ?`);
-    const stmtDelete = db.prepare(`DELETE FROM model_jobs WHERE id = ?`);
-    // Recovery views are MAIN-only: an aux journal is not a chat message, so
-    // recovering it would insert garbage into a chat (the failure mode the
-    // Gemini-cache fetch split fixed — see the design note §8-2).
-    const stmtListActive = db.prepare(`SELECT * FROM model_jobs WHERE status = 'running' AND kind = 'main' ORDER BY created_at DESC`);
-    // Oldest first: recovery appends each job's message to the chat in the order
-    // returned, so newest-first would insert a later reply above an earlier one
-    // when more than one unclaimed job piled up for the same chat.
-    const stmtListUnclaimed = db.prepare(`
-        SELECT * FROM model_jobs WHERE status IN ('done', 'failed') AND claimed = 0 AND kind = 'main' ORDER BY created_at ASC
-    `);
-    const stmtMarkRunningFailed = db.prepare(`
-        UPDATE model_jobs SET status = 'failed', error = ?, ended_at = ? WHERE status = 'running'
-    `);
-    // Rotation candidates: terminal jobs beyond the retention cap. Keep order
-    // is unclaimed-MAIN-first then newest, so OFFSET skips the keepers and
-    // returns the eviction set — aux jobs, claimed jobs and the oldest go
-    // first. (An unclaimed aux job — client died mid-request — is worthless:
-    // nothing ever recovers it, so it must not crowd out unrecovered mains.)
-    const stmtTerminalOverflow = db.prepare(`
-        SELECT id FROM model_jobs WHERE status IN ('done', 'failed', 'aborted')
-        ORDER BY (CASE WHEN claimed = 0 AND kind = 'main' THEN 0 ELSE 1 END) ASC, ended_at DESC
-        LIMIT -1 OFFSET ?
-    `);
-    // Age expiry only spares unclaimed MAIN rows — a response no client has
-    // recovered yet (e.g. offline for a week) is kept until the overflow cap
-    // evicts it. Claimed rows and aux jobs expire by age.
-    const stmtTerminalExpired = db.prepare(`
-        SELECT id FROM model_jobs WHERE status IN ('done', 'failed', 'aborted') AND (claimed = 1 OR kind = 'aux') AND ended_at < ?
-    `);
-    const stmtPendingUpsert = db.prepare(`
-        INSERT INTO pending_sends (chat_id, generation_id, created_at) VALUES (?, ?, ?)
-        ON CONFLICT(chat_id) DO UPDATE SET generation_id = excluded.generation_id, created_at = excluded.created_at
-    `);
-    const stmtPendingDelete = db.prepare(`DELETE FROM pending_sends WHERE chat_id = ?`);
-    const stmtPendingList = db.prepare(`SELECT * FROM pending_sends ORDER BY created_at ASC`);
-    // A pending send this old is noise (the one-shot resume window has long
-    // passed); swept by the same out-of-band cleanup timer as terminal jobs.
-    const stmtPendingExpired = db.prepare(`DELETE FROM pending_sends WHERE created_at < ?`);
+    const jobs = new Map();
+    for (const entry of fs.readdirSync(journalDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const statePath = path.join(journalDir, entry.name, 'state.json');
+        if (!fs.existsSync(statePath)) continue;
+        try { const row = JSON.parse(fs.readFileSync(statePath, 'utf8')); if (row?.id) jobs.set(row.id, row); } catch {}
+    }
+    const pendingPath = path.join(journalDir, 'pending-sends.json');
+    const pending = new Map();
+    if (fs.existsSync(pendingPath)) {
+        try { for (const row of JSON.parse(fs.readFileSync(pendingPath, 'utf8')).items || []) pending.set(row.chat_id, row); } catch {}
+    }
+    function persistPending() {
+        atomicWriteJson(journalDir, 'pending-sends.json', { schemaVersion: 1, items: [...pending.values()] });
+    }
+    function persistRow(row, event) {
+        jobs.set(row.id, row);
+        atomicWriteJson(saveDir, path.join('model-jobs', row.id, 'state.json'), { schemaVersion: 1, ...row });
+        const eventPath = path.join(journalDir, row.id, 'events.jsonl');
+        const fd = fs.openSync(eventPath, 'a', 0o600);
+        try { fs.writeSync(fd, `${JSON.stringify({ at: Date.now(), event, status: row.status, bytes: row.bytes })}\n`, null, 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    }
+    const db = { close() {} };
+    const stmtInsert = { run(id, chat_id, generation_id, adapter_kind, model, target_origin, kind, streaming, created_at) { persistRow({ id, chat_id, generation_id, adapter_kind, model, target_origin, kind, streaming, status: 'running', upstream_status: null, content_type: null, error: null, created_at, ended_at: null, bytes: 0, claimed: 0 }, 'created'); } };
+    const stmtGet = { get(id) { return jobs.get(id); } };
+    const stmtRunningForChat = { get(chatId) { return [...jobs.values()].find(row => row.chat_id === chatId && row.status === 'running' && row.kind === 'main'); } };
+    const stmtSetUpstream = { run(status, contentType, id) { const row = jobs.get(id); if (row) { row.upstream_status = status; row.content_type = contentType; persistRow(row, 'upstream'); } } };
+    const stmtFinalize = { run(status, error, endedAt, bytes, id) { const row = jobs.get(id); if (row) { Object.assign(row, { status, error, ended_at: endedAt, bytes }); persistRow(row, 'finalized'); } } };
+    const stmtClaim = { run(id) { const row = jobs.get(id); if (row) { row.claimed = 1; persistRow(row, 'claimed'); } } };
+    const stmtDelete = { run(id) { jobs.delete(id); } };
+    const stmtListActive = { all() { return [...jobs.values()].filter(row => row.status === 'running' && row.kind === 'main').sort((a, b) => b.created_at - a.created_at); } };
+    const stmtListUnclaimed = { all() { return [...jobs.values()].filter(row => ['done', 'failed'].includes(row.status) && !row.claimed && row.kind === 'main').sort((a, b) => a.created_at - b.created_at); } };
+    const stmtMarkRunningFailed = { run(reason, endedAt) { for (const row of jobs.values()) if (row.status === 'running') { Object.assign(row, { status: 'failed', error: reason, ended_at: endedAt }); persistRow(row, 'restart-failed'); } } };
+    const stmtTerminalOverflow = { all(offset) { return [...jobs.values()].filter(row => TERMINAL_STATUSES.includes(row.status)).sort((a, b) => { const ap = !a.claimed && a.kind === 'main' ? 0 : 1; const bp = !b.claimed && b.kind === 'main' ? 0 : 1; return ap - bp || (b.ended_at || 0) - (a.ended_at || 0); }).slice(offset).map(row => ({ id: row.id })); } };
+    const stmtTerminalExpired = { all(cutoff) { return [...jobs.values()].filter(row => TERMINAL_STATUSES.includes(row.status) && (row.claimed || row.kind === 'aux') && row.ended_at < cutoff).map(row => ({ id: row.id })); } };
+    const stmtPendingUpsert = { run(chat_id, generation_id, created_at) { pending.set(chat_id, { chat_id, generation_id, created_at }); persistPending(); } };
+    const stmtPendingDelete = { run(chatId) { const changes = pending.delete(chatId) ? 1 : 0; if (changes) persistPending(); return { changes }; } };
+    const stmtPendingList = { all() { return [...pending.values()].sort((a, b) => a.created_at - b.created_at); } };
+    const stmtPendingExpired = { run(cutoff) { let changed = false; for (const [id, row] of pending) if (row.created_at < cutoff) { pending.delete(id); changed = true; } if (changed) persistPending(); } };
     const PENDING_SEND_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
     // In-memory state for running jobs: abort controller + live byte counter
@@ -295,7 +215,7 @@ function createModelJobs(opts = {}) {
     }
 
     function journalPath(jobId) {
-        return path.join(journalDir, `${jobId}.journal`);
+        return path.join(journalDir, jobId, 'response.journal');
     }
 
     function rowToJson(row, active) {
@@ -336,7 +256,7 @@ function createModelJobs(opts = {}) {
     }
 
     function deleteJobFiles(jobId) {
-        try { fs.unlinkSync(journalPath(jobId)); } catch { /* already gone */ }
+        try { fs.rmSync(path.join(journalDir, jobId), { recursive: true, force: true }); } catch { /* already gone */ }
     }
 
     function cleanupTerminalJobs() {
@@ -510,6 +430,7 @@ function createModelJobs(opts = {}) {
         activeJobs.set(jobId, job);
         // Touch the journal synchronously so a stream reader attaching right
         // after the POST returns never races the async open in runJob().
+        fs.mkdirSync(path.dirname(journalPath(jobId)), { recursive: true });
         fs.closeSync(fs.openSync(journalPath(jobId), 'w'));
 
         const runPromise = runJob(job, {
