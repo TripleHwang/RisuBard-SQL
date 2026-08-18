@@ -40,9 +40,10 @@ export function bindPluginRequestStatusStorage(
 
 export function resolvePluginRequestStatus(options: PluginV2ProviderOptions | undefined): boolean {
     try {
-        return typeof options?.hostRequestStatus === 'function'
-            ? options.hostRequestStatus() === true
-            : options?.hostRequestStatus === true
+        const preference = options?.hostRequestStatus
+        return typeof preference === 'function'
+            ? preference() === true
+            : preference !== false
     } catch {
         return false
     }

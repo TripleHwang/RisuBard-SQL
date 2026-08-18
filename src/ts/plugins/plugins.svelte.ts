@@ -461,7 +461,7 @@ export type PluginV2ProviderArgument = {
 export type PluginV2ProviderOptions = {
     tokenizer?: string
     tokenizerFunc?: (content: string) => number[] | Promise<number[]>
-    /** Opt in to RisuBard's host-rendered request status card. */
+    /** RisuBard's host-rendered request status card is on by default; set false to opt out. */
     hostRequestStatus?: boolean | (() => boolean)
     /** Plugin storage key whose `risubard` value opts in dynamically. */
     hostRequestStatusStorageKey?: string

@@ -2,9 +2,11 @@ import { describe, expect, test } from 'vitest'
 import { bindPluginRequestStatusStorage, resolvePluginRequestStatus } from './providerRequestStatus'
 
 describe('resolvePluginRequestStatus', () => {
-    test('keeps plugin request status disabled unless the provider opts in', () => {
-        expect(resolvePluginRequestStatus(undefined)).toBe(false)
-        expect(resolvePluginRequestStatus({})).toBe(false)
+    test('uses host request status by default and allows an explicit opt-out', () => {
+        expect(resolvePluginRequestStatus(undefined)).toBe(true)
+        expect(resolvePluginRequestStatus({})).toBe(true)
+        expect(resolvePluginRequestStatus({ hostRequestStatus: true })).toBe(true)
+        expect(resolvePluginRequestStatus({ hostRequestStatus: false })).toBe(false)
     })
 
     test('supports a live provider-owned status selector', () => {
