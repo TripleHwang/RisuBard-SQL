@@ -665,7 +665,7 @@
     <ChevronsLeft size={20} />
   </button>
   {/if}
-  <div data-sidebar-options-divider class="w-full border-b border-b-selected relative text-white" class:max-xs:hidden={$leftBarCollapsed}>
+  <div data-sidebar-options-divider class="w-full relative text-white" class:max-xs:hidden={$leftBarCollapsed}>
     {#if menuMode === 1}
       <div class="absolute w-20 min-w-20 flex border-b-selected border-b bg-bgcolor flex-col items-center pt-2 rounded-b-md z-20 pb-2 max-h-[calc(100dvh-4rem)] overflow-x-hidden overflow-y-auto hamburger-menu">
         <BarIcon
@@ -726,10 +726,9 @@
   {/if}
   <div
     data-sidebar-persona
-    class="flex w-full flex-col items-center gap-1 border-b border-b-selected px-2 py-3"
+    class="mb-2 flex w-full flex-col items-center gap-1 border-b border-b-selected px-2 py-3"
     class:max-xs:hidden={$leftBarCollapsed}
   >
-    <span data-sidebar-persona-label class="w-full text-center text-[10px] font-semibold text-white">{language.persona}</span>
     <button
       class="group relative grid h-14 w-14 place-items-center overflow-hidden rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm transition-all hover:border-primary hover:text-primary"
       aria-label={language.persona}

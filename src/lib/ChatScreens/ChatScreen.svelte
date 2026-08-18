@@ -2,7 +2,9 @@
     import { getCustomBackground, getEmotion } from "../../ts/util";
     
     import { DBState } from 'src/ts/stores.svelte';
-    import { CharEmotion, selectedCharID, openModuleListStore } from "../../ts/stores.svelte";
+    import { CharEmotion, selectedCharID, openModuleListStore, MobileGUI, chatDeselected } from "../../ts/stores.svelte";
+    import { LoaderCircleIcon } from '@lucide/svelte';
+    import { v4 } from 'uuid';
     import ResizeBox from './ResizeBox.svelte'
     import DefaultChatScreen from "./DefaultChatScreen.svelte";
     import defaultWallpaper from '../../etc/bg.jpg'
@@ -11,8 +13,125 @@
     import BackgroundDom from "./BackgroundDom.svelte";
     import SideBarArrow from "../UI/GUI/SideBarArrow.svelte";
     import ModuleChatMenu from "../Setting/Pages/Module/ModuleChatMenu.svelte";
+    import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
+    import RisuBardSaveSlotsDialog from '../SideBars/RisuBardSaveSlotsDialog.svelte';
+    import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
+    import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg';
+    import { ensureChatHydrated } from 'src/ts/storage/chatStorage';
+    import { notifyError, notifySuccess } from 'src/ts/alert';
+    import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
+    import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
+    import { createMemorySaveSlot, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
+    import { language } from 'src/lang';
     let openChatList = $state(false)
     let openModuleList = $state(false)
+    let saveSlotsOpen = $state(false)
+    let savingSlot = $state(false)
+    let currentCharacter = $derived(
+        $selectedCharID >= 0 ? DBState.db.characters[$selectedCharID] : undefined
+    )
+
+    async function saveCurrentChat(): Promise<void> {
+        const character = currentCharacter
+        if(savingSlot || !character) return
+        const chatIdx = character.chatPage
+        if(character.chats[chatIdx]?._placeholder){
+            await ensureChatHydrated(
+                character.chats,
+                chatIdx,
+                character.chaId
+            )
+        }
+        const chat = character.chats[chatIdx]
+        if(!chat || chat._placeholder){
+            notifyError('채팅 전체 내용을 불러오지 못했습니다.')
+            return
+        }
+        if(chat.isStreaming){
+            notifyError('응답 생성이 끝난 뒤 채팅을 저장해 주세요.')
+            return
+        }
+        if(!character.chaId || !chat.id){
+            notifyError('채팅 저장에는 안정적인 캐릭터와 채팅 ID가 필요합니다.')
+            return
+        }
+        savingSlot = true
+        try {
+            await createMemorySaveSlot({
+                characterId: character.chaId,
+                chat,
+                saveId: v4(),
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            })
+            notifySuccess('채팅, 변수와 Memory Wiki를 저장했습니다.')
+        }
+        catch(error){
+            notifyError(
+                `채팅 저장 실패: ${error instanceof Error
+                    ? error.message
+                    : String(error)}`
+            )
+        }
+        finally {
+            savingSlot = false
+        }
+    }
+
+    async function loadSavedChat(saveId: string): Promise<void> {
+        const character = currentCharacter
+        if(!character?.chaId) return
+        const destinationChatId = v4()
+        const prepared = await prepareMemorySaveLoad({
+            characterId: character.chaId,
+            saveId,
+            destinationChatId,
+            fetchImpl: fetch,
+            createAuth: () => forageStorage.createAuth(),
+        })
+        const loadedChat = prepared.chat
+        loadedChat.id = destinationChatId
+        loadedChat.name = `${loadedChat.name} (Load)`
+        loadedChat.isStreaming = false
+        delete loadedChat.activeStreamingDisplayOptimizationMode
+        delete loadedChat._placeholder
+        character.chats.unshift(loadedChat)
+        character.chats = character.chats
+        try {
+            await requestImmediateSave({
+                forceFullWrite: true,
+                rejectOnFailure: true,
+            })
+        }
+        catch(error){
+            character.chats.splice(
+                character.chats.indexOf(loadedChat),
+                1
+            )
+            character.chats = character.chats
+            await completeMemoryWikiFork({
+                characterId: character.chaId,
+                destinationChatId,
+                forkToken: prepared.forkToken,
+                action: 'discard',
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            }).catch(() => undefined)
+            void requestImmediateSave({ forceFullWrite: true })
+            throw error
+        }
+        await completeMemoryWikiFork({
+            characterId: character.chaId,
+            destinationChatId,
+            forkToken: prepared.forkToken,
+            action: 'finalize',
+            fetchImpl: fetch,
+            createAuth: () => forageStorage.createAuth(),
+        })
+        changeChatTo(0)
+        saveSlotsOpen = false
+        notifySuccess('세이브를 새 채팅으로 불러왔습니다.')
+    }
 
     $effect(() => {
         if ($openModuleListStore) {
@@ -39,9 +158,45 @@
     });
 </script>
 
+{#snippet chatChrome()}
+    <SideBarArrow />
+    {#if !$MobileGUI
+        && currentCharacter?.chaId
+        && currentCharacter.chaId !== '§playground'
+        && !$chatDeselected}
+        <div data-chat-file-edge-actions class="absolute bottom-20 left-0 z-30 flex flex-col gap-2">
+            <button
+                type="button"
+                data-edge-save-chat
+                class="risu-button-lift flex size-12 items-center justify-center rounded-r-md border border-l-0 border-primary/45 bg-primary/25 text-textcolor shadow-sm transition-colors hover:bg-primary/35 disabled:pointer-events-none disabled:opacity-50"
+                disabled={savingSlot}
+                aria-label={language.saveChatFileAction}
+                title={language.saveChatFileAction}
+                onclick={() => void saveCurrentChat()}
+            >
+                {#if savingSlot}
+                    <LoaderCircleIcon size={22} class="animate-spin" />
+                {:else}
+                    <SolarAssetIcon src={feedIcon} name="feed-bold" size={24} />
+                {/if}
+            </button>
+            <button
+                type="button"
+                data-edge-load-chat
+                class="risu-button-lift flex size-12 items-center justify-center rounded-r-md border border-l-0 border-primary/45 bg-primary/25 text-textcolor shadow-sm transition-colors hover:bg-primary/35"
+                aria-label={language.loadChatFileAction}
+                title={language.loadChatFileAction}
+                onclick={() => { saveSlotsOpen = true }}
+            >
+                <SolarAssetIcon src={loadIcon} name="undo-left-square-bold" size={24} />
+            </button>
+        </div>
+    {/if}
+{/snippet}
+
 {#if DBState.db.theme === 'waifu'}
     <div class="grow h-full min-h-0 flex justify-center relative overflow-hidden" style="{bgImg.length < 4 ? wallPaper : bgImg}">
-        <SideBarArrow />
+        {@render chatChrome()}
         <BackgroundDom />
         {#if $selectedCharID >= 0}
             {#if DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
@@ -51,18 +206,18 @@
             {/if}
         {/if}
         <div class="h-full w-2xl" style:width="{42 * (DBState.db.waifuWidth / 100)}rem" class:halfwp={$selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none'}>
-            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList/>
+            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList onSaveChat={saveCurrentChat} onOpenChatLoad={() => { saveSlotsOpen = true }} {savingSlot}/>
         </div>
     </div>
 {:else if DBState.db.theme === 'waifuMobile'}
     <div class="grow h-full min-h-0 relative overflow-hidden" style={bgImg.length < 4 ? wallPaper : bgImg}>
-        <SideBarArrow />
+        {@render chatChrome()}
         <BackgroundDom />
         <div class="w-full absolute z-10 bottom-0 left-0"
             class:per33={$selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
             class:h-full={!($selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none')}
         >
-            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList/>
+            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList onSaveChat={saveCurrentChat} onOpenChatLoad={() => { saveSlotsOpen = true }} {savingSlot}/>
         </div>
         {#if $selectedCharID >= 0}
             {#if DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
@@ -74,7 +229,7 @@
     </div>
 {:else}
     <div class="grow h-full min-h-0 min-w-0 relative justify-center flex overflow-hidden">
-        <SideBarArrow />
+        {@render chatChrome()}
         <BackgroundDom />
         <div style={bgImg} class="h-full w-full" class:max-w-6xl={DBState.db.classicMaxWidth}>
             {#if $selectedCharID >= 0}
@@ -82,7 +237,7 @@
                     <ResizeBox />
                 {/if}
             {/if}
-            <DefaultChatScreen customStyle={bgImg.length > 2 ? `${externalStyles}`: ''} bind:openChatList bind:openModuleList/>
+            <DefaultChatScreen customStyle={bgImg.length > 2 ? `${externalStyles}`: ''} bind:openChatList bind:openModuleList onSaveChat={saveCurrentChat} onOpenChatLoad={() => { saveSlotsOpen = true }} {savingSlot}/>
         </div>
     </div>
 {/if}
@@ -90,6 +245,15 @@
     <ChatList close={() => {openChatList = false}}/>
 {:else if openModuleList}
     <ModuleChatMenu close={() => {openModuleList = false}}/>
+{/if}
+
+{#if currentCharacter?.chaId}
+    <RisuBardSaveSlotsDialog
+        open={saveSlotsOpen}
+        characterId={currentCharacter.chaId}
+        onOpenChange={(open) => { saveSlotsOpen = open }}
+        onLoad={loadSavedChat}
+    />
 {/if}
 
 <style>

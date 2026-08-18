@@ -516,6 +516,10 @@ export const languageEnglish = {
     rerollConfirm: "Generate a new message and add it to the list?",
     noSwipesRerollConfirm: "There are no additional regenerated messages. Generate a new message and add it to the list?",
     chatList: "Chat List",
+    currentChatLabel: "Current chat",
+    sidebarChatListLabel: "Chat list",
+    saveChatFileAction: "Save chat",
+    loadChatFileAction: "Load chat",
     removeChat: "Remove this message?",
     loreBook: "Lorebook",
     lorebookWorkspace: {

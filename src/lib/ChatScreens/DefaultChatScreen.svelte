@@ -49,8 +49,11 @@ import { isMobile } from 'src/ts/platform'
     import Chats from './Chats.svelte';
     import Button from '../UI/GUI/Button.svelte';
     import PluginDefinedIcon from '../Others/PluginDefinedIcon.svelte';
+    import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
     import RisuBardMemoryWiki from '../Others/RisuBardMemoryWiki.svelte';
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar';
+    import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
+    import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg';
 
     const loadPlaygroundMenu = () => import('../Playground/PlaygroundMenu.svelte').then(m => m.default);
 
@@ -72,6 +75,9 @@ import { isMobile } from 'src/ts/platform'
         openModuleList?: boolean;
         openChatList?: boolean;
         customStyle?: string;
+        onSaveChat?: () => void | Promise<void>;
+        onOpenChatLoad?: () => void;
+        savingSlot?: boolean;
     }
 
     let messageInput:string = $state('')
@@ -87,7 +93,14 @@ import { isMobile } from 'src/ts/platform'
     let scrollNavTimer: ReturnType<typeof setTimeout> | null = null
     let chatsInstance: any = $state()
     let isScrollingToMessage = $state(false)
-    let { openModuleList = $bindable(false), openChatList = $bindable(false), customStyle = '' }: Props = $props();
+    let {
+        openModuleList = $bindable(false),
+        openChatList = $bindable(false),
+        customStyle = '',
+        onSaveChat = () => {},
+        onOpenChatLoad = () => {},
+        savingSlot = false,
+    }: Props = $props();
     let currentCharacter = $derived(DBState.db.characters[$selectedCharID])
     let currentChatSlot = $derived(currentCharacter?.chats[currentCharacter.chatPage])
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
@@ -1020,6 +1033,14 @@ import { isMobile } from 'src/ts/platform'
                                 disabled={(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.length < 2) || (DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.length - 1].role !== 'char')}
                                 onSelect={() => sendContinue()}>
                                 <StepForwardIcon /><span>{language.continueResponse}</span>
+                            </ShDropdownMenuItem>
+                            <ShDropdownMenuItem data-composer-save-chat disabled={savingSlot} onSelect={() => void onSaveChat()}>
+                                <SolarAssetIcon src={feedIcon} name="feed-bold" size={18} />
+                                <span>{language.saveChatFileAction}</span>
+                            </ShDropdownMenuItem>
+                            <ShDropdownMenuItem data-composer-load-chat onSelect={onOpenChatLoad}>
+                                <SolarAssetIcon src={loadIcon} name="undo-left-square-bold" size={18} />
+                                <span>{language.loadChatFileAction}</span>
                             </ShDropdownMenuItem>
                             {#if DBState.db.showMenuChatList}
                                 <ShDropdownMenuItem onSelect={() => { openChatList = true }}>

@@ -9,6 +9,7 @@
     import { LoaderCircleIcon } from '@lucide/svelte';
     import { cn } from 'src/lib/utils';
     import type { ShDialogTier } from './ShDialog.svelte';
+    import { handleDialogCloseAutoFocus } from './dialogFocusPolicy';
 
     interface Props {
         open?: boolean;
@@ -58,6 +59,7 @@
         />
         <Dialog.Content
             class={cn(contentBase, tierClasses[tier], contentClass)}
+            onCloseAutoFocus={handleDialogCloseAutoFocus}
             escapeKeydownBehavior="ignore"
             interactOutsideBehavior="ignore"
         >

@@ -583,6 +583,10 @@ export const languageKorean = {
   noSwipesRerollConfirm:
     "현재는 추가 재생성된 메세지가 없습니다. 재생성하여 신규 메세지를 목록에 추가 할까요?",
   chatList: "채팅 리스트",
+  currentChatLabel: "현재 챗",
+  sidebarChatListLabel: "챗 목록",
+  saveChatFileAction: "저장하기",
+  loadChatFileAction: "불러오기",
   removeChat: "이 메시지를 삭제하시겠습니까?",
   loreBook: "로어북",
   lorebookWorkspace: {

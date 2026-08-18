@@ -10,6 +10,7 @@
     import { AlertDialog } from 'bits-ui';
     import { cn } from 'src/lib/utils';
     import type { ShDialogTier } from './ShDialog.svelte';
+    import { handleDialogCloseAutoFocus } from './dialogFocusPolicy';
 
     interface Props {
         open?: boolean;
@@ -75,6 +76,7 @@
         />
         <AlertDialog.Content
             class={cn(contentBase, tierClasses[tier], sizeClasses[size], contentClass)}
+            onCloseAutoFocus={handleDialogCloseAutoFocus}
             escapeKeydownBehavior={closeOnEscape ? 'close' : 'ignore'}
             interactOutsideBehavior={closeOnOutsideClick ? 'close' : 'ignore'}
         >

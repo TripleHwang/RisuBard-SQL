@@ -14,6 +14,7 @@
     import { Dialog } from 'bits-ui';
     import { XIcon } from '@lucide/svelte';
     import { cn } from 'src/lib/utils';
+    import { handleDialogCloseAutoFocus } from './dialogFocusPolicy';
 
     interface Props {
         open?: boolean;
@@ -105,6 +106,7 @@
                 contentClass
             )}
             style={contentStyle}
+            onCloseAutoFocus={handleDialogCloseAutoFocus}
             escapeKeydownBehavior={closeOnEscape ? 'close' : 'ignore'}
             interactOutsideBehavior={closeOnOutsideClick ? 'close' : 'ignore'}
         >

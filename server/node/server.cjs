@@ -35,6 +35,7 @@ const { resolveDataRoot } = require('./data-root.cjs');
 const { commitTransaction, moveToTrash } = require('./file-store.cjs');
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
 const { openServerBrowser } = require('./open-server-browser.cjs');
+const { releaseToUpdateInfo } = require('./release-update.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -998,8 +999,9 @@ function stopTunnel() {
 
 // ── Update check ─────────────────────────────────────────────────────────────
 const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false';
-const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || 'https://risu-update-worker.nodridan.workers.dev/check';
-const PUBLIC_STATS_URL = (process.env.RISU_UPDATE_URL || 'https://risu-update-worker.nodridan.workers.dev/check').replace(/\/check$/, '/api/public-stats');
+const GITHUB_REPO = 'rpaddict/RisuBard';
+const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+const PUBLIC_STATS_URL = process.env.RISU_PUBLIC_STATS_URL || 'https://risu-update-worker.nodridan.workers.dev/api/public-stats';
 
 // Re-read on each call so non-portable updates (docker/git pull) without a
 // process restart don't keep reporting the old version to the update worker.
@@ -1011,8 +1013,6 @@ function getCurrentVersion() {
 }
 
 // ── Deployment type & self-update helpers ─────────────────────────────────────
-const GITHUB_REPO = 'PocketRisu/PocketRisu';
-
 const deploymentType = (() => {
     // Only portable builds have the .portable marker (created by CI release workflow).
     // Self-update is gated on this — all other types are inferred for analytics only.
@@ -1371,22 +1371,20 @@ async function migrateInlaysToFilesystem() {
     await fs.writeFile(inlayMigrationMarker, new Date().toISOString(), 'utf-8');
 }
 
-async function fetchLatestRelease(lang) {
+async function fetchLatestRelease() {
     if (UPDATE_CHECK_DISABLED) return null;
     try {
         const currentVersion = getCurrentVersion();
-        const params = new URLSearchParams({
-            v: currentVersion,
-            d: deploymentType,
-            os: `${process.platform}-${process.arch}`,
-            id: instanceId,
+        const res = await fetch(UPDATE_CHECK_URL, {
+            headers: {
+                Accept: 'application/vnd.github+json',
+                'User-Agent': 'RisuBard-Updater',
+            },
         });
-        if (lang) params.set('l', String(lang).slice(0, 16));
-        const url = `${UPDATE_CHECK_URL}?${params}`;
-        const res = await fetch(url);
+        if (res.status === 404) return null;
         if (!res.ok) return null;
-        const data = await res.json();
-        if (data.hasUpdate) {
+        const data = releaseToUpdateInfo(await res.json(), currentVersion);
+        if (data?.hasUpdate) {
             console.log(`[Update] New version available: v${data.latestVersion} (current: v${currentVersion}, ${data.severity})`);
         }
         return data;
@@ -5909,7 +5907,7 @@ app.get('/api/update-check', async (req, res) => {
         res.json({ currentVersion, hasUpdate: false, severity: 'none', disabled: true, deploymentType, canSelfUpdate: false });
         return;
     }
-    const result = await fetchLatestRelease(req.query.lang);
+    const result = await fetchLatestRelease();
     const response = result || { currentVersion, hasUpdate: false, severity: 'none' };
     response.deploymentType = deploymentType;
     response.canSelfUpdate = deploymentType === 'portable'
