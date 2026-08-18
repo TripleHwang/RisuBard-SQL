@@ -32,4 +32,34 @@ describe('resolvePluginRequestStatus', () => {
         value = 'risubard'
         expect(resolvePluginRequestStatus(options)).toBe(true)
     })
+
+    test('migrates the legacy JellyBard status selection for the RisuBard bridge', () => {
+        const storage = new Map<string, unknown>([
+            ['provider-manager:jellybard-status-path', 'jellybard'],
+        ])
+        const options = bindPluginRequestStatusStorage({
+            hostRequestStatusStorageKey: 'provider-manager:risubard-status-path',
+        }, (key) => storage.get(key), (key, value) => storage.set(key, value))
+
+        expect(resolvePluginRequestStatus(options)).toBe(true)
+        expect(storage.get('provider-manager:risubard-status-path')).toBe('risubard')
+    })
+
+    test('keeps an installed JellyBard bridge active while migrating its selection', () => {
+        const storage = new Map<string, unknown>([
+            ['provider-manager:jellybard-status-path', 'jellybard'],
+        ])
+        const options = bindPluginRequestStatusStorage({
+            hostRequestStatusStorageKey: 'provider-manager:jellybard-status-path',
+        }, (key) => storage.get(key), (key, value) => storage.set(key, value))
+
+        expect(resolvePluginRequestStatus(options)).toBe(true)
+        expect(storage.get('provider-manager:risubard-status-path')).toBe('risubard')
+    })
+
+    test('does not break provider registration when legacy storage migration fails', () => {
+        expect(() => bindPluginRequestStatusStorage({
+            hostRequestStatusStorageKey: 'provider-manager:risubard-status-path',
+        }, () => { throw new Error('storage unavailable') })).not.toThrow()
+    })
 })

@@ -817,6 +817,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             pluginV2.providerOptions.set(name, bindPluginRequestStatusStorage(
                 options,
                 oldApis.pluginStorage.getItem,
+                oldApis.pluginStorage.setItem,
             ))
             customProviderStore.set(provs)
 
