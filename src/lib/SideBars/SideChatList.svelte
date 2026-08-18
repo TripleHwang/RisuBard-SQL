@@ -2,7 +2,7 @@
     import { onDestroy, onMount } from "svelte";
     import { v4 } from "uuid";
     import Sortable from 'sortablejs/modular/sortable.core.esm.js';
-    import { DownloadIcon, PencilIcon, HardDriveUploadIcon, MenuIcon, TrashIcon, SplitIcon, FolderPlusIcon, BookmarkCheckIcon, PackageIcon, CopyIcon, FolderOpenIcon, LoaderCircleIcon, SaveIcon } from "@lucide/svelte";
+    import { DownloadIcon, PencilIcon, HardDriveUploadIcon, MenuIcon, TrashIcon, SplitIcon, FolderPlusIcon, BookmarkCheckIcon, PackageIcon, CopyIcon, LoaderCircleIcon, PlusIcon, ChevronRightIcon } from "@lucide/svelte";
 
     import type { Chat, ChatFolder, character } from "src/ts/storage/database.svelte";
     import { newChatModelDefaults } from "src/ts/storage/database.svelte";
@@ -12,10 +12,13 @@
 
     import CheckInput from "../UI/GUI/CheckInput.svelte";
     import ShButton from "../UI/GUI/ShButton.svelte";
+    import SolarAssetIcon from "../UI/Icons/SolarAssetIcon.svelte";
     import TextInput from "../UI/GUI/TextInput.svelte";
+    import feedIcon from "src/assets/solar-bold/feed-bold.svg";
+    import loadIcon from "src/assets/solar-bold/undo-left-square-bold.svg";
 
     import { exportChat, importChat, exportAllChats } from "src/ts/characters";
-    import { alertConfirm, alertError, alertSelect, alertStore, notifySuccess, notifyError } from "src/ts/alert";
+    import { alertConfirm, alertError, alertInput, alertSelect, alertStore, notifySuccess, notifyError } from "src/ts/alert";
     import { findCharacterbyId, sleep, sortableOptions } from "src/ts/util";
 
     import { bookmarkListOpen, openModuleListStore } from "src/ts/stores.svelte";
@@ -60,6 +63,57 @@
     let opened = 0
     let saveSlotsOpen = $state(false)
     let savingSlot = $state(false)
+    let chatListExpanded = $state(false)
+    const activeChat = $derived(chara.chats[chara.chatPage])
+
+    function createNewChat(): void {
+        const newChat = {
+            message: [] as any[],
+            note: '',
+            name: `New Chat ${chara.chats.length + 1}`,
+            localLore: [] as any[],
+            fmIndex: -1,
+            id: v4(),
+            ...newChatModelDefaults(),
+        }
+        chara.chats.unshift(newChat)
+        chara.chats = chara.chats
+        changeChatTo(0)
+        void requestImmediateSave()
+        $ReloadGUIPointer += 1
+    }
+
+    async function renameCurrentChat(): Promise<void> {
+        if(!activeChat) return
+        const nextName = await alertInput(
+            `${language.edit} ${language.Chat}`,
+            [],
+            activeChat.name,
+        )
+        if(!nextName?.trim()) return
+        activeChat.name = nextName.trim()
+        chara.chats = chara.chats
+        void requestImmediateSave()
+    }
+
+    async function deleteCurrentChat(): Promise<void> {
+        if(!activeChat) return
+        if(chara.chats.length === 1){
+            notifyError(language.errors.onlyOneChat)
+            return
+        }
+        const confirmed = await alertConfirm(
+            `${language.removeConfirm}${activeChat.name}`
+        )
+        if(!confirmed) return
+        const index = chara.chats.indexOf(activeChat)
+        if(index < 0) return
+        chara.chats.splice(index, 1)
+        chara.chats = chara.chats
+        changeChatTo(0)
+        $ReloadGUIPointer += 1
+        void requestImmediateSave()
+    }
 
     async function saveCurrentChat(): Promise<void> {
         if(savingSlot) return
@@ -352,50 +406,82 @@
     })
 </script>
 <div class="flex flex-col w-full">
-    <div data-sidebar-chat-actions class="grid grid-cols-3 gap-1.5 mt-2">
-    <ShButton data-sidebar-new-chat size="sm" className="w-full" onclick={() => {
-        const len = chara.chats.length
-        let chats = chara.chats
-        const newChat = {
-            message:[] as any[], note:'', name:`New Chat ${len + 1}`, localLore:[] as any[], fmIndex: -1, id: v4(),
-            ...newChatModelDefaults()
-        }
-        chats.unshift(newChat)
-        chara.chats = chats
-        changeChatTo(0)
-        void requestImmediateSave()
-        $ReloadGUIPointer += 1
-    }}><span class="truncate">{language.newChat}</span></ShButton>
+    <section class="border-b border-darkborderc pb-2">
+        <div data-chat-file-header class="flex min-h-10 items-center gap-1">
+            <button
+                type="button"
+                data-chat-list-toggle
+                aria-expanded={chatListExpanded}
+                class="risu-button-lift flex min-w-0 grow items-center gap-1.5 rounded-md px-1.5 py-2 text-left text-textcolor hover:bg-selected/60"
+                onclick={() => { chatListExpanded = !chatListExpanded }}
+            >
+                <ChevronRightIcon
+                    size={17}
+                    class={`shrink-0 transition-transform duration-150 ${chatListExpanded ? 'rotate-90' : ''}`}
+                />
+                <span class="truncate font-semibold">{activeChat?.name ?? language.newChat}</span>
+            </button>
 
-        <ShButton
-            data-risubard-save-chat
-            variant="outline"
-            size="sm"
-            className="w-full"
-            disabled={savingSlot}
-            onclick={() => void saveCurrentChat()}
-        >
-            {#if savingSlot}
-                <LoaderCircleIcon size={15} class="animate-spin shrink-0" />
-            {:else}
-                <SaveIcon size={15} class="shrink-0" />
-            {/if}
-            저장
-        </ShButton>
-        <ShButton
-            data-risubard-load-chat
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onclick={() => { saveSlotsOpen = true }}
-        >
-            <FolderOpenIcon size={15} class="shrink-0" />
-            불러오기
-        </ShButton>
-    </div>
+            <div data-chat-file-toolbar class="flex shrink-0 items-center gap-2">
+                <ShButton data-risubard-save-chat variant="soft-primary" size="icon" className="relative" disabled={savingSlot} aria-label="현재 채팅 저장" title="현재 채팅을 저장된 파일로 보관" onclick={() => void saveCurrentChat()}>
+                    <span aria-hidden="true" class="pointer-events-none absolute top-[2px] left-1/2 -translate-x-1/2 text-[8px] font-semibold leading-none tracking-[0.08em] text-textcolor/75">SAVE</span>
+                    {#if savingSlot}
+                        <span class="mt-2"><LoaderCircleIcon size={18} class="animate-spin" /></span>
+                    {:else}
+                        <span class="mt-2"><SolarAssetIcon src={feedIcon} name="feed-bold" size={22} /></span>
+                    {/if}
+                </ShButton>
+                <ShButton data-risubard-load-chat variant="soft-primary" size="icon" className="relative" aria-label="채팅 불러오기" title="저장된 채팅 파일 열기" onclick={() => { saveSlotsOpen = true }}>
+                    <span aria-hidden="true" class="pointer-events-none absolute top-[2px] left-1/2 -translate-x-1/2 text-[8px] font-semibold leading-none tracking-[0.08em] text-textcolor/75">LOAD</span>
+                    <span class="mt-2"><SolarAssetIcon src={loadIcon} name="undo-left-square-bold" size={22} /></span>
+                </ShButton>
+            </div>
+        </div>
+    </section>
 
-    {#key sorted}
-    <div class="flex flex-col mt-2 overflow-y-auto max-h-80" bind:this={listEle}>
+    <div class:hidden={!chatListExpanded}>
+        <div data-chat-list-toolbar class="flex items-center gap-0.5 border-b border-darkborderc py-1.5">
+            <ShButton data-sidebar-new-chat variant="ghost" size="icon-sm" aria-label={language.newChat} title={language.newChat} onclick={createNewChat}>
+                <PlusIcon size={18} />
+            </ShButton>
+            <ShButton variant="ghost" size="icon-sm" aria-label={language.edit} title={language.edit} onclick={() => void renameCurrentChat()}>
+                <PencilIcon size={18} />
+            </ShButton>
+            <ShButton variant="ghost" size="icon-sm" aria-label={language.copy} title={language.copy} onclick={() => { if(activeChat) void copyChatWithMemory(activeChat) }}>
+                <CopyIcon size={18} />
+            </ShButton>
+            <ShButton variant="destructive" size="icon-sm" aria-label={language.remove} title={language.remove} onclick={() => void deleteCurrentChat()}>
+                <TrashIcon size={18} />
+            </ShButton>
+            <ShButton variant="ghost" size="icon-sm" aria-label={language.download} title={language.download} onclick={exportAllChats}>
+                <DownloadIcon size={18} />
+            </ShButton>
+            <ShButton variant="ghost" size="icon-sm" aria-label={language.import} title={language.import} onclick={importChat}>
+                <HardDriveUploadIcon size={18} />
+            </ShButton>
+            <span class="mx-1 h-4 w-px bg-darkborderc"></span>
+            <ShButton variant="ghost" size="icon-sm" aria-label="Branches" title="Branches" onclick={() => { alertStore.set({ type: 'branches', msg: '' }) }}>
+                <SplitIcon size={18} />
+            </ShButton>
+            <ShButton variant="ghost" size="icon-sm" aria-label="Bookmarks" title="Bookmarks" onclick={() => { $bookmarkListOpen = true }}>
+                <BookmarkCheckIcon size={18} />
+            </ShButton>
+            <ShButton variant="ghost" size="icon-sm" className="ml-auto" aria-label="New folder" title="New folder" onclick={() => {
+                chara.chatFolders ??= []
+                chara.chatFolders.unshift({
+                    id: v4(),
+                    name: `New Folder ${chara.chatFolders.length + 1}`,
+                    folded: false,
+                })
+                chara.chatFolders = chara.chatFolders
+                $ReloadGUIPointer += 1
+            }}>
+                <FolderPlusIcon size={18} />
+            </ShButton>
+        </div>
+
+        {#key sorted}
+        <div class="flex flex-col mt-1 overflow-y-auto max-h-80" bind:this={listEle}>
         <!-- folder div -->
         <div class="flex flex-col" bind:this={folderEles}>
             <!-- chat folder -->
@@ -482,69 +568,12 @@
                     {:else}
                     {#each chara.chats.filter(chat => chat.folderId == chara.chatFolders[i].id) as chat}
                     {@const chatIdx = chara.chats.indexOf(chat)}
-                    <button data-risu-chat-idx={chatIdx} onclick={() => {
+                    <button data-chat-list-row data-risu-chat-idx={chatIdx} onclick={() => {
                         if(!editMode){
                             changeChatTo(chatIdx)
                         }
                     }} class="risu-chats flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"class:bg-selected={chatIdx === chara.chatPage && !$chatDeselected}>
-                        {#if editMode}
-                            <TextInput bind:value={chat.name} className="grow min-w-0" padding={false}/>
-                        {:else}
-                            <span>{chat.name}</span>
-                        {/if}
-                        <div class="grow flex justify-end">
-                            <div role="button" tabindex="0" onkeydown={(e) => {
-                                if(e.key === 'Enter'){
-                                    e.currentTarget.click()
-                                }
-                            }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={async (e) => {
-                                e.stopPropagation()
-                                await copyChatWithMemory(chat)
-                            }}>
-                                <CopyIcon size={18}/>
-                            </div>
-                            <div role="button" tabindex="0" onkeydown={(e) => {
-                                if(e.key === 'Enter'){
-                                    e.currentTarget.click()
-                                }
-                            }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={() => {
-                                editMode = !editMode
-                            }}>
-                                <PencilIcon size={18}/>
-                            </div>
-                            <div role="button" tabindex="0" onkeydown={(e) => {
-                                if(e.key === 'Enter'){
-                                    e.currentTarget.click()
-                                }
-                            }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={async (e) => {
-                                e.stopPropagation()
-                                exportChat(chara.chats.indexOf(chat))
-                            }}>
-                                <DownloadIcon size={18}/>
-                            </div>
-                            <div role="button" tabindex="0" onkeydown={(e) => {
-                                if(e.key === 'Enter'){
-                                    e.currentTarget.click()
-                                }
-                            }} class="text-textcolor2 hover:text-red-400 cursor-pointer" onclick={async (e) => {
-                                e.stopPropagation()
-                                if(chara.chats.length === 1){
-                                    notifyError(language.errors.onlyOneChat)
-                                    return
-                                }
-                                const d = await alertConfirm(`${language.removeConfirm}${chat.name}`)
-                                if(d){
-                                    changeChatTo(0)
-                                    $ReloadGUIPointer += 1
-                                    let chats = chara.chats
-                                    chats.splice(chara.chats.indexOf(chat), 1)
-                                    chara.chats = chats
-                                    void requestImmediateSave()
-                                }
-                            }}>
-                                <TrashIcon size={18}/>
-                            </div>
-                        </div>
+                        <span class="truncate">{chat.name}</span>
                     </button>
                     {/each}
                     {/if}
@@ -556,126 +585,23 @@
         <div class="risu-chat flex flex-col">
             {#each chara.chats as chat, i}
             {#if chat.folderId == null || isOrphanFolder(chat.folderId)}
-            <button data-risu-chat-idx={i} onclick={() => {
+            <button data-chat-list-row data-risu-chat-idx={i} onclick={() => {
                 if(!editMode){
                     changeChatTo(i)
                 }
             }}
             class="flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"
             class:bg-selected={i === chara.chatPage && !$chatDeselected}>
-                {#if editMode}
-                    <TextInput bind:value={chara.chats[i].name} className="grow min-w-0" padding={false}/>
-                {:else}
-                    <span>{chat.name}</span>
-                {/if}
-                <div class="grow flex justify-end">
-                    <div role="button" tabindex="0" onkeydown={(e) => {
-                        if(e.key === 'Enter'){
-                            e.currentTarget.click()
-                        }
-                    }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={async (e) => {
-                        e.stopPropagation()
-                        await copyChatWithMemory(chat)
-                    }}>
-                        <CopyIcon size={18}/>
-                    </div>
-                    <div role="button" tabindex="0" onkeydown={(e) => {
-                        if(e.key === 'Enter'){
-                            e.currentTarget.click()
-                        }
-                    }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={() => {
-                        editMode = !editMode
-                    }}>
-                        <PencilIcon size={18}/>
-                    </div>
-                    <div role="button" tabindex="0" onkeydown={(e) => {
-                        if(e.key === 'Enter'){
-                            e.currentTarget.click()
-                        }
-                    }} class="text-textcolor2 hover:text-primary mr-1 cursor-pointer" onclick={async (e) => {
-                        e.stopPropagation()
-                        exportChat(i)
-                    }}>
-                        <DownloadIcon size={18}/>
-                    </div>
-                    <div role="button" tabindex="0" onkeydown={(e) => {
-                        if(e.key === 'Enter'){
-                            e.currentTarget.click()
-                        }
-                    }} class="text-textcolor2 hover:text-red-400 cursor-pointer" onclick={async (e) => {
-                        e.stopPropagation()
-                        if(chara.chats.length === 1){
-                            notifyError(language.errors.onlyOneChat)
-                            return
-                        }
-                        const d = await alertConfirm(`${language.removeConfirm}${chat.name}`)
-                        if(d){
-                            changeChatTo(0)
-                            $ReloadGUIPointer += 1
-                            let chats = chara.chats
-                            chats.splice(i, 1)
-                            chara.chats = chats
-                            void requestImmediateSave()
-                        }
-                    }}>
-                        <TrashIcon size={18}/>
-                    </div>
-                </div>
+                <span class="truncate">{chat.name}</span>
             </button>
             {/if}
             {/each}
         </div>
     </div>
     {/key}
+    </div>
 
     <div class="border-t border-selected mt-2">
-        <div class="flex mt-2 ml-2 items-center">
-            <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" onclick={() => {
-                exportAllChats()
-            }}>
-                <DownloadIcon size={18}/>
-            </button>
-            <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" onclick={() => {
-                importChat()
-            }}>
-                <HardDriveUploadIcon size={18}/>
-            </button>
-            <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" onclick={() => {
-                editMode = !editMode
-            }}>
-                <PencilIcon size={18}/>
-            </button>
-            <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" onclick={() => {
-                alertStore.set({
-                  type: "branches",
-                  msg: ""
-                })
-            }}>
-                <SplitIcon size={18}/>
-            </button>
-            <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" onclick={() => {
-                $bookmarkListOpen = true;
-            }}>
-                <BookmarkCheckIcon size={18}/>
-            </button>
-            <button class="ml-auto text-textcolor2 hover:text-primary mr-2 cursor-pointer" onclick={() => {
-                if (!chara.chatFolders) {
-                    chara.chatFolders = []
-                }
-                const folders = chara.chatFolders
-                const length = chara.chatFolders.length
-                folders.unshift({
-                    id: v4(),
-                    name: `New Folder ${length + 1}`,
-                    folded: false,
-                })
-                chara.chatFolders = folders
-                $ReloadGUIPointer += 1
-            }}>
-                <FolderPlusIcon size={18}/>
-            </button>
-        </div>
-
         {#if DBState.db.characters[$selectedCharID]?.chaId !== '§playground' && !$chatDeselected}
             {#if DBState.db.showModelInSidebar}
                 <ModelBind />

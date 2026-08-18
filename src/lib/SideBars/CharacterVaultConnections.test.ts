@@ -15,6 +15,32 @@ describe('Character Vault sidebar integration', () => {
             .toBeLessThan(sidebar.indexOf('data-quick-inventory'))
     })
 
+    test('labels persona as a rail section and keeps Vault as an unlabeled square action', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const personaStart = sidebar.indexOf('data-sidebar-persona')
+        const vaultStart = sidebar.indexOf('data-character-vault-button')
+        const inventoryStart = sidebar.indexOf('data-quick-inventory')
+        const persona = sidebar.slice(personaStart, vaultStart)
+        const vault = sidebar.slice(vaultStart, inventoryStart)
+        expect(persona).toContain('data-sidebar-persona-label')
+        expect(persona).toContain('text-white')
+        expect(persona.indexOf('data-sidebar-persona-label'))
+            .toBeLessThan(persona.indexOf('<button'))
+        expect(vault).toContain('character-toolbar-button--chat')
+        expect(vault).not.toContain('border-b')
+        expect(vault).not.toMatch(/>Vault<\/span>/)
+    })
+
+    test('aligns the square rail options control with the workspace header divider', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        expect(sidebar).toContain('data-sidebar-options')
+        expect(sidebar).toContain('data-sidebar-options-divider')
+        expect(sidebar).toMatch(/data-sidebar-options[\s\S]*size-10[\s\S]*data-sidebar-options-divider/)
+        expect(sidebar).toContain('bg-darkbg pt-2 pb-6 text-textcolor')
+        expect(sidebar).toMatch(/data-character-workspace-header class="flex min-h-10/)
+        expect(sidebar).not.toMatch(/data-character-workspace-header class="[^"]*mt-1\.5/)
+    })
+
     test('renders entries from the stable quick-access projection', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         expect(sidebar).toContain('getCharacterVaultQuickAccess')

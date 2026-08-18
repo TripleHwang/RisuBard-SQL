@@ -34,8 +34,14 @@ describe('RisuBard memory CommonJS runtime', () => {
                 warnings: [], forkToken: 'token',
             },
         }))
+        const previewSaveSlot = vi.fn(async () => Buffer.from([8]))
+        const renameSaveSlot = vi.fn(async (input) => ({
+            ...summary, sourceChatName: input.name,
+        }))
+        const deleteSaveSlot = vi.fn(async () => undefined)
         const service = createRuntimeMemoryService(userDataDirectory, {
             createSaveSlot, listSaveSlots, prepareSaveLoad,
+            previewSaveSlot, renameSaveSlot, deleteSaveSlot,
         })
 
         await service.saveMarkdownWikiTurn({
@@ -69,6 +75,26 @@ describe('RisuBard memory CommonJS runtime', () => {
         expect(prepareSaveLoad).toHaveBeenCalledWith({
             userDataDirectory, characterId: 'character',
             saveId: 'save-1', destinationChatId: 'loaded',
+        })
+
+        await expect(service.previewMemorySave({
+            characterId: 'character', saveId: 'save-1',
+        })).resolves.toEqual(Buffer.from([8]))
+        await expect(service.renameMemorySave({
+            characterId: 'character', saveId: 'save-1', name: '새 이름',
+        })).resolves.toMatchObject({ sourceChatName: '새 이름' })
+        await expect(service.deleteMemorySave({
+            characterId: 'character', saveId: 'save-1',
+        })).resolves.toBeUndefined()
+        expect(previewSaveSlot).toHaveBeenCalledWith({
+            userDataDirectory, characterId: 'character', saveId: 'save-1',
+        })
+        expect(renameSaveSlot).toHaveBeenCalledWith({
+            userDataDirectory, characterId: 'character', saveId: 'save-1',
+            name: '새 이름',
+        })
+        expect(deleteSaveSlot).toHaveBeenCalledWith({
+            userDataDirectory, characterId: 'character', saveId: 'save-1',
         })
     })
 

@@ -122,6 +122,36 @@ async function safeFile(
     }
 }
 
+async function validatedSave(
+    fileSystem: SaveFileSystem,
+    input: { userDataDirectory: string; characterId: string; saveId: string }
+): Promise<{
+    directory: string
+    manifestPath: string
+    chatPath: string
+    manifest: StoredMemorySaveManifest
+}> {
+    const characterId = required(input.characterId, 'characterId')
+    const saveId = required(input.saveId, 'saveId')
+    const workspace = workspaceFor(input.userDataDirectory, characterId, saveId)
+    const manifestPath = join(workspace.directory, SAVE_MANIFEST)
+    const chatPath = join(workspace.directory, SAVE_CHAT)
+    await safeFile(fileSystem, manifestPath, 'Memory save manifest')
+    await safeFile(fileSystem, chatPath, 'Memory save chat')
+    const manifest = parseManifest(JSON.parse(
+        await fileSystem.readFile(manifestPath, 'utf8')
+    ))
+    if (manifest.saveId !== saveId) {
+        throw new Error('Invalid memory save manifest')
+    }
+    return {
+        directory: workspace.directory,
+        manifestPath,
+        chatPath,
+        manifest,
+    }
+}
+
 export async function createMemorySaveSlot(input: {
     userDataDirectory: string
     characterId: string
@@ -253,6 +283,47 @@ export async function listMemorySaveSlots(input: {
         right.createdAt.localeCompare(left.createdAt)
         || left.saveId.localeCompare(right.saveId)
     )
+}
+
+export async function readMemorySaveChat(input: {
+    userDataDirectory: string
+    characterId: string
+    saveId: string
+}, options: { fileSystem?: SaveFileSystem } = {}): Promise<Buffer> {
+    const fileSystem = options.fileSystem ?? nodeFs
+    const saved = await validatedSave(fileSystem, input)
+    return Buffer.from(await fileSystem.readFile(saved.chatPath))
+}
+
+export async function renameMemorySaveSlot(input: {
+    userDataDirectory: string
+    characterId: string
+    saveId: string
+    name: string
+}, options: { fileSystem?: SaveFileSystem } = {}): Promise<MemorySaveSlotSummary> {
+    const fileSystem = options.fileSystem ?? nodeFs
+    const name = required(input.name, 'saved file name', 512)
+    const saved = await validatedSave(fileSystem, input)
+    const manifest: StoredMemorySaveManifest = {
+        ...saved.manifest,
+        sourceChatName: name,
+    }
+    await fileSystem.writeFile(
+        saved.manifestPath,
+        JSON.stringify(manifest),
+        { encoding: 'utf8', mode: 0o600 }
+    )
+    return summaryOf(manifest)
+}
+
+export async function deleteMemorySaveSlot(input: {
+    userDataDirectory: string
+    characterId: string
+    saveId: string
+}, options: { fileSystem?: SaveFileSystem } = {}): Promise<void> {
+    const fileSystem = options.fileSystem ?? nodeFs
+    const saved = await validatedSave(fileSystem, input)
+    await fileSystem.rm(saved.directory, { recursive: true, force: false })
 }
 
 export async function prepareMemorySaveLoad(input: {

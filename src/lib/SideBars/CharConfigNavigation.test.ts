@@ -7,46 +7,40 @@ import { languageKorean } from '../../lang/ko'
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8')
 
 describe('character configuration navigation', () => {
-    test('uses the requested Solar Bold icon mapping', () => {
+    test('keeps character navigation in the shared sidebar toolbar', () => {
         const config = source('src/lib/SideBars/CharConfig.svelte')
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         const iconPath = 'src/lib/UI/Icons/SolarBoldIcon.svelte'
         expect(existsSync(resolve(process.cwd(), iconPath))).toBe(true)
         for (const name of [
+            'chat-round-dots',
             'people-nearby',
             'gallery-wide',
             'notebook',
             'microphone-3',
             'code-square',
             'settings',
-            'share',
         ]) {
-            expect(config).toContain(`<SolarBoldIcon name="${name}" size={iconButtonSize} />`)
+            expect(sidebar).toContain(`<SolarBoldIcon name="${name}"`)
             expect(source(iconPath)).toContain(`name === '${name}'`)
         }
-        expect(config).not.toMatch(/<(UserIcon|SmileIcon|BookIcon|Volume2Icon|Braces|ActivityIcon|Share2Icon)/)
+        expect(config).not.toContain('data-character-config-navigation')
     })
 
-    test('labels every icon tab and gives the final screen a Share heading', () => {
-        const config = source('src/lib/SideBars/CharConfig.svelte')
-        expect(config.match(/data-character-config-tab/g)).toHaveLength(7)
-        expect(config).toContain('aria-label={language.share}')
-        expect(config).toContain('>{language.share}</h2>')
-        expect(languageEnglish.share).toBe('Share')
-        expect(languageKorean.share).toBe('공유')
+    test('puts chat home first and promotes character management to the title row', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        expect(sidebar).toContain('data-character-workspace-header')
+        expect(sidebar).toContain('data-character-title')
+        expect(sidebar).toContain('data-character-manage')
+        expect(sidebar).toContain('data-character-config-navigation')
+        expect(sidebar.indexOf('data-character-chat-home'))
+            .toBeLessThan(sidebar.indexOf('data-character-config-tab'))
+        expect(sidebar).not.toContain('data-sidebar-mode-tabs')
     })
 
-    test('evenly distributes tabs with compact equal vertical spacing', () => {
-        const config = source('src/lib/SideBars/CharConfig.svelte')
-        expect(config).toContain('data-character-config-navigation')
-        expect(config).toContain('class="flex w-full items-center justify-evenly my-1.5"')
-        expect(config).not.toContain('class="flex mb-2"')
-        expect(config).not.toContain('text-2xl font-bold mt-2')
-    })
-
-    test('shows the localized tab name in the app tooltip', () => {
-        const config = source('src/lib/SideBars/CharConfig.svelte')
-        expect(config).toContain('import { tooltip } from "src/ts/gui/tooltip";')
-        expect(config.match(/use:tooltip=/g)).toHaveLength(7)
+    test('retains every character section from information through advanced settings', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        expect(sidebar.match(/data-character-config-tab/g)).toHaveLength(6)
         for (const label of [
             'language.characterInfo',
             'language.characterDisplay',
@@ -54,9 +48,58 @@ describe('character configuration navigation', () => {
             '"TTS"',
             'language.scripts',
             'language.advancedSettings',
-            'language.share',
         ]) {
-            expect(config).toContain(`use:tooltip={${label}}`)
+            expect(sidebar).toContain(`aria-label={${label}}`)
         }
+    })
+
+    test('opens the former share screen from the management button', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const charConfig = source('src/lib/SideBars/CharConfig.svelte')
+        const manageStart = sidebar.indexOf('data-character-manage')
+        const manageEnd = sidebar.indexOf('</button>', manageStart)
+        const manageButton = sidebar.slice(manageStart, manageEnd)
+        expect(manageButton).toContain('characterManageOpen = true')
+        expect(manageButton).not.toContain('botMakerMode.set(true)')
+        expect(sidebar).toContain('bind:open={characterManageOpen}')
+        expect(sidebar).toContain('closeOnOutsideClick={true}')
+        expect(sidebar).toContain('<CharConfig subMenuOverride={6}')
+        expect(charConfig).toContain('subMenuOverride?: number')
+        expect(languageEnglish.share).toBe('Share')
+        expect(languageKorean.share).toBe('공유')
+    })
+
+    test('uses the requested local Solar icons for management and developer tools', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        for (const [name, asset] of [
+            ['share-bold', 'src/assets/solar-bold/share-bold.svg'],
+            ['magnifier-bug-bold', 'src/assets/solar-bold/magnifier-bug-bold.svg'],
+        ]) {
+            expect(existsSync(resolve(process.cwd(), asset))).toBe(true)
+            expect(sidebar).toContain(`name="${name}"`)
+        }
+        expect(sidebar).not.toContain('<WrenchIcon')
+    })
+
+    test('shares one toolbar button state model while chat keeps a visible idle state', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const styles = source('src/styles.css')
+        expect(sidebar).toContain('character-toolbar-button--chat')
+        expect(sidebar.match(/character-toolbar-button/g)?.length).toBeGreaterThanOrEqual(7)
+        expect(sidebar).toContain("class:is-active={!$botMakerMode && !devTool}")
+        expect(sidebar).toContain("class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 0}")
+        expect(styles).toContain('.character-toolbar-button--chat:not(.is-active)')
+        expect(styles).toContain('.character-toolbar-button.is-active')
+        expect(styles).toContain('transform: translateY(-1px)')
+    })
+
+    test('uses one vertical gap around the character toolbar and following heading', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const chatList = source('src/lib/SideBars/SideChatList.svelte')
+        expect(sidebar).toMatch(
+            /data-character-config-navigation[^>]*class="my-2 /
+        )
+        expect(chatList).toContain('<section class="border-b border-darkborderc pb-2">')
+        expect(chatList).not.toContain('<section class="mt-1 border-b')
     })
 })

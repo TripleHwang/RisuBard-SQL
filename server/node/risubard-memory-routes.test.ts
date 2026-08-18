@@ -155,6 +155,50 @@ describe('RisuBard memory routes', () => {
         expect(harness.response.body).toEqual(Buffer.from([4, 5, 6]))
     })
 
+    test('validates save preview, rename, and delete requests', async () => {
+        const { registerRisuBardMemoryRoutes } = require(
+            './risubard-memory-routes.cjs'
+        )
+        const harness = createHarness()
+        const renamed = {
+            saveId: 'save-1', sourceChatId: 'chat-1',
+            sourceChatName: '새 이름', createdAt: '2026-08-14T08:00:00.000Z',
+            turnCount: 3,
+        }
+        const service = {
+            previewMemorySave: vi.fn(async () => Buffer.from([7, 8])),
+            renameMemorySave: vi.fn(async () => renamed),
+            deleteMemorySave: vi.fn(async () => undefined),
+        }
+        registerRisuBardMemoryRoutes(harness.app, {
+            auth: async () => true,
+            service,
+        })
+        const identity = { characterId: 'character', saveId: 'save-1' }
+
+        await harness.routes.get('/api/risubard/memory/save-slot/preview')!({
+            body: identity,
+        }, harness.response, vi.fn())
+        expect(service.previewMemorySave).toHaveBeenCalledWith(identity)
+        expect(harness.response.headers['content-type'])
+            .toBe('application/octet-stream')
+        expect(harness.response.body).toEqual(Buffer.from([7, 8]))
+
+        await harness.routes.get('/api/risubard/memory/save-slot/rename')!({
+            body: { ...identity, name: '새 이름' },
+        }, harness.response, vi.fn())
+        expect(service.renameMemorySave).toHaveBeenCalledWith({
+            ...identity, name: '새 이름',
+        })
+        expect(harness.response.body).toEqual(renamed)
+
+        await harness.routes.get('/api/risubard/memory/save-slot/delete')!({
+            body: identity,
+        }, harness.response, vi.fn())
+        expect(service.deleteMemorySave).toHaveBeenCalledWith(identity)
+        expect(harness.response.statusCode).toBe(204)
+    })
+
     test('authenticates and validates copy and branch memory forks', async () => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'

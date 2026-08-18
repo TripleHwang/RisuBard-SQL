@@ -7,7 +7,6 @@
     import { DBState } from 'src/ts/stores.svelte';
     import { CharConfigSubMenu, MobileGUI, selectedCharID, hypaV3ModalOpen } from "../../ts/stores.svelte";
     import { PlusIcon, TrashIcon, DownloadIcon, HardDriveUploadIcon, ImageIcon, ImageOffIcon, ArrowUp, ArrowDown, TriangleAlertIcon } from '@lucide/svelte'
-    import SolarBoldIcon from '../UI/Icons/SolarBoldIcon.svelte'
     import Check from "../UI/GUI/CheckInput.svelte";
     import { addCharEmotion, addingEmotion, getCharImage, rmCharEmotion, selectCharImg, removeChar, changeCharImage } from "../../ts/characters";
     import LoreBook from "./LoreBook/LoreBookSetting.svelte";
@@ -35,7 +34,13 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     import { exportCharacterPackage, importPackageToCharacter } from "src/ts/characterPackage";
     import { exportRegex, importRegex } from "src/ts/process/scripts";
     import SliderInput from "../UI/GUI/SliderInput.svelte";
-    import { tooltip } from "src/ts/gui/tooltip";
+
+    interface Props {
+        subMenuOverride?: number
+    }
+
+    let { subMenuOverride }: Props = $props()
+    let activeSubMenu = $derived(subMenuOverride ?? $CharConfigSubMenu)
 
     let iconRemoveMode = $state(false)
     let pkgIncludeCharacter = $state(true)
@@ -44,7 +49,6 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     let pkgIncludeInlays = $state(false)
     let viewSubMenu = $state(0)
     let emos:[string, string][] = $state([])
-    let iconButtonSize = window.innerWidth > 360 ? 24 as const : 20 as const
     let tokens = $state({
         desc: 0,
         firstMsg: 0,
@@ -228,37 +232,6 @@ import ShButton from "../UI/GUI/ShButton.svelte";
 
 </script>
 
-{#if licensed !== 'private' && !$MobileGUI}
-    <div data-character-config-navigation class="flex w-full items-center justify-evenly my-1.5">
-        <button type="button" data-character-config-tab aria-label={language.characterInfo} use:tooltip={language.characterInfo} aria-pressed={$CharConfigSubMenu === 0} class={$CharConfigSubMenu === 0 ? 'text-textcolor ' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 0}}>
-            <SolarBoldIcon name="people-nearby" size={iconButtonSize} />
-        </button>
-        <button type="button" data-character-config-tab aria-label={language.characterDisplay} use:tooltip={language.characterDisplay} aria-pressed={$CharConfigSubMenu === 1} class={$CharConfigSubMenu === 1 ? 'text-textcolor' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 1}}>
-            <SolarBoldIcon name="gallery-wide" size={iconButtonSize} />
-        </button>
-        <button type="button" data-character-config-tab aria-label={language.loreBook} use:tooltip={language.loreBook} aria-pressed={$CharConfigSubMenu === 3} class={$CharConfigSubMenu === 3 ? 'text-textcolor' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 3}}>
-            <SolarBoldIcon name="notebook" size={iconButtonSize} />
-        </button>
-        {#if DBState.db.characters[$selectedCharID].type === 'character'}
-            <button type="button" data-character-config-tab aria-label="TTS" use:tooltip={"TTS"} aria-pressed={$CharConfigSubMenu === 5} class={$CharConfigSubMenu === 5 ? 'text-textcolor' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 5}}>
-                <SolarBoldIcon name="microphone-3" size={iconButtonSize} />
-            </button>
-            <button type="button" data-character-config-tab aria-label={language.scripts} use:tooltip={language.scripts} aria-pressed={$CharConfigSubMenu === 4} class={$CharConfigSubMenu === 4 ? 'text-textcolor' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 4}}>
-                <SolarBoldIcon name="code-square" size={iconButtonSize} />
-            </button>
-        {/if}
-        <button type="button" data-character-config-tab aria-label={language.advancedSettings} use:tooltip={language.advancedSettings} aria-pressed={$CharConfigSubMenu === 2} class={$CharConfigSubMenu === 2 ? 'text-textcolor' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 2}}>
-            <SolarBoldIcon name="settings" size={iconButtonSize} />
-        </button>
-        {#if DBState.db.characters[$selectedCharID].type === 'character'}
-            <button type="button" data-character-config-tab aria-label={language.share} use:tooltip={language.share} aria-pressed={$CharConfigSubMenu === 6} class={$CharConfigSubMenu === 6 ? 'text-textcolor' : 'text-textcolor2'} onclick={() => {$CharConfigSubMenu = 6}}>
-                <SolarBoldIcon name="share" size={iconButtonSize} />
-            </button>
-        {/if}
-    </div>
-{/if}
-
-
 {#snippet assetViewerButton()}
     {#if DBState.db.characters[$selectedCharID].type === 'character' && hasImageAssets((DBState.db.characters[$selectedCharID] as character).additionalAssets)}
         <ShButton
@@ -271,7 +244,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     {/if}
 {/snippet}
 
-{#if $CharConfigSubMenu === 0}
+{#if activeSubMenu === 0}
     {#if licensed !== 'private'}
         <h2 class="mb-2 text-2xl font-bold">{language.characterInfo}</h2>
         <span class="text-textcolor">{language.characterName}</span>
@@ -317,9 +290,9 @@ import ShButton from "../UI/GUI/ShButton.svelte";
 {:else if licensed === 'private'}
     <span>You are not allowed</span>
     {(() => {
-        $CharConfigSubMenu = 0
+        if (subMenuOverride === undefined) $CharConfigSubMenu = 0
     })()}
-{:else if $CharConfigSubMenu === 1}
+{:else if activeSubMenu === 1}
     {#if !$MobileGUI}
         <h2 class="mb-2 text-2xl font-bold">{language.characterDisplay}</h2>
     {/if}
@@ -619,12 +592,12 @@ import ShButton from "../UI/GUI/ShButton.svelte";
                 </table>
             </div>
     {/if}
-{:else if $CharConfigSubMenu === 3}
+{:else if activeSubMenu === 3}
     {#if !$MobileGUI}
         <h2 class="mb-2 text-2xl font-bold">{language.loreBook} <Help key="lorebook"/></h2>
     {/if}
     <LoreBook />
-{:else if $CharConfigSubMenu === 4}
+{:else if activeSubMenu === 4}
     {#if DBState.db.characters[$selectedCharID].type === 'character'}
         {#if !$MobileGUI}
             <h2 class="mb-2 text-2xl font-bold">{language.scripts}</h2>
@@ -665,7 +638,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
             <TextAreaInput margin="both" autocomplete="off" bind:value={DBState.db.characters[$selectedCharID].virtualscript}></TextAreaInput>
         {/if}
     {/if}
-{:else if $CharConfigSubMenu === 6}
+{:else if activeSubMenu === 6}
     {#if !$MobileGUI}
         <h2 class="mb-2 text-2xl font-bold">{language.share}</h2>
     {/if}
@@ -736,7 +709,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
         </div>
     {/if}
 
-{:else if $CharConfigSubMenu === 5}
+{:else if activeSubMenu === 5}
     {#if DBState.db.characters[$selectedCharID].type === 'character'}
         {#if !$MobileGUI}
             <h2 class="mb-2 text-2xl font-bold">TTS</h2>
@@ -1038,7 +1011,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
             </div>
         {/if}
     {/if}
-{:else if $CharConfigSubMenu === 2}
+{:else if activeSubMenu === 2}
     {#if !$MobileGUI}
         <h2 class="mb-2 text-2xl font-bold">{language.advancedSettings}</h2>
     {/if}

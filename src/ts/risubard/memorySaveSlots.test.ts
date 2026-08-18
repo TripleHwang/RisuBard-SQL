@@ -5,7 +5,10 @@ import {
     createMemorySaveSlot,
     encodeMemorySaveChat,
     listMemorySaveSlots,
+    deleteMemorySaveSlot,
+    previewMemorySaveSlot,
     prepareMemorySaveLoad,
+    renameMemorySaveSlot,
 } from './memorySaveSlots'
 
 const chat: Chat = {
@@ -105,5 +108,59 @@ describe('memory save slot client', () => {
             destinationChatId: 'loaded-chat', fetchImpl,
             createAuth: async () => 'auth',
         })).rejects.toThrow('fork token')
+    })
+
+    test('renames and deletes a saved file through bounded JSON requests', async () => {
+        const calls: Array<{ url: string; init?: RequestInit }> = []
+        const renamed = { ...summary, sourceChatName: '성 안뜰' }
+        const fetchImpl = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+            calls.push({ url: String(url), init })
+            return String(url).endsWith('/rename')
+                ? new Response(JSON.stringify(renamed))
+                : new Response(null, { status: 204 })
+        }) as unknown as typeof fetch
+
+        await expect(renameMemorySaveSlot({
+            characterId: 'character', saveId: 'save-1', name: '성 안뜰',
+            fetchImpl, createAuth: async () => 'auth',
+        })).resolves.toEqual(renamed)
+        await expect(deleteMemorySaveSlot({
+            characterId: 'character', saveId: 'save-1', fetchImpl,
+            createAuth: async () => 'auth',
+        })).resolves.toBeUndefined()
+        expect(calls.map((call) => call.url)).toEqual([
+            '/api/risubard/memory/save-slot/rename',
+            '/api/risubard/memory/save-slot/delete',
+        ])
+        expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+            characterId: 'character', saveId: 'save-1', name: '성 안뜰',
+        })
+    })
+
+    test('loads only the selected saved chat for a compact latest-message preview', async () => {
+        const previewChat: Chat = {
+            ...chat,
+            message: [
+                { role: 'user', data: '예전 질문', chatId: 'old-user' },
+                { role: 'char', data: '예전 답변', chatId: 'old-char' },
+                { role: 'user', data: '최신 질문', chatId: 'latest-user' },
+                { role: 'char', data: '최신 답변', chatId: 'latest-char' },
+                { role: 'char', data: '숨겨진 최신 답변', chatId: 'hidden-char', disabled: true },
+            ],
+        }
+        const savedBytes = encodeMemorySaveChat(previewChat)
+        const fetchImpl = vi.fn(async () => new Response(
+            Uint8Array.from(savedBytes).buffer,
+            { headers: { 'content-type': 'application/octet-stream' } }
+        )) as unknown as typeof fetch
+
+        await expect(previewMemorySaveSlot({
+            characterId: 'character', saveId: 'save-1', fetchImpl,
+            createAuth: async () => 'auth',
+        })).resolves.toEqual([
+            { role: 'user', data: '최신 질문' },
+            { role: 'char', data: '최신 답변' },
+        ])
+        expect(fetchImpl).toHaveBeenCalledOnce()
     })
 })

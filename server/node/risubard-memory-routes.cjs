@@ -15,6 +15,12 @@ function hasBoundedId(value) {
         && value.length <= 1_024
 }
 
+function hasBoundedName(value) {
+    return typeof value === 'string'
+        && value.trim().length > 0
+        && value.length <= 512
+}
+
 function validEvidence(value, chatId) {
     return Array.isArray(value)
         && value.length <= 12
@@ -109,6 +115,61 @@ function registerRisuBardMemoryRoutes(app, options) {
                 return
             }
             res.send(await options.service.listMemorySaves(req.body))
+        }
+        catch (error) {
+            next(error)
+        }
+    })
+
+    app.post('/api/risubard/memory/save-slot/preview', async (req, res, next) => {
+        try {
+            if (!await options.auth(req, res)) return
+            if (!hasExactKeys(req.body, ['characterId', 'saveId'])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.saveId)) {
+                res.status(400).send({ error: 'Invalid memory save preview request' })
+                return
+            }
+            const bytes = await options.service.previewMemorySave(req.body)
+            res.setHeader('content-type', 'application/octet-stream')
+            res.send(bytes)
+        }
+        catch (error) {
+            next(error)
+        }
+    })
+
+    app.post('/api/risubard/memory/save-slot/rename', async (req, res, next) => {
+        try {
+            if (!await options.auth(req, res)) return
+            if (!hasExactKeys(req.body, ['characterId', 'saveId', 'name'])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.saveId)
+                || !hasBoundedName(req.body.name)) {
+                res.status(400).send({ error: 'Invalid memory save rename request' })
+                return
+            }
+            res.send(await options.service.renameMemorySave({
+                ...req.body,
+                name: req.body.name.trim(),
+            }))
+        }
+        catch (error) {
+            next(error)
+        }
+    })
+
+    app.post('/api/risubard/memory/save-slot/delete', async (req, res, next) => {
+        try {
+            if (!await options.auth(req, res)) return
+            if (!hasExactKeys(req.body, ['characterId', 'saveId'])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.saveId)) {
+                res.status(400).send({ error: 'Invalid memory save delete request' })
+                return
+            }
+            await options.service.deleteMemorySave(req.body)
+            res.status(204).send()
         }
         catch (error) {
             next(error)

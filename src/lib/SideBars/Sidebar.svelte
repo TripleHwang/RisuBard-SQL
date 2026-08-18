@@ -16,7 +16,8 @@
 
     leftBarCollapsed,
     openPersonaManager,
-    characterVaultOpen
+    characterVaultOpen,
+    CharConfigSubMenu
 
 
   } from "../../ts/stores.svelte";
@@ -32,7 +33,6 @@
     FolderIcon,
     FolderOpenIcon,
     HomeIcon,
-    WrenchIcon,
     User2Icon,
     ChevronsLeft,
     ArrowRight,
@@ -60,6 +60,13 @@
     import QuickSettingsGui from "../Others/QuickSettingsGUI.svelte";
   import PluginDefinedIcon from "../Others/PluginDefinedIcon.svelte";
   import CharacterVaultDialog from "./CharacterVaultDialog.svelte";
+  import ShButton from "../UI/GUI/ShButton.svelte";
+  import ShDialog from "../UI/GUI/ShDialog.svelte";
+  import SolarBoldIcon from '../UI/Icons/SolarBoldIcon.svelte';
+  import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
+  import shareIcon from 'src/assets/solar-bold/share-bold.svg';
+  import magnifierBugIcon from 'src/assets/solar-bold/magnifier-bug-bold.svg';
+  import { tooltip } from "src/ts/gui/tooltip";
   import { getCharacterVaultQuickAccess } from "src/ts/characterVault";
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
@@ -69,6 +76,7 @@
   let editMode = $state(false);
   let menuMode = $state(0);
   let devTool = $state(false)
+  let characterManageOpen = $state(false)
 
   function reseter() {
     menuMode = 0;
@@ -641,7 +649,8 @@
 >
   {#if !DBState.db.hamburgerButtonBottom}
   <button
-    class="flex h-8 min-h-8 w-14 min-w-14 cursor-pointer text-white mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-primary"
+    data-sidebar-options
+    class="risu-button-lift mt-2 flex size-10 min-h-10 min-w-10 cursor-pointer items-center justify-center rounded-md bg-textcolor2 text-white transition-colors hover:bg-primary"
     class:max-xs:hidden={$leftBarCollapsed}
     onclick={() => {
       menuMode = 1 - menuMode;
@@ -656,7 +665,7 @@
     <ChevronsLeft size={20} />
   </button>
   {/if}
-  <div class="mt-2 border-b border-b-selected w-full relative text-white" class:max-xs:hidden={$leftBarCollapsed}>
+  <div data-sidebar-options-divider class="w-full border-b border-b-selected relative text-white" class:max-xs:hidden={$leftBarCollapsed}>
     {#if menuMode === 1}
       <div class="absolute w-20 min-w-20 flex border-b-selected border-b bg-bgcolor flex-col items-center pt-2 rounded-b-md z-20 pb-2 max-h-[calc(100dvh-4rem)] overflow-x-hidden overflow-y-auto hamburger-menu">
         <BarIcon
@@ -720,6 +729,7 @@
     class="flex w-full flex-col items-center gap-1 border-b border-b-selected px-2 py-3"
     class:max-xs:hidden={$leftBarCollapsed}
   >
+    <span data-sidebar-persona-label class="w-full text-center text-[10px] font-semibold text-white">{language.persona}</span>
     <button
       class="group relative grid h-14 w-14 place-items-center overflow-hidden rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm transition-all hover:border-primary hover:text-primary"
       aria-label={language.persona}
@@ -743,20 +753,18 @@
   </div>
   <div
     data-character-vault-button
-    class="flex w-full flex-col items-center gap-1 border-b border-b-selected px-2 py-2"
+    class="flex w-full flex-col items-center px-2 py-2"
     class:max-xs:hidden={$leftBarCollapsed}
   >
     <button
       type="button"
-      class="group relative grid h-12 w-14 place-items-center rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm transition-all hover:border-primary hover:text-primary"
+      class="character-toolbar-button character-toolbar-button--chat risu-button-lift"
       aria-label="Character Vault 열기"
       title="Character Vault · 캐릭터 저장소"
       onclick={() => characterVaultOpen.set(true)}
     >
       <ArchiveIcon size={21} />
-      <span class="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary opacity-75"></span>
     </button>
-    <span class="w-full truncate text-center text-[10px] font-medium text-textcolor2">Vault</span>
   </div>
   <div data-quick-inventory class="character-list flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto pr-0" class:max-xs:hidden={$leftBarCollapsed} use:touchDragContainer>
     <div class="h-4 min-h-4 w-14" role="listitem" data-spacer-index="0" ondragover={(e) => {
@@ -1122,7 +1130,7 @@
   </button>
   {/if}
   <button
-    class="flex h-8 min-h-8 w-14 min-w-14 cursor-pointer text-white mb-2 mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-primary"
+    class="risu-button-lift my-2 flex size-10 min-h-10 min-w-10 cursor-pointer items-center justify-center rounded-md bg-textcolor2 text-white transition-colors hover:bg-primary"
     class:max-xs:hidden={$leftBarCollapsed}
     onclick={() => {
       menuMode = 1 - menuMode;
@@ -1132,7 +1140,7 @@
 </div>
 {/if}
 <div
-  class="setting-area h-full max-xs:relative flex-col overflow-y-auto overflow-x-hidden bg-darkbg py-6 text-textcolor max-h-full"
+  class="setting-area h-full max-xs:relative flex-col overflow-y-auto overflow-x-hidden bg-darkbg pt-2 pb-6 text-textcolor max-h-full"
   class:risu-sidebar={!$sideBarClosing}
   class:w-96={$sideBarSize === 0}
   class:w-110={$sideBarSize === 1}
@@ -1226,23 +1234,58 @@
     {:else if DBState.db.characters[$selectedCharID]?.chaId === '§playground'}
       <SideChatList bind:chara={ DBState.db.characters[$selectedCharID]} />
     {:else}
-      <div data-sidebar-mode-tabs class="w-full h-8 min-h-8 border border-selected rounded-md flex">
-        <button onclick={() => {
-          devTool = false
-          botMakerMode.set(false)
-        }} class="grow border-r border-r-selected rounded-bl-md" class:text-textcolor2={$botMakerMode || devTool}>{language.Chat}</button>
-        <button onclick={() => {
-          devTool = false
-          botMakerMode.set(true)
-        }} class="grow rounded-br-md" class:text-textcolor2={!$botMakerMode || devTool}>{language.character}</button>
+      {@const currentCharacter = DBState.db.characters[$selectedCharID]}
+      <div data-character-workspace-header class="flex min-h-10 items-center gap-2 border-b border-darkborderc pb-2">
+        <strong data-character-title class="min-w-0 grow truncate text-base text-textcolor">
+          {currentCharacter.name || language.character}
+        </strong>
+        {#if currentCharacter.type === 'character'}
+          <ShButton
+            data-character-manage
+            variant="outline"
+            size="icon-sm"
+            aria-label={language.manageCharacter}
+            title={language.manageCharacter}
+            onclick={() => {
+              characterManageOpen = true
+            }}
+          >
+            <SolarAssetIcon src={shareIcon} name="share-bold" size={18} />
+          </ShButton>
+        {/if}
         {#if DBState.db.enableDevTools}
-          <button onclick={() => {
-            devTool = true
-          }} class="border-l border-l-selected rounded-br-md px-1" class:text-textcolor2={!devTool}>
-            <WrenchIcon size={18} />
-          </button>
+          <ShButton variant="ghost" size="icon-sm" aria-label="Developer tools" title="Developer tools" onclick={() => { devTool = true }}>
+            <SolarAssetIcon src={magnifierBugIcon} name="magnifier-bug-bold" size={18} />
+          </ShButton>
         {/if}
       </div>
+      {#if currentCharacter.license !== 'private'}
+        <nav data-character-config-navigation aria-label={language.character} class="my-2 flex w-full items-center justify-evenly gap-1 rounded-lg bg-selected/25 p-1">
+          <button type="button" data-character-chat-home aria-label={language.Chat} aria-pressed={!$botMakerMode && !devTool} use:tooltip={language.Chat} class="character-toolbar-button character-toolbar-button--chat risu-button-lift" class:is-active={!$botMakerMode && !devTool} onclick={() => { devTool = false; botMakerMode.set(false) }}>
+            <SolarBoldIcon name="chat-round-dots" size={22} />
+          </button>
+          <button type="button" data-character-config-tab aria-label={language.characterInfo} use:tooltip={language.characterInfo} aria-pressed={$botMakerMode && !devTool && $CharConfigSubMenu === 0} class="character-toolbar-button risu-button-lift" class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 0} onclick={() => { devTool = false; botMakerMode.set(true); CharConfigSubMenu.set(0) }}>
+            <SolarBoldIcon name="people-nearby" size={22} />
+          </button>
+          <button type="button" data-character-config-tab aria-label={language.characterDisplay} use:tooltip={language.characterDisplay} aria-pressed={$botMakerMode && !devTool && $CharConfigSubMenu === 1} class="character-toolbar-button risu-button-lift" class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 1} onclick={() => { devTool = false; botMakerMode.set(true); CharConfigSubMenu.set(1) }}>
+            <SolarBoldIcon name="gallery-wide" size={22} />
+          </button>
+          <button type="button" data-character-config-tab aria-label={language.loreBook} use:tooltip={language.loreBook} aria-pressed={$botMakerMode && !devTool && $CharConfigSubMenu === 3} class="character-toolbar-button risu-button-lift" class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 3} onclick={() => { devTool = false; botMakerMode.set(true); CharConfigSubMenu.set(3) }}>
+            <SolarBoldIcon name="notebook" size={22} />
+          </button>
+          {#if currentCharacter.type === 'character'}
+            <button type="button" data-character-config-tab aria-label={"TTS"} use:tooltip={"TTS"} aria-pressed={$botMakerMode && !devTool && $CharConfigSubMenu === 5} class="character-toolbar-button risu-button-lift" class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 5} onclick={() => { devTool = false; botMakerMode.set(true); CharConfigSubMenu.set(5) }}>
+              <SolarBoldIcon name="microphone-3" size={22} />
+            </button>
+            <button type="button" data-character-config-tab aria-label={language.scripts} use:tooltip={language.scripts} aria-pressed={$botMakerMode && !devTool && $CharConfigSubMenu === 4} class="character-toolbar-button risu-button-lift" class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 4} onclick={() => { devTool = false; botMakerMode.set(true); CharConfigSubMenu.set(4) }}>
+              <SolarBoldIcon name="code-square" size={22} />
+            </button>
+          {/if}
+          <button type="button" data-character-config-tab aria-label={language.advancedSettings} use:tooltip={language.advancedSettings} aria-pressed={$botMakerMode && !devTool && $CharConfigSubMenu === 2} class="character-toolbar-button risu-button-lift" class:is-active={$botMakerMode && !devTool && $CharConfigSubMenu === 2} onclick={() => { devTool = false; botMakerMode.set(true); CharConfigSubMenu.set(2) }}>
+            <SolarBoldIcon name="settings" size={22} />
+          </button>
+        </nav>
+      {/if}
       {#if QuickSettings.open}
         <QuickSettingsGui />
       {:else if devTool}
@@ -1283,6 +1326,21 @@
   onOpenChange={(open) => characterVaultOpen.set(open)}
   onSelectCharacter={selectCharacter}
 />
+
+<ShDialog
+  bind:open={characterManageOpen}
+  onOpenChange={(open) => { characterManageOpen = open }}
+  size="xl"
+  tier="base"
+  closeOnEscape={true}
+  closeOnOutsideClick={true}
+  ariaLabel={language.manageCharacter}
+  closeAriaLabel={language.close}
+  contentClass="bg-darkbg"
+  bodyClass="min-h-0 overflow-y-auto pr-1"
+>
+  <CharConfig subMenuOverride={6} />
+</ShDialog>
 
 <style>
   .editMode {

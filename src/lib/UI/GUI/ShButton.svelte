@@ -3,7 +3,7 @@
     // desktop/mobile use (NodeOnly is also accessed via Tailscale on phones).
     // See .agent/guide/ui.md "Sh* sizing scale" for the rationale and the
     // coordination with ShInput / ShToggle / SelectInput.
-    export type ShButtonVariant = 'default' | 'outline' | 'secondary' | 'ghost' | 'destructive' | 'success' | 'primary' | 'link';
+    export type ShButtonVariant = 'default' | 'outline' | 'secondary' | 'ghost' | 'destructive' | 'success' | 'primary' | 'soft-primary' | 'link';
     export type ShButtonSize = 'default' | 'xs' | 'sm' | 'lg' | 'icon' | 'icon-xs' | 'icon-sm' | 'icon-lg';
 </script>
 
@@ -37,7 +37,7 @@
     // type alignment with sidebar legacy buttons. xs/sm sizes override below
     // for dense areas. See .agent/guide/ui.md.
     const base =
-        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-base font-medium shrink-0 " +
+        "risu-button-lift inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-base font-medium shrink-0 " +
         "transition-colors select-none outline-none " +
         "focus-visible:ring-2 focus-visible:ring-borderc/50 focus-visible:border-borderc " +
         "disabled:opacity-50 disabled:pointer-events-none " +
@@ -61,6 +61,7 @@
         // uses textcolor; primary hues per theme are picked dark enough that the
         // theme textcolor (mostly off-white) stays readable.
         primary:     'bg-primary text-textcolor border border-transparent hover:bg-primary/90',
+        'soft-primary': 'bg-primary/25 text-textcolor border border-primary/45 hover:bg-primary/35',
         link:        'bg-transparent text-borderc border-none underline-offset-4 hover:underline',
     };
 

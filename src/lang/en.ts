@@ -1212,6 +1212,7 @@ export const languageEnglish = {
     trash: "Trash",
     trashDesc: "Deleted characters are moved to trash. you can restore or delete them permanently. deleted characters are automatically purged after 3 days.",
     share: "Share",
+    manageCharacter: "Manage",
     shareExport: "Share/Export",
     risupresetDesc: "Risupreset format is a format specifically designed for PocketRisu presets.",
     risuMDesc: "RisuM format is a format that is specifically designed for PocketRisu modules.",

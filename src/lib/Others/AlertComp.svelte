@@ -848,7 +848,15 @@
     closable={false}
     closeOnOutsideClick={false}
 >
-    <div class="flex flex-col gap-3">
+    <form
+        id="alert-input-form"
+        class="flex flex-col gap-3"
+        onsubmit={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            alertStore.set({ type: 'none', msg: input })
+        }}
+    >
         {#if $alertStore.msg}
             <p class="text-textcolor whitespace-pre-wrap">{$alertStore.msg}</p>
         {/if}
@@ -858,11 +866,6 @@
             autocomplete="off"
             list="alert-input-list"
             fullwidth
-            onkeydown={(e) => {
-                if (e.key === 'Enter' && !e.isComposing) {
-                    alertStore.set({ type: 'none', msg: input })
-                }
-            }}
         />
         {#if $alertStore.datalist}
             <datalist id="alert-input-list">
@@ -874,10 +877,10 @@
                 {/each}
             </datalist>
         {/if}
-    </div>
+    </form>
     {#snippet footer()}
         <ShButton variant="outline" onclick={() => alertStore.set({ type: 'none', msg: '' })}>{language.cancel}</ShButton>
-        <ShButton onclick={() => alertStore.set({ type: 'none', msg: input })}>{language.confirm}</ShButton>
+        <ShButton type="submit" form="alert-input-form">{language.confirm}</ShButton>
     {/snippet}
 </ShDialog>
 

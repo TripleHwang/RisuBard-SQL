@@ -1,11 +1,19 @@
 <script lang="ts">
-    import { Clock3Icon, LoaderCircleIcon, RotateCcwIcon } from '@lucide/svelte'
-    import ShDialog from '../UI/GUI/ShDialog.svelte'
+    import { ArrowDownIcon, ArrowUpIcon, Clock3Icon, LoaderCircleIcon, PencilIcon, Trash2Icon } from '@lucide/svelte'
+    import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg'
+    import { alertConfirm, alertInput } from 'src/ts/alert'
     import { forageStorage } from 'src/ts/globalApi.svelte'
     import {
+        deleteMemorySaveSlot,
         listMemorySaveSlots,
+        previewMemorySaveSlot,
+        renameMemorySaveSlot,
+        type MemorySavePreviewMessage,
         type MemorySaveSlotSummary,
     } from 'src/ts/risubard/memorySaveSlots'
+    import ShButton from '../UI/GUI/ShButton.svelte'
+    import ShDialog from '../UI/GUI/ShDialog.svelte'
+    import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte'
 
     interface Props {
         open: boolean
@@ -16,12 +24,50 @@
 
     let { open, characterId, onOpenChange, onLoad }: Props = $props()
     let slots = $state<MemorySaveSlotSummary[]>([])
+    let selectedId = $state('')
+    let sortAscending = $state(true)
     let loading = $state(false)
     let loadingId = $state('')
+    let previewLoadingId = $state('')
+    let previewCache = $state<Record<string, MemorySavePreviewMessage[]>>({})
     let error = $state('')
     let requestSequence = 0
 
-    async function refresh() {
+    const sortedSlots = $derived.by(() => [...slots].sort((left, right) => {
+        const comparison = left.createdAt.localeCompare(right.createdAt)
+            || left.saveId.localeCompare(right.saveId)
+        return sortAscending ? comparison : -comparison
+    }))
+    const selectedSlot = $derived(slots.find((slot) => slot.saveId === selectedId))
+    const selectedPreview = $derived(previewCache[selectedId] ?? [])
+
+    async function ensurePreview(saveId: string): Promise<void> {
+        if (!saveId || previewCache[saveId] || previewLoadingId === saveId) return
+        previewLoadingId = saveId
+        try {
+            const messages = await previewMemorySaveSlot({
+                characterId,
+                saveId,
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            })
+            previewCache[saveId] = messages
+            previewCache = { ...previewCache }
+        }
+        catch (cause) {
+            error = cause instanceof Error ? cause.message : String(cause)
+        }
+        finally {
+            if (previewLoadingId === saveId) previewLoadingId = ''
+        }
+    }
+
+    function selectSlot(saveId: string): void {
+        selectedId = saveId
+        void ensurePreview(saveId)
+    }
+
+    async function refresh(): Promise<void> {
         const sequence = ++requestSequence
         loading = true
         error = ''
@@ -31,7 +77,15 @@
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
-            if (sequence === requestSequence) slots = next
+            if (sequence !== requestSequence) return
+            slots = next
+            if (!next.some((slot) => slot.saveId === selectedId)) {
+                selectedId = [...next].sort((left, right) =>
+                    left.createdAt.localeCompare(right.createdAt)
+                    || left.saveId.localeCompare(right.saveId)
+                )[0]?.saveId ?? ''
+            }
+            if (selectedId) void ensurePreview(selectedId)
         }
         catch (cause) {
             if (sequence === requestSequence) {
@@ -43,7 +97,7 @@
         }
     }
 
-    async function load(saveId: string) {
+    async function load(saveId: string): Promise<void> {
         if (loadingId) return
         loadingId = saveId
         error = ''
@@ -58,6 +112,50 @@
         }
     }
 
+    async function renameSelected(): Promise<void> {
+        if (!selectedSlot) return
+        const name = await alertInput('저장된 파일 이름 변경', [], selectedSlot.sourceChatName)
+        if (!name?.trim()) return
+        try {
+            const renamed = await renameMemorySaveSlot({
+                characterId,
+                saveId: selectedSlot.saveId,
+                name,
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            })
+            slots = slots.map((slot) => slot.saveId === renamed.saveId ? renamed : slot)
+        }
+        catch (cause) {
+            error = cause instanceof Error ? cause.message : String(cause)
+        }
+    }
+
+    async function deleteSelected(): Promise<void> {
+        if (!selectedSlot) return
+        if (!await alertConfirm(`저장된 파일을 삭제할까요?\n${selectedSlot.sourceChatName}`)) return
+        try {
+            const deletedId = selectedSlot.saveId
+            await deleteMemorySaveSlot({
+                characterId,
+                saveId: deletedId,
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            })
+            slots = slots.filter((slot) => slot.saveId !== deletedId)
+            delete previewCache[deletedId]
+            previewCache = { ...previewCache }
+            selectedId = [...slots].sort((left, right) =>
+                left.createdAt.localeCompare(right.createdAt)
+                || left.saveId.localeCompare(right.saveId)
+            )[0]?.saveId ?? ''
+            if (selectedId) void ensurePreview(selectedId)
+        }
+        catch (cause) {
+            error = cause instanceof Error ? cause.message : String(cause)
+        }
+    }
+
     function savedAt(value: string): string {
         return new Date(value).toLocaleString()
     }
@@ -67,221 +165,171 @@
     })
 </script>
 
-<ShDialog
-    {open}
-    onOpenChange={onOpenChange}
-    size="lg"
-    tier="base"
-    contentClass="save-slot-dialog"
->
+<ShDialog {open} onOpenChange={onOpenChange} size="xl" tier="base" contentClass="save-slot-dialog">
     {#snippet title()}채팅 불러오기{/snippet}
-    {#snippet description()}
-        저장 당시의 대화, 변수와 Memory Wiki를 새 채팅으로 복제합니다.
-    {/snippet}
 
     <div class="save-ledger">
         <div class="save-ledger__head">
-            <span>세이브 슬롯</span>
-            <button
-                type="button"
-                class="save-ledger__refresh"
-                aria-label="세이브 목록 새로고침"
-                disabled={loading}
-                onclick={() => void refresh()}
-            >
-                <RotateCcwIcon size={15} class={loading ? 'animate-spin' : ''} />
-            </button>
+            <strong>저장된 파일</strong>
+            <div data-save-file-toolbar class="save-ledger__toolbar">
+                <ShButton data-save-file-rename variant="ghost" size="icon-sm" aria-label="선택한 파일 이름 변경" title="선택한 파일 이름 변경" disabled={!selectedSlot} onclick={() => void renameSelected()}>
+                    <PencilIcon size={16} />
+                </ShButton>
+                <ShButton data-save-file-delete variant="destructive" size="icon-sm" aria-label="선택한 파일 삭제" title="선택한 파일 삭제" disabled={!selectedSlot} onclick={() => void deleteSelected()}>
+                    <Trash2Icon size={16} />
+                </ShButton>
+                <span class="save-ledger__divider"></span>
+                <ShButton data-save-file-sort variant="ghost" size="icon-sm" aria-label={sortAscending ? '새 파일을 위로 정렬' : '오래된 파일을 위로 정렬'} title={sortAscending ? '현재: 오래된 파일부터' : '현재: 새 파일부터'} onclick={() => { sortAscending = !sortAscending }}>
+                    {#if sortAscending}<ArrowUpIcon size={16} />{:else}<ArrowDownIcon size={16} />{/if}
+                </ShButton>
+            </div>
         </div>
 
-        {#if error}
-            <p class="save-ledger__error">{error}</p>
-        {/if}
+        {#if error}<p class="save-ledger__error">{error}</p>{/if}
 
         {#if loading && slots.length === 0}
-            <div class="save-ledger__empty">
-                <LoaderCircleIcon size={20} class="animate-spin" />
-                세이브 목록을 읽는 중…
-            </div>
+            <div class="save-ledger__empty"><LoaderCircleIcon size={20} class="animate-spin" />저장된 파일을 읽는 중…</div>
         {:else if slots.length === 0}
             <div class="save-ledger__empty">아직 저장된 채팅이 없습니다.</div>
         {:else}
-            <ol class="save-ledger__list">
-                {#each slots as slot, index (slot.saveId)}
-                    {@const tooltipId = `save-event-${slot.saveId}`}
-                    <li class="save-slot">
-                        <div class="save-slot__index">
-                            {String(slots.length - index).padStart(2, '0')}
-                        </div>
-                        <div class="save-slot__body">
-                            <strong>{slot.sourceChatName}</strong>
-                            <div class="save-slot__meta">
-                                <span><Clock3Icon size={13} />{savedAt(slot.createdAt)}</span>
-                                <span>{slot.turnCount}턴</span>
-                            </div>
-                        </div>
-                        <button
-                            type="button"
-                            class="save-slot__load"
-                            aria-label="이 세이브 불러오기"
-                            aria-describedby={slot.latestEvent ? tooltipId : undefined}
-                            disabled={Boolean(loadingId)}
-                            onclick={() => void load(slot.saveId)}
-                        >
-                            {#if loadingId === slot.saveId}
-                                <LoaderCircleIcon size={15} class="animate-spin" />
-                            {:else}
-                                불러오기
-                            {/if}
-                        </button>
-                        {#if slot.latestEvent}
-                            <div
-                                id={tooltipId}
-                                role="tooltip"
-                                class="save-slot__tooltip"
-                            >
-                                <span>최신 사건</span>
-                                <strong>{slot.latestEvent.title}</strong>
-                                <p>{slot.latestEvent.excerpt}</p>
-                            </div>
+            <div class="save-workspace">
+                <ol data-save-file-grid class="save-ledger__list">
+                    {#each sortedSlots as slot, index (slot.saveId)}
+                        <li class:save-slot--selected={slot.saveId === selectedId} class="save-slot">
+                            <button type="button" class="save-slot__select risu-button-lift" aria-pressed={slot.saveId === selectedId} onclick={() => selectSlot(slot.saveId)}>
+                                <span class="save-slot__index">{String(index + 1).padStart(2, '0')}</span>
+                                <span class="save-slot__body">
+                                    <strong>{slot.sourceChatName}</strong>
+                                    <span class="save-slot__meta">
+                                        <span><Clock3Icon size={12} />{savedAt(slot.createdAt)}</span>
+                                        <span>{slot.turnCount}턴</span>
+                                    </span>
+                                </span>
+                            </button>
+                            <ShButton size="icon-sm" aria-label={`${slot.sourceChatName} 불러오기`} title="선택한 저장 파일을 새 채팅으로 불러오기" disabled={Boolean(loadingId)} onclick={(event) => { event.stopPropagation(); void load(slot.saveId) }}>
+                                {#if loadingId === slot.saveId}
+                                    <LoaderCircleIcon size={16} class="animate-spin" />
+                                {:else}
+                                    <SolarAssetIcon src={loadIcon} name="undo-left-square-bold" size={17} />
+                                {/if}
+                            </ShButton>
+                        </li>
+                    {/each}
+                </ol>
+
+                <aside data-save-file-preview class="save-preview">
+                    <div class="save-preview__head">
+                        <span>최근 대화</span>
+                        {#if selectedSlot}<strong>{selectedSlot.sourceChatName}</strong>{/if}
+                    </div>
+                    <div class="save-preview__body">
+                        {#if previewLoadingId === selectedId}
+                            <div class="save-preview__empty"><LoaderCircleIcon size={18} class="animate-spin" />프리뷰 읽는 중…</div>
+                        {:else if selectedPreview.length === 0}
+                            <div class="save-preview__empty">표시할 최근 대화가 없습니다.</div>
+                        {:else}
+                            {#each selectedPreview as message}
+                                <article class:save-preview__message--user={message.role === 'user'} class="save-preview__message">
+                                    <span>{message.role === 'user' ? 'USER' : 'CHARACTER'}</span>
+                                    <p>{message.data}</p>
+                                </article>
+                            {/each}
                         {/if}
-                    </li>
-                {/each}
-            </ol>
+                    </div>
+                </aside>
+            </div>
         {/if}
     </div>
 </ShDialog>
 
 <style>
     :global(.save-slot-dialog) {
-        background:
-            linear-gradient(145deg, color-mix(in srgb, var(--color-darkbg) 92%, #8b6a34 8%), var(--color-darkbg));
+        background: linear-gradient(145deg, color-mix(in srgb, var(--color-darkbg) 94%, var(--color-selected) 6%), var(--color-darkbg));
     }
     .save-ledger {
         display: flex;
         flex-direction: column;
         gap: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--color-darkborderc);
     }
-    .save-ledger__head {
+    .save-ledger__head, .save-ledger__toolbar, .save-slot__meta, .save-preview__head {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        color: var(--color-textcolor2);
-        font-size: 0.72rem;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
     }
-    .save-ledger__refresh {
-        padding: 0.3rem;
-        border-radius: 0.35rem;
-        color: var(--color-textcolor2);
-        cursor: pointer;
+    .save-ledger__head { justify-content: space-between; gap: 0.75rem; }
+    .save-ledger__head > strong { color: var(--color-textcolor2); font-size: 0.75rem; letter-spacing: 0.08em; }
+    .save-ledger__toolbar { gap: 0.2rem; margin-left: auto; }
+    .save-ledger__divider { width: 1px; height: 1.1rem; margin: 0 0.2rem; background: var(--color-darkborderc); }
+    .save-workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.75rem;
+        min-height: 0;
     }
-    .save-ledger__refresh:hover { color: var(--color-textcolor); }
     .save-ledger__list {
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-content: start;
         gap: 0.55rem;
+        max-height: 22rem;
         margin: 0;
-        padding: 0;
+        padding: 0 0.35rem 0 0;
+        overflow-y: auto;
         list-style: none;
+        scrollbar-color: var(--color-borderc) transparent;
+        scrollbar-width: thin;
     }
     .save-slot {
-        position: relative;
         display: grid;
-        grid-template-columns: 2.6rem minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
-        min-height: 4.5rem;
-        overflow: visible;
+        min-width: 0;
+        min-height: 4.25rem;
+        padding-right: 0.45rem;
         border: 1px solid var(--color-darkborderc);
         border-radius: 0.55rem;
         background: color-mix(in srgb, var(--color-darkbg) 82%, var(--color-selected) 18%);
-        transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+        transition: border-color 140ms ease, box-shadow 140ms ease;
     }
-    .save-slot:hover, .save-slot:focus-within {
-        z-index: 2;
-        border-color: var(--color-borderc);
-        transform: translateY(-1px);
-        box-shadow: 0 0.6rem 1.6rem rgb(0 0 0 / 0.2);
-        outline: none;
-    }
-    .save-slot__index {
-        align-self: stretch;
+    .save-slot:hover, .save-slot:focus-within { border-color: var(--color-borderc); box-shadow: 0 0.45rem 1.25rem rgb(0 0 0 / 0.18); }
+    .save-slot--selected { border-color: var(--color-primary); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent); }
+    .save-slot__select {
         display: grid;
-        place-items: center;
-        border-right: 1px solid var(--color-darkborderc);
-        color: var(--color-textcolor2);
-        font: 600 0.72rem ui-monospace, monospace;
-        letter-spacing: 0.08em;
+        grid-template-columns: 2.25rem minmax(0, 1fr);
+        align-self: stretch;
+        min-width: 0;
+        text-align: left;
     }
-    .save-slot__body { min-width: 0; padding: 0.7rem 0.85rem; }
-    .save-slot__body strong {
-        display: block;
+    .save-slot__index { display: grid; place-items: center; border-right: 1px solid var(--color-darkborderc); color: var(--color-textcolor2); font: 600 0.68rem ui-monospace, monospace; letter-spacing: 0.06em; }
+    .save-slot__body { min-width: 0; padding: 0.55rem 0.65rem; }
+    .save-slot__body > strong { display: block; overflow: hidden; color: var(--color-textcolor); font-size: 0.8rem; text-overflow: ellipsis; white-space: nowrap; }
+    .save-slot__meta { flex-wrap: wrap; gap: 0.2rem 0.55rem; margin-top: 0.28rem; color: var(--color-textcolor2); font-size: 0.65rem; }
+    .save-slot__meta span { display: inline-flex; align-items: center; gap: 0.2rem; }
+    .save-preview {
+        display: flex;
+        height: min(30vh, 18rem);
+        min-width: 0;
+        min-height: 10rem;
+        flex-direction: column;
         overflow: hidden;
-        color: var(--color-textcolor);
-        font-size: 0.9rem;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        border: 1px solid var(--color-darkborderc);
+        border-radius: 0.55rem;
+        background: color-mix(in srgb, var(--color-darkbg) 90%, var(--color-selected) 10%);
     }
-    .save-slot__meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.3rem 0.75rem;
-        margin-top: 0.3rem;
-        color: var(--color-textcolor2);
-        font-size: 0.72rem;
+    .save-preview__head { justify-content: space-between; gap: 0.75rem; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-darkborderc); color: var(--color-textcolor2); font-size: 0.68rem; letter-spacing: 0.06em; }
+    .save-preview__head strong { overflow: hidden; color: var(--color-textcolor); text-overflow: ellipsis; white-space: nowrap; }
+    .save-preview__body { display: flex; flex: 1; flex-direction: column; gap: 0.45rem; padding: 0.65rem; overflow-y: auto; scrollbar-color: var(--color-borderc) transparent; scrollbar-width: thin; }
+    .save-preview__message { align-self: flex-start; max-width: 94%; padding: 0.5rem 0.58rem; border: 1px solid var(--color-darkborderc); border-radius: 0.48rem; background: var(--color-darkbg); }
+    .save-preview__message--user { align-self: flex-end; background: color-mix(in srgb, var(--color-selected) 45%, var(--color-darkbg)); }
+    .save-preview__message > span { color: var(--color-textcolor2); font-size: 0.56rem; letter-spacing: 0.08em; }
+    .save-preview__message p { margin: 0.2rem 0 0; color: var(--color-textcolor); font-size: 0.72rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .save-preview__empty, .save-ledger__empty { display: flex; min-height: 8rem; align-items: center; justify-content: center; gap: 0.45rem; color: var(--color-textcolor2); font-size: 0.78rem; }
+    .save-ledger__empty { border: 1px dashed var(--color-darkborderc); border-radius: 0.5rem; }
+    .save-ledger__error { margin: 0; color: #f87171; font-size: 0.76rem; }
+
+    @media (max-width: 767px) {
+        .save-ledger__list { max-height: 36vh; }
+        .save-preview { height: 30vh; min-height: 30vh; }
     }
-    .save-slot__meta span { display: inline-flex; align-items: center; gap: 0.25rem; }
-    .save-slot__load {
-        margin-right: 0.7rem;
-        padding: 0.4rem 0.65rem;
-        border: 1px solid var(--color-borderc);
-        border-radius: 0.4rem;
-        color: var(--color-textcolor);
-        font-size: 0.76rem;
-        cursor: pointer;
-        transition: background 120ms ease;
-    }
-    .save-slot__load:hover { background: var(--color-selected); }
-    .save-slot__load:disabled { cursor: wait; opacity: 0.55; }
-    .save-slot__tooltip {
-        pointer-events: none;
-        position: absolute;
-        right: 0.6rem;
-        bottom: calc(100% + 0.45rem);
-        width: min(21rem, calc(100vw - 4rem));
-        padding: 0.7rem 0.8rem;
-        border: 1px solid var(--color-borderc);
-        border-radius: 0.45rem;
-        background: var(--color-darkbg);
-        box-shadow: 0 0.75rem 2rem rgb(0 0 0 / 0.35);
-        opacity: 0;
-        transform: translateY(0.25rem);
-        transition: opacity 120ms ease, transform 120ms ease;
-    }
-    .save-slot:hover .save-slot__tooltip,
-    .save-slot:focus-within .save-slot__tooltip {
-        opacity: 1;
-        transform: translateY(0);
-    }
-    .save-slot__tooltip span {
-        display: block;
-        color: var(--color-textcolor2);
-        font-size: 0.65rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-    }
-    .save-slot__tooltip strong { display: block; margin-top: 0.2rem; font-size: 0.82rem; }
-    .save-slot__tooltip p { margin: 0.3rem 0 0; color: var(--color-textcolor2); font-size: 0.75rem; line-height: 1.45; }
-    .save-ledger__empty {
-        display: flex;
-        min-height: 8rem;
-        align-items: center;
-        justify-content: center;
-        gap: 0.45rem;
-        border: 1px dashed var(--color-darkborderc);
-        border-radius: 0.5rem;
-        color: var(--color-textcolor2);
-        font-size: 0.82rem;
-    }
-    .save-ledger__error { margin: 0; color: #f87171; font-size: 0.78rem; }
 </style>

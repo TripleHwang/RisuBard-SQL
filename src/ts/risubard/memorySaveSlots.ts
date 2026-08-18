@@ -22,6 +22,11 @@ export interface MemorySaveSlotSummary {
     latestEvent?: MemorySaveEventPreview
 }
 
+export interface MemorySavePreviewMessage {
+    role: 'user' | 'char'
+    data: string
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -192,6 +197,133 @@ export async function listMemorySaveSlots(input: {
         throw new Error('Invalid memory save list')
     }
     return value.map(parseSummary)
+}
+
+export async function renameMemorySaveSlot(input: {
+    characterId: string
+    saveId: string
+    name: string
+    fetchImpl: typeof fetch
+    createAuth(): Promise<string>
+}): Promise<MemorySaveSlotSummary> {
+    const name = input.name.trim()
+    if (!name || name.length > 512) {
+        throw new Error('Saved file name must be a non-empty bounded string')
+    }
+    const response = await invokeBrowserFetch(
+        input.fetchImpl,
+        '/api/risubard/memory/save-slot/rename',
+        {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'content-type': 'application/json',
+                'risu-auth': await input.createAuth(),
+            },
+            body: JSON.stringify({
+                characterId: boundedId(input.characterId, 'Character ID'),
+                saveId: boundedId(input.saveId, 'Saved file ID'),
+                name,
+            }),
+        }
+    )
+    if (!response.ok) {
+        throw new Error(
+            `Memory save rename failed with status ${response.status}`
+            + await failureDetail(response)
+        )
+    }
+    return parseSummary(await response.json())
+}
+
+export async function deleteMemorySaveSlot(input: {
+    characterId: string
+    saveId: string
+    fetchImpl: typeof fetch
+    createAuth(): Promise<string>
+}): Promise<void> {
+    const response = await invokeBrowserFetch(
+        input.fetchImpl,
+        '/api/risubard/memory/save-slot/delete',
+        {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'content-type': 'application/json',
+                'risu-auth': await input.createAuth(),
+            },
+            body: JSON.stringify({
+                characterId: boundedId(input.characterId, 'Character ID'),
+                saveId: boundedId(input.saveId, 'Saved file ID'),
+            }),
+        }
+    )
+    if (!response.ok) {
+        throw new Error(
+            `Memory save deletion failed with status ${response.status}`
+            + await failureDetail(response)
+        )
+    }
+}
+
+export async function previewMemorySaveSlot(input: {
+    characterId: string
+    saveId: string
+    fetchImpl: typeof fetch
+    createAuth(): Promise<string>
+}): Promise<MemorySavePreviewMessage[]> {
+    const response = await invokeBrowserFetch(
+        input.fetchImpl,
+        '/api/risubard/memory/save-slot/preview',
+        {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'content-type': 'application/json',
+                'risu-auth': await input.createAuth(),
+            },
+            body: JSON.stringify({
+                characterId: boundedId(input.characterId, 'Character ID'),
+                saveId: boundedId(input.saveId, 'Saved file ID'),
+            }),
+        }
+    )
+    if (!response.ok) {
+        throw new Error(
+            `Memory save preview failed with status ${response.status}`
+            + await failureDetail(response)
+        )
+    }
+    const decoded = decodeMemorySaveChat(
+        new Uint8Array(await response.arrayBuffer())
+    )
+    if (!isRecord(decoded) || !Array.isArray(decoded.message)) {
+        throw new Error('Memory save preview returned an invalid chat snapshot')
+    }
+    const visibleMessages = decoded.message
+        .filter((message): message is Record<string, unknown> =>
+            isRecord(message)
+            && (message.role === 'user' || message.role === 'char')
+            && typeof message.data === 'string'
+            && !message.isComment
+            && !message.disabled
+        )
+    const latestByRole = new Map<'user' | 'char', {
+        index: number
+        role: 'user' | 'char'
+        data: string
+    }>()
+    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+        const message = visibleMessages[index]
+        const role = message.role as 'user' | 'char'
+        if (!latestByRole.has(role)) {
+            latestByRole.set(role, { index, role, data: message.data as string })
+        }
+        if (latestByRole.size === 2) break
+    }
+    return [...latestByRole.values()]
+        .sort((left, right) => left.index - right.index)
+        .map(({ role, data }) => ({ role, data }))
 }
 
 export async function prepareMemorySaveLoad(input: {

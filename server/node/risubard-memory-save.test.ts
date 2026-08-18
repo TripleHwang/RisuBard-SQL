@@ -5,7 +5,10 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { completeMemoryWorkspaceFork } from './risubard-memory-fork'
 import {
     createMemorySaveSlot,
+    deleteMemorySaveSlot,
     listMemorySaveSlots,
+    readMemorySaveChat,
+    renameMemorySaveSlot,
     prepareMemorySaveLoad,
 } from './risubard-memory-save'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
@@ -115,5 +118,31 @@ describe('memory save slots', () => {
             characterId: 'character',
         })
         expect(slots.map((slot) => slot.saveId)).toEqual(['newer', 'older'])
+    })
+
+    test('reads, renames, and deletes one validated saved file', async () => {
+        const root = await createRoot()
+        const source = resolveMemoryWorkspace(root, 'character', 'chat-source')
+        await fs.mkdir(source.directory, { recursive: true })
+        const bytes = Buffer.from([7, 8, 9])
+        await createMemorySaveSlot({
+            userDataDirectory: root, characterId: 'character',
+            sourceChatId: 'chat-source', saveId: 'save-1',
+            sourceChatName: '원래 이름', turnCount: 2, chatBytes: bytes,
+        })
+
+        await expect(readMemorySaveChat({
+            userDataDirectory: root, characterId: 'character', saveId: 'save-1',
+        })).resolves.toEqual(bytes)
+        await expect(renameMemorySaveSlot({
+            userDataDirectory: root, characterId: 'character', saveId: 'save-1',
+            name: '바뀐 이름',
+        })).resolves.toMatchObject({ sourceChatName: '바뀐 이름' })
+        await deleteMemorySaveSlot({
+            userDataDirectory: root, characterId: 'character', saveId: 'save-1',
+        })
+        await expect(listMemorySaveSlots({
+            userDataDirectory: root, characterId: 'character',
+        })).resolves.toEqual([])
     })
 })

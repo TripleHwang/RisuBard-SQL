@@ -18,9 +18,12 @@ const {
 } = require('./risubard-memory-fork.ts')
 const {
     createMemorySaveSlot,
+    deleteMemorySaveSlot,
     listMemorySaveSlots,
     memorySaveWorkspaceId,
     prepareMemorySaveLoad,
+    readMemorySaveChat,
+    renameMemorySaveSlot,
 } = require('./risubard-memory-save.ts')
 const { revealLocalFile } = require('./reveal-local-file.cjs')
 
@@ -40,6 +43,9 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
     const createSaveSlot = options.createSaveSlot || createMemorySaveSlot
     const listSaveSlots = options.listSaveSlots || listMemorySaveSlots
     const prepareSaveLoad = options.prepareSaveLoad || prepareMemorySaveLoad
+    const previewSaveSlot = options.previewSaveSlot || readMemorySaveChat
+    const renameSaveSlot = options.renameSaveSlot || renameMemorySaveSlot
+    const deleteSaveSlot = options.deleteSaveSlot || deleteMemorySaveSlot
     const queues = new Map()
     const serializedMany = (pairs, operation) => {
         const keys = [...new Set(pairs.map((pair) => JSON.stringify(pair)))]
@@ -118,6 +124,21 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
             userDataDirectory,
             ...input,
         }),
+        previewMemorySave: (input) => serialized(
+            input.characterId,
+            memorySaveWorkspaceId(input.saveId),
+            () => previewSaveSlot({ userDataDirectory, ...input })
+        ),
+        renameMemorySave: (input) => serialized(
+            input.characterId,
+            memorySaveWorkspaceId(input.saveId),
+            () => renameSaveSlot({ userDataDirectory, ...input })
+        ),
+        deleteMemorySave: (input) => serialized(
+            input.characterId,
+            memorySaveWorkspaceId(input.saveId),
+            () => deleteSaveSlot({ userDataDirectory, ...input })
+        ),
         prepareMemorySaveLoad: (input) => serializedMany([
             [input.characterId, memorySaveWorkspaceId(input.saveId)],
             [input.characterId, input.destinationChatId],
