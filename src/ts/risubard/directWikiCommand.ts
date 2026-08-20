@@ -22,6 +22,7 @@ export interface DirectWikiModelCall {
     extractJson: ''
     schema: string
     logSource: 'memory'
+    logPurpose: 'bardwiki-admin'
 }
 
 export interface DirectWikiModelResponse {
@@ -295,6 +296,7 @@ export async function executeDirectWikiCommand(input: {
         extractJson: '',
         schema: directWikiCommandSchema,
         logSource: 'memory',
+        logPurpose: 'bardwiki-admin',
     })
     if (response.type !== 'success' || typeof response.result !== 'string') {
         const reason = typeof response.result === 'string'

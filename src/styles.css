@@ -16,6 +16,7 @@
   --color-darkbutton: var(--risu-theme-darkbutton);
   --color-success: var(--risu-theme-success);
   --color-primary: var(--risu-theme-primary);
+  --color-accenttext: var(--risu-theme-accenttext);
 
   --color-primary-50: var(--risu-theme-primary-50);
   --color-primary-100: var(--risu-theme-primary-100);
@@ -121,6 +122,17 @@
   --height-138: 36rem;
 
   --default-ring-color: rgb(59 130 246 / 0.5);
+}
+
+:root[data-risu-color-scheme="pastel-pop"]
+  :is(.bg-primary, .bg-darkbutton, .bg-selected, .bg-borderc, .bg-draculared) {
+  color: var(--color-accenttext);
+}
+
+:root[data-risu-color-scheme="pastel-pop"]
+  :is(.bg-primary, .bg-darkbutton, .bg-selected, .bg-borderc, .bg-draculared)
+  :is(.text-white, .text-textcolor, .text-textcolor2) {
+  color: var(--color-accenttext);
 }
 
 /*
@@ -256,7 +268,7 @@ body {
      here is a fallback for the brief boot window before updateColorScheme runs. */
   --risu-theme-primary: #3b82f6;
   --risu-height-size: 100%;
-  --risu-font-family: Arial, sans-serif, serif;
+  --risu-font-family: "OpenAI Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
 
   --risu-theme-neutral-50: #f9fafb;
   --risu-theme-neutral-100: #f3f4f6;

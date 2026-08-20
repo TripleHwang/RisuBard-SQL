@@ -69,11 +69,11 @@ fi
 
 info "Extracting..."
 tar -xzf "$TMP_DIR/release.tar.gz" -C "$TMP_DIR"
-# Match RisuBard-* plus the inherited repository names for compatibility.
+# Match the current archive name plus the oldest inherited repository name.
 # Use find rather than ls: ls exits non-zero when one branch has no match,
 # which `set -euo pipefail` would propagate and abort the script.
 EXTRACTED_DIR=$(find "$TMP_DIR" -maxdepth 1 -type d \
-    \( -name 'RisuBard-*' -o -name 'PocketRisu-*' -o -name 'Risuai-NodeOnly-*' \) \
+    \( -name 'RisuBard-*' -o -name 'Risuai-NodeOnly-*' \) \
     -print -quit)
 [ -d "$EXTRACTED_DIR" ] || error "Extraction failed."
 

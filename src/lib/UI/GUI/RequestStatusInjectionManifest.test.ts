@@ -23,6 +23,11 @@ describe('request status injection manifest', () => {
         expect(toast).toContain('injectionManifest.totalTokens')
     })
 
+    test('renders the explicit request purpose instead of only the broad kind', () => {
+        expect(toast).toContain('requestPurposeLabels[entry.purpose]')
+        expect(requestPipeline).toContain('purpose: logPurpose')
+    })
+
     test('offers an accessible close button that dismisses the current request card', () => {
         expect(toast).toContain('aria-label={rs?.close')
         expect(toast).toContain('onclick={dismiss}')

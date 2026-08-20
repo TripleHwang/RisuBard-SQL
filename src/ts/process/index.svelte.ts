@@ -29,7 +29,6 @@ import { getModuleAssets, getModuleToggles } from "./modules";
 import { forageStorage, readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
-import { tryCountShadowMessageTokens, tryCreateShadowContextReport } from "../risubard/shadowPipeline";
 import {
     createStoredResponseMemoryAnalysis,
     projectConfirmedMemoryTurn,
@@ -41,6 +40,7 @@ import {
     createNarrativeSourcesPrompt,
     isNarrativeContextOptedIn,
     loadNarrativeInquiry,
+    mergeNarrativeContextWithStaticPrompt,
     ensureNarrativeSessionChatId,
     normalizeNarrativeWorkingMessageLimit,
     selectPromptedNarrativeSources,
@@ -989,9 +989,18 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 if (requestStatusSources.length === 0) {
                     setRequestStatusSource(currentContextMessage, 'memory')
                 }
-                baseDescriptionPrompt = safeStructuredClone(currentContextMessage)
-                unformated.description = [currentContextMessage]
-                lorepmt.actives.length = 0
+                const mergedContext = mergeNarrativeContextWithStaticPrompt({
+                    currentContext: currentContextMessage,
+                    baseline,
+                    baseDescription: baseDescriptionPrompt,
+                    descriptionPrompts: unformated.description,
+                    afterDescriptionPrompts,
+                    activeLorePrompts: lorepmt.actives,
+                })
+                baseDescriptionPrompt = mergedContext.baseDescription
+                unformated.description = mergedContext.descriptionPrompts
+                afterDescriptionPrompts = mergedContext.afterDescriptionPrompts
+                lorepmt.actives = mergedContext.activeLorePrompts
             }
             }
         }
@@ -1387,10 +1396,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         chats.push(chat)
         currentTokens += await tokenizer.tokenizeChat(chat)
     }
-    if(narrativeContextObservation.mode !== 'current'){
-        await addFirstMessage()
-    }
-
     console.log('Prepared messages for token calculation:', ms)
 
     const triggerResult = await runTrigger(currentChar, 'start', {chat: currentChat})
@@ -1413,19 +1418,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         )
     ms = selectNarrativeWorkingMessages(
         ms,
-        narrativeContextObservation.mode === 'current'
-            ? 'current'
-            : 'legacy',
         narrativeWorkingMessageLimit,
         DBState.db.risuBardResponseExcludeUserMessages !== true
     )
     narrativeContextObservation.selectedHistoryMessages = ms.length
 
-    if(narrativeContextObservation.mode === 'current'
-        && shouldIncludeNarrativeFirstMessage(
-            narrativeContextObservation.mode === 'current'
-                ? 'current'
-                : 'legacy',
+    if(shouldIncludeNarrativeFirstMessage(
             narrativeContextObservation.availableHistoryMessages,
             narrativeWorkingMessageLimit
         )){
@@ -2031,13 +2029,18 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 inputTokens -= await tokenizer.tokenizeChat(formated[pointer])
                 formated[pointer].content = ''
                 if(formated[pointer].multimodals?.length > 0){
-                    messageTokenCountsByMessage.set(
-                        formated[pointer],
-                        await tryCountShadowMessageTokens(
+                    try {
+                        messageTokenCountsByMessage.set(
                             formated[pointer],
-                            (message) => tokenizer.tokenizeChat(message)
+                            await tokenizer.tokenizeChat(formated[pointer])
                         )
-                    )
+                    }
+                    catch {
+                        messageTokenCountsByMessage.set(
+                            formated[pointer],
+                            Number.NaN
+                        )
+                    }
                 }
             }
             pointer++
@@ -2046,13 +2049,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             return v.content !== ''  || (v.multimodals && v.multimodals.length > 0)
         })
     }
-    const messageTokenCounts = formated.map((message) =>
-        messageTokenCountsByMessage.get(message) ?? Number.NaN
-    )
-    const shadowEstimatedTokens = messageTokenCounts.reduce(
-        (total, tokens) => total + tokens,
-        0
-    )
     //estimate tokens
     let outputTokens = maxResponseTokens
     if(inputTokens + outputTokens > maxContextTokens){
@@ -2100,24 +2096,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         return true
     }
 
-    const shadowContext = tryCreateShadowContextReport({
-        legacyMessages: formated,
-        messageTokens: messageTokenCounts,
-        maxContextTokens,
-        reservedResponseTokens: maxResponseTokens,
-        legacyEstimatedTokens: shadowEstimatedTokens,
-    })
-    if(shadowContext.status === 'success'){
-        console.debug('[RisuBard shadow context]', shadowContext.report)
-    }
-    else{
-        console.warn('[RisuBard shadow context]', shadowContext.error)
-    }
     console.info('[RisuBard context mode]', {
         ...narrativeContextObservation,
-        historyPolicy: narrativeContextObservation.mode === 'current'
-            ? 'recent-12'
-            : 'legacy-token-trimming',
+        historyPolicy: `bounded-recent-${narrativeWorkingMessageLimit}`,
         finalMessageCount: formated.length,
         removableMessageCount: formated.filter(
             (message) => message.removable
@@ -2144,6 +2125,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         continue: arg.continue,
         chatId: generationId,
         realChatId: realChatId,
+        logPurpose: 'chat-response',
         imageResponse: DBState.db.outputImageModal,
         previewBody: arg.previewPrompt,
         escape: nowChatroom.type === 'character' && nowChatroom.escapeOutput,
@@ -2764,9 +2746,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     }
 
     if (narrativeTurnToConfirm
-        && shouldAutomaticallyConfirmNarrativeTurn(
-            DBState.db.risuBardAutoWikiEnabled
-        )) {
+        && shouldAutomaticallyConfirmNarrativeTurn()) {
         void confirmProjectedNarrativeTurn({
             characterId: currentChar.chaId,
             chatId: narrativeSessionChatId,

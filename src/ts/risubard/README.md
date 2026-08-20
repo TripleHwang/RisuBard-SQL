@@ -1,6 +1,6 @@
 # RisuBard adapters
 
-This directory contains adapters between the existing PocketRisu-derived application and `packages/risubard-core/`, beginning with side-effect-free shadow-context comparison.
+This directory contains adapters between the inherited application and `packages/risubard-core/`, beginning with side-effect-free shadow-context comparison.
 
 The narrative-context path is enabled by default. Assistant responses remain
 unconfirmed until the next user message completes a generation or the user

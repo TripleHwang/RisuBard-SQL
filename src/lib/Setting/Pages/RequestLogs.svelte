@@ -23,6 +23,7 @@
         fetchRequestLogPage, fetchRequestLogEntry, fetchRequestLogStats, clearRequestLogs,
         type RequestLogEntry, type RequestLogCategory, type RequestLogSource,
     } from 'src/ts/requestLog'
+    import { requestPurposeLabels } from 'src/ts/requestPurpose'
 
     const PAGE_SIZE = 50
 
@@ -425,7 +426,7 @@
                         {/if}
 
                         <ShBadge variant="outline" className="shrink-0 hidden md:inline-flex">
-                            {sourceLabel[entry.source] ?? entry.source}
+                            {entry.purpose ? requestPurposeLabels[entry.purpose] : sourceLabel[entry.source] ?? entry.source}
                         </ShBadge>
 
                         {#if entry.route === 'job'}

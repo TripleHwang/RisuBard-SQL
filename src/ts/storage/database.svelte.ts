@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { checkNullish, decryptBuffer, encryptBuffer, selectSingleFile } from '../util';
 import { changeLanguage, language } from '../../lang';
 import { DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES, DEFAULT_CHAT_LOAD_INITIAL_PAGES, normalizeChatLoadPages } from '../chatLoadPages';
+import { normalizeChatPageSize } from '../chatPagination';
 import type { RisuPlugin } from '../plugins/plugins.svelte';
 import type {triggerscript as triggerscriptMain} from '../process/triggers';
 import { downloadFile, saveAsset as saveImageGlobal } from '../globalApi.svelte';
@@ -489,7 +490,8 @@ export function setDatabase(data:Database){
     // primary token was added. Without this, custom-scheme users (whose object
     // is preserved as-is) would render with an undefined CSS var.
     data.colorScheme.primary ??= defaultColorScheme.primary
-    data.colorSchemeName ??= 'default'
+    data.colorScheme.accentText ??= data.colorScheme.textcolor
+    data.colorSchemeName ??= 'dark'
     data.NAIsettings.starter ??= ""
     data.hypaModel ??= 'MiniLM'
     data.mancerHeader ??= ''
@@ -793,6 +795,7 @@ export function setDatabase(data:Database){
     data.moveInsteadOfCopyOnCMPConvert ??= false
     data.chatLoadInitialPages = normalizeChatLoadPages(data.chatLoadInitialPages, DEFAULT_CHAT_LOAD_INITIAL_PAGES)
     data.chatLoadAdditionalPages = normalizeChatLoadPages(data.chatLoadAdditionalPages, DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES)
+    data.chatPageSize = normalizeChatPageSize(data.chatPageSize)
     // NodeOnly default: 'balanced' (upstream defaults to 'off') — remote/mobile
     // usage benefits from coalesced streaming updates out of the box.
     data.streamingDisplayOptimizationMode ??= (data as {largeChatPerformanceMode?: StreamingDisplayOptimizationMode}).largeChatPerformanceMode ?? 'balanced'
@@ -1370,6 +1373,10 @@ export interface Database{
     }
     risuBardMemoryDockRatio?: number
     risuBardMemoryWorkspaceHeight?: number
+    pluginFabPlacements?: Record<string, {
+        xRatio: number
+        yRatio: number
+    }>
     risuBardModelMode?: 'memory' | 'model'
     risuBardAutoWikiEnabled?: boolean
     risuBardRecentMessageCount?: number
@@ -1618,6 +1625,7 @@ export interface Database{
     moveInsteadOfCopyOnCMPConvert?:boolean
     chatLoadInitialPages?: number
     chatLoadAdditionalPages?: number
+    chatPageSize?: number
     streamingDisplayOptimizationMode?: StreamingDisplayOptimizationMode
     ImagenModel:string
     ImagenImageSize:string
@@ -1732,6 +1740,7 @@ export interface character{
     desc:string
     notes:string
     chats:Chat[]
+    personas?:RisuPersona[]
     chatFolders: ChatFolder[]
     chatPage: number
     viewScreen: 'emotion'|'none'|'imggen',
@@ -2473,7 +2482,7 @@ export const themePresetTemplate: themePreset = {
     customCSS: '',
     waifuWidth: 100,
     waifuWidth2: 100,
-    colorSchemeName: 'default',
+    colorSchemeName: 'dark',
     colorScheme: safeStructuredClone(defaultColorScheme),
     textTheme: 'standard',
     customTextTheme: {

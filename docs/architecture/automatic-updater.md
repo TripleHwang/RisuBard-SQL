@@ -2,7 +2,7 @@
 
 ## 개요
 
-2026-08-19부터 RisuBard 공개판의 자동 업데이터는 PocketRisu의 업데이트 워커가 아니라 `rpaddict/RisuBard`의 GitHub Releases를 직접 확인한다.
+2026-08-19부터 RisuBard 공개판의 자동 업데이터는 이전 공개판의 업데이트 워커가 아니라 `rpaddict/RisuBard`의 GitHub Releases를 직접 확인한다.
 
 - 릴리즈 확인 API: `https://api.github.com/repos/rpaddict/RisuBard/releases/latest`
 - 릴리즈 다운로드 저장소: `https://github.com/rpaddict/RisuBard`
@@ -11,7 +11,7 @@
 
 ## 변경 이유
 
-기존 서버는 PocketRisu 업데이트 워커의 응답을 사용했고, 휴대용 업데이트 스크립트는 `PocketRisu/PocketRisu`의 릴리즈를 조회했다. 이 상태에서는 RisuBard가 자체 릴리즈를 발행해도 사용자에게 업데이트가 표시되거나 자동 설치되지 않는다.
+기존 서버는 이전 업데이트 워커의 응답을 사용했고, 휴대용 업데이트 스크립트도 이전 저장소의 릴리즈를 조회했다. 이 상태에서는 RisuBard가 자체 릴리즈를 발행해도 사용자에게 업데이트가 표시되거나 자동 설치되지 않는다.
 
 이번 변경으로 웹 UI의 업데이트 확인, 포터블 셀프 업데이트, 독립 실행형 업데이트 스크립트가 모두 `rpaddict/RisuBard`를 기준으로 동작한다.
 
@@ -41,16 +41,16 @@ GitHub가 `404`를 반환하는 경우는 공개 릴리즈가 없는 상태로 �
 
 ## 포터블 파일명 규칙
 
-현재 릴리즈 워크플로와의 호환성을 위해 포터블 파일명에는 기존 `PocketRisu` 접두사를 유지한다.
+포터블 파일명은 `RisuBard` 접두사를 사용한다.
 
 | 실행 환경 | 예상 파일명 |
 | --- | --- |
-| Windows x64 | `PocketRisu-vX.Y.Z-win-x64.zip` |
-| Linux x64 | `PocketRisu-vX.Y.Z-linux-x64.tar.gz` |
-| Linux ARM64 | `PocketRisu-vX.Y.Z-linux-arm64.tar.gz` |
-| macOS ARM64 | `PocketRisu-vX.Y.Z-macos-arm64.tar.gz` |
+| Windows x64 | `RisuBard-vX.Y.Z-win-x64.zip` |
+| Linux x64 | `RisuBard-vX.Y.Z-linux-x64.tar.gz` |
+| Linux ARM64 | `RisuBard-vX.Y.Z-linux-arm64.tar.gz` |
+| macOS ARM64 | `RisuBard-vX.Y.Z-macos-arm64.tar.gz` |
 
-저장소만 `rpaddict/RisuBard`로 변경했으며 파일명까지 `RisuBard-*`로 바꾸지는 않았다. 파일명을 변경하려면 릴리즈 워크플로와 `getSelfUpdateAssetInfo()`를 같은 작업에서 함께 수정해야 한다.
+릴리즈 워크플로와 `getSelfUpdateAssetInfo()`도 같은 파일명 규칙을 사용한다.
 
 ## 배포 형태별 차이
 

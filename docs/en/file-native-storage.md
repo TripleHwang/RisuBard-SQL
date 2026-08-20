@@ -1,6 +1,6 @@
 # File-native user data
 
-PocketRisu stores canonical user data as ordinary JSON, JSONL, Markdown, and content-addressed files. SQLite and `database.bin` are not user-data authorities. A compatibility `database.bin` can be rebuilt for existing clients and RisuAI exports.
+RisuBard stores canonical user data as ordinary JSON, JSONL, Markdown, and content-addressed files. SQLite and `database.bin` are not user-data authorities. A compatibility `database.bin` can be rebuilt for existing clients and RisuAI exports.
 
 Set an absolute data root before starting the server:
 

@@ -5,6 +5,7 @@ import { selectedCharID } from "./stores.svelte"
 import { createBlankChar, getCharImage } from "./characters"
 import { isIOS } from "src/ts/platform"
 import PopupList from "src/lib/UI/PopupList.svelte"
+import { resolvePersonaById } from "./personaScopes"
 
 export interface Messagec extends Message{
     index: number
@@ -71,8 +72,7 @@ export function checkPersonaBinded(){
         if(!chat.bindedPersona){
             return null
         }
-        const persona = db.personas.find(v => v.id === chat.bindedPersona)
-        return persona 
+        return resolvePersonaById(db, character, chat.bindedPersona)?.persona ?? null
     } catch (error) {
         return null
     }

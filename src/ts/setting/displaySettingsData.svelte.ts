@@ -19,7 +19,7 @@ export const displayThemeSettingsItems: SettingItem[] = [
         classes: 'mt-4',
         options: {
             selectOptions: [
-                { value: '', label: 'PocketRisu Standard' },
+                { value: '', label: 'RisuBard Standard' },
                 { value: 'standardRisu', label: 'Standard Risu' },
                 { value: 'waifu', label: 'Waifulike' },
                 { value: 'mobilechat', label: 'Mobile Chat' },

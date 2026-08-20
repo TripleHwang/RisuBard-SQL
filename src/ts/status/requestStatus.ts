@@ -1,4 +1,5 @@
 import { writable, get } from "svelte/store"
+import type { RequestPurpose } from '../requestPurpose'
 
 // Request Status Channel — a surface-agnostic store that request producers
 // publish to (phase/tokens/badges) and a renderer subscribes to. Decouples the
@@ -211,6 +212,7 @@ export interface RequestStatusEntry {
     id: string                             // per-request key = generationId (issued upstream; we only consume)
     chatId?: string                        // real chat.id of the generating chat (absent for aux requests)
     kind: RequestKind                      // chip: main / translate / memory / emotion / sub
+    purpose?: RequestPurpose
     label: string                          // model / preset name
     phase: RequestPhase
     thinkingTokens: number
@@ -346,6 +348,7 @@ function update(id: string, fn: (e: RequestStatusEntry) => RequestStatusEntry): 
 
 export interface StartStatusInit {
     kind: RequestKind
+    purpose?: RequestPurpose
     label: string
     chatId?: string
     phase?: RequestPhase
@@ -360,6 +363,7 @@ export function startStatus(id: string, init: StartStatusInit): void {
             id,
             chatId: init.chatId,
             kind: init.kind,
+            purpose: init.purpose,
             label: init.label,
             phase: init.phase ?? 'connecting',
             thinkingTokens: 0,

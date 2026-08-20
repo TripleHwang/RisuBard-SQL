@@ -184,7 +184,7 @@
                             aprilFoolsPage = 0
                             aprilFools = false
                         }}>
-                            PocketRisu  
+                            RisuBard
                         </a>
                     </p>
 

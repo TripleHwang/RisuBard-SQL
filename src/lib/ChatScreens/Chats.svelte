@@ -4,7 +4,6 @@
     import Chat from './Chat.svelte';
     import { getCharImage } from 'src/ts/characters';
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
-    import { chatFoldedStateMessageIndex } from 'src/ts/globalApi.svelte';
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
     
@@ -27,7 +26,8 @@
         onUndoCanonical = async () => false,
         currentUsername,
         userIcon,
-        loadPages,
+        pageStart,
+        pageEnd,
         userIconPortrait,
         hasNewUnreadMessage = $bindable(false)
     }:{
@@ -44,7 +44,8 @@
         ) => Promise<boolean>
         currentUsername: string
         userIcon: string
-        loadPages: number
+        pageStart: number
+        pageEnd: number
         userIconPortrait?: boolean
         hasNewUnreadMessage?: boolean
     } = $props();
@@ -84,8 +85,8 @@
         const charImage = getCharImage(currentCharacter.image, 'css')
         const userImage = getCharImage(userIcon, 'css')
         const simpleChar = createSimpleCharacter(currentCharacter);
-        let loadStart = messages.length - 1
-        let loadEnd = messages.length - loadPages
+        let loadStart = pageEnd - 1
+        let loadEnd = pageStart
         const currentChat = currentCharacter.chats?.[currentCharacter.chatPage]
         const configuredPerformanceMode = DBState.db.streamingDisplayOptimizationMode ?? 'off';
         const performanceMode = currentChat?.isStreaming
@@ -107,11 +108,6 @@
         }
         if (lastNonDisabledIdx >= 0 && messages[lastNonDisabledIdx].role === 'char') {
             lastRealCharIdx = lastNonDisabledIdx;
-        }
-
-        if(chatFoldedStateMessageIndex.index !== -1){
-            loadStart = chatFoldedStateMessageIndex.index
-            loadEnd = Math.max(0, chatFoldedStateMessageIndex.index - loadPages)
         }
 
         const reloadPointerMap = get(ReloadChatPointer);

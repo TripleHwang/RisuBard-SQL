@@ -1,5 +1,3 @@
-export function shouldAutomaticallyConfirmNarrativeTurn(
-    enabled: boolean | undefined
-): boolean {
-    return enabled !== false
+export function shouldAutomaticallyConfirmNarrativeTurn(): boolean {
+    return true
 }

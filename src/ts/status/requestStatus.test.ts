@@ -153,10 +153,17 @@ describe('publish API', () => {
     })
 
     it('startStatus creates an entry', () => {
-        startStatus('g1', { kind: 'main', label: 'gpt', chatId: 'c1', now: 100 })
+        startStatus('g1', {
+            kind: 'main',
+            purpose: 'chat-response',
+            label: 'gpt',
+            chatId: 'c1',
+            now: 100,
+        })
         const e = get(requestStatuses).get('g1')!
         expect(e.phase).toBe('connecting')
         expect(e.label).toBe('gpt')
+        expect(e.purpose).toBe('chat-response')
         expect(e.chatId).toBe('c1')
         expect(e.startedAt).toBe(100)
     })

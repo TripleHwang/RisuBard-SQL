@@ -14,6 +14,7 @@
     import { language } from 'src/lang'
     import { RotateCwIcon, XIcon } from '@lucide/svelte'
     import { toast } from 'svelte-sonner'
+    import { requestPurposeLabels } from 'src/ts/requestPurpose'
 
     let { id }: { id: string } = $props()
 
@@ -139,7 +140,7 @@
                 {/if}
 
                 <span class="rs-phase {phaseColor(entry.phase)}">{PHASE_LABEL[entry.phase]}</span>
-                <span class="rs-chip">{KIND_LABEL[entry.kind]}</span>
+                <span class="rs-chip">{entry.purpose ? requestPurposeLabels[entry.purpose] : KIND_LABEL[entry.kind]}</span>
                 <span class="rs-elapsed">{elapsedStr(entry)}</span>
 
                 {#if entry.retryAttempt}

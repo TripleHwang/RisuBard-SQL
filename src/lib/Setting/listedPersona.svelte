@@ -1,18 +1,34 @@
 <script lang="ts">
-    import { XIcon } from "@lucide/svelte";
-    import { language } from "../../lang";
-    
-    import { DBState } from 'src/ts/stores.svelte';
-    import { changeUserPersona } from "src/ts/persona";
-
+    import { XIcon } from '@lucide/svelte'
+    import { v4 } from 'uuid'
+    import { language } from '../../lang'
+    import { DBState, selectedCharID } from 'src/ts/stores.svelte'
+    import { changeUserPersona } from 'src/ts/persona'
+    import { requestImmediateSave } from 'src/ts/globalApi.svelte'
+    import { getCharacterPersonas, getEffectivePersona, type PersonaSelection } from 'src/ts/personaScopes'
 
     interface Props {
-        close?: any;
-        onSelect?: ((index: number) => void) | null;
+        close?: () => void
+        onSelect?: ((selection: PersonaSelection) => void) | null
     }
 
-    let { close = () => {}, onSelect = null }: Props = $props();
+    let { close = () => {}, onSelect = null }: Props = $props()
+    const currentCharacter = $derived(DBState.db.characters[$selectedCharID])
+    const currentChat = $derived(currentCharacter?.chats?.[currentCharacter.chatPage])
+    const effective = $derived(getEffectivePersona(DBState.db, currentCharacter, currentChat))
 
+    function choose(selection: PersonaSelection): void {
+        selection.persona.id ??= v4()
+        if (onSelect) {
+            onSelect(selection)
+        } else if (selection.scope === 'global') {
+            changeUserPersona(selection.index)
+        } else if (currentChat) {
+            currentChat.bindedPersona = selection.persona.id
+        }
+        void requestImmediateSave()
+        close()
+    }
 </script>
 
 <div class="absolute w-full h-full z-40 bg-black/50 flex justify-center items-center">
@@ -25,29 +41,37 @@
                 </button>
             </div>
         </div>
-        {#each DBState.db.personas as persona, i}
-            <button onclick={() => {
-                if (onSelect) {
-                    onSelect(i)
-                } else {
-                    changeUserPersona(i)
-                }
-                close()
-            }} class="flex items-center text-textcolor border-t-1 border-solid border-0 border-darkborderc p-2 cursor-pointer" class:bg-selected={i === DBState.db.selectedPersona}>
-                <span class="overflow-x-auto whitespace-nowrap w-full text-left">
+
+        {#if currentCharacter && getCharacterPersonas(currentCharacter).length > 0}
+            <div class="persona-group-label">{language.settingsWorkspace.personaManager.characterGroup}</div>
+            {#each getCharacterPersonas(currentCharacter) as persona, i}
+                <button
+                    onclick={() => choose({ persona, index: i, scope: 'character' })}
+                    class="persona-row"
+                    class:bg-selected={effective?.scope === 'character' && effective.index === i}
+                >
                     <span class="font-medium">{persona.name}</span>
-                    {#if persona.note}
-                        <span class="opacity-75"> / {persona.note}</span>
-                    {/if}
-                </span>
+                    {#if persona.note}<span class="opacity-75"> / {persona.note}</span>{/if}
+                </button>
+            {/each}
+        {/if}
+
+        <div class="persona-group-label">{language.settingsWorkspace.personaManager.globalGroup}</div>
+        {#each DBState.db.personas as persona, i}
+            <button
+                onclick={() => choose({ persona, index: i, scope: 'global' })}
+                class="persona-row"
+                class:bg-selected={effective?.scope === 'global' && effective.index === i}
+            >
+                <span class="font-medium">{persona.name}</span>
+                {#if persona.note}<span class="opacity-75"> / {persona.note}</span>{/if}
             </button>
         {/each}
     </div>
 </div>
 
 <style>
-    .break-any{
-        word-break: normal;
-        overflow-wrap: anywhere;
-    }
+    .break-any { word-break: normal; overflow-wrap: anywhere; }
+    .persona-group-label { margin-top: .5rem; padding: .45rem .5rem; color: var(--color-textcolor2); font-size: .7rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .persona-row { display: flex; align-items: center; width: 100%; padding: .6rem .5rem; border-top: 1px solid var(--color-darkborderc); color: var(--color-textcolor); text-align: left; cursor: pointer; }
 </style>

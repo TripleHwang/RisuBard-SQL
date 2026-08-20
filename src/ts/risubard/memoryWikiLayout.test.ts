@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
     normalizeMemoryWikiDockRatio,
     normalizeMemoryWikiDialogSize,
+    normalizeMemoryWikiTreeHeight,
     normalizeMemoryWikiWorkspaceHeight,
 } from './memoryWikiLayout'
 
@@ -18,6 +19,13 @@ describe('memory wiki dialog layout', () => {
         expect(normalizeMemoryWikiWorkspaceHeight(120, 900)).toBe(288)
         expect(normalizeMemoryWikiWorkspaceHeight(800, 900)).toBe(680)
         expect(normalizeMemoryWikiWorkspaceHeight(460.6, 900)).toBe(461)
+    })
+
+    test('keeps a portrait file tree useful without crowding out the editor', () => {
+        expect(normalizeMemoryWikiTreeHeight(undefined, 700)).toBe(176)
+        expect(normalizeMemoryWikiTreeHeight(20, 700)).toBe(96)
+        expect(normalizeMemoryWikiTreeHeight(900, 700)).toBe(508)
+        expect(normalizeMemoryWikiTreeHeight(212.6, 700)).toBe(213)
     })
 
     test('uses the saved size without mutating it', () => {

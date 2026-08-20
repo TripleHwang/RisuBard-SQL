@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { mount, tick, unmount } from 'svelte'
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import RisuBardWikiEditor from './RisuBardWikiEditor.svelte'
 
@@ -71,6 +72,86 @@ afterEach(async () => {
 })
 
 describe('RisuBardWikiEditor', () => {
+    it('collapses action labels instead of wrapping the toolbar at narrow widths', async () => {
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(RisuBardWikiEditor, {
+            target,
+            props: { characterId: 'character', chatId: 'chat', documents },
+        })
+        await tick()
+
+        const titleRow = document.querySelector('[data-wiki-title-row]')
+        const toolbar = document.querySelector('[data-wiki-action-toolbar]')
+        expect(titleRow?.querySelector('[aria-label="항목 유형"]')).not.toBeNull()
+        expect(titleRow?.querySelector('[aria-label="항목 이름"]')).not.toBeNull()
+        expect(toolbar).not.toBeNull()
+        expect([...toolbar!.querySelectorAll('button')].map((button) =>
+            button.textContent?.trim()
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
+        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(4)
+        expect([...toolbar!.querySelectorAll('button')].map((button) =>
+            button.getAttribute('aria-label')
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
+
+        const source = readFileSync(
+            'src/lib/Others/RisuBardWikiEditor.svelte',
+            'utf8'
+        )
+        expect(source).toContain('container-name: wiki-editor-pane')
+        expect(source).toContain('@container wiki-editor-pane (max-width: 32rem)')
+        expect(source).toMatch(/\.editor-actions\s*\{[^}]*flex-wrap:\s*nowrap/s)
+        expect(document.body.textContent).not.toContain('characters/라비안.md')
+        expect(document.body.textContent).not.toContain('context: auto')
+    })
+
+    it('exposes collapsible portrait panels, touch resizing, and editor focus', async () => {
+        const onFocusModeChange = vi.fn()
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(RisuBardWikiEditor, {
+            target,
+            props: {
+                characterId: 'character',
+                chatId: 'chat',
+                documents,
+                onFocusModeChange,
+            },
+        })
+        await tick()
+
+        const editor = document.querySelector<HTMLElement>('[data-wiki-editor]')!
+        expect(editor.dataset.treeExpanded).toBe('true')
+        expect(editor.dataset.editorExpanded).toBe('true')
+        expect(editor.dataset.editorFocus).toBe('false')
+        expect(editor.style.getPropertyValue('--wiki-tree-height')).toBe('176px')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-tree-resizer]'
+        )?.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'ArrowDown',
+            bubbles: true,
+        }))
+        await tick()
+        expect(editor.style.getPropertyValue('--wiki-tree-height')).toBe('200px')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-toggle-tree]'
+        )?.click()
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-toggle-editor]'
+        )?.click()
+        await tick()
+        expect(editor.dataset.treeExpanded).toBe('false')
+        expect(editor.dataset.editorExpanded).toBe('false')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-editor-focus]'
+        )?.click()
+        await tick()
+        expect(editor.dataset.editorFocus).toBe('true')
+        expect(editor.dataset.editorExpanded).toBe('true')
+        expect(onFocusModeChange).toHaveBeenLastCalledWith(true)
+    })
+
     it('copies a saved wiki document into the character lorebook without AI', async () => {
         const character = { chaId: 'character', globalLore: [] }
         mocks.db.characters = [character]
@@ -174,9 +255,13 @@ describe('RisuBardWikiEditor', () => {
             .find((button) => button.textContent?.includes('전투'))!
         eventButton.click()
         await tick()
-        const retractButton = [...document.querySelectorAll('button')]
-            .find((button) => button.textContent?.trim() === '사건 영구 삭제')!
-        retractButton.click()
+        const toolbar = document.querySelector('[data-wiki-action-toolbar]')!
+        expect([...toolbar.querySelectorAll('button')].map((button) =>
+            button.textContent?.trim()
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
+        const deleteButton = [...toolbar.querySelectorAll('button')]
+            .find((button) => button.textContent?.trim() === '삭제')!
+        deleteButton.click()
 
         await vi.waitFor(() => {
             expect(mocks.retractWikiEvent).toHaveBeenCalledWith(

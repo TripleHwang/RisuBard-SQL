@@ -1,20 +1,59 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
     createNarrativeSourcesPrompt,
-    createNarrativeInquiryShadow,
-    createNarrativeInquiryShadowCache,
     createNarrativeContextPrompt,
+    mergeNarrativeContextWithStaticPrompt,
     isNarrativeContextOptedIn,
     loadNarrativeInquiry,
-    observeNarrativeInquiryShadow,
     ensureNarrativeSessionChatId,
     findNarrativeSessionChat,
-    scheduleNarrativeInquiryShadow,
     selectPromptedNarrativeSources,
     normalizeNarrativeWorkingMessageLimit,
     selectNarrativeWorkingMessages,
     shouldIncludeNarrativeFirstMessage,
 } from './narrativeContext'
+
+describe('narrative context prompt composition', () => {
+    it('keeps static character and active lore prompts beside native BardWiki context', () => {
+        const character = { content: 'character' }
+        const assetLore = { content: 'asset output instructions' }
+        const wiki = { content: 'current scene' }
+
+        expect(mergeNarrativeContextWithStaticPrompt({
+            currentContext: wiki,
+            baseline: null,
+            baseDescription: character,
+            descriptionPrompts: [character],
+            afterDescriptionPrompts: [],
+            activeLorePrompts: [assetLore],
+        })).toEqual({
+            baseDescription: character,
+            descriptionPrompts: [character, wiki],
+            afterDescriptionPrompts: [wiki],
+            activeLorePrompts: [assetLore],
+        })
+    })
+
+    it('replaces static prompts only when a synthesized baseline represents them', () => {
+        const character = { content: 'character' }
+        const assetLore = { content: 'asset output instructions' }
+        const baseline = { content: 'synthesized baseline and wiki' }
+
+        expect(mergeNarrativeContextWithStaticPrompt({
+            currentContext: baseline,
+            baseline: 'synthesized baseline',
+            baseDescription: character,
+            descriptionPrompts: [character],
+            afterDescriptionPrompts: [],
+            activeLorePrompts: [assetLore],
+        })).toEqual({
+            baseDescription: baseline,
+            descriptionPrompts: [baseline],
+            afterDescriptionPrompts: [],
+            activeLorePrompts: [],
+        })
+    })
+})
 
 describe('actual narrative inquiry prompt', () => {
     it('assigns one stable v2 session ID to an idless legacy chat', () => {
@@ -74,6 +113,40 @@ describe('actual narrative inquiry prompt', () => {
             currentInput: 'What happened?',
             fetchImpl,
             createAuth: async () => 'auth',
+        })).resolves.toMatchObject({
+            mode: 'bounded-v1-fallback',
+            sources: [],
+        })
+    })
+
+    it('allows a normal local inquiry to take longer than 150 ms', async () => {
+        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+            mode: 'bounded-v1-fallback',
+            graphRevision: 0,
+            indexRevision: 0,
+            cacheStatus: 'missing-or-stale',
+            sources: [],
+            entityCandidates: [],
+            metrics: {
+                candidateCount: 0,
+                inspectedNodeCount: 0,
+                inspectedEdgeCount: 0,
+                selectedNodeCount: 0,
+                selectedTokens: 0,
+                hopCount: 0,
+                auxiliaryModelCalls: 0,
+            },
+        }))) as unknown as typeof fetch
+
+        await expect(loadNarrativeInquiry({
+            characterId: 'character-1',
+            chatId: 'chat-1',
+            currentInput: 'What happened?',
+            fetchImpl,
+            createAuth: async () => {
+                await new Promise((resolve) => setTimeout(resolve, 175))
+                return 'auth'
+            },
         })).resolves.toMatchObject({
             mode: 'bounded-v1-fallback',
             sources: [],
@@ -333,19 +406,13 @@ describe('selectNarrativeWorkingMessages', () => {
         expect(normalizeNarrativeWorkingMessageLimit(24)).toBe(24)
     })
 
-    it('keeps legacy history unchanged and caps current mode to recent messages', () => {
+    it('caps both current and fallback modes to recent messages', () => {
         const messages = Array.from({ length: 20 }, (_, index) => ({
             id: `message-${index}`,
         }))
 
         expect(selectNarrativeWorkingMessages(
             messages,
-            'legacy',
-            12
-        )).toEqual(messages)
-        expect(selectNarrativeWorkingMessages(
-            messages,
-            'current',
             12
         )).toEqual(messages.slice(-12))
         expect(messages).toHaveLength(20)
@@ -362,7 +429,6 @@ describe('selectNarrativeWorkingMessages', () => {
 
         expect(selectNarrativeWorkingMessages(
             messages,
-            'current',
             3,
             false
         ).map((message) => message.id)).toEqual([
@@ -370,12 +436,6 @@ describe('selectNarrativeWorkingMessages', () => {
             'assistant-2',
             'user-current',
         ])
-        expect(selectNarrativeWorkingMessages(
-            messages,
-            'legacy',
-            3,
-            false
-        )).toEqual(messages)
     })
 
     it('counts eight as total slots and always retains the current user request', () => {
@@ -385,13 +445,13 @@ describe('selectNarrativeWorkingMessages', () => {
         ]).flat().concat({ id: 'user-current', role: 'user' })
 
         const withUsers = selectNarrativeWorkingMessages(
-            messages, 'current', 8, true
+            messages, 8, true
         )
         expect(withUsers.filter((message) => message.role === 'user')).toHaveLength(4)
         expect(withUsers.filter((message) => message.role === 'char')).toHaveLength(4)
 
         const withoutHistoricalUsers = selectNarrativeWorkingMessages(
-            messages, 'current', 8, false
+            messages, 8, false
         )
         expect(withoutHistoricalUsers.filter((message) => message.role === 'user'))
             .toEqual([{ id: 'user-current', role: 'user' }])
@@ -399,183 +459,9 @@ describe('selectNarrativeWorkingMessages', () => {
             .toHaveLength(7)
     })
 
-    it('keeps the first greeting inside the current-mode message budget', () => {
-        expect(shouldIncludeNarrativeFirstMessage('current', 11, 12)).toBe(true)
-        expect(shouldIncludeNarrativeFirstMessage('current', 12, 12)).toBe(false)
-        expect(shouldIncludeNarrativeFirstMessage('legacy', 20, 12)).toBe(true)
-    })
-})
-
-describe('createNarrativeInquiryShadow', () => {
-    it('projects v1 memory into bounded memory sources and body-free metrics', () => {
-        const timestamps = [10, 13]
-        const result = createNarrativeInquiryShadow({
-            state: {
-                facts: [{
-                    id: 'trust',
-                    text: 'Lina distrusts Kain.',
-                    status: 'active',
-                    evidence: [{
-                        chatId: 'chat-1',
-                        messageId: 'message-1',
-                    }],
-                }],
-                events: [{
-                    id: 'ambush',
-                    summary: 'Kain was ambushed before the rendezvous.',
-                    evidence: [{
-                        chatId: 'chat-1',
-                        messageId: 'message-2',
-                    }],
-                }],
-                appliedOperationIds: [],
-            },
-            storyId: 'chat-1',
-            branchId: 'main',
-            currentInput: 'Why was Kain ambushed?',
-            now: () => timestamps.shift() ?? 13,
-        })
-
-        expect(result.sources.map((source) => source.id)).toEqual([
-            'narrative-memory:event:v1:ambush',
-            'narrative-memory:claim:v1:trust',
-        ])
-        expect(result.sources.every((source) =>
-            source.kind === 'memory' && source.role === 'system'
-        )).toBe(true)
-        expect(result.report).toEqual({
-            availableV1FactCount: 1,
-            availableV1EventCount: 1,
-            v1FactWindowCount: 1,
-            v1EventWindowCount: 1,
-            selectedV1FactCount: 1,
-            selectedV1EventCount: 1,
-            omittedV1FactCount: 0,
-            omittedV1EventCount: 0,
-            cacheHit: false,
-            candidateCount: 2,
-            selectedNodeCount: 2,
-            selectedNodeIds: [
-                'event:v1:ambush',
-                'claim:v1:trust',
-            ],
-            selectedTokens: expect.any(Number),
-            hopCount: 1,
-            auxiliaryModelCalls: 0,
-            elapsedMs: 3,
-        })
-        expect(JSON.stringify(result.report)).not.toContain('ambushed')
-        expect(JSON.stringify(result.report)).not.toContain('distrusts')
-    })
-
-    it('emits only the comparison report through the supplied observer', () => {
-        const reports: unknown[] = []
-        const sources = observeNarrativeInquiryShadow({
-            state: {
-                facts: [],
-                events: [{
-                    id: 'ambush',
-                    summary: 'Kain was ambushed.',
-                    evidence: [{
-                        chatId: 'chat-1',
-                        messageId: 'message-2',
-                    }],
-                }],
-                appliedOperationIds: [],
-            },
-            storyId: 'chat-1',
-            branchId: 'main',
-            currentInput: 'Kain',
-            now: () => 1,
-            observe: (report) => reports.push(report),
-        })
-
-        expect(sources).toHaveLength(1)
-        expect(reports).toHaveLength(1)
-        expect(JSON.stringify(reports)).not.toContain('Kain was ambushed')
-    })
-
-    it('schedules shadow traversal without blocking the request path', () => {
-        const tasks: Array<() => void> = []
-        const reports: Array<{ availableV1EventCount: number }> = []
-        const state = {
-            facts: [],
-            events: [{
-                id: 'ambush',
-                summary: 'Kain was ambushed.',
-                evidence: [{
-                    chatId: 'chat-1',
-                    messageId: 'message-2',
-                }],
-            }],
-            appliedOperationIds: [],
-        }
-
-        scheduleNarrativeInquiryShadow({
-            state,
-            storyId: 'chat-1',
-            branchId: 'main',
-            currentInput: 'Kain',
-            now: () => 1,
-            schedule: (task) => tasks.push(task),
-            observe: (report) => reports.push(report),
-        })
-        expect(tasks).toHaveLength(1)
-        expect(reports).toEqual([])
-        tasks[0]()
-        expect(reports).toEqual([expect.objectContaining({
-            availableV1EventCount: 1,
-        })])
-    })
-
-    it('bounds the v1 shadow window and reuses its revision index', () => {
-        const state = {
-            facts: Array.from({ length: 100 }, (_, index) => ({
-                id: `fact-${index}`,
-                text: `Fact ${index}`,
-                status: 'active' as const,
-                evidence: [{
-                    chatId: 'chat-1',
-                    messageId: `fact-message-${index}`,
-                }],
-            })),
-            events: Array.from({ length: 100 }, (_, index) => ({
-                id: `event-${index}`,
-                summary: `Event ${index}`,
-                evidence: [{
-                    chatId: 'chat-1',
-                    messageId: `event-message-${index}`,
-                }],
-            })),
-            appliedOperationIds: ['revision-1'],
-        }
-        const cache = createNarrativeInquiryShadowCache()
-
-        const first = createNarrativeInquiryShadow({
-            state,
-            storyId: 'chat-1',
-            branchId: 'main',
-            currentInput: 'Event 99',
-            cache,
-            now: () => 1,
-        })
-        const second = createNarrativeInquiryShadow({
-            state: structuredClone(state),
-            storyId: 'chat-1',
-            branchId: 'main',
-            currentInput: 'Event 99',
-            cache,
-            now: () => 1,
-        })
-
-        expect(first.report).toMatchObject({
-            availableV1FactCount: 100,
-            availableV1EventCount: 100,
-            v1FactWindowCount: 32,
-            v1EventWindowCount: 32,
-            cacheHit: false,
-        })
-        expect(second.report.cacheHit).toBe(true)
-        expect(cache.size()).toBe(1)
+    it('keeps the first greeting inside the message budget', () => {
+        expect(shouldIncludeNarrativeFirstMessage(11, 12)).toBe(true)
+        expect(shouldIncludeNarrativeFirstMessage(12, 12)).toBe(false)
+        expect(shouldIncludeNarrativeFirstMessage(20, 12)).toBe(false)
     })
 })

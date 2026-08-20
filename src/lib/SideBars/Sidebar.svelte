@@ -68,6 +68,7 @@
   import magnifierBugIcon from 'src/assets/solar-bold/magnifier-bug-bold.svg';
   import { tooltip } from "src/ts/gui/tooltip";
   import { getCharacterVaultQuickAccess } from "src/ts/characterVault";
+  import { getEffectivePersona } from "src/ts/personaScopes";
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
     import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
@@ -77,6 +78,13 @@
   let menuMode = $state(0);
   let devTool = $state(false)
   let characterManageOpen = $state(false)
+  $effect(() => {
+    if ($selectedCharID < 0) characterManageOpen = false
+  })
+  const effectivePersona = $derived.by(() => {
+    const character = DBState.db.characters[$selectedCharID]
+    return getEffectivePersona(DBState.db, character, character?.chats?.[character.chatPage])
+  })
 
   function reseter() {
     menuMode = 0;
@@ -98,7 +106,8 @@
   // sort is cheap; the $derived is only read while on the home screen.
   let recentChars = $derived(
     DBState.db.characters
-      .map((c, index) => ({ index, name: c.name, image: c.image, lastInteraction: c.lastInteraction ?? 0 }))
+      .map((c, index) => ({ index, name: c.name, image: c.image, lastInteraction: c.lastInteraction ?? 0, trashTime: c.trashTime }))
+      .filter((c) => !c.trashTime)
       .filter((c) => c.lastInteraction > 0)
       .sort((a, b) => b.lastInteraction - a.lastInteraction)
   );
@@ -735,8 +744,8 @@
       title={language.persona}
       onclick={() => openPersonaManager.set(true)}
     >
-      {#if DBState.db.userIcon}
-        {#await getCharImage(DBState.db.userIcon, 'plain')}
+      {#if effectivePersona?.persona.icon}
+        {#await getCharImage(effectivePersona.persona.icon, 'plain')}
           <User2Icon size={22} />
         {:then personaImage}
           <img src={personaImage} alt="" class="h-full w-full object-cover object-top" />
@@ -744,10 +753,19 @@
       {:else}
         <User2Icon size={22} />
       {/if}
+      <span
+        data-persona-scope-badge
+        class="absolute right-0 top-0 grid size-5 place-items-center rounded-full border border-darkborderc bg-darkbg text-textcolor shadow-md"
+        title={effectivePersona?.scope === 'character'
+          ? language.settingsWorkspace.personaManager.characterTab
+          : language.settingsWorkspace.personaManager.globalTab}
+      >
+        <SolarBoldIcon name={effectivePersona?.scope === 'character' ? 'people-nearby' : 'earth'} size={12} />
+      </span>
       <span class="absolute inset-x-0 bottom-0 h-1 bg-primary opacity-80"></span>
     </button>
     <span class="w-full truncate text-center text-[10px] font-medium text-textcolor2">
-      {DBState.db.username || language.persona}
+      {effectivePersona?.persona.name || language.persona}
     </span>
   </div>
   <div

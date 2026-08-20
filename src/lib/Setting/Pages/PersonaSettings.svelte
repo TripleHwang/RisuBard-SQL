@@ -1,172 +1,572 @@
 <script lang="ts">
-    import { language } from "src/lang";
-    import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
-    import BaseRoundedButton from "src/lib/UI/BaseRoundedButton.svelte";
-    import Button from "src/lib/UI/GUI/Button.svelte";
-    import Check from "src/lib/UI/GUI/CheckInput.svelte";
-    import Help from "src/lib/Others/Help.svelte";
-    import TextAreaInput from "src/lib/UI/GUI/TextAreaInput.svelte";
-    import TextInput from "src/lib/UI/GUI/TextInput.svelte";
-    import { alertConfirm, alertSelect } from "src/ts/alert";
-    import { getCharImage } from "src/ts/characters";
-    import { changeUserPersona, exportUserPersona, importUserPersona, saveUserPersona, selectUserImg } from "src/ts/persona";
-    import Sortable from 'sortablejs/modular/sortable.core.esm.js';
-    import { onDestroy, onMount } from "svelte";
-    import { sleep, sortableOptions } from "src/ts/util";
-    import { DBState } from 'src/ts/stores.svelte';
-    import { requestImmediateSave } from "src/ts/globalApi.svelte";
-    import { v4 } from "uuid"
+    import { onDestroy, onMount, tick } from 'svelte'
+    import Sortable from 'sortablejs/modular/sortable.core.esm.js'
+    import { v4 } from 'uuid'
+    import { Maximize2Icon, PlusIcon } from '@lucide/svelte'
+    import { language } from 'src/lang'
+    import SettingPage from 'src/lib/UI/GUI/SettingPage.svelte'
+    import Help from 'src/lib/Others/Help.svelte'
+    import TextAreaInput from 'src/lib/UI/GUI/TextAreaInput.svelte'
+    import TextInput from 'src/lib/UI/GUI/TextInput.svelte'
+    import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
+    import { alertConfirm, alertSelect } from 'src/ts/alert'
+    import { getCharImage } from 'src/ts/characters'
+    import { tooltip } from 'src/ts/gui/tooltip'
+    import {
+        changeUserPersona,
+        exportUserPersona,
+        importUserPersona,
+        saveUserPersona,
+        selectPersonaImg,
+    } from 'src/ts/persona'
+    import { DBState, popUpEditorStore, selectedCharID } from 'src/ts/stores.svelte'
+    import { requestImmediateSave } from 'src/ts/globalApi.svelte'
+    import {
+        clonePersonaToStore,
+        ensureCharacterPersonas,
+        getCharacterPersonas,
+        type PersonaScope,
+    } from 'src/ts/personaScopes'
+    import type { RisuPersona } from 'src/ts/storage/database.svelte'
+    import { sortableOptions } from 'src/ts/util'
 
-    let { embedded = false }: { embedded?: boolean } = $props();
+    type PersonaManagerScope = 'global' | 'character'
+    const PERSONA_GRID_HEIGHT_KEY = 'risubard-persona-grid-height'
+    const PERSONA_DESCRIPTION_HEIGHT_KEY = 'risubard-persona-description-height'
+    const MIN_PERSONA_GRID_HEIGHT = 112
+    const MAX_PERSONA_GRID_HEIGHT = 520
+    const MIN_DESCRIPTION_HEIGHT = 160
+    const MAX_DESCRIPTION_HEIGHT = 720
 
-    let stb: Sortable = null
-    let ele: HTMLDivElement = $state()
-    let sorted = $state(0)
-    let selectedId:string = null
-    const createStb = () => {
-        stb = Sortable.create(ele, {
-            onStart: async () => {
-                DBState.db.personas[DBState.db.selectedPersona].id ??= v4()
-                selectedId = DBState.db.personas[DBState.db.selectedPersona].id
-                saveUserPersona()
-            },
-            onEnd: async () => {
-                let idx:number[] = []
-                ele.querySelectorAll('[data-risu-idx]').forEach((e, i) => {
-                    idx.push(parseInt(e.getAttribute('data-risu-idx')))
-                })
-                let newValue:{
-                    personaPrompt:string
-                    name:string
-                    icon:string
-                    note?:string
-                    largePortrait?:boolean
-                    id?:string
-                }[] = []
-                idx.forEach((i) => {
-                    newValue.push(DBState.db.personas[i])
-                })
-                DBState.db.personas = newValue
-                const selectedPersona = DBState.db.personas.findIndex((e) => e.id === selectedId)
-                changeUserPersona(selectedPersona !== -1 ? selectedPersona : 0, 'noSave')
+    let { embedded = false }: { embedded?: boolean } = $props()
+    let activeScope = $state<PersonaManagerScope>('global')
+    let characterSelectedIndex = $state(0)
+    let editingPersona = $state<RisuPersona | null>(null)
+    let gridElement = $state<HTMLDivElement>()
+    let sortable: Sortable | null = null
+    let personaGridHeight = $state(204)
+    let descriptionHeight = $state(240)
+    let popupEditorTimer: ReturnType<typeof setInterval> | null = null
+    let stopPersonaGridResize: (() => void) | null = null
+    let stopDescriptionResize: (() => void) | null = null
+
+    const currentCharacter = $derived(DBState.db.characters[$selectedCharID])
+
+    function activeStore(scope: PersonaScope = activeScope): RisuPersona[] {
+        if (scope === 'global') return DBState.db.personas
+        return currentCharacter ? getCharacterPersonas(currentCharacter) : []
+    }
+
+    function editableStore(): RisuPersona[] {
+        if (activeScope === 'global') return DBState.db.personas
+        return currentCharacter ? ensureCharacterPersonas(currentCharacter) : []
+    }
+
+    function selectedIndex(): number {
+        return activeScope === 'global' ? DBState.db.selectedPersona : characterSelectedIndex
+    }
+
+    function syncGlobalLegacyFields(): void {
+        if (activeScope !== 'global' || !editingPersona) return
+        DBState.db.username = editingPersona.name
+        DBState.db.userIcon = editingPersona.icon
+        DBState.db.personaPrompt = editingPersona.personaPrompt
+        DBState.db.userNote = editingPersona.note ?? ''
+    }
+
+    function bindCharacterPersona(persona: RisuPersona): void {
+        const chat = currentCharacter?.chats?.[currentCharacter.chatPage]
+        if (!chat) return
+        persona.id ??= v4()
+        chat.bindedPersona = persona.id
+    }
+
+    function selectPersona(index: number, bindToChat = true, saveCurrent = true): void {
+        const store = activeStore()
+        if (store.length === 0) {
+            editingPersona = null
+            characterSelectedIndex = 0
+            return
+        }
+        const safeIndex = Math.min(Math.max(index, 0), store.length - 1)
+        if (activeScope === 'global') {
+            changeUserPersona(safeIndex, saveCurrent ? 'save' : 'noSave')
+        } else {
+            characterSelectedIndex = safeIndex
+            if (bindToChat) bindCharacterPersona(store[safeIndex])
+        }
+        editingPersona = store[safeIndex]
+        void requestImmediateSave()
+    }
+
+    function switchScope(scope: PersonaManagerScope): void {
+        if (scope === activeScope) return
+        syncGlobalLegacyFields()
+        activeScope = scope
+        selectPersona(scope === 'global' ? DBState.db.selectedPersona : characterSelectedIndex, false)
+        void resetSortable()
+    }
+
+    function createPersona(): RisuPersona {
+        return { name: 'New Persona', icon: '', personaPrompt: '', note: '', id: v4() }
+    }
+
+    async function addPersona(): Promise<void> {
+        if (activeScope === 'character' && !currentCharacter) return
+        const selection = parseInt(await alertSelect([language.createfromScratch, language.importCharacter]))
+        const store = editableStore()
+        let persona: RisuPersona | null = null
+        if (selection === 0) {
+            persona = createPersona()
+            store.push(persona)
+        } else if (selection === 1) {
+            persona = await importUserPersona(store)
+        }
+        if (!persona) return
+        selectPersona(store.indexOf(persona))
+    }
+
+    async function importPersona(): Promise<void> {
+        if (activeScope === 'character' && !currentCharacter) return
+        const store = editableStore()
+        const imported = await importUserPersona(store)
+        if (imported) selectPersona(store.indexOf(imported))
+    }
+
+    function duplicateGlobalPersona(): void {
+        const source = editingPersona
+        if (!source) return
+        if (activeScope === 'global') saveUserPersona()
+        const store = editableStore()
+        const clone = clonePersonaToStore(source, store, v4)
+        selectPersona(store.indexOf(clone))
+    }
+
+    function cloneGlobalPersonaToCharacter(): void {
+        const source = DBState.db.personas[DBState.db.selectedPersona]
+        if (!source || !currentCharacter) return
+        saveUserPersona()
+        const characterPersonas = ensureCharacterPersonas(currentCharacter)
+        const clone = clonePersonaToStore(source, characterPersonas, v4)
+        activeScope = 'character'
+        characterSelectedIndex = characterPersonas.indexOf(clone)
+        editingPersona = clone
+        bindCharacterPersona(clone)
+        void requestImmediateSave()
+    }
+
+    async function removePersona(): Promise<void> {
+        const store = editableStore()
+        if (!editingPersona || (activeScope === 'global' && store.length === 1)) return
+        if (!await alertConfirm(`${language.removeConfirm}${editingPersona.name}`)) return
+
+        const removedId = editingPersona.id
+        store.splice(selectedIndex(), 1)
+        if (activeScope === 'character') {
+            for (const chat of currentCharacter?.chats ?? []) {
+                if (removedId && chat.bindedPersona === removedId) chat.bindedPersona = ''
+            }
+            characterSelectedIndex = Math.min(characterSelectedIndex, store.length - 1)
+        }
+        selectPersona(activeScope === 'global' ? 0 : characterSelectedIndex, false, false)
+        void requestImmediateSave()
+    }
+
+    function destroySortable(): void {
+        sortable?.destroy()
+        sortable = null
+    }
+
+    function initializeSortable(): void {
+        destroySortable()
+        if (!gridElement) return
+        sortable = Sortable.create(gridElement, {
+            onEnd: () => {
+                const store = activeStore()
+                const selected = editingPersona
+                const order = Array.from(gridElement.querySelectorAll<HTMLElement>('[data-risu-idx]'))
+                    .map((element) => Number(element.dataset.risuIdx))
+                const reordered = order.map((index) => store[index]).filter(Boolean)
+                if (activeScope === 'global') {
+                    DBState.db.personas = reordered
+                    const index = Math.max(0, reordered.indexOf(selected!))
+                    changeUserPersona(index, 'noSave')
+                } else if (currentCharacter) {
+                    currentCharacter.personas = reordered
+                    characterSelectedIndex = Math.max(0, reordered.indexOf(selected!))
+                }
+                editingPersona = selected
                 void requestImmediateSave()
-                try {
-                    stb.destroy()
-                } catch (error) {}
-                sorted += 1
-                await sleep(1)
-                createStb()
             },
-            ...sortableOptions
+            ...sortableOptions,
         })
     }
 
-    onMount(createStb)
+    async function resetSortable(): Promise<void> {
+        await tick()
+        initializeSortable()
+    }
 
-    onDestroy(() => {
-        saveUserPersona()
-        if(stb){
-            try {
-                stb.destroy()
-            } catch (error) {}
+    async function replacePersonaImage(): Promise<void> {
+        if (!editingPersona) return
+        if (await selectPersonaImg(editingPersona)) {
+            syncGlobalLegacyFields()
+            void requestImmediateSave()
         }
+    }
+
+    function togglePortraitMode(): void {
+        if (!editingPersona) return
+        editingPersona.largePortrait = !editingPersona.largePortrait
+        syncGlobalLegacyFields()
+        void requestImmediateSave()
+    }
+
+    function normalizeDescriptionHeight(value: number): number {
+        if (!Number.isFinite(value)) return 240
+        return Math.min(MAX_DESCRIPTION_HEIGHT, Math.max(MIN_DESCRIPTION_HEIGHT, Math.round(value)))
+    }
+
+    function normalizePersonaGridHeight(value: number): number {
+        if (!Number.isFinite(value)) return 204
+        return Math.min(MAX_PERSONA_GRID_HEIGHT, Math.max(MIN_PERSONA_GRID_HEIGHT, Math.round(value)))
+    }
+
+    function persistPersonaGridHeight(): void {
+        personaGridHeight = normalizePersonaGridHeight(personaGridHeight)
+        localStorage.setItem(PERSONA_GRID_HEIGHT_KEY, String(personaGridHeight))
+    }
+
+    function startPersonaGridResize(event: PointerEvent): void {
+        event.preventDefault()
+        const startY = event.clientY
+        const startHeight = personaGridHeight
+        stopPersonaGridResize?.()
+
+        const update = (moveEvent: PointerEvent) => {
+            personaGridHeight = normalizePersonaGridHeight(startHeight + moveEvent.clientY - startY)
+        }
+        const stop = () => {
+            window.removeEventListener('pointermove', update)
+            window.removeEventListener('pointerup', stop)
+            persistPersonaGridHeight()
+            stopPersonaGridResize = null
+        }
+        stopPersonaGridResize = stop
+        window.addEventListener('pointermove', update)
+        window.addEventListener('pointerup', stop, { once: true })
+    }
+
+    function resizePersonaGridByKeyboard(event: KeyboardEvent): void {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+        event.preventDefault()
+        personaGridHeight = normalizePersonaGridHeight(
+            personaGridHeight + (event.key === 'ArrowDown' ? 16 : -16),
+        )
+        persistPersonaGridHeight()
+    }
+
+    function persistDescriptionHeight(): void {
+        descriptionHeight = normalizeDescriptionHeight(descriptionHeight)
+        localStorage.setItem(PERSONA_DESCRIPTION_HEIGHT_KEY, String(descriptionHeight))
+    }
+
+    function startDescriptionResize(event: PointerEvent): void {
+        event.preventDefault()
+        const startY = event.clientY
+        const startHeight = descriptionHeight
+        stopDescriptionResize?.()
+
+        const update = (moveEvent: PointerEvent) => {
+            descriptionHeight = normalizeDescriptionHeight(startHeight + moveEvent.clientY - startY)
+        }
+        const stop = () => {
+            window.removeEventListener('pointermove', update)
+            window.removeEventListener('pointerup', stop)
+            persistDescriptionHeight()
+            stopDescriptionResize = null
+        }
+        stopDescriptionResize = stop
+        window.addEventListener('pointermove', update)
+        window.addEventListener('pointerup', stop, { once: true })
+    }
+
+    function resizeDescriptionByKeyboard(event: KeyboardEvent): void {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+        event.preventDefault()
+        descriptionHeight = normalizeDescriptionHeight(
+            descriptionHeight + (event.key === 'ArrowDown' ? 16 : -16),
+        )
+        persistDescriptionHeight()
+    }
+
+    function openDescriptionEditor(): void {
+        if (!editingPersona) return
+        popUpEditorStore.value = editingPersona.personaPrompt
+        popUpEditorStore.mode = 'default'
+        popUpEditorStore.language = 'markdown'
+        popUpEditorStore.open = true
+        if (popupEditorTimer) clearInterval(popupEditorTimer)
+        popupEditorTimer = setInterval(() => {
+            if (popUpEditorStore.open || !editingPersona) return
+            editingPersona.personaPrompt = popUpEditorStore.value
+            syncGlobalLegacyFields()
+            void requestImmediateSave()
+            if (popupEditorTimer) clearInterval(popupEditorTimer)
+            popupEditorTimer = null
+        }, 100)
+    }
+
+    $effect(() => {
+        if (activeScope !== 'global' || !editingPersona) return
+        editingPersona.name
+        editingPersona.icon
+        editingPersona.personaPrompt
+        editingPersona.note
+        syncGlobalLegacyFields()
+    })
+
+    onMount(() => {
+        const storedGridHeight = Number(localStorage.getItem(PERSONA_GRID_HEIGHT_KEY))
+        const storedHeight = Number(localStorage.getItem(PERSONA_DESCRIPTION_HEIGHT_KEY))
+        if (storedGridHeight) personaGridHeight = normalizePersonaGridHeight(storedGridHeight)
+        if (storedHeight) descriptionHeight = normalizeDescriptionHeight(storedHeight)
+        selectPersona(DBState.db.selectedPersona, false, false)
+        initializeSortable()
+    })
+    onDestroy(() => {
+        syncGlobalLegacyFields()
+        destroySortable()
+        if (popupEditorTimer) clearInterval(popupEditorTimer)
+        stopPersonaGridResize?.()
+        stopDescriptionResize?.()
     })
 </script>
+
 <SettingPage title={language.persona} showTitle={!embedded}>
-{#key sorted}
-<div class="p-4 rounded-md border-darkborderc border mb-2 flex-wrap flex gap-2 w-full max-w-full min-w-0" bind:this={ele}>
-    {#each DBState.db.personas as persona, i}
-        <button data-risu-idx={i} onclick={() => {
-            changeUserPersona(i)
-        }}>
-            {#if persona.icon === ''}
-                <div class="rounded-md h-20 w-20 shadow-lg bg-textcolor2 cursor-pointer hover:text-primary" class:ring-3={i === DBState.db.selectedPersona}></div>
-            {:else}
-                {#await getCharImage(persona.icon, 'css')}
-                    <div class="rounded-md h-20 w-20 shadow-lg bg-textcolor2 cursor-pointer hover:text-primary" class:ring-3={i === DBState.db.selectedPersona}></div>
-                {:then im} 
-                    <div class="rounded-md h-20 w-20 shadow-lg bg-textcolor2 cursor-pointer hover:text-primary" style={im} class:ring-3={i === DBState.db.selectedPersona}></div>                
-                {/await}
-            {/if}
+    <div data-persona-scope-tabs class="persona-scope-tabs" role="tablist" aria-label={language.persona}>
+        <button role="tab" aria-selected={activeScope === 'global'} class:active={activeScope === 'global'} onclick={() => switchScope('global')}>
+            {language.settingsWorkspace.personaManager.globalTab}
         </button>
-    {/each}
-    <div class="flex justify-center items-center ml-2 mr-2">
-        <BaseRoundedButton
-            onClick={async () => {
-                const sel = parseInt(await alertSelect([language.createfromScratch, language.importCharacter]))
-                if(sel === 0){
-                    DBState.db.personas.push({
-                        name: 'New Persona',
-                        icon: '',
-                        personaPrompt: '',
-                        note: ''
-                    })
-                    changeUserPersona(DBState.db.personas.length - 1)
-                    void requestImmediateSave()
-                } else if(sel === 1){
-                    await importUserPersona()
-                    void requestImmediateSave()
-                }
-            }}
-            ><svg viewBox="0 0 24 24" width="1.2em" height="1.2em"
-                ><path
-                fill="none"
-                stroke="currentColor"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                /></svg
-            >
-        </BaseRoundedButton>
-    </div>
-</div>
-{/key}
-
-<div class="flex w-full items-starts rounded-md border-darkborderc border p-4 max-w-full flex-wrap">
-    <div class="flex flex-col mt-4 mr-4">
-        <button onclick={() => {selectUserImg()}}>
-            {#if DBState.db.userIcon === ''}
-                <div class="rounded-md h-28 w-28 shadow-lg bg-textcolor2 cursor-pointer hover:text-primary"></div>
-            {:else}
-                {#await getCharImage(DBState.db.userIcon, DBState.db.personas[DBState.db.selectedPersona].largePortrait ? 'lgcss' : 'css')}
-                    <div class="rounded-md h-28 w-28 shadow-lg bg-textcolor2 cursor-pointer hover:text-primary"></div>
-                {:then im} 
-                    <div class="rounded-md h-28 w-28 shadow-lg bg-textcolor2 cursor-pointer hover:text-primary" style={im}></div>                
-                {/await}
-            {/if}
+        <button role="tab" aria-selected={activeScope === 'character'} class:active={activeScope === 'character'} onclick={() => switchScope('character')}>
+            {language.settingsWorkspace.personaManager.characterTab}
         </button>
     </div>
-    <div class="flex grow flex-col p-2 max-w-full">
-        <span class="text-sm text-textcolor2">{language.name} <Help key="personaName" /></span>
-        <TextInput className="mt-2" marginBottom placeholder="User" bind:value={DBState.db.username}/>
-        <span class="text-sm text-textcolor2">{language.note} <Help key="personaNote" /></span>
-        {#if DBState.db.personaNote}
-            <TextInput className="mt-2" marginBottom bind:value={DBState.db.userNote} placeholder={`Put a unique identifier for this persona here.\nExample: [Alternate Hunters persona]`} />
-        {/if}
-        <span class="text-sm text-textcolor2">{language.description} <Help key="personaDescription" /></span>
-        <TextAreaInput className="mt-2 mb-4" autocomplete="off" bind:value={DBState.db.personaPrompt} placeholder={`Put the description of this persona here.\nExample: [<user> is a 20 year old girl.]`} />
-        <div class="flex gap-2 mt-4 max-w-full flex-wrap">
-            <Button onclick={exportUserPersona}>{language.export}</Button>
-            <Button onclick={importUserPersona}>{language.import}</Button>
 
-            <Button styled="danger" onclick={async () => {
-                if(DBState.db.personas.length === 1){
-                    return
-                }
-                const d = await alertConfirm(`${language.removeConfirm}${DBState.db.personas[DBState.db.selectedPersona].name}`)
-                if(d){
-                    saveUserPersona()
-                    let personas = DBState.db.personas
-                    personas.splice(DBState.db.selectedPersona, 1)
-                    DBState.db.personas = personas
-                    changeUserPersona(0, 'noSave')
-                    void requestImmediateSave()
-                }
-            }}>{language.remove}</Button>
-            <Check bind:check={DBState.db.personas[DBState.db.selectedPersona].largePortrait} name={language.largePortrait}/>
-            <Help key="personaLargePortrait" />
+    {#if activeScope === 'character' && !currentCharacter}
+        <div class="persona-empty">{language.settingsWorkspace.personaManager.noCharacter}</div>
+    {:else}
+        <div class="persona-grid-shell">
+            <div data-persona-grid class="persona-grid" style:height={`${personaGridHeight}px`} bind:this={gridElement}>
+                {#each activeStore() as persona, i (persona.id ?? i)}
+                    <button data-risu-idx={i} class="persona-tile" class:selected={i === selectedIndex()} aria-label={persona.name} title={persona.name} use:tooltip={persona.name} onclick={() => selectPersona(i)}>
+                        {#if persona.icon}
+                            {#await getCharImage(persona.icon, 'plain')}
+                                <span class="persona-placeholder"></span>
+                            {:then image}
+                                <img src={image} alt="" />
+                            {/await}
+                        {:else}
+                            <span class="persona-placeholder"></span>
+                        {/if}
+                    </button>
+                {/each}
+                <button
+                    data-persona-create
+                    class="persona-create"
+                    aria-label={language.settingsWorkspace.personaManager.create}
+                    title={language.settingsWorkspace.personaManager.create}
+                    use:tooltip={language.settingsWorkspace.personaManager.create}
+                    onclick={addPersona}
+                ><PlusIcon size={22} /></button>
+            </div>
+            <button
+                data-persona-grid-resizer
+                class="persona-grid-resizer"
+                aria-label={language.settingsWorkspace.personaManager.resizeList}
+                title={language.settingsWorkspace.personaManager.resizeList}
+                use:tooltip={language.settingsWorkspace.personaManager.resizeList}
+                onpointerdown={startPersonaGridResize}
+                onkeydown={resizePersonaGridByKeyboard}
+            ><span></span></button>
         </div>
-    </div>
-</div>
+
+        {#if activeScope === 'character' && activeStore().length === 0}
+            <div class="persona-empty compact">{language.settingsWorkspace.personaManager.noCharacterPersonas}</div>
+        {/if}
+
+        {#if editingPersona}
+            <div class="persona-editor">
+                <div class="portrait-column">
+                    <div class="portrait-wrap">
+                        <button
+                            class="portrait-button"
+                            onclick={replacePersonaImage}
+                            aria-label={language.settingsWorkspace.personaManager.changeImage}
+                            title={language.settingsWorkspace.personaManager.changeImage}
+                            use:tooltip={language.settingsWorkspace.personaManager.changeImage}
+                        >
+                            {#if editingPersona.icon}
+                                {#await getCharImage(editingPersona.icon, editingPersona.largePortrait ? 'lgcss' : 'css')}
+                                    <span class="persona-placeholder large"></span>
+                                {:then imageStyle}
+                                    <span class="persona-portrait" style={imageStyle}></span>
+                                {/await}
+                            {:else}
+                                <span class="persona-placeholder large"></span>
+                            {/if}
+                        </button>
+                        <button
+                            data-persona-portrait-mode
+                            class="portrait-mode-button"
+                            aria-label={editingPersona.largePortrait
+                                ? language.settingsWorkspace.personaManager.useSquareImage
+                                : language.settingsWorkspace.personaManager.usePortraitImage}
+                            title={editingPersona.largePortrait
+                                ? language.settingsWorkspace.personaManager.useSquareImage
+                                : language.settingsWorkspace.personaManager.usePortraitImage}
+                            use:tooltip={editingPersona.largePortrait
+                                ? language.settingsWorkspace.personaManager.useSquareImage
+                                : language.settingsWorkspace.personaManager.usePortraitImage}
+                            onclick={togglePortraitMode}
+                        ><SolarBoldIcon name="smartphone-rotate-2" size={17} /></button>
+                    </div>
+                </div>
+                <div class="fields">
+                    <label data-persona-field="name" class="field-row">
+                        <span class="field-label">{language.name} <Help key="personaName" /></span>
+                        <TextInput className="field-input" placeholder="User" bind:value={editingPersona.name} />
+                    </label>
+                    {#if DBState.db.personaNote}
+                        <label data-persona-field="note" class="field-row">
+                            <span class="field-label">{language.note} <Help key="personaNote" /></span>
+                            <TextInput className="field-input" bind:value={editingPersona.note} placeholder="Alternate persona" />
+                        </label>
+                    {/if}
+                </div>
+                <section data-persona-description class="description-section">
+                    <div class="description-heading">
+                        <span class="field-label">{language.description} <Help key="personaDescription" /></span>
+                        <button
+                            class="popup-editor-button"
+                            aria-label={language.settingsWorkspace.personaManager.openDescriptionEditor}
+                            title={language.settingsWorkspace.personaManager.openDescriptionEditor}
+                            use:tooltip={language.settingsWorkspace.personaManager.openDescriptionEditor}
+                            onclick={openDescriptionEditor}
+                        ><Maximize2Icon size={16} /></button>
+                    </div>
+                    <div class="description-editor" style:height={`${descriptionHeight}px`}>
+                        <TextAreaInput
+                            height="full"
+                            actionBar={false}
+                            autocomplete="off"
+                            bind:value={editingPersona.personaPrompt}
+                            placeholder="Put the description of this persona here."
+                        />
+                    </div>
+                    <button
+                        data-persona-description-resizer
+                        class="description-resizer"
+                        aria-label={language.settingsWorkspace.personaManager.resizeDescription}
+                        title={language.settingsWorkspace.personaManager.resizeDescription}
+                        use:tooltip={language.settingsWorkspace.personaManager.resizeDescription}
+                        onpointerdown={startDescriptionResize}
+                        onkeydown={resizeDescriptionByKeyboard}
+                    ><span></span></button>
+                </section>
+                <div class="action-toolbar" aria-label={language.persona}>
+                    <button
+                        class="icon-button"
+                        aria-label={language.settingsWorkspace.personaManager.duplicate}
+                        title={language.settingsWorkspace.personaManager.duplicate}
+                        use:tooltip={language.settingsWorkspace.personaManager.duplicate}
+                        onclick={duplicateGlobalPersona}
+                    ><SolarBoldIcon name="copy" size={18} /></button>
+                    {#if activeScope === 'global'}
+                        <button
+                            class="icon-button"
+                            disabled={!currentCharacter}
+                            aria-label={language.settingsWorkspace.personaManager.cloneToCharacter}
+                            title={language.settingsWorkspace.personaManager.cloneToCharacter}
+                            use:tooltip={language.settingsWorkspace.personaManager.cloneToCharacter}
+                            onclick={cloneGlobalPersonaToCharacter}
+                        ><SolarBoldIcon name="people-nearby" size={19} /></button>
+                    {/if}
+                    <button
+                        class="icon-button"
+                        aria-label={language.settingsWorkspace.personaManager.export}
+                        title={language.settingsWorkspace.personaManager.export}
+                        use:tooltip={language.settingsWorkspace.personaManager.export}
+                        onclick={() => exportUserPersona(editingPersona!)}
+                    ><SolarBoldIcon name="export" size={18} /></button>
+                    <button
+                        class="icon-button"
+                        aria-label={language.settingsWorkspace.personaManager.import}
+                        title={language.settingsWorkspace.personaManager.import}
+                        use:tooltip={language.settingsWorkspace.personaManager.import}
+                        onclick={importPersona}
+                    ><SolarBoldIcon name="import" size={18} /></button>
+                    <button
+                        class="icon-button danger"
+                        disabled={activeScope === 'global' && activeStore().length === 1}
+                        aria-label={language.settingsWorkspace.personaManager.remove}
+                        title={language.settingsWorkspace.personaManager.remove}
+                        use:tooltip={language.settingsWorkspace.personaManager.remove}
+                        onclick={removePersona}
+                    ><SolarBoldIcon name="trash-bin-trash" size={18} /></button>
+                </div>
+            </div>
+        {/if}
+    {/if}
 </SettingPage>
+
+<style>
+    .persona-scope-tabs { display: flex; gap: .25rem; margin-bottom: .75rem; padding: .25rem; overflow-x: auto; border: 1px solid var(--color-darkborderc); border-radius: .75rem; background: color-mix(in srgb, var(--color-darkbg) 78%, transparent); }
+    .persona-scope-tabs button { flex: 1 0 auto; padding: .58rem 1rem; border-radius: .55rem; color: var(--color-textcolor2); font-size: .86rem; font-weight: 650; }
+    .persona-scope-tabs button.active { color: var(--color-textcolor); background: var(--color-selected); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-borderc) 40%, transparent); }
+    .persona-grid-shell { width: 100%; }
+    .persona-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: .65rem; width: 100%; overflow-y: auto; padding: 1rem; border: 1px solid var(--color-darkborderc); border-radius: .65rem; scrollbar-gutter: stable; }
+    .persona-grid-resizer { width: 100%; height: .75rem; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
+    .persona-grid-resizer span { width: 2.75rem; height: .2rem; border-radius: 999px; background: var(--color-darkborderc); transition: width .15s ease, background .15s ease; }
+    .persona-grid-resizer:hover span, .persona-grid-resizer:focus-visible span { width: 3.5rem; background: var(--color-borderc); }
+    .persona-tile, .persona-create { flex: 0 0 auto; width: 5rem; height: 5rem; overflow: hidden; border: 2px solid transparent; border-radius: .55rem; background: var(--color-textcolor2); box-shadow: 0 .4rem 1rem rgb(0 0 0 / .12); transition: border-color .16s ease, transform .16s ease, background .16s ease; }
+    .persona-tile:hover, .persona-create:hover { transform: translateY(-1px); }
+    .persona-tile.selected { border-color: var(--color-primary); }
+    .persona-create { display: grid; place-items: center; border-color: var(--color-darkborderc); color: var(--color-textcolor2); background: color-mix(in srgb, var(--color-selected) 34%, var(--color-darkbg)); box-shadow: none; }
+    .persona-create:hover { border-color: var(--color-borderc); color: var(--color-textcolor); background: var(--color-selected); }
+    .persona-tile img, .persona-placeholder, .persona-portrait { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+    .persona-placeholder { background: color-mix(in srgb, var(--color-textcolor2) 65%, var(--color-darkbg)); }
+    .persona-editor { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 1rem 1.25rem; width: 100%; margin-top: .75rem; padding: 1rem; border: 1px solid var(--color-darkborderc); border-radius: .65rem; }
+    .portrait-column { min-width: 0; }
+    .portrait-wrap { position: relative; width: 8.5rem; height: 8.5rem; }
+    .portrait-button, .persona-placeholder.large { width: 8.5rem; height: 8.5rem; overflow: hidden; border-radius: .6rem; }
+    .portrait-button { display: block; box-shadow: 0 .5rem 1.5rem rgb(0 0 0 / .16); }
+    .portrait-mode-button { position: absolute; right: .45rem; bottom: .45rem; width: 2rem; height: 2rem; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--color-textcolor) 26%, transparent); border-radius: .5rem; color: var(--color-textcolor); background: color-mix(in srgb, var(--color-darkbg) 86%, transparent); box-shadow: 0 .3rem .8rem rgb(0 0 0 / .28); backdrop-filter: blur(6px); }
+    .portrait-mode-button:hover { background: var(--color-selected); }
+    .fields { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: .75rem; }
+    .field-row { display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); align-items: center; gap: .75rem; }
+    .field-label { display: inline-flex; align-items: center; gap: .2rem; color: var(--color-textcolor2); font-size: .82rem; white-space: nowrap; }
+    .field-row :global(.field-input) { min-width: 0; margin: 0; }
+    .description-section { grid-column: 1 / -1; min-width: 0; }
+    .description-heading { display: flex; align-items: center; justify-content: space-between; min-height: 2rem; margin-bottom: .35rem; }
+    .popup-editor-button { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .45rem; color: var(--color-textcolor2); }
+    .popup-editor-button:hover { color: var(--color-textcolor); background: var(--color-selected); }
+    .description-editor { min-height: 10rem; overflow: hidden; }
+    .description-editor :global(> div) { height: 100%; min-height: 0; }
+    .description-resizer { width: 100%; height: .75rem; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
+    .description-resizer span { width: 2.75rem; height: .2rem; border-radius: 999px; background: var(--color-darkborderc); transition: width .15s ease, background .15s ease; }
+    .description-resizer:hover span, .description-resizer:focus-visible span { width: 3.5rem; background: var(--color-borderc); }
+    .action-toolbar { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .45rem; padding-top: .85rem; border-top: 1px solid var(--color-darkborderc); }
+    .icon-button { width: 2.35rem; height: 2.35rem; display: grid; place-items: center; border: 1px solid var(--color-darkborderc); border-radius: .58rem; color: var(--color-textcolor2); background: color-mix(in srgb, var(--color-darkbg) 78%, transparent); transition: color .15s ease, border-color .15s ease, background .15s ease, transform .15s ease; }
+    .icon-button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--color-borderc); color: var(--color-textcolor); background: var(--color-selected); }
+    .icon-button.danger:hover:not(:disabled) { border-color: color-mix(in srgb, var(--color-draculared) 70%, var(--color-darkborderc)); color: var(--color-draculared); background: color-mix(in srgb, var(--color-draculared) 12%, var(--color-darkbg)); }
+    .icon-button:disabled { cursor: not-allowed; opacity: .38; }
+    .persona-empty { padding: 2.5rem 1rem; border: 1px dashed var(--color-darkborderc); border-radius: .65rem; color: var(--color-textcolor2); text-align: center; }
+    .persona-empty.compact { margin-top: .75rem; padding: 1rem; }
+    @media (max-width: 600px) {
+        .persona-editor { grid-template-columns: 1fr; }
+        .portrait-column { display: flex; justify-content: center; }
+        .description-section, .action-toolbar { grid-column: 1; }
+        .field-row { grid-template-columns: 3.75rem minmax(0, 1fr); }
+    }
+</style>

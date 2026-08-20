@@ -6,7 +6,7 @@
 
 > 🌐 Hướng dẫn này được dịch bằng máy. Để có thông tin chính xác nhất, vui lòng tham khảo phiên bản [tiếng Anh](../en/install.md) hoặc [tiếng Hàn](../ko/install.md).
 
-PocketRisu có thể được cài đặt theo bốn cách.
+RisuBard có thể được cài đặt theo bốn cách.
 
 - [1. Gói portable](#1-gói-portable) — Tệp nhị phân được biên dịch sẵn. Không cần Node.js.
 - [2. Docker](#2-docker) — Môi trường container.
@@ -34,27 +34,27 @@ Tải xuống và chạy tệp nhị phân được biên dịch sẵn. Không c
 
 ### Tải xuống
 
-Lấy tệp cho OS của bạn từ [trang Releases](https://github.com/PocketRisu/PocketRisu/releases).
+Lấy tệp cho OS của bạn từ [trang Releases](https://github.com/rpaddict/RisuBard/releases).
 
 | OS                       | Tệp                                       |
 | ------------------------ | ----------------------------------------- |
-| Windows (x64)            | `PocketRisu-vX.X.X-win-x64.zip`           |
-| macOS (Apple Silicon)    | `PocketRisu-vX.X.X-macos-arm64.tar.gz`    |
-| Linux (x64)              | `PocketRisu-vX.X.X-linux-x64.tar.gz`      |
-| Linux (ARM)              | `PocketRisu-vX.X.X-linux-arm64.tar.gz`    |
+| Windows (x64)            | `RisuBard-vX.X.X-win-x64.zip`           |
+| macOS (Apple Silicon)    | `RisuBard-vX.X.X-macos-arm64.tar.gz`    |
+| Linux (x64)              | `RisuBard-vX.X.X-linux-x64.tar.gz`      |
+| Linux (ARM)              | `RisuBard-vX.X.X-linux-arm64.tar.gz`    |
 
 ### Chạy
 
 **Windows**
 
-Giải nén tệp zip và nhấp đúp vào `PocketRisu.exe`. Trình duyệt tự động mở tại `http://localhost:6001`.
+Giải nén tệp zip và nhấp đúp vào `RisuBard.exe`. Trình duyệt tự động mở tại `http://localhost:6001`.
 
 **macOS**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-macos-arm64.tar.gz
-xattr -cr PocketRisu-vX.X.X-macos-arm64
-open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
+tar -xzf RisuBard-vX.X.X-macos-arm64.tar.gz
+xattr -cr RisuBard-vX.X.X-macos-arm64
+open RisuBard-vX.X.X-macos-arm64/RisuBard.app
 ```
 
 Lệnh `xattr` là thao tác một lần để bỏ qua cảnh báo "Apple không thể xác minh".
@@ -62,8 +62,8 @@ Lệnh `xattr` là thao tác một lần để bỏ qua cảnh báo "Apple khôn
 **Linux**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-linux-*.tar.gz
-cd PocketRisu-vX.X.X-linux-*
+tar -xzf RisuBard-vX.X.X-linux-*.tar.gz
+cd RisuBard-vX.X.X-linux-*
 ./start.sh
 ```
 
@@ -76,10 +76,10 @@ Mở `http://localhost:6001` trong trình duyệt.
 **Linux (x64):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-linux-x64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-cd PocketRisu-${VERSION}-linux-x64
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-linux-x64.tar.gz" -o risubard.tar.gz
+tar -xzf risubard.tar.gz && rm risubard.tar.gz
+cd RisuBard-${VERSION}-linux-x64
 ./start.sh
 ```
 
@@ -88,11 +88,11 @@ cd PocketRisu-${VERSION}-linux-x64
 **macOS (Apple Silicon):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-macos-arm64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-xattr -cr PocketRisu-${VERSION}-macos-arm64
-cd PocketRisu-${VERSION}-macos-arm64
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-macos-arm64.tar.gz" -o risubard.tar.gz
+tar -xzf risubard.tar.gz && rm risubard.tar.gz
+xattr -cr RisuBard-${VERSION}-macos-arm64
+cd RisuBard-${VERSION}-macos-arm64
 ./start.sh
 ```
 
@@ -123,7 +123,7 @@ Chạy trên hệ thống có Docker hoặc Docker Desktop được cài đặt.
 ### Chạy
 
 ```bash
-curl -L https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/docker-compose.yml -o docker-compose.yml
+curl -L https://raw.githubusercontent.com/rpaddict/RisuBard/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -160,7 +160,7 @@ Cài đặt từ [trang chính thức của Node.js](https://nodejs.org/) nếu 
 ### Cài đặt
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/install.sh | bash
 ```
 
 Thông báo trạng thái hiển thị khi cài đặt hoàn tất.
@@ -168,7 +168,7 @@ Thông báo trạng thái hiển thị khi cài đặt hoàn tất.
 ### Khởi động máy chủ
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 pnpm runserver
 ```
 
@@ -177,14 +177,14 @@ Mở `http://localhost:6001` trong trình duyệt.
 ### Cập nhật
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 ./update.sh
 ```
 
-> **Lưu ý một lần cho v1.5.x → v1.6.0**: Nếu bạn đã cài đặt qua `install.sh` trong thời kỳ Risuai-NodeOnly (v1.5.x trở về trước), hãy thay `update.sh` bằng phiên bản mới một lần trước lần cập nhật v1.6.0 đầu tiên. (Repository đã được đổi tên thành PocketRisu và `update.sh` cũ không thể tìm thấy thư mục mã nguồn mới.)
+> **Lưu ý một lần cho v1.5.x → v1.6.0**: Nếu bạn đã cài đặt qua `install.sh` trong thời kỳ Risuai-NodeOnly (v1.5.x trở về trước), hãy thay `update.sh` bằng phiên bản mới một lần trước lần cập nhật v1.6.0 đầu tiên. (Repository đã được đổi tên thành RisuBard và `update.sh` cũ không thể tìm thấy thư mục mã nguồn mới.)
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/update.sh -o update.sh && chmod +x update.sh
+> curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/update.sh -o update.sh && chmod +x update.sh
 > ./update.sh
 > ```
 >
@@ -198,8 +198,8 @@ cd ~/pocketrisu
 Clone và build mã nguồn thủ công. Dành cho nhà phát triển cần sửa đổi hoặc gỡ lỗi mã.
 
 ```bash
-git clone https://github.com/PocketRisu/PocketRisu.git
-cd PocketRisu
+git clone https://github.com/rpaddict/RisuBard.git
+cd RisuBard
 pnpm install
 pnpm build
 pnpm runserver

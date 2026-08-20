@@ -11,6 +11,7 @@ import { HideIconStore, moduleBackgroundEmbedding, ReloadGUIPointer } from "../s
 import {get} from "svelte/store"
 import { convertCharacterToModule, convertModuleToCharacter } from "../interchangeability"
 import { exportCharacterCard, importCharacterProcess } from "../characterCards"
+import { hasher } from "../parser/parser.svelte"
 
 export interface MCPModule{
     url: string
@@ -167,7 +168,9 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
 
     let module = main.module
 
-    const maxConcurrentAssetSaves = 10
+    // Bulk writes use JSON/base64 under the server's 100 MB body limit.
+    const maxAssetBatchSize = 20
+    const maxAssetBatchBytes = 32 * 1024 * 1024
     const retryDelayMs = 5000
     const maxRetries = 3
     const totalAssets = module.assets?.length ?? 0
@@ -178,39 +181,91 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
         data: Uint8Array
     }
 
+    type DecodedAssetTask = {
+        task: AssetTask
+        data: Uint8Array
+    }
+
     const runAssetTasks = async (tasks: AssetTask[]) => {
         if (tasks.length === 0) {
             return []
         }
-        const inFlight = new Set<Promise<void>>()
         const failed: AssetTask[] = []
-        const runTask = (task: AssetTask) => {
-            const promise = (async () => {
+
+        const persistBatch = async (batch: DecodedAssetTask[]) => {
+            if (batch.length === 1 && batch[0].data.length > maxAssetBatchBytes) {
+                const { task, data } = batch[0]
                 try {
-                    const decoded = await decodeRPack(task.data)
                     if (!module.assets?.[task.index]) {
                         throw new Error(`Missing asset metadata for index ${task.index}`)
                     }
-                    module.assets[task.index][1] = await saveAsset(decoded)
+                    module.assets[task.index][1] = await saveAsset(data)
                     completed += 1
-                } catch (error) {
+                } catch {
                     failed.push(task)
                 } finally {
                     alertWait(`Loading... (Adding Assets ${completed} / ${totalAssets})`)
                 }
-            })()
-            inFlight.add(promise)
-            promise.finally(() => inFlight.delete(promise))
-        }
-
-        for (const task of tasks) {
-            while (inFlight.size >= maxConcurrentAssetSaves) {
-                await Promise.race(inFlight)
+                return
             }
-            runTask(task)
+            try {
+                const prepared = await Promise.all(batch.map(async ({ task, data }) => {
+                    if (!module.assets?.[task.index]) {
+                        throw new Error(`Missing asset metadata for index ${task.index}`)
+                    }
+                    let id: string
+                    try {
+                        id = await hasher(data)
+                    } catch {
+                        id = v4()
+                    }
+                    return {
+                        task,
+                        key: `assets/${id}.png`,
+                        value: data,
+                    }
+                }))
+                await forageStorage.setItems(prepared.map(({ key, value }) => ({ key, value })))
+                for (const { task, key } of prepared) {
+                    module.assets[task.index][1] = key
+                    completed += 1
+                }
+            } catch {
+                failed.push(...batch.map(({ task }) => task))
+            } finally {
+                alertWait(`Loading... (Adding Assets ${completed} / ${totalAssets})`)
+            }
         }
 
-        await Promise.all(inFlight)
+        for (let offset = 0; offset < tasks.length; offset += maxAssetBatchSize) {
+            const decodeGroup = tasks.slice(offset, offset + maxAssetBatchSize)
+            const decoded = await Promise.all(decodeGroup.map(async (task) => {
+                try {
+                    return { task, data: await decodeRPack(task.data) } as DecodedAssetTask
+                } catch {
+                    failed.push(task)
+                    return null
+                }
+            }))
+
+            let batch: DecodedAssetTask[] = []
+            let batchBytes = 0
+            for (const decodedTask of decoded) {
+                if (!decodedTask) {
+                    continue
+                }
+                if (batch.length > 0 && batchBytes + decodedTask.data.length > maxAssetBatchBytes) {
+                    await persistBatch(batch)
+                    batch = []
+                    batchBytes = 0
+                }
+                batch.push(decodedTask)
+                batchBytes += decodedTask.data.length
+            }
+            if (batch.length > 0) {
+                await persistBatch(batch)
+            }
+        }
         return failed
     }
 

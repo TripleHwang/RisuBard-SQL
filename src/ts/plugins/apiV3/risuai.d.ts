@@ -1543,7 +1543,12 @@ interface RisuaiPluginAPI {
 
     /**
      * Registers a floating action button.
-     * If `id` is provided and a button with that ID already exists, it will be replaced in-place (preserving position).
+     * Action buttons are draggable by the user and their viewport-relative position is restored automatically.
+     * Plugin authors do not need to implement dragging or storage. Provide a stable `id` to preserve
+     * the user's chosen position when the plugin or app reloads. Without an `id`, the host uses the
+     * button name as a best-effort fallback, so renaming the button resets its position.
+     * IDs are scoped to the current plugin. If `id` is provided and a button with that ID already exists
+     * in the same plugin, it will be replaced in-place (preserving its registration slot and saved position).
      * When replacing, the button stays in its original location store regardless of the `location` parameter.
      *
      * @param arg - Button configuration
@@ -1551,7 +1556,7 @@ interface RisuaiPluginAPI {
      * @param arg.icon - Icon content (HTML or image URL)
      * @param arg.iconType - Icon type ('html', 'img', or 'none')
      * @param arg.location - Button location ('action', 'chat', or 'hamburger'). Ignored when replacing an existing button.
-     * @param arg.id - Optional stable ID. If omitted, a UUID is generated. If provided and already registered, the existing button is replaced in-place.
+     * @param arg.id - Optional plugin-scoped stable ID. Strongly recommended for persistent user positioning. If omitted, a UUID is returned and the button name is used as a best-effort layout key.
      * @param callback - Callback function when clicked
      *
      * @example

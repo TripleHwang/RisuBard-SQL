@@ -2,7 +2,7 @@
  * Settings-only export tests (/api/backup/export?mode=settings).
  *
  * A settings-only backup is the full backup minus characters, chats and inlay
- * images. It exists so a user running several PocketRisu instances can seed a
+ * images. It exists so a user running several RisuBard instances can seed a
  * fresh one without carrying their character library.
  *
  * Two things have to hold, and they pull in opposite directions:

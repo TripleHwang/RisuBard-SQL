@@ -18,6 +18,9 @@
 import { getDatabase } from './storage/database.svelte'
 import { getClientId } from './log'
 import type { RequestInjectionManifest } from './status/requestStatus'
+import type { RequestPurpose } from './requestPurpose'
+
+export const REQUEST_LOG_RECORDED_EVENT = 'risubard-request-log-recorded'
 
 export type RequestLogCategory = 'llm' | 'tts' | 'image' | 'translate' | 'embedding' | 'other'
 export type RequestLogSource =
@@ -36,6 +39,7 @@ export interface RequestLogUsage {
 export interface RequestLogScopeInit {
     category: RequestLogCategory
     source: RequestLogSource
+    purpose?: RequestPurpose
     /** Message/generation key the per-message log viewer looks up. */
     chatId?: string
     /** Stable chat.id that owns the request; used for per-chat evidence export. */
@@ -51,6 +55,7 @@ interface PendingEntry {
     timestamp: number
     category: RequestLogCategory
     source: RequestLogSource
+    purpose?: RequestPurpose
     chatId?: string
     sessionChatId?: string
     generationId?: string
@@ -150,11 +155,20 @@ async function send(entries: PendingEntry[]): Promise<void> {
     try {
         const { forageStorage } = await import('./globalApi.svelte')
         const auth = await forageStorage.createAuth()
-        await fetch('/api/request-logs', {
+        const response = await fetch('/api/request-logs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'risu-auth': auth },
             body: JSON.stringify(entries),
         })
+        if (!response.ok || typeof window === 'undefined') return
+        const sessionChatIds = [...new Set(entries.flatMap((entry) =>
+            entry.sessionChatId ? [entry.sessionChatId] : []
+        ))]
+        if (sessionChatIds.length > 0) {
+            window.dispatchEvent(new CustomEvent(REQUEST_LOG_RECORDED_EVENT, {
+                detail: { sessionChatIds },
+            }))
+        }
     } catch {
         // Same policy as the system log: a log that cannot be delivered is
         // dropped rather than retried — logging must never affect the app.
@@ -173,6 +187,7 @@ export interface RequestLogEntry {
     timestamp: number
     category: RequestLogCategory
     source: RequestLogSource
+    purpose?: RequestPurpose
     chatId?: string
     sessionChatId?: string
     generationId?: string
@@ -383,6 +398,7 @@ export function createRequestLogScope(init: RequestLogScopeInit): RequestLogScop
                 timestamp: started,
                 category: init.category,
                 source: init.source,
+                purpose: init.purpose,
                 chatId: init.chatId,
                 sessionChatId: init.sessionChatId,
                 generationId: init.generationId,

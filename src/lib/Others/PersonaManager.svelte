@@ -1,28 +1,101 @@
 <script lang="ts">
-    import { XIcon } from '@lucide/svelte'
+    import { onDestroy, onMount } from 'svelte'
+    import { CircleQuestionMarkIcon, XIcon } from '@lucide/svelte'
     import { language } from 'src/lang'
+    import { alertMd } from 'src/ts/alert'
+    import { tooltip } from 'src/ts/gui/tooltip'
     import { openPersonaManager } from 'src/ts/stores.svelte'
     import PersonaSettings from '../Setting/Pages/PersonaSettings.svelte'
+
+    const PERSONA_MANAGER_WIDTH_KEY = 'risubard-persona-manager-width'
+    const MIN_MANAGER_WIDTH = 520
+    const MAX_MANAGER_WIDTH = 1080
+    let managerWidth = $state(672)
+    let stopManagerResize: (() => void) | null = null
 
     function close() {
         openPersonaManager.set(false)
     }
+
+    function normalizeManagerWidth(value: number): number {
+        if (!Number.isFinite(value)) return 672
+        const viewportMaximum = Math.max(MIN_MANAGER_WIDTH, window.innerWidth - 32)
+        return Math.min(MAX_MANAGER_WIDTH, viewportMaximum, Math.max(MIN_MANAGER_WIDTH, Math.round(value)))
+    }
+
+    function persistManagerWidth(): void {
+        managerWidth = normalizeManagerWidth(managerWidth)
+        localStorage.setItem(PERSONA_MANAGER_WIDTH_KEY, String(managerWidth))
+    }
+
+    function startManagerResize(event: PointerEvent): void {
+        event.preventDefault()
+        const startX = event.clientX
+        const startWidth = managerWidth
+        stopManagerResize?.()
+
+        const update = (moveEvent: PointerEvent) => {
+            managerWidth = normalizeManagerWidth(startWidth + moveEvent.clientX - startX)
+        }
+        const stop = () => {
+            window.removeEventListener('pointermove', update)
+            window.removeEventListener('pointerup', stop)
+            persistManagerWidth()
+            stopManagerResize = null
+        }
+        stopManagerResize = stop
+        window.addEventListener('pointermove', update)
+        window.addEventListener('pointerup', stop, { once: true })
+    }
+
+    function resizeManagerByKeyboard(event: KeyboardEvent): void {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+        event.preventDefault()
+        managerWidth = normalizeManagerWidth(
+            managerWidth + (event.key === 'ArrowRight' ? 24 : -24),
+        )
+        persistManagerWidth()
+    }
+
+    onMount(() => {
+        const storedWidth = Number(localStorage.getItem(PERSONA_MANAGER_WIDTH_KEY))
+        if (storedWidth) managerWidth = normalizeManagerWidth(storedWidth)
+    })
+
+    onDestroy(() => stopManagerResize?.())
 </script>
 
 <div class="persona-manager-backdrop">
-    <dialog open class="persona-manager" aria-labelledby="persona-manager-title">
+    <dialog open class="persona-manager" style={`--persona-manager-width: ${managerWidth}px`} aria-labelledby="persona-manager-title">
         <header>
-            <div>
-                <span>{language.settingsWorkspace.personaManager.eyebrow}</span>
+            <div class="persona-manager-title">
                 <h1 id="persona-manager-title">{language.persona}</h1>
+                <button
+                    class="help-button"
+                    aria-label={language.settingsWorkspace.personaManager.help}
+                    title={language.settingsWorkspace.personaManager.help}
+                    use:tooltip={language.settingsWorkspace.personaManager.help}
+                    onclick={() => alertMd(language.settingsWorkspace.personaManager.help)}
+                >
+                    <CircleQuestionMarkIcon size={16} />
+                </button>
             </div>
-            <button aria-label={language.settingsWorkspace.personaManager.close} onclick={close}>
+            <button class="close-button" aria-label={language.settingsWorkspace.personaManager.close} title={language.settingsWorkspace.personaManager.close} onclick={close}>
                 <XIcon size={20} />
             </button>
         </header>
         <div class="persona-manager-content">
             <PersonaSettings embedded />
         </div>
+        <button
+            data-persona-manager-resizer
+            class="persona-manager-resizer"
+            aria-label={language.settingsWorkspace.personaManager.resizeWindow}
+            title={language.settingsWorkspace.personaManager.resizeWindow}
+            use:tooltip={language.settingsWorkspace.personaManager.resizeWindow}
+            onpointerdown={startManagerResize}
+            onkeydown={resizeManagerByKeyboard}
+        ><span></span></button>
     </dialog>
 </div>
 
@@ -39,8 +112,9 @@
     }
 
     .persona-manager {
+        position: relative;
         margin: 0;
-        width: min(42rem, calc(100vw - 2rem));
+        width: min(var(--persona-manager-width), calc(100vw - 2rem));
         height: calc(100dvh - 2rem);
         display: flex;
         flex-direction: column;
@@ -60,21 +134,19 @@
         border-bottom: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 68%, transparent);
     }
 
-    header span {
-        color: var(--risu-theme-textcolor2);
-        font-size: .66rem;
-        font-weight: 700;
-        letter-spacing: .08em;
-        text-transform: uppercase;
+    .persona-manager-title {
+        display: flex;
+        align-items: center;
+        gap: .4rem;
     }
 
     header h1 {
-        margin: .2rem 0 0;
+        margin: 0;
         font-size: 1.35rem;
         font-weight: 700;
     }
 
-    header button {
+    .close-button {
         width: 2.35rem;
         height: 2.35rem;
         display: grid;
@@ -83,15 +155,52 @@
         color: var(--risu-theme-textcolor2);
     }
 
-    header button:hover {
+    .close-button:hover,
+    .help-button:hover {
         color: var(--risu-theme-textcolor);
         background: color-mix(in srgb, var(--risu-theme-selected) 65%, transparent);
+    }
+
+    .help-button {
+        width: 1.75rem;
+        height: 1.75rem;
+        display: grid;
+        place-items: center;
+        border-radius: .45rem;
+        color: var(--risu-theme-textcolor2);
     }
 
     .persona-manager-content {
         flex: 1;
         overflow-y: auto;
         padding: 1.5rem;
+    }
+
+    .persona-manager-resizer {
+        position: absolute;
+        top: 4.6rem;
+        right: 0;
+        bottom: .75rem;
+        z-index: 3;
+        width: .75rem;
+        display: grid;
+        place-items: center;
+        cursor: col-resize;
+        touch-action: none;
+    }
+
+    .persona-manager-resizer span {
+        width: .2rem;
+        height: 3rem;
+        border-radius: 999px;
+        background: var(--risu-theme-darkborderc);
+        transition: height .15s ease, background .15s ease;
+    }
+
+    .persona-manager-resizer:hover span,
+    .persona-manager-resizer:focus-visible span {
+        height: 4rem;
+        background: var(--risu-theme-borderc);
     }
 
     @media (max-width: 600px) {
@@ -104,6 +213,10 @@
             height: 100dvh;
             border: 0;
             border-radius: 0;
+        }
+
+        .persona-manager-resizer {
+            display: none;
         }
     }
 </style>

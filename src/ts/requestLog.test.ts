@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // The collector reaches globalApi only for the auth header; stub it so the
@@ -19,7 +20,7 @@ vi.mock('./storage/database.svelte', () => ({
     getDatabase: () => ({ requestLogEnabled: loggingEnabled }),
 }))
 
-const { createRequestLogScope } = await import('./requestLog')
+const { createRequestLogScope, REQUEST_LOG_RECORDED_EVENT } = await import('./requestLog')
 
 // Captures what the collector POSTs to /api/request-logs.
 let posted: any[][]
@@ -51,8 +52,33 @@ function jsonResponse(body: string, status = 200): Response {
 }
 
 describe('createRequestLogScope', () => {
+    it('announces the owning chats only after rows are persisted', async () => {
+        const recorded = vi.fn()
+        window.addEventListener(REQUEST_LOG_RECORDED_EVENT, recorded, { once: true })
+        const scope = createRequestLogScope({
+            category: 'llm',
+            source: 'main',
+            sessionChatId: 'chat-persisted',
+        })
+        const wrapped = scope.wrap(async () => jsonResponse('{}'))
+        await (await wrapped('https://x.test/v1', { method: 'POST', body: '{}' })).text()
+
+        expect(recorded).not.toHaveBeenCalled()
+        await scope.close()
+
+        expect(recorded).toHaveBeenCalledTimes(1)
+        expect((recorded.mock.calls[0][0] as CustomEvent).detail).toEqual({
+            sessionChatIds: ['chat-persisted'],
+        })
+    })
+
     it('records url, body, status and duration of a plain request', async () => {
-        const scope = createRequestLogScope({ category: 'llm', source: 'main', chatId: 'gen-1' })
+        const scope = createRequestLogScope({
+            category: 'llm',
+            source: 'main',
+            purpose: 'chat-response',
+            chatId: 'gen-1',
+        })
         const wrapped = scope.wrap(async () => jsonResponse('{"ok":true}'))
 
         const res = await wrapped('https://api.example.com/v1/chat', {
@@ -68,6 +94,7 @@ describe('createRequestLogScope', () => {
         expect(entry.url).toBe('https://api.example.com/v1/chat')
         expect(entry.category).toBe('llm')
         expect(entry.source).toBe('main')
+        expect(entry.purpose).toBe('chat-response')
         expect(entry.chatId).toBe('gen-1')
         expect(entry.status).toBe(200)
         expect(entry.success).toBe(true)

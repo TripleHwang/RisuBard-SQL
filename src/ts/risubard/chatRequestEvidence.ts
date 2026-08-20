@@ -4,6 +4,7 @@ import {
     type RequestLogRoute,
     type RequestLogSource,
 } from 'src/ts/requestLog'
+import { requestPurposeLabel, type RequestPurpose } from 'src/ts/requestPurpose'
 import {
     reconcileInjectionManifest,
     type RequestInjectionKind,
@@ -11,21 +12,12 @@ import {
 } from 'src/ts/status/requestStatus'
 import type { Message } from 'src/ts/storage/database.svelte'
 
-export interface LegacyInputComposition {
-    mode: 'estimated' | 'excluded' | 'unchanged' | 'unavailable'
-    inputTokens?: number
-    activeMessageCount?: number
-    recentMessageCount?: number
-    fullChatTokens?: number
-    recentChatTokens?: number
-    removedWikiTokens?: number
-}
-
 export interface ChatRequestEvidenceEntry {
     id: number
     timestamp: string
     generationId?: string
     source: RequestLogSource
+    purpose?: RequestPurpose
     model?: string
     provider?: string
     outcome: 'done' | 'failed' | 'aborted'
@@ -39,12 +31,13 @@ export interface ChatRequestEvidenceEntry {
     cachedTokens?: number
     reasoningTokens?: number
     injectionManifest?: RequestInjectionManifest
-    legacyInput?: LegacyInputComposition
+    selectedHistoryMessageCount?: number
 }
 
 export interface ChatRequestEvidence {
     schemaVersion: 1
     generatedAt: string
+    timeZone?: string
     chatId: string
     requestCount: number
     totals: {
@@ -52,9 +45,10 @@ export interface ChatRequestEvidence {
         outputTokens: number
         cachedTokens: number
         reasoningTokens: number
-        legacyInputTokens?: number
-        inputTokenSavings?: number
-        legacyInputSavingsRate?: number
+    }
+    retainedAssistant?: {
+        responseCount: number
+        bodyTokens: number
     }
     requests: ChatRequestEvidenceEntry[]
 }
@@ -88,141 +82,56 @@ const injectionLabels: Record<RequestInjectionKind, string> = {
 
 const number = (value: number | undefined) => value?.toLocaleString('ko-KR') ?? '확인 불가'
 
+function localTimeZone(): string {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+}
+
+function safeTimeZone(value: string | undefined): string {
+    const candidate = value || localTimeZone()
+    try {
+        new Intl.DateTimeFormat('en', { timeZone: candidate }).format(0)
+        return candidate
+    }
+    catch {
+        return 'UTC'
+    }
+}
+
+function localTimestamp(value: string, timeZone: string): string {
+    const parts = new Intl.DateTimeFormat('en', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+    }).formatToParts(new Date(value))
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+        parts.find((item) => item.type === type)?.value ?? '00'
+    return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`
+}
+
+function timeZoneOffset(value: string, timeZone: string): string {
+    const name = new Intl.DateTimeFormat('en', {
+        timeZone,
+        timeZoneName: 'longOffset',
+    }).formatToParts(new Date(value)).find(
+        (item) => item.type === 'timeZoneName'
+    )?.value ?? 'GMT'
+    return name === 'GMT' ? 'UTC+00:00' : name.replace('GMT', 'UTC')
+}
+
 function sum(entries: RequestLogEntry[], key: 'inputTokens' | 'outputTokens' | 'cachedTokens' | 'reasoningTokens') {
     return entries.reduce((total, entry) => total + Math.max(0, entry[key] ?? 0), 0)
-}
-
-const legacyMessageOverheadTokens = 4
-
-async function countLegacyTextTokens(text: string): Promise<number> {
-    const { encodeWithTokenizer } = await import('src/ts/tokenizer')
-    return (await encodeWithTokenizer(text, 'tik')).length
-}
-
-function messageId(message: Message): string | undefined {
-    return message.chatId ?? message.generationInfo?.generationId
-}
-
-function activeMessagesBefore(messages: readonly Message[], end: number): Message[] {
-    const active: Message[] = []
-    for (let index = end - 1; index >= 0; index--) {
-        const message = messages[index]
-        if (message.disabled === true || message.isComment) continue
-        if (message.disabled === 'allBefore') break
-        active.unshift(message)
-    }
-    return active
-}
-
-function isWikiOnlyRequest(source: RequestLogSource): boolean {
-    return source === 'memory' || source === 'wiki-admin'
-}
-
-/**
- * Adds a no-wiki/full-chat counterfactual when evidence is exported. Message
- * bodies are tokenized once locally; this never runs in the generation path.
- */
-export async function addLegacyInputEstimates(
-    evidence: ChatRequestEvidence,
-    messages: readonly Message[],
-    countText: (text: string) => Promise<number> = countLegacyTextTokens,
-): Promise<ChatRequestEvidence> {
-    const messageTokens = new Map<Message, number>()
-    for (const message of messages) {
-        const tokens = await countText(message.data)
-        messageTokens.set(message, Math.max(0, Math.round(tokens)) + legacyMessageOverheadTokens)
-    }
-
-    const requests = evidence.requests.map((request): ChatRequestEvidenceEntry => {
-        if (isWikiOnlyRequest(request.source)) {
-            return { ...request, legacyInput: { mode: 'excluded', inputTokens: 0 } }
-        }
-        if (request.source !== 'main') {
-            return {
-                ...request,
-                legacyInput: request.inputTokens === undefined
-                    ? { mode: 'unavailable' }
-                    : { mode: 'unchanged', inputTokens: request.inputTokens },
-            }
-        }
-        const assistantIndex = messages.findIndex((message) =>
-            message.role === 'char'
-            && request.generationId !== undefined
-            && (message.chatId === request.generationId
-                || message.generationInfo?.generationId === request.generationId)
-        )
-        if (assistantIndex < 0 || request.inputTokens === undefined) {
-            return { ...request, legacyInput: { mode: 'unavailable' } }
-        }
-        const assistant = messages[assistantIndex]
-        const active = activeMessagesBefore(messages, assistantIndex)
-        const recentIds = new Set(
-            assistant.generationInfo?.risuBardContext?.recentMessages.map(
-                (message) => message.id
-            ) ?? []
-        )
-        const recent = active.filter((message) => {
-            const id = messageId(message)
-            return id !== undefined && recentIds.has(id)
-        })
-        const total = (items: readonly Message[]) => items.reduce(
-            (sum, message) => sum + (messageTokens.get(message) ?? 0),
-            0
-        )
-        const fullChatTokens = total(active)
-        const recentChatTokens = total(recent)
-        const manifestWikiTokens = request.injectionManifest?.items.reduce(
-            (sum, item) => sum + (item.kind === 'wiki' ? Math.max(0, item.tokens) : 0),
-            0
-        )
-        const removedWikiTokens = Math.round(manifestWikiTokens && manifestWikiTokens > 0
-            ? manifestWikiTokens
-            : assistant.generationInfo?.risuBardContext?.selectedTokens ?? 0)
-        const inputTokens = Math.max(
-            0,
-            request.inputTokens - removedWikiTokens
-                + Math.max(0, fullChatTokens - recentChatTokens)
-        )
-        return {
-            ...request,
-            legacyInput: {
-                mode: 'estimated',
-                activeMessageCount: active.length,
-                recentMessageCount: recent.length,
-                fullChatTokens,
-                recentChatTokens,
-                removedWikiTokens,
-                inputTokens,
-            },
-        }
-    })
-    const complete = requests.every((request) => request.legacyInput?.inputTokens !== undefined)
-    const legacyInputTokens = complete
-        ? requests.reduce((total, request) => total + request.legacyInput!.inputTokens!, 0)
-        : undefined
-    const inputTokenSavings = legacyInputTokens === undefined
-        ? undefined
-        : legacyInputTokens - evidence.totals.inputTokens
-    return {
-        ...evidence,
-        totals: {
-            ...evidence.totals,
-            ...(legacyInputTokens === undefined ? {} : {
-                legacyInputTokens,
-                inputTokenSavings,
-                legacyInputSavingsRate: legacyInputTokens > 0
-                    ? inputTokenSavings! / legacyInputTokens
-                    : 0,
-            }),
-        },
-        requests,
-    }
 }
 
 export function buildChatRequestEvidence(
     chatId: string,
     entries: RequestLogEntry[],
     generatedAt = Date.now(),
+    timeZone = localTimeZone(),
 ): ChatRequestEvidence {
     const requests = entries.map((entry): ChatRequestEvidenceEntry => ({
         id: entry.id,
@@ -231,6 +140,7 @@ export function buildChatRequestEvidence(
             ? { generationId: entry.generationId ?? entry.chatId }
             : {}),
         source: entry.source,
+        ...(entry.purpose ? { purpose: entry.purpose } : {}),
         ...(entry.model ? { model: entry.model } : {}),
         ...(entry.provider ? { provider: entry.provider } : {}),
         outcome: entry.aborted ? 'aborted' : entry.success ? 'done' : 'failed',
@@ -253,6 +163,7 @@ export function buildChatRequestEvidence(
     return {
         schemaVersion: 1,
         generatedAt: new Date(generatedAt).toISOString(),
+        timeZone: safeTimeZone(timeZone),
         chatId,
         requestCount: requests.length,
         totals: {
@@ -274,6 +185,7 @@ export function buildLegacyChatRequestEvidence(
     chatId: string,
     entries: LegacyChatGenerationEvidence[],
     generatedAt = Date.now(),
+    timeZone = localTimeZone(),
 ): ChatRequestEvidence {
     const requests: ChatRequestEvidenceEntry[] = entries.map((entry, index) => {
         const inputTokens = entry.inputTokens === undefined
@@ -303,6 +215,7 @@ export function buildLegacyChatRequestEvidence(
             timestamp: new Date(entry.timestamp ?? generatedAt).toISOString(),
             ...(entry.generationId ? { generationId: entry.generationId } : {}),
             source: 'main',
+            purpose: 'chat-response',
             ...(entry.model ? { model: entry.model } : {}),
             outcome: 'done',
             streaming: false,
@@ -325,6 +238,7 @@ export function buildLegacyChatRequestEvidence(
     return {
         schemaVersion: 1,
         generatedAt: new Date(generatedAt).toISOString(),
+        timeZone: safeTimeZone(timeZone),
         chatId,
         requestCount: requests.length,
         totals: {
@@ -334,6 +248,48 @@ export function buildLegacyChatRequestEvidence(
             reasoningTokens: 0,
         },
         requests,
+    }
+}
+
+async function countRetainedTextTokens(text: string): Promise<number> {
+    const { encodeWithTokenizer } = await import('src/ts/tokenizer')
+    return (await encodeWithTokenizer(text, 'tik')).length
+}
+
+/** Adds current-chat totals without counting user text or discarded swipes. */
+export async function addRetainedAssistantSummary(
+    evidence: ChatRequestEvidence,
+    messages: readonly Message[],
+    countText: (text: string) => Promise<number> = countRetainedTextTokens,
+): Promise<ChatRequestEvidence> {
+    const retained = messages.filter(
+        (message) => message.role === 'char' && !message.isComment
+    )
+    const bodyTokens = (await Promise.all(
+        retained.map((message) => countText(message.data))
+    )).reduce((total, tokens) => total + Math.max(0, Math.round(tokens)), 0)
+    const byGenerationId = new Map<string, Message>()
+    for (const message of retained) {
+        if (message.chatId) byGenerationId.set(message.chatId, message)
+        if (message.generationInfo?.generationId) {
+            byGenerationId.set(message.generationInfo.generationId, message)
+        }
+    }
+    return {
+        ...evidence,
+        retainedAssistant: {
+            responseCount: retained.length,
+            bodyTokens,
+        },
+        requests: evidence.requests.map((request) => {
+            const recentMessages = request.generationId
+                ? byGenerationId.get(request.generationId)
+                    ?.generationInfo?.risuBardContext?.recentMessages
+                : undefined
+            return recentMessages
+                ? { ...request, selectedHistoryMessageCount: recentMessages.length }
+                : request
+        }),
     }
 }
 
@@ -347,19 +303,20 @@ function escapeTable(value: string | undefined): string {
 }
 
 export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence): string {
+    const timeZone = safeTimeZone(evidence.timeZone)
     const lines = [
         '# RisuBard 채팅 요청 증거 보고서',
         '',
-        `- 생성 시각: ${evidence.generatedAt}`,
+        `- 표시 시간대: ${timeZone} (${timeZoneOffset(evidence.generatedAt, timeZone)})`,
+        `- 생성 시각: ${localTimestamp(evidence.generatedAt, timeZone)}`,
         `- 채팅 ID: \`${evidence.chatId}\``,
         `- 요청 수: ${evidence.requestCount.toLocaleString('ko-KR')}`,
         `- 총 입력 토큰: ${evidence.totals.inputTokens.toLocaleString('ko-KR')}`,
         `- 총 출력 토큰: ${evidence.totals.outputTokens.toLocaleString('ko-KR')}`,
-        ...(evidence.totals.legacyInputTokens === undefined ? [] : [
-            `- 총 입력 토큰 (가상 레거시): ${evidence.totals.legacyInputTokens.toLocaleString('ko-KR')}`,
-            `- 입력 토큰 절감량: ${number(evidence.totals.inputTokenSavings)}`,
-            `- 입력 토큰 절감률: ${((evidence.totals.legacyInputSavingsRate ?? 0) * 100).toFixed(1)}%`,
-        ]),
+        ...(evidence.retainedAssistant ? [
+            `- 리롤 제외 누적 assistant 답변 수: ${evidence.retainedAssistant.responseCount.toLocaleString('ko-KR')}`,
+            `- 리롤 제외 누적 assistant 본문 토큰: ${evidence.retainedAssistant.bodyTokens.toLocaleString('ko-KR')}`,
+        ] : []),
         '',
         '> 이 보고서는 요청 메타데이터만 포함합니다. 프롬프트, 응답 본문, 헤더와 인증 정보는 제외됩니다.',
     ]
@@ -371,9 +328,10 @@ export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence)
             '',
             '| 항목 | 값 |',
             '| --- | --- |',
-            `| 시각 | ${request.timestamp} |`,
+            `| 시각 | ${localTimestamp(request.timestamp, timeZone)} |`,
             `| 생성 ID | ${escapeTable(request.generationId)} |`,
-            `| 종류 | ${request.source} |`,
+            `| 요청 목적 | ${requestPurposeLabel(request.purpose, request.source)} |`,
+            `| 로그 종류 | ${request.source} |`,
             `| 모델 | ${escapeTable(request.model)} |`,
             `| 공급자 | ${escapeTable(request.provider)} |`,
             `| 결과 | ${request.outcome} |`,
@@ -383,6 +341,9 @@ export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence)
             `| 출력 토큰 | ${number(request.outputTokens)} |`,
             `| 추론 토큰 | ${number(request.reasoningTokens)} |`,
             `| 캐시 토큰 | ${number(request.cachedTokens)} |`,
+            ...(request.selectedHistoryMessageCount === undefined ? [] : [
+                `| 선택된 채팅 메시지 | ${number(request.selectedHistoryMessageCount)} |`,
+            ]),
         )
         if (request.injectionManifest) {
             lines.push(
@@ -398,30 +359,6 @@ export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence)
                     return `| ${label} | ${number(item.tokens)} |`
                 }),
             )
-        }
-        if (request.legacyInput) {
-            lines.push('', '### 레거시 입력 구성', '')
-            if (request.legacyInput.mode === 'estimated') {
-                lines.push(
-                    '| 항목 | 값 |',
-                    '| --- | ---: |',
-                    `| 전체 활성 메시지 | ${number(request.legacyInput.activeMessageCount)} |`,
-                    `| 현재 최근 메시지 | ${number(request.legacyInput.recentMessageCount)} |`,
-                    `| 전체 채팅 토큰 | ${number(request.legacyInput.fullChatTokens)} |`,
-                    `| 현재 최근 채팅 토큰 | ${number(request.legacyInput.recentChatTokens)} |`,
-                    `| 제외한 BardWiki 토큰 | ${number(request.legacyInput.removedWikiTokens)} |`,
-                    `| 가상 레거시 입력 토큰 | ${number(request.legacyInput.inputTokens)} |`,
-                )
-            }
-            else if (request.legacyInput.mode === 'excluded') {
-                lines.push('위키 없는 레거시 기준에서는 발생하지 않는 요청입니다.')
-            }
-            else if (request.legacyInput.mode === 'unchanged') {
-                lines.push(`레거시 전환의 영향을 받지 않습니다. 입력 토큰: ${number(request.legacyInput.inputTokens)}`)
-            }
-            else {
-                lines.push('연결된 생성 메시지 또는 입력 토큰이 없어 계산할 수 없습니다.')
-            }
         }
     }
     return `${lines.join('\n')}\n`

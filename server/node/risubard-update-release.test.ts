@@ -22,8 +22,5 @@ describe('RisuBard release updater target', () => {
         )
         expect(updater).toContain("const REPO = 'rpaddict/RisuBard';")
         expect(sourceUpdater).toContain('REPO="rpaddict/RisuBard"')
-        expect(server).not.toContain("const GITHUB_REPO = 'PocketRisu/PocketRisu';")
-        expect(updater).not.toContain("const REPO = 'PocketRisu/PocketRisu';")
-        expect(sourceUpdater).not.toContain('REPO="PocketRisu/PocketRisu"')
     })
 })

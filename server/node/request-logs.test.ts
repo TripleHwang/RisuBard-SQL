@@ -21,6 +21,7 @@ function entry(overrides: Record<string, unknown> = {}) {
         timestamp: Date.now(),
         category: 'llm',
         source: 'main',
+        purpose: 'chat-response',
         url: 'https://api.example.com/v1/chat/completions',
         method: 'POST',
         status: 200,
@@ -141,10 +142,11 @@ describe('insert and query', () => {
     })
 
     it('falls back to safe defaults for unknown category and source', () => {
-        logs.addRequestLogBatch([entry({ category: 'bogus', source: 'nope' })])
+        logs.addRequestLogBatch([entry({ category: 'bogus', source: 'nope', purpose: 'nope' })])
         const [row] = logs.queryRequestLogs({})
         expect(row.category).toBe('other')
         expect(row.source).toBe('other')
+        expect(row.purpose).toBeNull()
     })
 })
 

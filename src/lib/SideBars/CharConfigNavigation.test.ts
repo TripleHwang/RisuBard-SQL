@@ -69,6 +69,26 @@ describe('character configuration navigation', () => {
         expect(languageKorean.share).toBe('공유')
     })
 
+    test('closes character management safely when deletion clears the selection', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const charConfig = source('src/lib/SideBars/CharConfig.svelte')
+        expect(sidebar).toMatch(/if \(\$selectedCharID < 0\)\s+characterManageOpen = false/)
+        expect(charConfig).toContain('let currentCharacter = $derived(DBState.db.characters[$selectedCharID])')
+        expect(charConfig).toContain('{#if currentCharacter}')
+        expect(charConfig.match(/if \(!currentCharacter\) return/g)?.length).toBeGreaterThanOrEqual(9)
+    })
+
+    test('does not show trashed characters in recent or mobile character lists', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const mobileCharacters = source('src/lib/Mobile/MobileCharacters.svelte')
+        expect(sidebar).toContain('.filter((c) => !c.trashTime)')
+        expect(mobileCharacters).toContain('.filter((c) => !c.trashTime)')
+        const recentChars = sidebar.slice(sidebar.indexOf('let recentChars'), sidebar.indexOf('let recentVisible'))
+        const sortChar = mobileCharacters.slice(mobileCharacters.indexOf('function sortChar'), mobileCharacters.indexOf('</script>'))
+        expect(recentChars.indexOf('.map(')).toBeLessThan(recentChars.indexOf('.filter('))
+        expect(sortChar.indexOf('.map(')).toBeLessThan(sortChar.indexOf('.filter('))
+    })
+
     test('uses the requested local Solar icons for management and developer tools', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         for (const [name, asset] of [

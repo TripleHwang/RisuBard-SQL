@@ -120,6 +120,80 @@ afterEach(async () => {
 })
 
 describe('RisuBardMemoryWiki', () => {
+    test('opens detailed Memory Wiki help from the title row', async () => {
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown',
+            wikiPath: 'C:\\wiki',
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+            documents: [],
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: { open: true, characterId: 'character', chatId: 'chat' },
+        })
+
+        let helpButton: HTMLButtonElement | null = null
+        await vi.waitFor(() => {
+            helpButton = document.querySelector('[data-memory-help]')
+            expect(helpButton).not.toBeNull()
+        })
+        expect(document.body.textContent).not.toContain(
+            '현재 메모리를 살펴보고 명시적인 작가 변경을 준비할 수 있습니다.'
+        )
+        expect(helpButton?.previousElementSibling?.tagName).toBe('STRONG')
+
+        helpButton?.click()
+        await vi.waitFor(() => {
+            const help = document.querySelector('[data-memory-help-content]')
+            expect(help).not.toBeNull()
+            expect(help?.textContent).toContain('자동 분석과 추가 분석')
+            expect(help?.textContent).toContain('문서 편집과 안전장치')
+            expect(help?.textContent).toContain('위키 관리자 명령')
+            expect(help?.textContent).toContain('컨텍스트 정책')
+        })
+    })
+
+    test('coordinates the portrait command panel with editor focus mode', async () => {
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown',
+            wikiPath: 'C:\\wiki',
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+            documents: [],
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: {
+                open: true,
+                characterId: 'character',
+                chatId: 'chat',
+                onExecuteWikiCommand: async () => ({ applied: [], failed: [] }),
+            },
+        })
+
+        let dock: HTMLElement | null = null
+        let commandPane: HTMLElement | null = null
+        await vi.waitFor(() => {
+            dock = document.querySelector('[data-memory-wiki-dock]')
+            commandPane = document.querySelector('[data-wiki-command-pane]')
+            expect(dock).not.toBeNull()
+            expect(commandPane).not.toBeNull()
+        })
+        expect(commandPane?.dataset.commandExpanded).toBe('false')
+        expect(dock?.dataset.editorFocus).toBe('false')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-toggle-command]'
+        )?.click()
+        await tick()
+        expect(commandPane?.dataset.commandExpanded).toBe('true')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-editor-focus]'
+        )?.click()
+        await tick()
+        expect(dock?.dataset.editorFocus).toBe('true')
+    })
+
     test('replaces text across the wiki and persisted current chat', async () => {
         const original = {
             id: 'character.gilbert', type: 'character' as const,
@@ -359,7 +433,7 @@ describe('RisuBardMemoryWiki', () => {
         })
     })
 
-    test('keeps chat history policy out of the wiki editor menu', async () => {
+    test('keeps chat history policy out of the wiki settings menu', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown',
             wikiPath: 'C:\\wiki',
@@ -373,18 +447,24 @@ describe('RisuBardMemoryWiki', () => {
         })
 
         await vi.waitFor(() => {
-            expect(document.body.querySelector('[data-wiki-editor-menu]')).not.toBeNull()
+            expect(document.body.querySelector('[data-memory-settings]')).not.toBeNull()
         })
         expect(document.body.querySelector('[data-memory-recent-message-count]')).toBeNull()
         expect(document.body.querySelector('[data-response-recent-message-count]')).toBeNull()
         expect(document.body.querySelector('[data-response-include-user-messages]')).toBeNull()
     })
 
-    test('replaces the absolute wiki path with an editor menu bar', async () => {
+    test('uses one compact top navigation and moves document count into the sidebar', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown',
             wikiPath: 'C:\\Users\\reader\\RisuBard\\wiki',
-            documents: [],
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+            documents: [{
+                id: 'character.reader', type: 'character', status: 'active',
+                title: 'Reader', relativePath: 'characters/reader.md',
+                sourceMessageIds: [], updated: 'now', content: '# Reader',
+                links: [], contextMode: 'auto', contentHash: 'hash',
+            }],
         })
         const target = document.createElement('div')
         document.body.appendChild(target)
@@ -398,16 +478,31 @@ describe('RisuBardMemoryWiki', () => {
         })
 
         await vi.waitFor(() => {
-            const menu = document.body.querySelector('[data-wiki-editor-menu]')
-            expect(menu?.textContent).toContain('파일')
-            expect(menu?.textContent).toContain('편집')
-            expect(menu?.textContent).toContain('찾기')
-            expect(menu?.textContent).toContain('보기')
-            expect(menu?.textContent).toContain('설정')
+            const views = document.body.querySelector('.dock-views')
+            expect(views).not.toBeNull()
+            expect(views?.querySelector('[data-risubard-force-wiki-update]'))
+                .not.toBeNull()
+            expect(views?.querySelector('[data-memory-settings]')).not.toBeNull()
+            expect(document.body.querySelector('[data-wiki-editor-menu]')).toBeNull()
+            expect(document.body.querySelector('.ledger-toolbar')).toBeNull()
+            expect(document.body.querySelector('.wiki-health')?.textContent)
+                .toMatch(/1\s*문서.*끊어진 링크 0/)
+            expect(document.body.textContent).not.toContain('Markdown 원본')
             expect(document.body.textContent).not.toContain(
                 'C:\\Users\\reader\\RisuBard\\wiki'
             )
         })
+
+        const forceUpdate = document.body.querySelector(
+            '[data-risubard-force-wiki-update]'
+        )!
+        const workspace = document.body.querySelector('[data-memory-view="workspace"]')!
+        const log = document.body.querySelector('[data-memory-view="log"]')!
+        const settings = document.body.querySelector('[data-memory-settings]')!
+        expect(forceUpdate.compareDocumentPosition(workspace)
+            & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+        expect(log.compareDocumentPosition(settings)
+            & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     })
 
     test('shows the current v2 graph instead of the v1 ledger', async () => {

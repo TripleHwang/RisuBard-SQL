@@ -1,19 +1,19 @@
 <p align="center">
-  <img src="../assets/pocketrisu-banner-1024.png" alt="PocketRisu — Nền tảng Trò chuyện Nhập vai AI Tự lưu trữ" width="900" />
+  <img src="../assets/risubard-banner-1024.png" alt="RisuBard — Nền tảng Trò chuyện Nhập vai AI Tự lưu trữ" width="900" />
 </p>
 
-<h1 align="center">PocketRisu — Trò chuyện Nhập vai AI Tự lưu trữ</h1>
+<h1 align="center">RisuBard — Trò chuyện Nhập vai AI Tự lưu trữ</h1>
 
 <p align="center">
   <a href="../README.md">English</a> | <a href="README.ko.md">한국어</a> | <a href="README.de.md">Deutsch</a> | <a href="README.cn.md">简体中文</a> | <a href="README.es.md">Español</a> | <strong>Tiếng Việt</strong> | <a href="README.zh-Hant.md">繁體中文</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/PocketRisu/PocketRisu/releases">
-    <img alt="Latest Release" src="https://img.shields.io/github/v/release/PocketRisu/PocketRisu?label=latest" />
+  <a href="https://github.com/rpaddict/RisuBard/releases">
+    <img alt="Latest Release" src="https://img.shields.io/github/v/release/rpaddict/RisuBard?label=latest" />
   </a>
   <a href="../LICENSE">
-    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/PocketRisu/PocketRisu" />
+    <img alt="License: GPL-3.0" src="https://img.shields.io/github/license/rpaddict/RisuBard" />
   </a>
   <a href="https://nodejs.org/">
     <img alt="Node" src="https://img.shields.io/badge/node-≥22.12-brightgreen" />
@@ -22,7 +22,7 @@
 
 > 🌐 README này được dịch bằng máy. Để có thông tin chính xác nhất, vui lòng tham khảo phiên bản [tiếng Anh](../README.md) hoặc [tiếng Hàn](README.ko.md). Hoan nghênh đóng góp.
 
-PocketRisu là một nền tảng trò chuyện nhập vai AI tự lưu trữ, chạy trên PC hoặc máy chủ cá nhân của bạn và truy cập từ PC, máy tính bảng và điện thoại thông minh qua trình duyệt web.
+RisuBard là một nền tảng trò chuyện nhập vai AI tự lưu trữ, chạy trên PC hoặc máy chủ cá nhân của bạn và truy cập từ PC, máy tính bảng và điện thoại thông minh qua trình duyệt web.
 
 <p align="center">
   <table>
@@ -48,7 +48,7 @@ PocketRisu là một nền tảng trò chuyện nhập vai AI tự lưu trữ, c
 
 ## Tương thích với RisuAI
 
-PocketRisu được phát triển từ [RisuAI](https://github.com/kwaroran/RisuAI), được tối ưu hóa cho môi trường tự lưu trữ. Dữ liệu RisuAI hiện có có thể được di chuyển toàn bộ, và tất cả tài sản trong hệ sinh thái RisuAI vẫn có thể sử dụng nguyên trạng.
+RisuBard được phát triển từ [RisuAI](https://github.com/kwaroran/RisuAI), được tối ưu hóa cho môi trường tự lưu trữ. Dữ liệu RisuAI hiện có có thể được di chuyển toàn bộ, và tất cả tài sản trong hệ sinh thái RisuAI vẫn có thể sử dụng nguyên trạng.
 
 - Tải xuống nhân vật RisuRealm
 - Thẻ nhân vật (`.charx`, `.risum`, `.risup`, v.v.)
@@ -77,8 +77,7 @@ PocketRisu được phát triển từ [RisuAI](https://github.com/kwaroran/Risu
 
 ## Cộng đồng & Liên hệ
 
-- Báo cáo lỗi / yêu cầu tính năng: [GitHub Issues](https://github.com/PocketRisu/PocketRisu/issues)
-- Email: contact@pocketrisu.com
+- Báo cáo lỗi / yêu cầu tính năng: [GitHub Issues](https://github.com/rpaddict/RisuBard/issues)
 
 
 ## Giấy phép

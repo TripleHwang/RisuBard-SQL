@@ -6,6 +6,7 @@
         FolderIcon,
         FolderOpenIcon,
         ImageIcon,
+        PencilIcon,
         PinIcon,
         SearchIcon,
         UserRoundIcon,
@@ -63,7 +64,10 @@
     let notice = $state('')
     let revision = $state(0)
     let cloning = $state(false)
+    let draggedCharacterId = $state('')
+    let dragOverFolderId = $state('')
     const imageCache = new Map<string, Promise<string | null>>()
+    const characterDragType = 'application/x-risubard-character-vault'
 
     let folders = $derived.by(() => {
         revision
@@ -133,6 +137,11 @@
             : [...selectedIds, id]
     }
 
+    function selectCard(event: MouseEvent, id: string) {
+        if (event.target instanceof Element && event.target.closest('button')) return
+        toggleSelected(id)
+    }
+
     function toggleAllVisible() {
         const visibleIds = visibleCharacters.map((item) => item.character.chaId)
         const visibleSet = new Set(visibleIds)
@@ -161,6 +170,67 @@
         commit(`${count}개 캐릭터 이동 완료`)
     }
 
+    function startCharacterDrag(event: DragEvent, id: string, name: string) {
+        if (!event.dataTransfer) return
+        if ((event.target as HTMLElement).closest('button')) {
+            event.preventDefault()
+            return
+        }
+        draggedCharacterId = id
+        event.dataTransfer.effectAllowed = 'move'
+        event.dataTransfer.setData('text/plain', name)
+        event.dataTransfer.setData(characterDragType, id)
+    }
+
+    function isCharacterDrag(event: DragEvent): boolean {
+        return event.dataTransfer?.types.includes(characterDragType) ?? false
+    }
+
+    function locationContainsCharacter(folderEntry: folder | null, id: string): boolean {
+        if (folderEntry) return folderEntry.data.includes(id)
+        return DBState.db.characterOrder.includes(id)
+    }
+
+    function dragCharacterOverLocation(event: DragEvent, folderEntry: folder | null) {
+        if (!isCharacterDrag(event)
+            || locationContainsCharacter(folderEntry, draggedCharacterId)) {
+            return
+        }
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+        dragOverFolderId = folderEntry?.id ?? '__unfiled__'
+    }
+
+    function leaveCharacterLocation(event: DragEvent, locationId: string) {
+        const next = event.relatedTarget
+        const location = event.currentTarget as HTMLElement
+        if (next instanceof Node && location.contains(next)) return
+        if (dragOverFolderId === locationId) dragOverFolderId = ''
+    }
+
+    function dropCharacterInLocation(event: DragEvent, folderEntry: folder | null) {
+        if (!isCharacterDrag(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+        const id = event.dataTransfer?.getData(characterDragType)
+            || draggedCharacterId
+        const character = DBState.db.characters.find((entry) => entry.chaId === id)
+        draggedCharacterId = ''
+        dragOverFolderId = ''
+        if (!character || locationContainsCharacter(folderEntry, id)) return
+        moveCharactersToVaultFolder(DBState.db, [id], folderEntry?.id ?? null)
+        selectedIds = selectedIds.filter((selectedId) => selectedId !== id)
+        commit(`${character.name} · ${folderEntry
+            ? `${folderEntry.name} 폴더로 이동`
+            : '미분류로 이동'}`)
+    }
+
+    function endCharacterDrag() {
+        draggedCharacterId = ''
+        dragOverFolderId = ''
+    }
+
     async function createFolder() {
         const name = await alertInput('새 폴더 이름', [], '새 폴더')
         if (!name) return
@@ -177,6 +247,17 @@
         if (!name || name === activeFolder.name) return
         activeFolder.name = name
         commit('폴더 이름 변경 완료')
+    }
+
+    async function renameCharacter(id: string) {
+        const character = DBState.db.characters.find((entry) => entry.chaId === id)
+        if (!character) return
+        const oldName = character.name
+        const value = await alertInput('캐릭터 이름 변경', [], oldName)
+        const name = value.trim()
+        if (!name || name === oldName) return
+        character.name = name
+        commit(`${oldName} → ${name} 이름 변경 완료`)
     }
 
     function recolorActiveFolder(color: string) {
@@ -398,14 +479,26 @@
             <button
                 type="button"
                 class:active={activeScope === '__unfiled__'}
+                class:drop-target={dragOverFolderId === '__unfiled__'}
                 onclick={() => activeScope = '__unfiled__'}
+                ondragover={(event) => dragCharacterOverLocation(event, null)}
+                ondragleave={(event) => leaveCharacterLocation(event, '__unfiled__')}
+                ondrop={(event) => dropCharacterInLocation(event, null)}
             >
                 <UserRoundIcon size={15} /><span>미분류</span>
                 <small>{DBState.db.characterOrder.filter((entry) => typeof entry === 'string').length}</small>
             </button>
-            <div class="folder-list">
+            <div class="folder-list" role="list">
                 {#each folders as folderEntry (folderEntry.id)}
-                    <div class="folder-row" style={`--folder-accent:${folderEntry.color || 'var(--color-borderc)'}`}>
+                    <div
+                        class="folder-row"
+                        role="listitem"
+                        class:drop-target={dragOverFolderId === folderEntry.id}
+                        style={`--folder-accent:${folderEntry.color || 'var(--color-borderc)'}`}
+                        ondragover={(event) => dragCharacterOverLocation(event, folderEntry)}
+                        ondragleave={(event) => leaveCharacterLocation(event, folderEntry.id)}
+                        ondrop={(event) => dropCharacterInLocation(event, folderEntry)}
+                    >
                         <button
                             type="button"
                             class:active={activeScope === folderEntry.id}
@@ -526,7 +619,29 @@
 
             <div class="character-grid" aria-label="캐릭터 목록">
                 {#each visibleCharacters as item (item.character.chaId)}
-                    <article class:selected={selectedIds.includes(item.character.chaId)}>
+                    <div
+                        class="character-card"
+                        role="checkbox"
+                        tabindex="0"
+                        aria-checked={selectedIds.includes(item.character.chaId)}
+                        class:selected={selectedIds.includes(item.character.chaId)}
+                        class:dragging={draggedCharacterId === item.character.chaId}
+                        draggable="true"
+                        aria-label={`${item.character.name} 캐릭터 카드 · 폴더로 드래그하여 이동`}
+                        onclick={(event) => selectCard(event, item.character.chaId)}
+                        onkeydown={(event) => {
+                            if (event.target !== event.currentTarget
+                                || (event.key !== 'Enter' && event.key !== ' ')) return
+                            event.preventDefault()
+                            toggleSelected(item.character.chaId)
+                        }}
+                        ondragstart={(event) => startCharacterDrag(
+                            event,
+                            item.character.chaId,
+                            item.character.name
+                        )}
+                        ondragend={endCharacterDrag}
+                    >
                         <div class="portrait">
                             {#await characterImage(
                                 item.character.chaId,
@@ -563,11 +678,17 @@
                                 aria-label={`${item.character.name} 열기`}
                                 onclick={() => openCharacter(item.index)}
                             ><SolarBoldIcon name="play-circle" size={16} /></button>
+                            <button
+                                type="button"
+                                class="rename-character"
+                                aria-label={`${item.character.name} 이름 변경`}
+                                onclick={() => void renameCharacter(item.character.chaId)}
+                            ><PencilIcon size={13} /></button>
                         </div>
                         <div class="character-caption">
                             <strong>{item.character.name}</strong>
                         </div>
-                    </article>
+                    </div>
                 {:else}
                     <div class="empty-vault">
                         <SearchIcon size={22} /> 조건에 맞는 캐릭터가 없습니다.
@@ -641,8 +762,13 @@
     .vault-rail button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vault-rail button small { font: 600 .64rem ui-monospace, monospace; opacity: .7; }
     .vault-rail button:hover, .vault-rail button.active { color: var(--color-textcolor); background: color-mix(in srgb, var(--color-selected) 75%, transparent); }
-    .folder-list { min-height: 0; overflow-y: auto; padding-top: .2rem; }
-    .folder-row { position: relative; display: flex; align-items: center; border-left: 2px solid var(--folder-accent); }
+    .folder-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: .2rem .25rem .2rem 0; scrollbar-color: var(--color-borderc) transparent; scrollbar-gutter: stable; scrollbar-width: thin; }
+    .folder-list::-webkit-scrollbar { width: .38rem; }
+    .folder-list::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--color-borderc); }
+    .folder-row { position: relative; display: flex; align-items: center; border-left: 2px solid var(--folder-accent); border-radius: .42rem; transition: background 120ms ease, box-shadow 120ms ease; }
+    .folder-row.drop-target, .vault-rail > button.drop-target { background: color-mix(in srgb, #d6ae69 18%, var(--color-selected)); box-shadow: inset 0 0 0 1px #d6ae69, 0 0 0 2px rgb(214 174 105 / .12); }
+    .folder-row.drop-target > button:first-child { color: var(--color-textcolor); }
+    .vault-rail > button.drop-target { color: var(--color-textcolor); }
     .folder-pin { flex: none; padding: .25rem; border-radius: .3rem; color: var(--color-textcolor2); opacity: .45; }
     .folder-pin:hover, .folder-pin.pinned { color: #d6ae69; opacity: 1; }
     .vault-main { position: relative; display: flex; min-width: 0; min-height: 0; flex-direction: column; background: color-mix(in srgb, var(--color-darkbg) 97%, black); }
@@ -666,17 +792,20 @@
     .cover-control { grid-template-columns: minmax(6rem, 1fr) auto auto; }
     .cover-control > span { grid-column: 1 / -1; }
     .character-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: repeat(auto-fill, minmax(12rem, 13rem)); align-content: start; gap: .65rem; overflow-y: auto; padding: .75rem; padding-bottom: 5rem; }
-    article { overflow: hidden; border: 1px solid var(--color-darkborderc); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); transition: border-color 120ms ease, transform 120ms ease; }
-    article:hover { transform: translateY(-1px); border-color: var(--color-borderc); }
-    article.selected { border-color: #d6ae69; box-shadow: inset 0 0 0 1px rgb(214 174 105 / .35); }
+    .character-card { overflow: hidden; cursor: grab; border: 1px solid var(--color-darkborderc); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); transition: border-color 120ms ease, opacity 120ms ease, transform 120ms ease; }
+    .character-card:hover { transform: translateY(-1px); border-color: var(--color-borderc); }
+    .character-card:focus-visible { outline: 2px solid #d6ae69; outline-offset: 2px; }
+    .character-card.selected { border-color: #d6ae69; box-shadow: inset 0 0 0 1px rgb(214 174 105 / .35); }
+    .character-card.dragging { cursor: grabbing; opacity: .42; transform: scale(.98); }
     .portrait { position: relative; display: grid; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--color-selected) 45%, var(--color-darkbg)); color: var(--color-textcolor2); }
     .portrait img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
-    .select-character, .pin-character, .open-character { position: absolute; display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border: 1px solid rgb(255 255 255 / .22); border-radius: .38rem; background: rgb(10 10 10 / .62); color: white; backdrop-filter: blur(6px); }
+    .select-character, .pin-character, .open-character, .rename-character { position: absolute; display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border: 1px solid rgb(255 255 255 / .22); border-radius: .38rem; background: rgb(10 10 10 / .62); color: white; backdrop-filter: blur(6px); }
     .select-character { left: .38rem; }
     .select-character, .pin-character { top: .38rem; }
     .pin-character, .open-character { right: .38rem; }
     .open-character { bottom: .38rem; }
-    .open-character:hover { border-color: #d6ae69; color: #f0c979; }
+    .rename-character { bottom: .38rem; left: .38rem; }
+    .open-character:hover, .rename-character:hover { border-color: #d6ae69; color: #f0c979; }
     .select-character[aria-pressed=true] { border-color: #d6ae69; background: #8b6a34; }
     .pin-character.pinned { color: #f0c979; }
     .character-caption { padding: .5rem .55rem; }
@@ -688,10 +817,8 @@
     .vault-notice { min-height: 1rem; margin: 0; color: var(--color-textcolor2); font-size: .7rem; }
     @media (max-width: 720px) {
         :global(.character-vault-dialog) { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh; border-radius: 0; }
-        .vault-shell { grid-template-columns: 1fr; }
-        .vault-rail { max-height: 10rem; border-right: 0; border-bottom: 1px solid var(--color-darkborderc); }
-        .folder-list { display: flex; gap: .25rem; overflow-x: auto; }
-        .folder-row { min-width: 9rem; }
+        .vault-shell { grid-template-columns: 1fr; grid-template-rows: clamp(10rem, 34dvh, 22rem) minmax(0, 1fr); }
+        .vault-rail { max-height: none; border-right: 0; border-bottom: 1px solid var(--color-darkborderc); }
         .folder-editor { grid-template-columns: 1fr 1fr; }
         .cover-control { grid-column: 1 / -1; }
         .vault-toolbar { flex-wrap: wrap; }

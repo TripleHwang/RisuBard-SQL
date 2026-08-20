@@ -6,6 +6,7 @@
 
 import type { SettingItem } from './types';
 import { getCurrentChat, getDatabase, loadTogglesFromChat } from '../storage/database.svelte';
+import { MAX_CHAT_PAGE_SIZE, MIN_CHAT_PAGE_SIZE } from '../chatPagination';
 
 export const accessibilitySettingsItems: SettingItem[] = [
     // Checkboxes
@@ -213,22 +214,13 @@ export const accessibilitySettingsItems: SettingItem[] = [
         }
     },
     {
-        id: 'acc.chatLoadInitialPages',
+        id: 'acc.chatPageSize',
         type: 'number',
-        labelKey: 'chatLoadInitialPages',
-        bindKey: 'chatLoadInitialPages',
-        helpKey: 'chatLoadInitialPages',
-        options: { min: 1 },
-        keywords: ['chat', 'load', 'initial', 'pages', 'scroll', 'message', 'count'],
-    },
-    {
-        id: 'acc.chatLoadAdditionalPages',
-        type: 'number',
-        labelKey: 'chatLoadAdditionalPages',
-        bindKey: 'chatLoadAdditionalPages',
-        helpKey: 'chatLoadAdditionalPages',
-        options: { min: 1 },
-        keywords: ['chat', 'load', 'additional', 'pages', 'scroll', 'message', 'count'],
+        labelKey: 'chatPageSize',
+        bindKey: 'chatPageSize',
+        helpKey: 'chatPageSize',
+        options: { min: MIN_CHAT_PAGE_SIZE, max: MAX_CHAT_PAGE_SIZE },
+        keywords: ['chat', 'page', 'render', 'memory', 'message', 'count'],
     },
     {
         id: 'acc.createFolderOnBranch',
@@ -347,8 +339,7 @@ export const accessibilityScrollItems = pick([
     'acc.alwaysScrollToNewMessage',
     'acc.newMessageButtonStyle',
     'acc.nodeOnlyScrollButtonType',
-    'acc.chatLoadInitialPages',
-    'acc.chatLoadAdditionalPages',
+    'acc.chatPageSize',
 ]);
 
 export const accessibilitySidebarItems = pick([

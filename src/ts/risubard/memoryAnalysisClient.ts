@@ -65,6 +65,7 @@ export interface MemoryAnalysisModelCall {
     schema?: string
     realChatId?: string
     logSource?: 'memory'
+    logPurpose?: 'bardwiki-analysis' | 'bardwiki-canonical-update'
 }
 
 interface MemoryAnalysisClientOptions {
@@ -789,6 +790,9 @@ export function createStoredResponseMemoryAnalysis(
                 ...(request.sessionChatId ? {
                     realChatId: request.sessionChatId,
                     logSource: 'memory' as const,
+                    logPurpose: request.format === 'canonical-batch'
+                        ? 'bardwiki-canonical-update' as const
+                        : 'bardwiki-analysis' as const,
                 } : {}),
                 ...(request.format === 'markdown'
                     ? {}

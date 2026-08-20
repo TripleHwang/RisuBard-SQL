@@ -28,7 +28,7 @@ export const languageKorean = {
     networkFetch:
       "네트워크가 불안정하거나 서버가 응답하지 않을 때 자주 발생합니다.",
     networkFetchWeb:
-      "이것은 CORS 오류일 수 있습니다. 이는 브라우저의 제한으로 인해 웹 버전을 사용할 때만 발생합니다. 데스크톱 로컬 버전이나 다른 버전의 PocketRisu를 사용해보세요.",
+      "이것은 CORS 오류일 수 있습니다. 이는 브라우저의 제한으로 인해 웹 버전을 사용할 때만 발생합니다. 데스크톱 로컬 버전이나 다른 버전의 리스바드를 사용해보세요.",
     networkFetchPlain:
       "이것은 요청 오류일 수 있습니다. 설정에서 직접 요청 보내기 옵션을 비활성화해 보세요.",
     requestLogRemoved: "요청 로그가 삭제되었습니다.",
@@ -71,9 +71,9 @@ export const languageKorean = {
     texttheme: "텍스트 색상을 선택해주세요",
     inputName: "마지막으로, 닉네임을 입력해 주세요",
     welcome:
-      "PocketRisu에 오신 것을 환영해요! 저는 PocketRisu 셋업을 도와줄 아이리스라고 해요. 먼저 닉네임을 입력해 주세요!",
+      "리스바드에 오신 것을 환영해요! 저는 리스바드 셋업을 도와줄 아이리스라고 해요. 먼저 닉네임을 입력해 주세요!",
     welcome2:
-      "{username}님 안녕하세요! PocketRisu를 시작하려면 몇 가지 설정만 하시면 되요. Ai 제공자를 선택해 주세요!",
+      "{username}님 안녕하세요! 리스바드를 시작하려면 몇 가지 설정만 하시면 되요. Ai 제공자를 선택해 주세요!",
     openRouterProvider:
       "OpenRouter는 여러 무료/유료 모델이 있습니다. 기본적으로 무료로 설정됩니다.",
     hordeProvider:
@@ -599,20 +599,24 @@ export const languageKorean = {
     searchKeys: "키",
     searchTarget: "검색 대상",
     showAll: "모든 상태",
-    showEnabled: "활성",
-    showDisabled: "비활성",
-    enabledFilter: "활성 상태 필터",
+    showEnabled: "표시",
+    showDisabled: "숨김",
+    enabledFilter: "숨김 상태 필터",
     batchEdit: "일괄 편집",
+    batchSelectionHelp: "여러 항목이 선택되었습니다. 아래 상태와 키 변경은 선택한 모든 항목에 적용됩니다.",
+    dragSelectionHelp: "선택된 항목 하나를 끌면 선택 묶음 전체가 원래 순서를 유지한 채 함께 이동합니다.",
     clearSelection: "선택 해제",
     enabled: "활성",
     disabled: "비활성",
+    hidden: "숨김",
     enable: "활성화",
     disable: "비활성화",
     alwaysActive: "항상 활성",
     activeInCurrentChat: "현재 채팅에서 활성화",
     alwaysOn: "항상 활성",
     keyActive: "키로 활성화",
-    selective: "선택적 활성화",
+    selective: "멀티플 키",
+    unreachable: "활성화 경로 없음",
     anyKey: "아무 키나 일치",
     useRegex: "정규식 사용",
     regexKeys: "정규식 키",
@@ -625,6 +629,7 @@ export const languageKorean = {
     moveDown: "아래로 이동",
     moveToFolder: "폴더로 이동",
     moveToRoot: "최상위로 이동",
+    entryActions: "이동 및 삭제",
     importLoremaster: "Loremaster 복원",
     importLoremasterResult: (count: number) => `Loremaster 항목 ${count}개를 복원했습니다.`,
     workspaceLabel: (scope: string) => `${scope} 로어북 작업공간`,
@@ -688,6 +693,11 @@ export const languageKorean = {
   loreBookToken: "로어북 최대 토큰",
   chatLoadInitialPages: "채팅 초기 로딩 개수",
   chatLoadAdditionalPages: "채팅 추가 로딩 개수",
+  chatPageSize: "페이지당 채팅 메시지 수",
+  chatPageNavigation: "채팅 페이지 탐색",
+  chatPagePrevious: "이전",
+  chatPageNext: "다음",
+  chatPageLatest: "최신",
   removeCharacter: "캐릭터 삭제",
   exportCharacter: "캐릭터 엑스포트",
   characterPackage: "캐릭터 패키지",
@@ -845,9 +855,9 @@ export const languageKorean = {
   chatWidthWide: "넓게",
   chatWidthFull: "제한 없음",
   customCSSWarning:
-    "PocketRisu는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 CSS가 레이아웃을 깨거나 의도와 다르게 동작할 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
+    "리스바드는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 CSS가 레이아웃을 깨거나 의도와 다르게 동작할 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
   customHTMLWarning:
-    "PocketRisu는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 Chat HTML이 정상적으로 렌더되지 않을 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
+    "리스바드는 원본 RisuAI와 UI 구성(HTML/CSS)이 다르기 때문에, 기존에 쓰던 커스텀 Chat HTML이 정상적으로 렌더되지 않을 수 있습니다. 어떤 부분을 덮어쓰는지 정확히 아는 경우에만 사용하세요.",
   sayNothing: "어떤 문자열도 입력되지 않을 시 'say nothing' 입력",
   regexScript: "정규식 스크립트",
   type: "타입",
@@ -883,7 +893,7 @@ export const languageKorean = {
     aiWorkspace: {
       eyebrow: "생성 작업공간",
       title: "AI 및 생성",
-      description: "RisuBard가 글을 생성하고 구성하며 보조하는 방식을 설정합니다. 기존 설정값은 그대로 유지하면서 목적별로 한곳에 정리했습니다.",
+      description: "리스바드가 글을 생성하고 구성하며 보조하는 방식을 설정합니다. 기존 설정값은 그대로 유지하면서 목적별로 한곳에 정리했습니다.",
       sectionNavigation: "AI 설정 섹션",
       currentSection: "현재 섹션",
       recommended: "권장",
@@ -947,12 +957,31 @@ export const languageKorean = {
       },
     },
     personaManager: {
-      eyebrow: "현재 집필 정체성",
       close: "페르소나 관리자 닫기",
+      help: "페르소나는 스토리 속 사용자 역할을 정합니다. 페르소나의 이름은 {{user}} 태그를 대체하며, 설명은 스토리 프롬프트에 주입됩니다.",
+      globalTab: "글로벌",
+      characterTab: "캐릭터",
+      create: "새 페르소나 생성",
+      resizeList: "페르소나 목록 높이 조절",
+      resizeWindow: "페르소나 관리자 너비 조절",
+      changeImage: "페르소나 이미지 변경",
+      openDescriptionEditor: "설명을 팝업 편집기로 열기",
+      resizeDescription: "설명 편집기 높이 조절",
+      usePortraitImage: "세로 이미지로 전환",
+      useSquareImage: "정사각형 이미지로 전환",
+      duplicate: "복제",
+      cloneToCharacter: "캐릭터로 클론",
+      export: "페르소나 내보내기",
+      import: "페르소나 들여오기",
+      remove: "페르소나 삭제",
+      noCharacter: "페르소나를 관리할 캐릭터를 선택하세요.",
+      noCharacterPersonas: "이 캐릭터에는 아직 페르소나가 없습니다.",
+      globalGroup: "글로벌 페르소나",
+      characterGroup: "캐릭터 페르소나",
     },
     sections: {
       ai: "AI 및 생성",
-      risubard: "RisuBard",
+      risubard: "리스바드",
       experience: "환경",
       extensions: "확장 기능",
       system: "데이터 및 시스템",
@@ -1315,8 +1344,8 @@ export const languageKorean = {
   manageCharacter: "관리",
   shareExport: "공유/엑스포트",
   risupresetDesc:
-    "Risupreset 포맷은 포맷을 공유하기 위한 PocketRisu 전용 포맷입니다.",
-  risuMDesc: "RisuM 포맷은 PocketRisu 모듈을 위해 특별히 설계된 포맷입니다.",
+    "Risupreset 포맷은 포맷을 공유하기 위한 리스바드 전용 포맷입니다.",
+  risuMDesc: "RisuM 포맷은 리스바드 모듈을 위해 특별히 설계된 포맷입니다.",
   jsonDesc: "JSON은 데이터를 저장하고 불러오기 위한 일반적인 포맷입니다.",
   nickname: "닉네임",
   useRegexLorebook: "정규식 사용",
@@ -1552,7 +1581,7 @@ export const languageKorean = {
   home: "홈",
   showSavingIcon: "저장 아이콘 표시",
   pluginVersionWarn:
-    "이 플러그인은 {{plugin_version}} 버전입니다. 이 버전의 PocketRisu와 호환되지 않습니다. 플러그인을 {{required_version}} 버전으로 업데이트하세요.",
+    "이 플러그인은 {{plugin_version}} 버전입니다. 이 버전의 리스바드와 호환되지 않습니다. 플러그인을 {{required_version}} 버전으로 업데이트하세요.",
   imageTranslation: "이미지 번역",
   banCharacterset: "문자 집합으로 자동 재생성",
   realmDirectOpen: "RisuRealm 미리보기에서 바로 열기",
@@ -1894,11 +1923,11 @@ export const languageKorean = {
     "## 나이틀리 빌드\n\n나이틀리 빌드에 연결하려고 합니다. 이 버전은 테스트용이며 버그가 포함되어 있을 수 있습니다. **이 버전에서는 버그 등 문제가 발생하더라도 직접적으로 해결하는 것을 지원하지 않습니다.**",
   loginSionyw: "Sionyw 계정으로 로그인",
   pluginRiskDetectedAlert:
-    "PocketRisu가 API 키나 개인 데이터를 훔칠 수도 있는 위험한 코드를 감지했습니다. 이 플러그인을 설치하지 않는 것을 권장합니다.",
+    "리스바드가 API 키나 개인 데이터를 훔칠 수도 있는 위험한 코드를 감지했습니다. 이 플러그인을 설치하지 않는 것을 권장합니다.",
   doNotInstall: "설치하지 않음",
   continueAnyway: "무시하고 계속",
   pluginNoRiskButAlert:
-    "PocketRisu가 위험한 코드를 감지하지 못했지만, 신뢰할 수 없는 출처의 플러그인을 설치하면 보안 위험이 발생할 수 있습니다.",
+    "리스바드가 위험한 코드를 감지하지 못했지만, 신뢰할 수 없는 출처의 플러그인을 설치하면 보안 위험이 발생할 수 있습니다.",
   pluginRisksInuserFriendly: {
     eval: "문자열에서 코드 실행",
     globalAccess: "글로벌 변수 접근",
@@ -2338,7 +2367,7 @@ export const languageKorean = {
   storageDiskOther: "기타 (시스템 및 다른 앱)",
   storageDiskFree: "여유 공간",
   storageDiskRisuTotal: (size: number) =>
-    `PocketRisu 합계: ${(size / 1024 / 1024).toFixed(1)} MB`,
+    `리스바드 합계: ${(size / 1024 / 1024).toFixed(1)} MB`,
 
   // 항목별 라벨 (분포 리스트의 ⓘ 설명)
   storageRowDbFile: "파일 데이터 루트",
@@ -2382,7 +2411,7 @@ export const languageKorean = {
     `${(size / 1024 / 1024).toFixed(1)} MB 회수 가능 — Optimize로 압축.`,
   storageInternalOnly: "저장공간과 함께보기",
   storageInternalOnlyHint:
-    "끄면 PocketRisu 내부 항목만, 켜면 기타 시스템·여유 공간까지 디스크 전체 기준으로 표시합니다.",
+    "끄면 리스바드 내부 항목만, 켜면 기타 시스템·여유 공간까지 디스크 전체 기준으로 표시합니다.",
 
   // 2 GB BLOB 한계 (별도 섹션)
   storageBlobLimit: "호환 투영본 크기",
@@ -2478,7 +2507,7 @@ export const languageKorean = {
   // 데이터 이전 (구 "계정 & 파일")
   migration: "데이터 이전",
   migrationDesc:
-    "원본 RisuAI(또는 호환 시스템)에서 데이터를 가져오거나 PocketRisu 데이터를 원본 호환 형식으로 내보냅니다.",
+    "원본 RisuAI(또는 호환 시스템)에서 데이터를 가져오거나 리스바드 데이터를 원본 호환 형식으로 내보냅니다.",
   migrationInfoBackupMoved:
     "서버 백업, 로컬 백업, 자동 스냅샷 관리는 [시스템 → 백업] 탭으로 이동했습니다.",
   migrationGotoBackupTab: "백업 탭 열기",
@@ -2487,7 +2516,7 @@ export const languageKorean = {
     "원본 RisuAI 호환 포맷으로 백업·내보내기를 수행하는 보조 기능들입니다. 일반적인 백업 작업은 백업 탭을 사용하세요.",
   migrationSaveFolderAccordion: "노드리스에서 save 폴더 가져오기",
   migrationSaveFolderDesc:
-    "이전에 사용하던 노드리스/RisuAI 인스턴스의 save 폴더를 PocketRisu로 가져올 때 사용합니다.",
+    "이전에 사용하던 노드리스/RisuAI 인스턴스의 save 폴더를 리스바드로 가져올 때 사용합니다.",
   migrationLoadUpstreamBackup: "원본 리스 로컬 백업 불러오기",
 
   // 시스템 → 백업 탭
@@ -2594,8 +2623,8 @@ export const languageKorean = {
   relatedGithubDesc: "Star를 눌러 프로젝트를 응원해주세요.",
   relatedFeedbackForm: "의견 보내기",
   relatedFeedbackFormDesc: "이슈 제보 및 의견을 보내주세요.",
-  relatedContactEmail: "개발자 이메일",
-  relatedContactEmailDesc: "개발자에게 직접 메일을 보낼 수 있어요.",
+  relatedContactEmail: "GitHub 이슈",
+  relatedContactEmailDesc: "문제를 제보하거나 GitHub에서 개발자에게 문의할 수 있어요.",
   relatedArcaLive: "아카라이브 채널",
   relatedArcaLiveDesc: "AI 채팅 채널에서 다른 사용자와 이야기를 나눠보세요.",
 
@@ -2605,7 +2634,7 @@ export const languageKorean = {
   hideRecentChats: "대화 목록 숨기기",
 
   showRequestStatus: "요청 상태 표시",
-  risuBardMemoryWiki: "RisuBard 메모리",
+  risuBardMemoryWiki: "리스바드 메모리",
   risuBardMemoryWikiDescription: "현재 메모리를 살펴보고 명시적인 작가 변경을 준비할 수 있습니다.",
   risuBardSettings: {
     common: {
@@ -2634,7 +2663,7 @@ export const languageKorean = {
     remove: "삭제",
     blockPlaceholder: "이 블록에서 위키 작성 AI가 추적하거나 정리할 항목을 지시하세요.",
     lockedInjectionDescription: "실행 시 현재 범위의 Wiki Guide가 여기에 주입됩니다.",
-    lockedCoreDescription: "RisuBard의 근거·분석·출력 계약을 유지하는 필수 블록입니다.",
+    lockedCoreDescription: "리스바드의 근거·분석·출력 계약을 유지하는 필수 블록입니다.",
     injectionTitle: "Wiki Guide Injection",
     injectionDescription: "캐릭터 지시를 먼저 적용하고 현재 챗 지시를 그 뒤에 추가합니다. 대화 생성 프롬프트에는 들어가지 않습니다.",
     characterGuide: "캐릭터 Wiki Guide",
@@ -2691,7 +2720,7 @@ export const languageKorean = {
   risuBardActiveFacts: "활성 사실",
   risuBardEvents: "사건 기록",
   risuBardInvalidatedFacts: "무효화된 사실",
-  risuBardMemoryEmpty: "이 채팅에는 아직 RisuBard 메모리가 없습니다.",
+  risuBardMemoryEmpty: "이 채팅에는 아직 리스바드 메모리가 없습니다.",
   risuBardMemoryLoadFailed: "이 채팅의 메모리를 불러오지 못했습니다.",
   risuBardMemoryRefresh: "새로고침",
   risuBardMemoryOpenManual: "BardWiki 수동 작성 열기",

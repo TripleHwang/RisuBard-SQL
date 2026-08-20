@@ -9,7 +9,14 @@
     import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
-    import { getAdditionalChatLoadPages, getInitialChatLoadPages } from 'src/ts/chatLoadPages';
+    import {
+        DEFAULT_CHAT_PAGE_SIZE,
+        getChatPageBounds,
+        getChatPageCount,
+        getChatPageForMessage,
+        getLatestChatPage,
+        normalizeChatPageSize,
+    } from 'src/ts/chatPagination';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -49,13 +56,26 @@ import { isMobile } from 'src/ts/platform'
     import Chats from './Chats.svelte';
     import Button from '../UI/GUI/Button.svelte';
     import PluginDefinedIcon from '../Others/PluginDefinedIcon.svelte';
+    import PluginFloatingActionButtons from '../Others/PluginFloatingActionButtons.svelte';
     import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
     import RisuBardMemoryWiki from '../Others/RisuBardMemoryWiki.svelte';
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar';
     import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
     import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg';
+    import { getEffectivePersona, resolvePersonaById } from 'src/ts/personaScopes';
+    import type { FloatingActionButtonPlacement } from 'src/ts/plugins/floatingActionButtonLayout';
 
     const loadPlaygroundMenu = () => import('../Playground/PlaygroundMenu.svelte').then(m => m.default);
+
+    function setPluginFabPlacement(
+        layoutKey: string,
+        placement: FloatingActionButtonPlacement | null
+    ) {
+        const next = { ...(DBState.db.pluginFabPlacements ?? {}) }
+        if (placement) next[layoutKey] = placement
+        else delete next[layoutKey]
+        DBState.db.pluginFabPlacements = next
+    }
 
     // Whether an Enter keydown should send (vs insert a newline), based on the
     // per-platform send-key mode. Mobile uses sendKeyMobile, desktop sendKeyPC.
@@ -84,7 +104,10 @@ import { isMobile } from 'src/ts/platform'
     let messageInputTranslate:string = $state('')
     let openMenu = $state(false)
     let memoryWikiOpen = $state(false)
-    let loadPages = $state(getInitialChatLoadPages(DBState.db))
+    let chatPage = $state(0)
+    let paginationKey = $state('')
+    let paginationMessageCount = $state(0)
+    let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -106,6 +129,40 @@ import { isMobile } from 'src/ts/platform'
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
+    let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
+    let chatBounds = $derived(getChatPageBounds(currentChat.length, chatPageSize, chatPage))
+
+    $effect(() => {
+        const nextKey = `${currentCharacter?.chaId ?? ''}/${currentChatSlot?.id ?? ''}`
+        const messageCount = currentChat.length
+        const nextPageCount = getChatPageCount(messageCount, chatPageSize)
+        const latestPage = nextPageCount - 1
+
+        if (nextKey !== paginationKey) {
+            paginationKey = nextKey
+            chatPage = latestPage
+        } else if (chatPageSize !== paginationPageSize) {
+            const anchorIndex = chatPage * paginationPageSize
+            chatPage = getChatPageForMessage(anchorIndex, messageCount, chatPageSize)
+        } else {
+            const previousLatestPage = getLatestChatPage(paginationMessageCount, paginationPageSize)
+            if (chatPage === previousLatestPage && messageCount > paginationMessageCount) {
+                chatPage = latestPage
+            } else if (chatPage > latestPage) {
+                chatPage = latestPage
+            }
+        }
+
+        paginationMessageCount = messageCount
+        paginationPageSize = chatPageSize
+    })
+
+    $effect(() => {
+        const foldedIndex = chatFoldedStateMessageIndex.index
+        if (foldedIndex >= 0) {
+            chatPage = getChatPageForMessage(foldedIndex, currentChat.length, chatPageSize)
+        }
+    })
 
     // ─── Per-chat composer draft ────────────────────────────────────────────
     // The message input is kept per chat, stored outside the chat body, so it
@@ -222,6 +279,14 @@ import { isMobile } from 'src/ts/platform'
         scrollWithinContainer(messages[0].el, container, { block: 'start', behavior: 'smooth' })
     }
 
+    async function selectChatPage(page: number, scrollToLatest = false) {
+        chatPage = getChatPageBounds(currentChat.length, chatPageSize, page).page
+        chatFoldedState.data = null
+        await tick()
+        if (scrollToLatest) chatsInstance?.scrollToLatestMessage()
+        else scrollToLoadedTop()
+    }
+
     // Literal bottom of the scroll (end of the latest message).
     function scrollToLoadedBottom() {
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
@@ -289,16 +354,10 @@ import { isMobile } from 'src/ts/platform'
     })
 
     async function scrollToMessage(index: number){
-        // Forces the loading of past messages not rendered on the screen
         isScrollingToMessage = true
         try {
-            const totalMessages = currentChat.length
-            const neededLoadPages = totalMessages - index + 5
-
-            if(loadPages < neededLoadPages){
-                loadPages = neededLoadPages
-                await tick()
-            }
+            chatPage = getChatPageForMessage(index, currentChat.length, chatPageSize)
+            await tick()
 
             let element: Element | null = null;
             // Poll for element existence (max 5 seconds)
@@ -429,6 +488,7 @@ import { isMobile } from 'src/ts/platform'
         messageInputTranslate = ''
         removeChatDraft(draftChaId, draftChatId)
         DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].message = cha
+        chatPage = getLatestChatPage(cha.length, chatPageSize)
 
         await sleep(10)
         updateInputSizeAll()
@@ -678,24 +738,15 @@ import { isMobile } from 'src/ts/platform'
     }
 
     let { userIconPortrait, currentUsername, userIcon } = $derived.by(() => {
-        const bindedPersona = DBState?.db?.characters?.[$selectedCharID]?.chats?.[DBState?.db?.characters?.[$selectedCharID]?.chatPage]?.bindedPersona
-
-        if(bindedPersona){
-            const persona = DBState.db.personas.find((p) => p.id === bindedPersona)
-            if(persona){
-                return {
-                    currentUsername: persona.name,
-                    userIconPortrait: persona.largePortrait,
-                    userIcon: persona.icon
-                }
-            }
-        }
-
-        const selectedPersonaIndex = DBState.db.selectedPersona
+        const character = DBState.db.characters[$selectedCharID]
+        const chat = character?.chats?.[character.chatPage]
+        const bound = resolvePersonaById(DBState.db, character, chat?.bindedPersona)
+        const effective = bound ?? getEffectivePersona(DBState.db, character, chat)
+        const persona = effective?.persona
         return {
-            currentUsername: DBState.db.username,
-            userIconPortrait: DBState.db.personas[selectedPersonaIndex].largePortrait,
-            userIcon: DBState.db.personas[selectedPersonaIndex].icon
+            currentUsername: persona?.name ?? DBState.db.username,
+            userIconPortrait: persona?.largePortrait ?? false,
+            userIcon: persona?.icon ?? DBState.db.userIcon,
         }
     })
 
@@ -717,9 +768,9 @@ import { isMobile } from 'src/ts/platform'
     )
     // Effective persona name for the input placeholder (chat-bound persona overrides the selected one).
     let activePersonaName = $derived.by(() => {
-        const chat = DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage]
-        const bound = chat?.bindedPersona ? DBState.db.personas.find(p => p.id === chat.bindedPersona) : null
-        return (bound ?? DBState.db.personas[DBState.db.selectedPersona])?.name || 'User'
+        const character = DBState.db.characters[$selectedCharID]
+        const chat = character?.chats?.[character.chatPage]
+        return getEffectivePersona(DBState.db, character, chat)?.persona.name || 'User'
     })
 
     function updateInputSizeAll() {
@@ -839,7 +890,6 @@ import { isMobile } from 'src/ts/platform'
 
     async function screenShot(){
         try {
-            loadPages = Infinity
             const html2canvas = await import('html-to-image');
             const chats = document.querySelectorAll('.default-chat-screen .risu-chat')
             alertWait("Taking screenShot...")
@@ -882,11 +932,10 @@ import { isMobile } from 'src/ts/platform'
             }
 
             if(mergedCanvas){
-                await downloadFile(`chat-${v4()}.png`, Buffer.from(mergedCanvas.toDataURL('png').split(',').at(-1), 'base64'))
+                await downloadFile(`chat-page-${chatBounds.page + 1}-${v4()}.png`, Buffer.from(mergedCanvas.toDataURL('png').split(',').at(-1), 'base64'))
                 mergedCanvas.remove();
             }
             notifySuccess(language.screenshotSaved)
-            loadPages = getInitialChatLoadPages(DBState.db)
         } catch (error) {
             console.error(error)
             notifyError("Error while taking screenshot")
@@ -1230,38 +1279,6 @@ import { isMobile } from 'src/ts/platform'
                         >
                             <BookOpenIcon size={18} strokeWidth={2.2} />
                         </button>
-                        <button
-                                type="button"
-                                role="switch"
-                                data-risubard-auto-wiki
-                                aria-checked={DBState.db.risuBardAutoWikiEnabled !== false}
-                                aria-label={language.risuBardAutoWiki}
-                                title={DBState.db.risuBardAutoWikiEnabled !== false
-                                    ? language.risuBardAutoWikiOn
-                                    : language.risuBardAutoWikiOff}
-                                onclick={() => {
-                                    DBState.db.risuBardAutoWikiEnabled =
-                                        DBState.db.risuBardAutoWikiEnabled === false
-                                }}
-                                class={`-ml-1 flex h-7 items-center gap-1 rounded-r-full border py-0.5 pl-2.5 pr-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
-                                    DBState.db.risuBardAutoWikiEnabled !== false
-                                        ? 'border-orange-400 bg-orange-500/20 text-orange-400'
-                                        : 'border-darkborderc bg-darkbg text-textcolor2'
-                                }`}
-                        >
-                            <span>auto</span>
-                            <span
-                                    aria-hidden="true"
-                                    class="flex h-4 w-4 items-center justify-center rounded-full border transition-colors"
-                                    class:border-orange-300={DBState.db.risuBardAutoWikiEnabled !== false}
-                                    class:bg-orange-400={DBState.db.risuBardAutoWikiEnabled !== false}
-                                    class:shadow-sm={DBState.db.risuBardAutoWikiEnabled !== false}
-                                    class:border-darkborderc={DBState.db.risuBardAutoWikiEnabled === false}
-                                    class:bg-bgcolor={DBState.db.risuBardAutoWikiEnabled === false}
-                            >
-                                <span class="h-1.5 w-1.5 rounded-full bg-white/90"></span>
-                            </span>
-                        </button>
                     </div>
                 {/if}
                 </div>
@@ -1366,11 +1383,6 @@ import { isMobile } from 'src/ts/platform'
             if (DBState.db.nodeOnlyScrollButtonType !== 'off') {
                 bumpScrollNav()
             }
-            //@ts-expect-error scrollHeight/clientHeight/scrollTop don't exist on EventTarget, but target is HTMLElement here
-            const scrolled = (e.target.scrollHeight - e.target.clientHeight + e.target.scrollTop)
-            if(scrolled < 100 && currentChat.length > loadPages){
-                loadPages += getAdditionalChatLoadPages(DBState.db)
-            }
             const chatTarget = e.target as HTMLElement;
             const chatsContainer = (DBState.db.fixedChatTextarea && chatTarget.children[1]) ? chatTarget.children[1] : chatTarget.children[0];
             const lastEl = chatsContainer?.firstElementChild;
@@ -1400,18 +1412,48 @@ import { isMobile } from 'src/ts/platform'
             {#if chatFoldedStateMessageIndex.index !== -1}
                 <button class="w-full flex justify-center max-w-full p-4">
                     <Button className="max-w-xl w-full" onclick={() => {
-                        loadPages += chatFoldedStateMessageIndex.index + 1
-                        chatFoldedState.data = null
+                        void selectChatPage(getLatestChatPage(currentChat.length, chatPageSize), true)
                     }}>
                         {language.loadMore}
                     </Button>
                 </button>
             {/if}
+
+            {#if chatBounds.pageCount > 1}
+                <nav
+                    data-chat-pagination
+                    class="mx-auto my-3 flex max-w-xl items-center justify-center gap-2 rounded-full border border-darkborderc bg-darkbg/90 px-3 py-2 text-sm text-textcolor shadow-sm"
+                    aria-label={language.chatPageNavigation}
+                >
+                    <button
+                        data-chat-page-previous
+                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={chatBounds.page === 0}
+                        onclick={() => void selectChatPage(chatBounds.page - 1)}
+                    >{language.chatPagePrevious}</button>
+                    <span class="min-w-20 text-center tabular-nums">
+                        {chatBounds.page + 1} / {chatBounds.pageCount}
+                    </span>
+                    <button
+                        data-chat-page-next
+                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={chatBounds.page >= chatBounds.pageCount - 1}
+                        onclick={() => void selectChatPage(chatBounds.page + 1, chatBounds.page + 1 >= chatBounds.pageCount - 1)}
+                    >{language.chatPageNext}</button>
+                    <button
+                        data-chat-page-latest
+                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={chatBounds.page >= chatBounds.pageCount - 1}
+                        onclick={() => void selectChatPage(chatBounds.pageCount - 1, true)}
+                    >{language.chatPageLatest}</button>
+                </nav>
+            {/if}
             
             <Chats
                 bind:this={chatsInstance}
                 messages={currentChat}
-                loadPages={loadPages}
+                pageStart={chatBounds.start}
+                pageEnd={chatBounds.end}
                 onReroll={reroll}
                 onNextSwipe={nextSwipe}
                 onDeleteSwipe={deleteSwipe}
@@ -1425,7 +1467,7 @@ import { isMobile } from 'src/ts/platform'
                 bind:hasNewUnreadMessage={showNewMessageButton}
             />
 
-            {#if currentChat.length <= loadPages}
+            {#if chatBounds.page === 0}
                 <Chat
                     character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
                     name={DBState.db.characters[$selectedCharID].name}
@@ -1491,17 +1533,11 @@ import { isMobile } from 'src/ts/platform'
     {/if}
 </div>
 
-{#if additionalFloatingActionButtons.length > 0}
-    <div class="fixed top-4 right-4 flex flex-col gap-3 z-50">
-        {#each additionalFloatingActionButtons as button}
-            <button class="bg-primary text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={() => {
-                button.callback()
-            }}>
-                <PluginDefinedIcon ico={button} />
-            </button>
-        {/each}
-    </div>
-{/if}
+<PluginFloatingActionButtons
+    buttons={additionalFloatingActionButtons}
+    placements={DBState.db.pluginFabPlacements}
+    onPlacementChange={setPluginFabPlacement}
+/>
 
 {#if composerFullscreen}
     <div class="fixed inset-0 z-50 bg-bgcolor flex flex-col p-4">

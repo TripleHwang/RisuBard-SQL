@@ -15,6 +15,7 @@ import { getInlayAsset, setInlayAsset, getInlayInfosBatch, type InlayAsset } fro
 import { getInlayMeta, setInlayMeta, type InlayAssetMeta } from './process/files/inlayMeta'
 import { PngChunk } from './pngChunk'
 import { reencodeImage } from './process/files/inlays'
+import { resolvePersonaById } from './personaScopes'
 
 // ── Types ──
 
@@ -88,9 +89,9 @@ export function getCharacterBoundPersonas(char: character): { persona: typeof db
         if (!chat.bindedPersona) continue
         if (seenIds.has(chat.bindedPersona)) continue
         seenIds.add(chat.bindedPersona)
-        const persona = db.personas.find(p => p.id === chat.bindedPersona)
-        if (persona) {
-            result.push({ persona, id: chat.bindedPersona })
+        const resolved = resolvePersonaById(db, char, chat.bindedPersona)
+        if (resolved) {
+            result.push({ persona: resolved.persona, id: chat.bindedPersona })
         }
     }
     return result

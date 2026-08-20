@@ -196,9 +196,10 @@
         min-width: 0;
     }
     .failure { color: var(--risu-theme-draculared); }
-    @media (max-width: 640px) {
+    @media (orientation: portrait) {
         header small, .authority { display: none; }
         footer { align-items: stretch; flex-direction: column; }
         footer :global(button) { justify-content: center; }
+        textarea { font-size: 1rem; }
     }
 </style>

@@ -20,6 +20,9 @@ const DEFAULT_WORKSPACE_HEIGHT = 500
 const MIN_WORKSPACE_HEIGHT = 288
 const MIN_COMMAND_HEIGHT = 220
 const DEFAULT_AVAILABLE_WORKSPACE_HEIGHT = 10_000
+const DEFAULT_TREE_HEIGHT = 176
+const MIN_TREE_HEIGHT = 96
+const MIN_EDITOR_HEIGHT = 192
 
 export function normalizeMemoryWikiDockRatio(value: unknown): number {
     const ratio = finiteOr(value, DEFAULT_DOCK_RATIO)
@@ -41,6 +44,24 @@ export function normalizeMemoryWikiWorkspaceHeight(
         Math.round(finiteOr(value, DEFAULT_WORKSPACE_HEIGHT)),
         MIN_WORKSPACE_HEIGHT,
         available - MIN_COMMAND_HEIGHT
+    )
+}
+
+export function normalizeMemoryWikiTreeHeight(
+    value: unknown,
+    availableHeight = DEFAULT_AVAILABLE_WORKSPACE_HEIGHT
+): number {
+    const available = Math.max(
+        MIN_TREE_HEIGHT + MIN_EDITOR_HEIGHT,
+        Math.round(finiteOr(
+            availableHeight,
+            DEFAULT_AVAILABLE_WORKSPACE_HEIGHT
+        ))
+    )
+    return clamp(
+        Math.round(finiteOr(value, DEFAULT_TREE_HEIGHT)),
+        MIN_TREE_HEIGHT,
+        available - MIN_EDITOR_HEIGHT
     )
 }
 

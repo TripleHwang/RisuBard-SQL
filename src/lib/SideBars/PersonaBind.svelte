@@ -8,6 +8,8 @@
     import { v4 } from "uuid";
     import ShButton from "../UI/GUI/ShButton.svelte";
     import type { Chat } from "src/ts/storage/database.svelte";
+    import { getCharImage } from "src/ts/characters";
+    import { getEffectivePersona, resolvePersonaById, type PersonaSelection } from "src/ts/personaScopes";
 
     interface Props {
         bindingTarget?: Pick<Chat, 'bindedPersona'>;
@@ -22,15 +24,20 @@
     let boundPersona = $derived.by(() => {
         const id = target?.bindedPersona
         if (!id) return null
-        return DBState.db.personas.find(p => p.id === id) ?? null
+        return resolvePersonaById(DBState.db, DBState.db.characters[$selectedCharID], id)
     })
-    let displayPersona = $derived(boundPersona ?? DBState.db.personas[DBState.db.selectedPersona])
+    let displaySelection = $derived(boundPersona ?? getEffectivePersona(
+        DBState.db,
+        DBState.db.characters[$selectedCharID],
+        target,
+    ))
+    let displayPersona = $derived(displaySelection?.persona)
     let isPersonaBound = $derived(!!boundPersona)
 
-    function bindPersona(personaIndex: number) {
+    function bindPersona(selection: PersonaSelection) {
         const chat = target ?? getCurrentChat()
         if (!chat) return
-        const persona = DBState.db.personas[personaIndex]
+        const persona = selection.persona
         if (!persona.id) persona.id = v4()
         chat.bindedPersona = persona.id
         onBindingChange()
@@ -67,7 +74,8 @@
                 language.cancel
             ]))
             if (sel === 0) {
-                bindPersona(DBState.db.selectedPersona)
+                const current = getEffectivePersona(DBState.db, DBState.db.characters[$selectedCharID])
+                if (current) bindPersona(current)
             } else if (sel === 1) {
                 personaSelectCallback.set(bindPersona)
                 openPersonaList.set(true)
@@ -84,6 +92,17 @@
             : 'text-textcolor2 opacity-75 hover:opacity-100'}`}
         onclick={handlePersonaBindClick}
     >
+        <span class="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-darkbg">
+            {#if displayPersona?.icon}
+                {#await getCharImage(displayPersona.icon, 'plain')}
+                    <PinIcon size={15} />
+                {:then personaImage}
+                    <img src={personaImage} alt="" class="h-full w-full object-cover object-top" />
+                {/await}
+            {:else}
+                <PinIcon size={15} />
+            {/if}
+        </span>
         {#if isPersonaBound}
             <PinIcon size={16} class="shrink-0" />
         {:else}

@@ -14,6 +14,7 @@ const ROTATE_EVERY_N_ROWS = 20;
 const CATEGORIES = ['llm', 'tts', 'image', 'translate', 'embedding', 'other'];
 const ROUTES = ['direct', 'proxy', 'job'];
 const SOURCES = ['main', 'translate', 'memory', 'emotion', 'sub', 'wiki-admin', 'preview', 'test', 'tts', 'image', 'plugin', 'other'];
+const PURPOSES = ['chat-response', 'bardwiki-analysis', 'bardwiki-canonical-update', 'bardwiki-admin'];
 const INJECTION_KINDS = new Set(['systemPrompt', 'jailbreak', 'globalNote', 'authorNote', 'character', 'persona', 'lorebook', 'wiki', 'memory', 'exampleDialogue', 'chatHistory', 'instruction', 'tool', 'other']);
 
 function truncateBody(value, maxBytes) {
@@ -60,7 +61,7 @@ function normalizeEntry(entry) {
     const injectionManifest = normalizeInjectionManifest(entry.injectionManifest);
     const sizeBytes = Buffer.byteLength(headers.text ?? '', 'utf8') + Buffer.byteLength(body.text ?? '', 'utf8') + Buffer.byteLength(response.text ?? '', 'utf8') + Buffer.byteLength(injectionManifest ? JSON.stringify(injectionManifest) : '', 'utf8');
     return {
-        timestamp, category: CATEGORIES.includes(entry.category) ? entry.category : 'other', source: SOURCES.includes(entry.source) ? entry.source : 'other',
+        timestamp, category: CATEGORIES.includes(entry.category) ? entry.category : 'other', source: SOURCES.includes(entry.source) ? entry.source : 'other', purpose: PURPOSES.includes(entry.purpose) ? entry.purpose : null,
         chatId: str(entry.chatId, 128), sessionChatId: str(entry.sessionChatId, 128), generationId: str(entry.generationId, 128), model: str(entry.model, 128), provider: str(entry.provider, 64),
         url: str(maskSensitive(entry.url ?? ''), 2048) ?? '', method: str(entry.method, 16), status: toInt(entry.status), success: !!entry.success, aborted: !!entry.aborted,
         route: ROUTES.includes(entry.route) ? entry.route : null, streaming: !!entry.streaming, durationMs: toInt(entry.durationMs), firstTokenMs: toInt(entry.firstTokenMs),

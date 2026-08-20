@@ -429,15 +429,21 @@ risuai.registerSetting(
 )
 
 // Register a floating action button
-risuai.registerButton({
-    name: 'My Action',
-    icon: 'https://example.com/icon.png', // Optional icon
-    iconType: 'img', // Icon type: 'html', 'img', or 'none'
-    location: 'action'
-}, () => {
+   risuai.registerButton({
+       name: 'My Action',
+       icon: 'https://example.com/icon.png', // Optional icon
+       iconType: 'img', // Icon type: 'html', 'img', or 'none'
+       location: 'action',
+       id: 'my-action'
+   }, () => {
       // Callback when clicked
-})
-```
+   })
+   ```
+
+   Action buttons are draggable and persisted by the host. Keep `id` stable across
+   plugin versions so users retain their chosen position; no plugin-side pointer or
+   storage code is needed. IDs are scoped to the plugin. Omitting `id` falls back to
+   the button name, so changing `name` resets the saved position.
 
 **Parameters:**
 - `name`: Display name (required, non-empty string)

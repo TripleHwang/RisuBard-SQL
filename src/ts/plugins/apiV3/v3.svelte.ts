@@ -6,6 +6,7 @@ import { bindPluginRequestStatusStorage } from "../providerRequestStatus";
 import { recordOwner, removeOwner, clearOwners } from "../pluginStorageMeta";
 import DOMPurify from 'dompurify';
 import { additionalChatMenu, additionalFloatingActionButtons, additionalHamburgerMenu, additionalSettingsMenu, bodyIntercepterStore, chatPanelStore, DBState, selectedCharID, type MenuDef } from "src/ts/stores.svelte";
+import { findOwnedMenuIndex, makeFabLayoutKey } from "../floatingActionButtonLayout";
 import { v4 } from "uuid";
 import { sleep } from "src/ts/util";
 import { alertConfirm, alertError, alertNormal } from "src/ts/alert";
@@ -499,17 +500,23 @@ const addPluginUnloadCallback = (pluginName: string, callback: Function) => {
     pluginUnloadCallbacks.get(pluginName)?.push(callback);
 }
 
-const makeMenuUnloadCallback = (menuId:string, menuStore: MenuDef[]) =>{
+const makeMenuUnloadCallback = (
+    menuId: string,
+    pluginName: string,
+    menuStore: MenuDef[]
+) =>{
     return () => {
-        const index = menuStore.findIndex(item => item.id === menuId);
+        const index = findOwnedMenuIndex(menuStore, pluginName, menuId);
         if(index !== -1){
             menuStore.splice(index, 1);
         }
     }
 }
 
-const removeChatPanel = (id: string) => {
-    const index = chatPanelStore.findIndex(item => item.id === id);
+const removeChatPanel = (id: string, pluginName?: string) => {
+    const index = chatPanelStore.findIndex(item => (
+        item.id === id && (!pluginName || item.pluginName === pluginName)
+    ));
     if(index !== -1){
         chatPanelStore.splice(index, 1);
     }
@@ -1088,24 +1095,29 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             const menuId = id || v4()
             const menuDef:MenuDef = {
                 id: menuId,
+                pluginName: plugin.name,
                 name,
                 icon,
                 iconType,
                 callback
             }
-            const existingIndex = additionalSettingsMenu.findIndex(item => item.id === menuId)
+            const existingIndex = findOwnedMenuIndex(
+                additionalSettingsMenu,
+                plugin.name,
+                menuId
+            )
             if(existingIndex !== -1){
                 additionalSettingsMenu[existingIndex] = menuDef
                 addPluginUnloadCallback(
                     plugin.name,
-                    makeMenuUnloadCallback(menuId, additionalSettingsMenu)
+                    makeMenuUnloadCallback(menuId, plugin.name, additionalSettingsMenu)
                 )
                 return {id: menuId}
             }
             additionalSettingsMenu.push(menuDef)
             addPluginUnloadCallback(
                 plugin.name,
-                makeMenuUnloadCallback(menuId, additionalSettingsMenu)
+                makeMenuUnloadCallback(menuId, plugin.name, additionalSettingsMenu)
             )
             return {id: menuId};
         },
@@ -1163,17 +1175,19 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 icon,
                 iconType,
                 callback,
-                id
+                id,
+                pluginName: plugin.name,
+                layoutKey: makeFabLayoutKey(plugin.name, providedId, name),
             }
 
             const buttonStores = [additionalFloatingActionButtons, additionalHamburgerMenu, additionalChatMenu]
             for(const store of buttonStores){
-                const existingIndex = store.findIndex(item => item.id === id)
+                const existingIndex = findOwnedMenuIndex(store, plugin.name, id)
                 if(existingIndex !== -1){
                     store[existingIndex] = menuDef
                     addPluginUnloadCallback(
                         plugin.name,
-                        makeMenuUnloadCallback(id, store)
+                        makeMenuUnloadCallback(id, plugin.name, store)
                     )
                     return {id}
                 }
@@ -1184,7 +1198,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                     additionalFloatingActionButtons.push(menuDef)
                     addPluginUnloadCallback(
                         plugin.name,
-                        makeMenuUnloadCallback(menuDef.id, additionalFloatingActionButtons)
+                        makeMenuUnloadCallback(menuDef.id, plugin.name, additionalFloatingActionButtons)
                     )
                     break
                 }
@@ -1192,7 +1206,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                     additionalHamburgerMenu.push(menuDef)
                     addPluginUnloadCallback(
                         plugin.name,
-                        makeMenuUnloadCallback(menuDef.id, additionalHamburgerMenu)
+                        makeMenuUnloadCallback(menuDef.id, plugin.name, additionalHamburgerMenu)
                     )
                     break
                 }
@@ -1200,7 +1214,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                     additionalChatMenu.push(menuDef)
                     addPluginUnloadCallback(
                         plugin.name,
-                        makeMenuUnloadCallback(menuDef.id, additionalChatMenu)
+                        makeMenuUnloadCallback(menuDef.id, plugin.name, additionalChatMenu)
                     )
                     break
                 }
@@ -1237,7 +1251,9 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                     : undefined,
             }
 
-            const existingIndex = chatPanelStore.findIndex(item => item.id === id);
+            const existingIndex = chatPanelStore.findIndex(item => (
+                item.id === id && item.pluginName === plugin.name
+            ));
             if(existingIndex !== -1){
                 chatPanelStore[existingIndex] = panel;
             }
@@ -1251,7 +1267,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         unregisterMCP: unregisterMCPModule,
         unregisterUIPart: (id: string) => {
             const removeFromMenuStore = (menuStore: MenuDef[]) => {
-                const index = menuStore.findIndex(item => item.id === id);
+                const index = findOwnedMenuIndex(menuStore, plugin.name, id);
                 if(index !== -1){
                     menuStore.splice(index, 1);
                 }
@@ -1261,7 +1277,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             removeFromMenuStore(additionalFloatingActionButtons);
             removeFromMenuStore(additionalHamburgerMenu);
             removeFromMenuStore(additionalChatMenu);
-            removeChatPanel(id);
+            removeChatPanel(id, plugin.name);
         },
         log: (message:string) => {
             console.log(`[RisuAI Plugin: ${plugin.name}] ${message}`);

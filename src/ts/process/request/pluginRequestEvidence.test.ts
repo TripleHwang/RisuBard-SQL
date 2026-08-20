@@ -7,6 +7,7 @@ describe('plugin request evidence recorder', () => {
         const recorder = createPluginRequestEvidenceRecorder({
             startedAt: 1_000,
             source: 'wiki-admin',
+            purpose: 'bardwiki-admin',
             sessionChatId: 'chat-1',
             generationId: 'generation-1',
             model: 'pluginmodel:::gemini',
@@ -29,6 +30,7 @@ describe('plugin request evidence recorder', () => {
             timestamp: 1_000,
             category: 'llm',
             source: 'wiki-admin',
+            purpose: 'bardwiki-admin',
             sessionChatId: 'chat-1',
             generationId: 'generation-1',
             inputTokens: 31,

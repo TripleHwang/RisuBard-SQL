@@ -4,18 +4,20 @@ import type { RequestLogEntry } from 'src/ts/requestLog'
 vi.mock('src/ts/requestLog', () => ({
     fetchRequestLogPage: vi.fn(),
 }))
+
 import {
-    addLegacyInputEstimates,
     buildLegacyChatRequestEvidence,
     buildChatRequestEvidence,
     formatChatRequestEvidenceMarkdown,
 } from './chatRequestEvidence'
+import * as evidenceModule from './chatRequestEvidence'
 
 const entry: RequestLogEntry = {
     id: 7,
     timestamp: Date.UTC(2026, 7, 12, 3, 4, 5),
     category: 'llm',
     source: 'main',
+    purpose: 'chat-response',
     chatId: 'generation-7',
     sessionChatId: 'chat-7',
     model: 'Vertex AI - Gemini 3.1 Pro',
@@ -47,7 +49,7 @@ const entry: RequestLogEntry = {
 }
 
 describe('chat request evidence', () => {
-    it('builds exportable evidence for legacy plugin generations without stored rows', () => {
+    it('builds exportable evidence for old plugin generations without stored rows', () => {
         const evidence = buildLegacyChatRequestEvidence('chat-legacy', [{
             timestamp: Date.UTC(2026, 7, 12, 3, 4, 5),
             generationId: 'generation-plugin',
@@ -78,7 +80,9 @@ describe('chat request evidence', () => {
 
     it('keeps only evidence metadata and reconciles injection tokens to input usage', () => {
         const evidence = buildChatRequestEvidence('chat-7', [entry], Date.UTC(2026, 7, 12, 4))
+
         expect(evidence.requests).toHaveLength(1)
+        expect(evidence.requests[0].purpose).toBe('chat-response')
         expect(evidence.requests[0].injectionManifest?.totalTokens).toBe(6_537)
         expect(evidence.requests[0].injectionManifest?.items.reduce(
             (sum, item) => sum + item.tokens, 0
@@ -89,9 +93,21 @@ describe('chat request evidence', () => {
     })
 
     it('formats the card fields and every injection row as readable Markdown', () => {
-        const evidence = buildChatRequestEvidence('chat-7', [entry], Date.UTC(2026, 7, 12, 4))
+        const evidence = buildChatRequestEvidence(
+            'chat-7',
+            [entry],
+            Date.UTC(2026, 7, 12, 4),
+            'Asia/Seoul',
+        )
         const markdown = formatChatRequestEvidenceMarkdown(evidence)
+
+        expect(markdown).toContain('- 표시 시간대: Asia/Seoul (UTC+09:00)')
+        expect(markdown).toContain('- 생성 시각: 2026-08-12 13:00:00')
+        expect(markdown).toContain('| 시각 | 2026-08-12 12:04:05 |')
+        expect(markdown).not.toContain('2026-08-12T03:04:05.000Z')
         expect(markdown).toContain('Vertex AI - Gemini 3.1 Pro')
+        expect(markdown).toContain('| 요청 목적 | 채팅 답변 생성 |')
+        expect(markdown).toContain('| 로그 종류 | main |')
         expect(markdown).toContain('6,537')
         expect(markdown).toContain('792')
         expect(markdown).toContain('22.4초')
@@ -99,143 +115,59 @@ describe('chat request evidence', () => {
         expect(markdown).toContain('로어북 · Main')
         expect(markdown).not.toContain('must-not-export')
         expect(markdown).not.toContain('secret prose')
+        expect(markdown).not.toContain('가상 레거시')
+        expect(markdown).not.toContain('레거시 입력 구성')
     })
 
-    it('estimates the no-wiki full-chat input only when the report is exported', async () => {
-        const evidence = buildChatRequestEvidence('chat-7', [{
-            ...entry,
-            id: 1,
-            generationId: 'assistant-1',
-            inputTokens: 100,
-            outputTokens: 10,
-            injectionManifest: {
-                totalTokens: 100,
-                estimated: true,
-                items: [
-                    { kind: 'wiki', name: '현재 장면', tokens: 10 },
-                    { kind: 'chatHistory', tokens: 20 },
-                    { kind: 'other', tokens: 70 },
-                ],
-            },
-        }, {
-            ...entry,
-            id: 2,
-            generationId: 'assistant-2',
-            inputTokens: 100,
-            outputTokens: 10,
-            injectionManifest: {
-                totalTokens: 100,
-                estimated: true,
-                items: [
-                    { kind: 'wiki', name: '선택 기억', tokens: 10 },
-                    { kind: 'chatHistory', tokens: 20 },
-                    { kind: 'other', tokens: 70 },
-                ],
-            },
-        }, {
-            ...entry,
-            id: 3,
-            source: 'memory',
-            generationId: 'memory-2',
-            inputTokens: 30,
-            outputTokens: 5,
-        }], Date.UTC(2026, 7, 12, 4))
+    it('counts only retained assistant bodies and the currently selected reroll', async () => {
+        const summarize = (evidenceModule as Record<string, unknown>)
+            .addRetainedAssistantSummary as undefined | ((
+                evidence: ReturnType<typeof buildChatRequestEvidence>,
+                messages: Array<Record<string, unknown>>,
+                countText: (text: string) => Promise<number>,
+            ) => Promise<ReturnType<typeof buildChatRequestEvidence>>)
+
+        expect(typeof summarize).toBe('function')
         const countText = vi.fn(async (text: string) => text.length)
-        const messages = [{
-            role: 'user' as const,
-            data: 'aaaa',
-            chatId: 'user-1',
-        }, {
-            role: 'char' as const,
-            data: 'bbbbbb',
-            chatId: 'assistant-1',
-            generationInfo: {
-                generationId: 'assistant-1',
-                risuBardContext: {
-                    mode: 'current' as const,
-                    recentMessages: [{ id: 'user-1', role: 'user' as const }],
-                    wikiPaths: [],
-                    selectedTokens: 10,
-                    inquiryDurationMs: 0,
-                },
-            },
-        }, {
-            role: 'user' as const,
-            data: 'ccc',
-            chatId: 'user-2',
-        }, {
-            role: 'char' as const,
-            data: 'reply',
-            chatId: 'assistant-2',
-            generationInfo: {
-                generationId: 'assistant-2',
-                risuBardContext: {
-                    mode: 'current' as const,
-                    recentMessages: [{ id: 'user-2', role: 'user' as const }],
-                    wikiPaths: [],
-                    selectedTokens: 10,
-                    inquiryDurationMs: 0,
-                },
-            },
-        }]
-
-        const estimated = await addLegacyInputEstimates(evidence, messages, countText)
-
-        expect(countText).toHaveBeenCalledTimes(4)
-        expect(estimated.requests[0].legacyInput).toEqual({
-            mode: 'estimated',
-            activeMessageCount: 1,
-            recentMessageCount: 1,
-            fullChatTokens: 8,
-            recentChatTokens: 8,
-            removedWikiTokens: 10,
-            inputTokens: 90,
-        })
-        expect(estimated.requests[1].legacyInput).toEqual({
-            mode: 'estimated',
-            activeMessageCount: 3,
-            recentMessageCount: 1,
-            fullChatTokens: 25,
-            recentChatTokens: 7,
-            removedWikiTokens: 10,
-            inputTokens: 108,
-        })
-        expect(estimated.requests[2].legacyInput).toEqual({
-            mode: 'excluded',
-            inputTokens: 0,
-        })
-        expect(estimated.totals).toMatchObject({
-            inputTokens: 230,
-            legacyInputTokens: 198,
-            inputTokenSavings: -32,
-        })
-        expect(estimated.totals.legacyInputSavingsRate).toBeCloseTo(-32 / 198)
-    })
-
-    it('prints legacy input composition without inventing legacy output tokens', async () => {
-        const evidence = await addLegacyInputEstimates(
-            buildChatRequestEvidence('chat-7', [entry], Date.UTC(2026, 7, 12, 4)),
-            [{
-                role: 'user', data: 'question', chatId: 'user-1',
+        const evidence = await summarize!(
+            buildChatRequestEvidence('chat-7', [entry]),
+            [{ role: 'user', data: 'question' }, {
+                role: 'char',
+                data: 'selected answer',
+                swipes: ['discarded reroll', 'selected answer'],
+                swipeId: 1,
             }, {
-                role: 'char', data: 'answer', chatId: 'generation-7',
+                role: 'char',
+                data: 'second',
+                chatId: 'generation-7',
                 generationInfo: {
                     generationId: 'generation-7',
                     risuBardContext: {
-                        mode: 'current',
-                        recentMessages: [{ id: 'user-1', role: 'user' }],
-                        wikiPaths: [], selectedTokens: 0, inquiryDurationMs: 0,
+                        recentMessages: [
+                            { id: 'assistant-1', role: 'char' },
+                            { id: 'user-2', role: 'user' },
+                        ],
                     },
                 },
+            }, {
+                role: 'char',
+                data: 'assistant-side comment',
+                isComment: true,
             }],
-            async (text) => text.length,
+            countText,
         )
 
+        expect(countText.mock.calls.map(([text]) => text)).toEqual([
+            'selected answer',
+            'second',
+        ])
+        expect(evidence.retainedAssistant).toEqual({
+            responseCount: 2,
+            bodyTokens: 21,
+        })
         const markdown = formatChatRequestEvidenceMarkdown(evidence)
-        expect(markdown).toContain('총 입력 토큰 (가상 레거시)')
-        expect(markdown).toContain('입력 토큰 절감량')
-        expect(markdown).toContain('### 레거시 입력 구성')
-        expect(markdown).toContain('전체 활성 메시지')
-        expect(markdown).not.toContain('출력 토큰 (가상 레거시)')
+        expect(markdown).toContain('- 리롤 제외 누적 assistant 답변 수: 2')
+        expect(markdown).toContain('- 리롤 제외 누적 assistant 본문 토큰: 21')
+        expect(markdown).toContain('| 선택된 채팅 메시지 | 2 |')
     })
 })

@@ -6,32 +6,34 @@ import { language } from "src/lang"
 import { reencodeImage } from "./process/files/inlays"
 import { PngChunk } from "./pngChunk"
 import { v4 } from "uuid"
+import type { RisuPersona } from "./storage/database.svelte"
 
-export async function selectUserImg() {
+export async function selectPersonaImg(persona: RisuPersona): Promise<boolean> {
     const selected = await selectSingleFile(['png'])
     if (!selected) {
-        return
+        return false
     }
-    const img = selected.data
-    let db = getDatabase()
-    const imgp = await saveImage(img)
-    db.userIcon = imgp
-    db.personas[db.selectedPersona] = {
-        ...db.personas[db.selectedPersona],
-        name: db.username,
-        icon: db.userIcon,
-        personaPrompt: db.personaPrompt,
-        note: db.userNote,
-        id: db.personas[db.selectedPersona].id ?? v4()
-    }
+    persona.icon = await saveImage(selected.data)
+    persona.id ??= v4()
+    return true
+}
+
+export async function selectUserImg() {
+    const db = getDatabase()
+    const persona = db.personas[db.selectedPersona]
+    if (!persona || !await selectPersonaImg(persona)) return
+    db.userIcon = persona.icon
+    saveUserPersona()
 }
 
 export function saveUserPersona() {
     let db = getDatabase()
-    db.personas[db.selectedPersona].name = db.username
-    db.personas[db.selectedPersona].icon = db.userIcon
-    db.personas[db.selectedPersona].personaPrompt = db.personaPrompt
-    db.personas[db.selectedPersona].note = db.userNote
+    const persona = db.personas[db.selectedPersona]
+    if (!persona) return
+    persona.name = db.username
+    persona.icon = db.userIcon
+    persona.personaPrompt = db.personaPrompt
+    persona.note = db.userNote
 }
 
 export function changeUserPersona(id: number, save: 'save' | 'noSave' = 'save') {
@@ -40,6 +42,7 @@ export function changeUserPersona(id: number, save: 'save' | 'noSave' = 'save') 
     }
     let db = getDatabase()
     const pr = db.personas[id]
+    if (!pr) return
     db.personaPrompt = pr.personaPrompt
     db.username = pr.name
     db.userIcon = pr.icon
@@ -53,15 +56,16 @@ interface PersonaCard {
     note?: string
 }
 
-export async function exportUserPersona() {
-    let db = getDatabase({ snapshot: true })
-    if ((!db.username) || (!db.personaPrompt)) {
+export async function exportUserPersona(persona?: RisuPersona) {
+    const db = getDatabase({ snapshot: true })
+    const current = persona ?? db.personas[db.selectedPersona]
+    if ((!current?.name) || (!current.personaPrompt)) {
         notifyError("username or persona prompt is empty")
         return
     }
 
     let img: Uint8Array
-    if (!db.userIcon) {
+    if (!current.icon) {
         const canvas = document.createElement('canvas')
         canvas.width = 256
         canvas.height = 256
@@ -72,13 +76,13 @@ export async function exportUserPersona() {
         const base64 = dataUrl.split(',')[1]
         img = new Uint8Array(Buffer.from(base64, 'base64'))
     } else {
-        img = await readImage(db.userIcon)
+        img = await readImage(current.icon)
     }
 
     let card: PersonaCard = safeStructuredClone({
-        name: db.username,
-        personaPrompt: db.personaPrompt,
-        note: db.userNote,
+        name: current.name,
+        personaPrompt: current.personaPrompt,
+        note: current.note,
     })
 
     alertStore.set({
@@ -98,16 +102,16 @@ export async function exportUserPersona() {
     })
 
     await sleep(10)
-    await downloadFile(`${db.username.replace(/[<>:"/\\|?*\.\,]/g, "")}_export.png`, img)
+    await downloadFile(`${current.name.replace(/[<>:"/\\|?*\.\,]/g, "")}_export.png`, img)
 
     notifySuccess(language.successExport)
 }
 
-export async function importUserPersona() {
+export async function importUserPersona(target?: RisuPersona[]): Promise<RisuPersona | null> {
     try {
         const v = await selectSingleFile(['png'])
         if (!v) {
-            return
+            return null
         }
         const readGenerator = PngChunk.readGenerator(v.data)
         let decoded: string | undefined;
@@ -121,24 +125,27 @@ export async function importUserPersona() {
 
         if (!decoded) {
             alertError(language.errors.noData)
-            return
+            return null
         }
         const data: PersonaCard = JSON.parse(Buffer.from(decoded, 'base64').toString('utf-8'))
         if (data.name && data.personaPrompt) {
-            let db = getDatabase()
-            db.personas.push({
+            const db = getDatabase()
+            const imported: RisuPersona = {
                 name: data.name,
                 icon: await saveImage(await reencodeImage(v.data)),
                 personaPrompt: data.personaPrompt,
                 note: data.note,
                 id: v4()
-            })
+            }
+            ;(target ?? db.personas).push(imported)
             notifySuccess(language.successImport)
+            return imported
         } else {
             alertError(language.errors.noData)
         }
     } catch (error) {
         alertError(error)
-        return
+        return null
     }
+    return null
 }

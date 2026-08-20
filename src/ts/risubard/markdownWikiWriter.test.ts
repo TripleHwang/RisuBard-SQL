@@ -69,6 +69,7 @@ describe('Markdown wiki writer', () => {
             tools: [],
             maxTokens: 4_096,
             logSource: 'memory',
+            logPurpose: 'bardwiki-canonical-update',
         })
         expect(submitted).not.toHaveProperty('schema')
         expect(submitted?.formated[1].content).toContain('소성당 전투')

@@ -6,7 +6,7 @@
 
 > 🌐 此指南由机器翻译生成。如需获取最准确的信息,请参阅 [English](../en/install.md) 或 [한국어](../ko/install.md) 版本。
 
-PocketRisu 有四种安装方式。
+RisuBard 有四种安装方式。
 
 - [1. 便携版](#1-便携版) — 预编译的二进制文件。无需 Node.js。
 - [2. Docker](#2-docker) — 容器环境。
@@ -34,27 +34,27 @@ PocketRisu 有四种安装方式。
 
 ### 下载
 
-从 [Releases 页面](https://github.com/PocketRisu/PocketRisu/releases)获取对应您 OS 的文件。
+从 [Releases 页面](https://github.com/rpaddict/RisuBard/releases)获取对应您 OS 的文件。
 
 | OS                       | 文件                                      |
 | ------------------------ | ----------------------------------------- |
-| Windows (x64)            | `PocketRisu-vX.X.X-win-x64.zip`           |
-| macOS (Apple Silicon)    | `PocketRisu-vX.X.X-macos-arm64.tar.gz`    |
-| Linux (x64)              | `PocketRisu-vX.X.X-linux-x64.tar.gz`      |
-| Linux (ARM)              | `PocketRisu-vX.X.X-linux-arm64.tar.gz`    |
+| Windows (x64)            | `RisuBard-vX.X.X-win-x64.zip`           |
+| macOS (Apple Silicon)    | `RisuBard-vX.X.X-macos-arm64.tar.gz`    |
+| Linux (x64)              | `RisuBard-vX.X.X-linux-x64.tar.gz`      |
+| Linux (ARM)              | `RisuBard-vX.X.X-linux-arm64.tar.gz`    |
 
 ### 运行
 
 **Windows**
 
-解压 zip 文件,双击文件夹中的 `PocketRisu.exe`。浏览器自动打开 `http://localhost:6001`。
+解压 zip 文件,双击文件夹中的 `RisuBard.exe`。浏览器自动打开 `http://localhost:6001`。
 
 **macOS**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-macos-arm64.tar.gz
-xattr -cr PocketRisu-vX.X.X-macos-arm64
-open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
+tar -xzf RisuBard-vX.X.X-macos-arm64.tar.gz
+xattr -cr RisuBard-vX.X.X-macos-arm64
+open RisuBard-vX.X.X-macos-arm64/RisuBard.app
 ```
 
 `xattr` 命令是绕过"无法验证 Apple"警告的一次性操作。
@@ -62,8 +62,8 @@ open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
 **Linux**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-linux-*.tar.gz
-cd PocketRisu-vX.X.X-linux-*
+tar -xzf RisuBard-vX.X.X-linux-*.tar.gz
+cd RisuBard-vX.X.X-linux-*
 ./start.sh
 ```
 
@@ -76,10 +76,10 @@ cd PocketRisu-vX.X.X-linux-*
 **Linux (x64):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-linux-x64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-cd PocketRisu-${VERSION}-linux-x64
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-linux-x64.tar.gz" -o risubard.tar.gz
+tar -xzf risubard.tar.gz && rm risubard.tar.gz
+cd RisuBard-${VERSION}-linux-x64
 ./start.sh
 ```
 
@@ -88,11 +88,11 @@ cd PocketRisu-${VERSION}-linux-x64
 **macOS (Apple Silicon):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-macos-arm64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-xattr -cr PocketRisu-${VERSION}-macos-arm64
-cd PocketRisu-${VERSION}-macos-arm64
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-macos-arm64.tar.gz" -o risubard.tar.gz
+tar -xzf risubard.tar.gz && rm risubard.tar.gz
+xattr -cr RisuBard-${VERSION}-macos-arm64
+cd RisuBard-${VERSION}-macos-arm64
 ./start.sh
 ```
 
@@ -123,7 +123,7 @@ cd PocketRisu-${VERSION}-macos-arm64
 ### 运行
 
 ```bash
-curl -L https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/docker-compose.yml -o docker-compose.yml
+curl -L https://raw.githubusercontent.com/rpaddict/RisuBard/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -160,7 +160,7 @@ node --version
 ### 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/install.sh | bash
 ```
 
 安装完成后会显示状态消息。
@@ -168,7 +168,7 @@ curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.
 ### 启动服务器
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 pnpm runserver
 ```
 
@@ -177,14 +177,14 @@ pnpm runserver
 ### 更新
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 ./update.sh
 ```
 
-> **v1.5.x → v1.6.0 一次性提示**: 如果您在 Risuai-NodeOnly 时代(v1.5.x 或更早)通过 `install.sh` 安装,请在首次 v1.6.0 更新前一次性将 `update.sh` 替换为新版本。(仓库已重命名为 PocketRisu,旧 `update.sh` 无法找到新的源目录。)
+> **v1.5.x → v1.6.0 一次性提示**: 如果您在 Risuai-NodeOnly 时代(v1.5.x 或更早)通过 `install.sh` 安装,请在首次 v1.6.0 更新前一次性将 `update.sh` 替换为新版本。(仓库已重命名为 RisuBard,旧 `update.sh` 无法找到新的源目录。)
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/update.sh -o update.sh && chmod +x update.sh
+> curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/update.sh -o update.sh && chmod +x update.sh
 > ./update.sh
 > ```
 >
@@ -198,8 +198,8 @@ cd ~/pocketrisu
 手动克隆并构建源码。适用于需要修改或调试代码的开发者。
 
 ```bash
-git clone https://github.com/PocketRisu/PocketRisu.git
-cd PocketRisu
+git clone https://github.com/rpaddict/RisuBard.git
+cd RisuBard
 pnpm install
 pnpm build
 pnpm runserver

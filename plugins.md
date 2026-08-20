@@ -595,13 +595,21 @@ Risuai.registerButton({
     name: 'Quick Action',
     icon: 'https://example.com/icon.png', // Optional icon URL
     iconType: 'img', // Icon type: 'html', 'img', or 'none'
-    location: 'action' //you can also use 'chat' or 'hamburger' for chat or hamburger menu
+    location: 'action', //you can also use 'chat' or 'hamburger' for chat or hamburger menu
+    id: 'quick-action' // Stable inside this plugin; recommended
 }, async () => {
   // Called when user clicks the button
   const char = await Risuai.getCharacter();
   await console.log(`Current character: ${char.name}`);
 });
 ```
+
+Buttons registered with `location: 'action'` are draggable automatically. RisuAI stores
+the user's viewport-relative position; plugins should not add their own drag handlers or
+position storage. Use a stable `id` so the position survives plugin and app reloads. IDs
+are scoped to each plugin, so different plugins may safely use the same ID. If `id` is
+omitted, the button name is used as a best-effort layout key and renaming it resets the
+saved position.
 
 **Icon Types:**
 - `'html'` - Raw HTML (SVG, emoji, etc.)

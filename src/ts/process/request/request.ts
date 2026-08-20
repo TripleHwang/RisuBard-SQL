@@ -47,6 +47,7 @@ import {
 import { createPluginRequestEvidenceRecorder } from './pluginRequestEvidence';
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, requestLogEnabled, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
+import { defaultRequestPurpose, type RequestPurpose } from "src/ts/requestPurpose";
 import {
     startStatus, appendText, endStatus, setStatusTokenCounter, addBadge,
     buildInjectionManifest, mergeRequestStatusSources,
@@ -99,6 +100,8 @@ interface requestDataArgument{
     modelBindingTarget?: ModelBindingTarget
     /** Overrides the request log's source/purpose tag. */
     logSource?:RequestLogSource
+    /** Explicit user-visible reason for the request. */
+    logPurpose?:RequestPurpose
 }
 
 export interface RequestDataArgumentExtended extends requestDataArgument{
@@ -748,6 +751,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     const genId = arg.chatId ?? `aux-${uuidv4()}`
     const statusKind = toRequestKind(mode)
     const reportStatus = statusEnabled() && !!genId
+    const logSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
+    const logPurpose = arg.logPurpose ?? defaultRequestPurpose(logSource)
 
     // Request logging wraps the transport, so the direct path and the
     // server-side job path are recorded identically — the job path had no
@@ -757,7 +762,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // genInfo.generationId).
     const logScope = createRequestLogScope({
         category: 'llm',
-        source: arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode)),
+        source: logSource,
+        purpose: logPurpose,
         chatId: genId,
         sessionChatId: arg.realChatId,
         generationId: genId,
@@ -999,6 +1005,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         if (reportStatus) {
             safeStatus(() => startStatus(genId, {
                 kind: statusKind,
+                purpose: logPurpose,
                 label: preset.name,
                 chatId: arg.realChatId,
                 phase: 'connecting',
@@ -1584,6 +1591,9 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
     const evidenceRecorder = createPluginRequestEvidenceRecorder({
         startedAt,
         source: arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(arg.mode)),
+        purpose: arg.logPurpose ?? defaultRequestPurpose(
+            arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(arg.mode))
+        ),
         sessionChatId: arg.realChatId,
         generationId: genId,
         model: responseModel,
@@ -1640,6 +1650,9 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
         if(reportStatus){
             safeStatus(() => startStatus(genId, {
                 kind: toRequestKind(arg.mode),
+                purpose: arg.logPurpose ?? defaultRequestPurpose(
+                    arg.logSource ?? toLogSource(arg.mode)
+                ),
                 label: responseModel,
                 chatId: arg.realChatId,
                 phase: 'connecting',

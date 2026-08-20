@@ -52,11 +52,11 @@ function getCustomBackupKeepEntry() {
         const rel = path.relative(ROOT, abs);
         if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
         if (!rel) {
-            error('Custom backup directory points at the PocketRisu app root. Move it to a separate folder before updating.');
+            error('Custom backup directory points at the RisuBard app root. Move it to a separate folder before updating.');
         }
         const top = rel.split(path.sep)[0];
         if (MANAGED_BACKUP_PATH_ROOTS.has(top)) {
-            error(`Custom backup directory is inside PocketRisu app files (${rel}). Move it to a separate folder such as data/backups before updating.`);
+            error(`Custom backup directory is inside RisuBard app files (${rel}). Move it to a separate folder such as data/backups before updating.`);
         }
         return top || null;
     } catch {
@@ -70,7 +70,7 @@ function httpsGet(url, redirectCount = 0) {
     return new Promise((resolve, reject) => {
         if (redirectCount > MAX_REDIRECTS) return reject(new Error('Too many redirects'));
         const get = url.startsWith('https') ? https.get : http.get;
-        get(url, { headers: { 'User-Agent': 'PocketRisu-Updater' } }, (res) => {
+        get(url, { headers: { 'User-Agent': 'RisuBard-Updater' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return httpsGet(res.headers.location, redirectCount + 1).then(resolve, reject);
             }
@@ -90,7 +90,7 @@ function downloadToFile(url, dest, redirectCount = 0) {
         if (redirectCount > MAX_REDIRECTS) return reject(new Error('Too many redirects'));
         const file = fs.createWriteStream(dest);
         const get = url.startsWith('https') ? https.get : http.get;
-        get(url, { headers: { 'User-Agent': 'PocketRisu-Updater' } }, (res) => {
+        get(url, { headers: { 'User-Agent': 'RisuBard-Updater' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 file.close();
                 fs.unlinkSync(dest);
@@ -286,7 +286,7 @@ async function main() {
             log('Restoring files already moved to backup...');
             restoreBackupIntoRoot(backupDir, true);
             error(isWin
-                ? 'Update failed because some files are in use. Close the running PocketRisu window/console first, then run update.bat again.'
+                ? 'Update failed because some files are in use. Close the running RisuBard window/console first, then run update.bat again.'
                 : 'Update failed because some files are in use. Stop the running server first, then try again.');
         }
     }
@@ -372,7 +372,7 @@ async function main() {
     log(`Update complete! ${current} → ${latest}`);
     log('');
     if (isWin) {
-        log('Restart by running PocketRisu.exe');
+        log('Restart by running RisuBard.exe');
     } else {
         log('Restart by running ./start.sh');
     }

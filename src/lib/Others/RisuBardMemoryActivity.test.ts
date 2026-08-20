@@ -6,13 +6,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
     loadChatRequestEvidence: vi.fn(),
-    addLegacyInputEstimates: vi.fn(async (evidence: unknown) => evidence),
+    addRetainedAssistantSummary: vi.fn(async (evidence: any, messages: any[]) => ({
+        ...evidence,
+        retainedAssistant: {
+            responseCount: messages.filter((message) => message.role === 'char').length,
+            bodyTokens: 123,
+        },
+    })),
     downloadFile: vi.fn(),
 }))
 
 vi.mock('src/ts/risubard/chatRequestEvidence', () => ({
     loadChatRequestEvidence: mocks.loadChatRequestEvidence,
-    addLegacyInputEstimates: mocks.addLegacyInputEstimates,
+    addRetainedAssistantSummary: mocks.addRetainedAssistantSummary,
     formatChatRequestEvidenceMarkdown: vi.fn(() => '# evidence'),
     buildLegacyChatRequestEvidence: vi.fn((chatId: string, entries: unknown[]) => ({
         schemaVersion: 1,
@@ -35,6 +41,9 @@ vi.mock('src/ts/risubard/chatRequestEvidence', () => ({
 }))
 vi.mock('src/ts/globalApi.svelte', () => ({
     downloadFile: mocks.downloadFile,
+}))
+vi.mock('src/ts/requestLog', () => ({
+    REQUEST_LOG_RECORDED_EVENT: 'risubard-request-log-recorded',
 }))
 import RisuBardMemoryActivity from './RisuBardMemoryActivity.svelte'
 import { publishRisuBardMemoryActivity } from 'src/ts/risubard/memoryActivity'
@@ -60,13 +69,22 @@ afterEach(async () => {
 })
 
 describe('RisuBardMemoryActivity', () => {
-    it('uses the full log pane instead of a fixed 18rem stream', () => {
+    it('uses a dedicated vertical log scroller and raises log type by one pixel', () => {
         const source = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardMemoryActivity.svelte'
+        ), 'utf8')
+        const workspaceSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
         ), 'utf8')
         expect(source).toMatch(/\.activity-console\s*\{[^}]*height:\s*100%/s)
         expect(source).toMatch(/\.activity-stream\s*\{[^}]*flex:\s*1/s)
         expect(source).not.toMatch(/\.activity-stream\s*\{[^}]*max-height:/s)
+        expect(source).toContain('--activity-font-step: 1px')
+        expect(source).toMatch(/\.activity-heading\s*\{[^}]*font-size:\s*calc\(\.74rem \+ var\(--activity-font-step\)\)/s)
+        expect(source).toMatch(/\.metadata-grid small\s*\{[^}]*font-size:\s*calc\(\.54rem \+ var\(--activity-font-step\)\)/s)
+        expect(workspaceSource).toContain('data-memory-activity-scroll')
+        expect(workspaceSource).toMatch(/\.activity-log-scroll\s*\{[^}]*overflow-y:\s*scroll/s)
+        expect(workspaceSource).toMatch(/\.activity-log-scroll\s*\{[^}]*scrollbar-gutter:\s*stable/s)
     })
 
     it('shows a failure published before the log view mounts', async () => {
@@ -150,18 +168,76 @@ describe('RisuBardMemoryActivity', () => {
         expect(onSelectPath).toHaveBeenCalledWith('characters/라비안.md')
     })
 
+    it('does not duplicate a persisted generation under its message id', async () => {
+        mocks.loadChatRequestEvidence.mockResolvedValue({
+            schemaVersion: 1,
+            generatedAt: '2026-08-12T04:00:00.000Z',
+            chatId: 'chat-deduplicated',
+            requestCount: 1,
+            totals: { inputTokens: 100, outputTokens: 20, cachedTokens: 0, reasoningTokens: 0 },
+            requests: [{
+                id: 1,
+                timestamp: '2026-08-12T03:04:05.000Z',
+                generationId: 'generation-2',
+                source: 'main',
+                purpose: 'chat-response',
+                outcome: 'done',
+                streaming: false,
+                inputTokens: 100,
+                outputTokens: 20,
+            }],
+        })
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(RisuBardMemoryActivity, {
+            target,
+            props: {
+                characterId: 'character',
+                chatId: 'chat-deduplicated',
+                messages: [{
+                    role: 'char',
+                    data: 'generated prose',
+                    chatId: 'assistant-2',
+                    time: Date.UTC(2026, 7, 12, 3, 4, 5),
+                    generationInfo: {
+                        generationId: 'generation-2',
+                        risuBardContext: {
+                            mode: 'current', recentMessages: [], wikiPaths: [],
+                            selectedTokens: 0, inquiryDurationMs: 0,
+                        },
+                    },
+                }],
+            },
+        })
+        await vi.waitFor(() => {
+            expect(document.querySelectorAll('details.request-entry')).toHaveLength(1)
+            expect(document.body.textContent).toContain('스토리 생성')
+            expect(document.body.textContent).not.toContain('구형 생성 기록')
+        })
+    })
+
     it('labels persisted automatic wiki and administrator requests', async () => {
         mocks.loadChatRequestEvidence.mockResolvedValue({
             schemaVersion: 1,
             generatedAt: '2026-08-12T04:00:00.000Z',
             chatId: 'chat-kinds',
-            requestCount: 2,
+            requestCount: 3,
             totals: { inputTokens: 30, outputTokens: 8, cachedTokens: 0, reasoningTokens: 0 },
             requests: [{
                 id: 2,
                 timestamp: '2026-08-12T03:05:00.000Z',
                 generationId: 'wiki-2',
                 source: 'memory',
+                purpose: 'bardwiki-analysis',
+                outcome: 'done',
+                streaming: false,
+                inputTokens: 20,
+                outputTokens: 5,
+            }, {
+                id: 3,
+                timestamp: '2026-08-12T03:04:30.000Z',
+                generationId: 'wiki-3',
+                source: 'memory',
+                purpose: 'bardwiki-canonical-update',
                 outcome: 'done',
                 streaming: false,
                 inputTokens: 20,
@@ -171,6 +247,7 @@ describe('RisuBardMemoryActivity', () => {
                 timestamp: '2026-08-12T03:04:00.000Z',
                 generationId: 'admin-1',
                 source: 'wiki-admin',
+                purpose: 'bardwiki-admin',
                 outcome: 'done',
                 streaming: false,
                 inputTokens: 10,
@@ -184,14 +261,112 @@ describe('RisuBardMemoryActivity', () => {
         })
 
         await vi.waitFor(() => {
-            expect(document.body.textContent).toContain('위키 작업')
-            expect(document.body.textContent).toContain('위키 관리자 명령')
+            expect(document.body.textContent).toContain('BardWiki 의미 분석')
+            expect(document.body.textContent).toContain('BardWiki 정본 갱신')
+            expect(document.body.textContent).toContain('BardWiki 관리자 명령')
         })
         expect([...document.querySelectorAll('time')].map((node) => node.dateTime))
             .toEqual([
                 '2026-08-12T03:05:00.000Z',
+                '2026-08-12T03:04:30.000Z',
                 '2026-08-12T03:04:00.000Z',
             ])
+    })
+
+    it('renders retained requests as collapsed summaries with grouped token totals', async () => {
+        mocks.loadChatRequestEvidence.mockResolvedValue({
+            schemaVersion: 1,
+            generatedAt: '2026-08-12T04:00:00.000Z',
+            chatId: 'chat-summary',
+            requestCount: 1,
+            totals: { inputTokens: 2_700, outputTokens: 700, cachedTokens: 0, reasoningTokens: 0 },
+            requests: [{
+                id: 9,
+                timestamp: '2026-08-12T03:04:05.000Z',
+                generationId: 'generation-9',
+                source: 'main',
+                purpose: 'chat-response',
+                outcome: 'done',
+                streaming: true,
+                durationMs: 12_000,
+                inputTokens: 2_700,
+                outputTokens: 700,
+                injectionManifest: {
+                    totalTokens: 2_700,
+                    items: [
+                        { kind: 'systemPrompt', name: 'System Rule', tokens: 300 },
+                        { kind: 'persona', tokens: 200 },
+                        { kind: 'wiki', name: 'characters/라비안.md', tokens: 400 },
+                        { kind: 'lorebook', name: 'Main', tokens: 500 },
+                        { kind: 'chatHistory', tokens: 600 },
+                        { kind: 'instruction', name: 'Guidelines', tokens: 700 },
+                    ],
+                },
+            }],
+        })
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(RisuBardMemoryActivity, {
+            target,
+            props: { characterId: 'character', chatId: 'chat-summary', messages: [] },
+        })
+
+        await vi.waitFor(() => expect(document.querySelector('details.request-entry')).not.toBeNull())
+        const card = document.querySelector<HTMLDetailsElement>('details.request-entry')!
+        const summary = card.querySelector('summary')?.textContent ?? ''
+        expect(card.open).toBe(false)
+        expect(summary).toContain('스토리 생성')
+        expect(summary).toContain('성공')
+        expect(summary).toContain('입력 2,700')
+        expect(summary).toContain('출력 700')
+        expect(summary).toContain('시스템 1,000')
+        expect(summary).toContain('페르소나 200')
+        expect(summary).toContain('BardWiki 400')
+        expect(summary).toContain('로어북 500')
+        expect(summary).toContain('채팅 600')
+        expect(document.body.textContent).toContain('보존 요청 1')
+        expect(document.body.textContent).toContain('이번 실행 이벤트 0')
+        expect(card.querySelector('.request-details')?.textContent).toContain('System Rule')
+    })
+
+    it('reloads retained history when a request-log row is persisted', async () => {
+        const base = {
+            schemaVersion: 1 as const,
+            generatedAt: '2026-08-12T04:00:00.000Z',
+            chatId: 'chat-refresh',
+            totals: { inputTokens: 10, outputTokens: 2, cachedTokens: 0, reasoningTokens: 0 },
+        }
+        mocks.loadChatRequestEvidence
+            .mockResolvedValueOnce({ ...base, requestCount: 0, requests: [] })
+            .mockResolvedValueOnce({
+                ...base,
+                requestCount: 1,
+                requests: [{
+                    id: 10,
+                    timestamp: '2026-08-12T03:04:05.000Z',
+                    generationId: 'persisted-after-mount',
+                    source: 'main',
+                    purpose: 'chat-response',
+                    outcome: 'done',
+                    streaming: true,
+                    inputTokens: 10,
+                    outputTokens: 2,
+                }],
+            })
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(RisuBardMemoryActivity, {
+            target,
+            props: { characterId: 'character', chatId: 'chat-refresh', messages: [] },
+        })
+        await vi.waitFor(() => expect(mocks.loadChatRequestEvidence).toHaveBeenCalledTimes(1))
+
+        window.dispatchEvent(new CustomEvent('risubard-request-log-recorded', {
+            detail: { sessionChatIds: ['chat-refresh'] },
+        }))
+
+        await vi.waitFor(() => {
+            expect(mocks.loadChatRequestEvidence).toHaveBeenCalledTimes(2)
+            expect(document.body.textContent).toContain('persisted-after-mount')
+        })
     })
 
     it('renders nullable database metrics as unavailable', async () => {
@@ -258,13 +433,13 @@ describe('RisuBardMemoryActivity', () => {
         json?.click()
         await vi.waitFor(() => {
             expect(mocks.loadChatRequestEvidence).toHaveBeenCalledWith('chat-evidence')
-            expect(mocks.addLegacyInputEstimates).toHaveBeenCalledWith(
+            expect(mocks.addRetainedAssistantSummary).toHaveBeenCalledWith(
                 expect.objectContaining({ chatId: 'chat-evidence' }),
                 [],
             )
             expect(mocks.downloadFile).toHaveBeenCalledWith(
                 expect.stringMatching(/^risubard-chat-evidence-.*\.json$/),
-                expect.stringContaining('"inputTokens": 6537'),
+                expect.stringContaining('"bodyTokens": 123'),
             )
         })
         markdown?.click()

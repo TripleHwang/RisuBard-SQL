@@ -174,7 +174,7 @@ jobs:
           cd scripts/portable
           GCC_DIR="$(dirname "$(which gcc)")"
           "$GCC_DIR/windres" launcher.rc -O coff -o launcher.res
-          gcc -municode -O2 -o ../../portable/PocketRisu.exe launcher.c launcher.res -lshell32
+          gcc -municode -O2 -o ../../portable/RisuBard.exe launcher.c launcher.res -lshell32
           rm -f launcher.res icon.ico
 
       - name: Create macOS app bundle
@@ -182,7 +182,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          APP="portable/PocketRisu.app"
+          APP="portable/RisuBard.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           ICONSET="$(mktemp -d)/AppIcon.iconset"
           mkdir -p "$ICONSET"
@@ -201,11 +201,11 @@ jobs:
           <plist version="1.0">
           <dict>
               <key>CFBundleExecutable</key>
-              <string>PocketRisu</string>
+              <string>RisuBard</string>
               <key>CFBundleName</key>
-              <string>PocketRisu</string>
+              <string>RisuBard</string>
               <key>CFBundleIdentifier</key>
-              <string>com.pocketrisu</string>
+              <string>com.risubard</string>
               <key>CFBundleVersion</key>
               <string>${VERSION}</string>
               <key>CFBundleShortVersionString</key>
@@ -219,13 +219,13 @@ jobs:
           </dict>
           </plist>
           PLIST
-          cat > "$APP/Contents/MacOS/PocketRisu" << 'LAUNCHER'
+          cat > "$APP/Contents/MacOS/RisuBard" << 'LAUNCHER'
           #!/bin/bash
           PORTABLE_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
           cd "$PORTABLE_DIR"
           PORT="${PORT:-6001}"
           if [ ! -f "bin/node" ]; then
-              osascript -e 'display dialog "PocketRisu.app must remain inside the PocketRisu portable folder." buttons {"OK"} default button 1 with icon stop'
+              osascript -e 'display dialog "RisuBard.app must remain inside the RisuBard portable folder." buttons {"OK"} default button 1 with icon stop'
               exit 1
           fi
           (sleep 2 && open "http://localhost:$PORT") &
@@ -236,7 +236,7 @@ jobs:
           end tell
           ENDSCRIPT
           LAUNCHER
-          chmod +x "$APP/Contents/MacOS/PocketRisu"
+          chmod +x "$APP/Contents/MacOS/RisuBard"
 
       - name: Add update script (Windows)
         if: matrix.platform == 'win'
@@ -281,7 +281,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          NAME="PocketRisu-v${VERSION}-win-x64"
+          NAME="RisuBard-v${VERSION}-win-x64"
           LEGACY_NAME="RisuAI-NodeOnly-v${VERSION}-win-x64"
           cd portable
           7z a -tzip "../${NAME}.zip" .
@@ -295,7 +295,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          NAME="PocketRisu-v${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}"
+          NAME="RisuBard-v${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}"
           LEGACY_NAME="RisuAI-NodeOnly-v${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}"
           mv portable "$NAME"
           tar -czf "${NAME}.tar.gz" "$NAME"
@@ -310,7 +310,7 @@ jobs:
         with:
           name: portable-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
-            PocketRisu-*
+            RisuBard-*
             RisuAI-NodeOnly-*
           retention-days: 1
 
@@ -333,5 +333,5 @@ jobs:
           generate_release_notes: true
           draft: true
           files: |
-            PocketRisu-*
+            RisuBard-*
             RisuAI-NodeOnly-*

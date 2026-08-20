@@ -790,6 +790,7 @@ describe('stored response memory analysis', () => {
             expect.objectContaining({
                 realChatId: 'chat',
                 logSource: 'memory',
+                logPurpose: 'bardwiki-analysis',
             }),
             expect.any(String),
         )
@@ -1328,6 +1329,8 @@ describe('stored response memory analysis', () => {
 
         expect(modelCalls).toHaveLength(2)
         expect(modelCalls[1].schema).toContain('candidateIndex')
+        expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
+        expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
         expect(modelCalls[1].maxTokens).toBe(12_000)
         expect(modelCalls[1].formated[1].content).toContain('confirmedMessages')
         expect(savedTitles).toEqual(['사만다', '아만다'])

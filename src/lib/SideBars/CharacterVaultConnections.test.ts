@@ -69,6 +69,17 @@ describe('Character Vault sidebar integration', () => {
         expect(dialog).toContain('max-width: 100vw !important')
     })
 
+    test('grows the mobile folder rail with viewport height and keeps it vertically scrollable', () => {
+        const dialog = source('src/lib/SideBars/CharacterVaultDialog.svelte')
+        expect(dialog).toMatch(
+            /\.folder-list\s*\{[^}]*flex:\s*1 1 auto;[^}]*overflow-y:\s*auto;[^}]*scrollbar-gutter:\s*stable;/s
+        )
+        expect(dialog).toContain(
+            'grid-template-rows: clamp(10rem, 34dvh, 22rem) minmax(0, 1fr)'
+        )
+        expect(dialog).not.toContain('.folder-list { display: flex;')
+    })
+
     test('uses the defined theme tokens for opaque Vault surfaces', () => {
         const dialog = source('src/lib/SideBars/CharacterVaultDialog.svelte')
         expect(dialog).toContain('var(--color-darkbg)')

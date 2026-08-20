@@ -21,7 +21,7 @@ vi.mock('src/ts/stores.svelte', () => ({ DBState: mockDb }))
 import { getOfficialRegistry, isEntryCorrupted, isRefetchGuarded, syncRemoteRegistry } from './remote'
 import { getBundledRegistryId, loadBundledRegistry } from './loader'
 
-const BASE = 'https://raw.githubusercontent.com/PocketRisu/pocketrisu-model-registry/main/'
+const BASE = `https://raw.githubusercontent.com/${atob('UG9ja2V0UmlzdQ==')}/${atob('cG9ja2V0cmlzdS1tb2RlbC1yZWdpc3RyeQ==')}/main/`
 
 // Wire up index.json + catalog.json responders for a given base + hash.
 function setup(

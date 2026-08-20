@@ -8,16 +8,16 @@
 
 ---
 
-# 📦 PocketRisu
+# 📦 RisuBard
 
-[![Latest Release](https://img.shields.io/github/v/release/PocketRisu/PocketRisu?label=latest)](https://github.com/PocketRisu/PocketRisu/releases)
-[![License: GPL-3.0](https://img.shields.io/github/license/PocketRisu/PocketRisu)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/rpaddict/RisuBard?label=latest)](https://github.com/rpaddict/RisuBard/releases)
+[![License: GPL-3.0](https://img.shields.io/github/license/rpaddict/RisuBard)](LICENSE)
 [![Node](https://img.shields.io/badge/node-≥22.12-brightgreen)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/docker-supported-blue)](#2--docker)
 
 **RisuAI의 모든 기능 + 전용 편의기능, Node.js 서버 하나로.**
 
-PocketRisu는 원본 [RisuAI](https://github.com/kwaroran/RisuAI)를 **Node.js 로컬 서버** 전용으로 단순화 및 개조한 버전입니다.
+RisuBard는 원본 [RisuAI](https://github.com/kwaroran/RisuAI)를 **Node.js 로컬 서버** 전용으로 단순화 및 개조한 버전입니다.
 
 PC에서 실행하면 브라우저로 바로 사용하고, 간단한 설정 하나면 스마트폰에서도 접속할 수 있습니다.
 
@@ -27,7 +27,7 @@ PC에서 실행하면 브라우저로 바로 사용하고, 간단한 설정 하�
 
 원본 RisuAI는 **웹사이트**, **데스크톱 앱(Tauri)**, **모바일 앱(Capacitor)** 등 여러 환경을 동시에 지원합니다. 이를 위해 데이터 저장, 네트워크 처리, 파일 관리 등에서 환경별로 다른 코드가 실행됩니다.
 
-PocketRisu는 이 모든 분기를 걷어내고 **Node.js 서버 하나**만을 전제로 단순화했습니다.
+RisuBard는 이 모든 분기를 걷어내고 **Node.js 서버 하나**만을 전제로 단순화했습니다.
 
 그 결과:
 
@@ -35,7 +35,7 @@ PocketRisu는 이 모든 분기를 걷어내고 **Node.js 서버 하나**만을 
 - 🖥️ **브라우저는 화면만 담당합니다.** 데이터 저장이나 파일 관리를 브라우저가 하지 않으므로, 브라우저 종류나 설정에 따라 데이터가 날아가는 문제가 없습니다.
 - ⚡ **서버가 직접 파일을 서빙합니다.** 이미지, 오디오 등의 에셋을 서버가 최적화된 방식으로 직접 전달하므로 로딩이 빠릅니다.
 - 📉 **데이터 전송량이 최적화되어 있습니다.** 삽화(인레이) 이미지의 WebP 자동 압축, 썸네일 실시간 생성, 브라우저 캐싱, GZIP 응답 압축 등을 적용하여 네트워크 전송량을 크게 줄였습니다. 모바일에서 접속할 때 특히 체감됩니다.
-- ✨ **PocketRisu 전용 편의기능이 포함되어 있습니다.** 테마 프리셋, 프롬프트 토글 프리셋, 페르소나 바인드 UI, 삽화 갤러리, 삽화 일괄 압축, 업데이트 자동 알림 등 원본에 없는 기능을 추가했습니다.
+- ✨ **RisuBard 전용 편의기능이 포함되어 있습니다.** 테마 프리셋, 프롬프트 토글 프리셋, 페르소나 바인드 UI, 삽화 갤러리, 삽화 일괄 압축, 업데이트 자동 알림 등 원본에 없는 기능을 추가했습니다.
 
 한마디로, **"내 PC(또는 서버)에서 돌아가는 나만의 RisuAI"** 입니다.
 
@@ -57,7 +57,7 @@ PocketRisu는 이 모든 분기를 걷어내고 **Node.js 서버 하나**만을 
 
 ## ⭐ 주요 특징
 
-### PocketRisu 전용 기능
+### RisuBard 전용 기능
 
 #### 🖼️ 인레이 이미지(삽화) 최적화
 
@@ -66,7 +66,7 @@ PC에서 만든 삽화를 스마트폰에서도 그대로 볼 수 있고, 기기
 
 - **WebP 자동 압축** — 인레이 이미지를 저장할 때 자동으로 WebP 형식으로 압축합니다. 서버 측 sharp 라이브러리로 처리하며, 원본 대비 저장 용량을 크게 줄입니다.
 - **브라우저 캐싱** — 한번 불러온 인레이 이미지는 브라우저 캐시에 저장됩니다. 같은 채팅을 다시 열거나 페이지를 새로고침해도 서버에 다시 요청하지 않습니다.
-- **일괄 압축** — 기존에 저장된 인레이 이미지를 한 번에 WebP로 변환할 수 있습니다. PocketRisu 설정에서 실행하면 절감된 용량을 실시간으로 확인할 수 있습니다.
+- **일괄 압축** — 기존에 저장된 인레이 이미지를 한 번에 WebP로 변환할 수 있습니다. RisuBard 설정에서 실행하면 절감된 용량을 실시간으로 확인할 수 있습니다.
 - **인레이 이미지(삽화) 갤러리** — 저장된 삽화를 한눈에 관리할 수 있는 갤러리입니다. 사용하지 않는 고아 파일을 탐지하여 정리할 수 있고, 이미지 lazy loading으로 대량의 삽화도 부드럽게 탐색할 수 있습니다. (햄버거 메뉴 > 갤러리 아이콘)
 
 > 📱 **모바일 데이터 절감** — WebP 압축 + 썸네일 서빙 + 브라우저 캐싱의 조합으로, 모바일에서 접속할 때 데이터 소모량이 크게 줄어듭니다. 같은 채팅을 다시 열어도 이미지를 다시 다운로드하지 않습니다.
@@ -97,7 +97,7 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 #### ⚡ 에셋 직접 서빙
 
 이미지, 오디오, 비디오 등의 에셋을 서버가 직접 서빙합니다.
-원본 RisuAI는 에셋을 API 호출로 Base64 인코딩하여 전달하지만, PocketRisu는 서버가 파일을 그대로 HTTP 응답으로 보내므로 인코딩 오버헤드가 없고, HTTP 캐시 헤더를 통해 동일 에셋의 반복 다운로드를 방지합니다. 여기에 GZIP 응답 압축까지 적용되어, 특히 모바일 환경에서 전송량을 체감할 수 있을 만큼 줄입니다.
+원본 RisuAI는 에셋을 API 호출로 Base64 인코딩하여 전달하지만, RisuBard는 서버가 파일을 그대로 HTTP 응답으로 보내므로 인코딩 오버헤드가 없고, HTTP 캐시 헤더를 통해 동일 에셋의 반복 다운로드를 방지합니다. 여기에 GZIP 응답 압축까지 적용되어, 특히 모바일 환경에서 전송량을 체감할 수 있을 만큼 줄입니다.
 
 #### 💾 SQLite 저장소 & 서버 주도 백업
 
@@ -128,7 +128,7 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 AI 응답을 재생성(리롤)하면 이전 응답이 DB에 저장되어, 새로고침이나 캐릭터 전환 후에도 좌우 화살표로 탐색할 수 있습니다.
 네비게이션(← →)은 순환 방식이며, 재생성(↻)은 확인 팝업이 표시됩니다. 개별 스와이프 삭제도 가능합니다.
 
-#### 🎨 PocketRisu Standard 테마
+#### 🎨 RisuBard Standard 테마
 
 기본 채팅 레이아웃이 개선되었습니다. 이름+아이콘 상단, 본문 중앙, 모델정보+버튼 하단의 세 영역으로 나뉘며, PC에서는 최대 너비가 제한되고 모바일에서는 화면에 꽉 차는 반응형 디자인입니다.
 기존 디자인을 선호하면 디스플레이 설정에서 "Standard Risu"로 전환할 수 있습니다.
@@ -146,7 +146,7 @@ Tailscale 등 VPN을 설치하지 않아도 됩니다.
 
 ## 📊 원본 RisuAI와의 차이점
 
-| 항목         | 원본 RisuAI                           | PocketRisu                            |
+| 항목         | 원본 RisuAI                           | RisuBard                            |
 | ------------ | ------------------------------------- | ----------------------------------- |
 | 실행 방식    | 웹사이트 / 데스크톱 앱 / 모바일 앱    | Node.js 서버 (브라우저 접속)        |
 | 데이터 저장  | 환경별로 다름 (localStorage, 파일 등) | SQLite 단일 DB                      |
@@ -188,13 +188,13 @@ Tailscale 등 VPN을 설치하지 않아도 됩니다.
 
 **1단계: 다운로드**
 
-[📥 Releases 페이지](https://github.com/PocketRisu/PocketRisu/releases)에서 자신의 OS에 맞는 파일을 다운로드하세요.
+[📥 Releases 페이지](https://github.com/rpaddict/RisuBard/releases)에서 자신의 OS에 맞는 파일을 다운로드하세요.
 
 | OS | 파일명 |
 |----|--------|
-| 🪟 Windows (x64) | `PocketRisu-vX.X.X-win-x64.zip` |
-| 🍎 macOS (Apple Silicon) | `PocketRisu-vX.X.X-macos-arm64.tar.gz` |
-| 🐧 Linux (x64) | `PocketRisu-vX.X.X-linux-x64.tar.gz` |
+| 🪟 Windows (x64) | `RisuBard-vX.X.X-win-x64.zip` |
+| 🍎 macOS (Apple Silicon) | `RisuBard-vX.X.X-macos-arm64.tar.gz` |
+| 🐧 Linux (x64) | `RisuBard-vX.X.X-linux-x64.tar.gz` |
 
 **2단계: 압축 해제**
 
@@ -203,26 +203,26 @@ Tailscale 등 VPN을 설치하지 않아도 됩니다.
 🍎🐧 **macOS/Linux**: 터미널에서 실행:
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-*.tar.gz
+tar -xzf RisuBard-vX.X.X-*.tar.gz
 ```
 
 > 🍎 **macOS 참고**: 처음 실행 시 "Apple에서 확인할 수 없습니다" 경고가 나올 수 있습니다. 이 경우 터미널에서 압축 해제한 폴더로 이동한 뒤 아래 명령어를 한 번 실행해주세요:
 > ```bash
-> cd PocketRisu-vX.X.X-macos-arm64/
+> cd RisuBard-vX.X.X-macos-arm64/
 > xattr -cr .
 > ```
 > 이후에는 경고 없이 실행됩니다.
 
 **3단계: 실행**
 
-🪟 **Windows**: `PocketRisu.exe`를 더블클릭하면 브라우저가 자동으로 열리며, `http://localhost:6001`로 접속됩니다.
+🪟 **Windows**: `RisuBard.exe`를 더블클릭하면 브라우저가 자동으로 열리며, `http://localhost:6001`로 접속됩니다.
 
-🍎 **macOS**: 폴더 안의 `PocketRisu.app`을 더블클릭하면 Terminal에서 서버가 실행되고 브라우저가 자동으로 열립니다.
+🍎 **macOS**: 폴더 안의 `RisuBard.app`을 더블클릭하면 Terminal에서 서버가 실행되고 브라우저가 자동으로 열립니다.
 
 🐧 **Linux**: 터미널에서 실행:
 
 ```bash
-cd PocketRisu-vX.X.X-*/
+cd RisuBard-vX.X.X-*/
 ./start.sh
 ```
 
@@ -252,20 +252,20 @@ GUI 없이 터미널에서 직접 다운로드하여 설치할 수 있습니다.
 **Linux (x64):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-linux-x64.tar.gz" -o risuai.tar.gz
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-linux-x64.tar.gz" -o risuai.tar.gz
 tar -xzf risuai.tar.gz && rm risuai.tar.gz
-cd PocketRisu-${VERSION}-linux-x64
+cd RisuBard-${VERSION}-linux-x64
 ./start.sh
 ```
 
 **macOS (Apple Silicon):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-macos-arm64.tar.gz" -o risuai.tar.gz
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-macos-arm64.tar.gz" -o risuai.tar.gz
 tar -xzf risuai.tar.gz && rm risuai.tar.gz
-cd PocketRisu-${VERSION}-macos-arm64
+cd RisuBard-${VERSION}-macos-arm64
 xattr -cr .
 ./start.sh
 ```
@@ -292,12 +292,12 @@ Docker는 프로그램을 "컨테이너"라는 독립된 공간에서 실행해�
   curl -fsSL https://get.docker.com | sh
   ```
 
-**2단계: PocketRisu 실행**
+**2단계: RisuBard 실행**
 
 터미널(Windows: PowerShell, Mac/Linux: Terminal)을 열고 아래 명령어를 붙여넣으세요:
 
 ```bash
-curl -L https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/docker-compose.yml -o docker-compose.yml
+curl -L https://raw.githubusercontent.com/rpaddict/RisuBard/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -343,7 +343,7 @@ Node.js가 없다면: [Node.js 공식 사이트](https://nodejs.org/)에서 설�
 터미널에서 아래 명령어 한 줄을 실행하세요:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/install.sh | bash
 ```
 
 설치가 완료되면 안내 메시지가 표시됩니다.
@@ -351,7 +351,7 @@ curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.
 #### ▶️ 서버 시작
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 pnpm runserver
 ```
 
@@ -360,13 +360,13 @@ pnpm runserver
 #### 🔄 업데이트 방법
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 ./update.sh
 ```
 
-> ⚠️ **v1.5.x → v1.6.0 1회성 안내**: Risuai-NodeOnly 시절(v1.5.x 이하)에 `install.sh`로 설치한 분은, v1.6.0으로 첫 업데이트 전에 `update.sh`를 새 버전으로 한 번만 교체해주세요. (repo 이름이 PocketRisu로 바뀌어 옛 `update.sh`가 새 소스 디렉토리를 찾지 못합니다.)
+> ⚠️ **v1.5.x → v1.6.0 1회성 안내**: Risuai-NodeOnly 시절(v1.5.x 이하)에 `install.sh`로 설치한 분은, v1.6.0으로 첫 업데이트 전에 `update.sh`를 새 버전으로 한 번만 교체해주세요. (repo 이름이 RisuBard로 바뀌어 옛 `update.sh`가 새 소스 디렉토리를 찾지 못합니다.)
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/update.sh -o update.sh && chmod +x update.sh
+> curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/update.sh -o update.sh && chmod +x update.sh
 > ./update.sh
 > ```
 > 이후 업데이트부터는 평소대로 `./update.sh`만 실행하면 됩니다.
@@ -378,8 +378,8 @@ cd ~/pocketrisu
 > 소스 코드를 직접 관리하고 싶은 분을 위한 방법입니다.
 
 ```bash
-git clone https://github.com/PocketRisu/PocketRisu.git
-cd PocketRisu
+git clone https://github.com/rpaddict/RisuBard.git
+cd RisuBard
 pnpm install
 pnpm build
 pnpm runserver
@@ -401,17 +401,17 @@ pnpm runserver
 
 ## 🚚 기존 RisuAI에서 이사하기
 
-기존 RisuAI(웹 리스/로컬 리스)에서 PocketRisu로 데이터를 옮기는 방법입니다.
+기존 RisuAI(웹 리스/로컬 리스)에서 RisuBard로 데이터를 옮기는 방법입니다.
 
 > [!IMPORTANT]
 > 이사 전에 반드시 **기존 데이터를 백업**해두세요. 기존 RisuAI의 설정 > 백업에서 `.bin` 파일로 내보낼 수 있습니다.
 
 ### 방법 1: 로컬 백업 파일(`.bin`)로 이사 (모든 환경)
 
-가장 간단한 방법입니다. 기존 RisuAI에서 내보낸 백업 파일을 PocketRisu에서 불러옵니다.
+가장 간단한 방법입니다. 기존 RisuAI에서 내보낸 백업 파일을 RisuBard에서 불러옵니다.
 
 1. **기존 RisuAI**에서 설정 > 백업 > "로컬 백업 저장"으로 `.bin` 파일을 내보냅니다.
-2. **PocketRisu**에서 설정 > 데이터 이전 > "원본 리스 로컬 백업 불러오기"로 해당 `.bin` 파일을 불러옵니다.
+2. **RisuBard**에서 설정 > 데이터 이전 > "원본 리스 로컬 백업 불러오기"로 해당 `.bin` 파일을 불러옵니다.
 
 ### 방법 2: Save 폴더 zip 업로드 (소규모 데이터)
 
@@ -426,9 +426,9 @@ pnpm runserver
 
 데이터가 수십 GB 이상으로 큰 경우 가장 안정적인 방법입니다.
 
-1. PocketRisu 서버를 **정지**합니다.
-2. 기존 RisuAI의 `save` 폴더를 PocketRisu의 `save` 폴더에 **통째로 덮어씌웁니다.**
-3. PocketRisu 서버를 **재시작**하면 자동으로 마이그레이션이 진행됩니다.
+1. RisuBard 서버를 **정지**합니다.
+2. 기존 RisuAI의 `save` 폴더를 RisuBard의 `save` 폴더에 **통째로 덮어씌웁니다.**
+3. RisuBard 서버를 **재시작**하면 자동으로 마이그레이션이 진행됩니다.
    - 터미널(또는 PM2 로그)에서 진행률을 확인할 수 있습니다.
 4. 마이그레이션 완료 후, 설정 > 데이터 이전 > "노드리스에서 save 폴더 가져오기" 아코디언의 "마이그레이션된 Save 파일 정리"로 원본 파일을 삭제하여 디스크 공간을 확보할 수 있습니다.
 
@@ -445,7 +445,7 @@ pnpm runserver
 
 ## 📱 모바일에서 접속하기
 
-PC에서 실행 중인 PocketRisu에 스마트폰으로 접속하는 방법입니다.
+PC에서 실행 중인 RisuBard에 스마트폰으로 접속하는 방법입니다.
 
 ### 방법 1: 📡 원격 접속 (가장 쉬움)
 
@@ -504,7 +504,7 @@ https://내PC이름.tail어쩌구.ts.net
 ### 🧪 안정성
 
 - 이 프로젝트는 **개인이 관리하는 커뮤니티 수정 버전**이며, 아직 충분한 테스트를 거치지 못했습니다. 예기치 않은 오류가 발생할 수 있습니다.
-- 문제가 발생하면 [Issues](https://github.com/PocketRisu/PocketRisu/issues)에 보고해주세요.
+- 문제가 발생하면 [Issues](https://github.com/rpaddict/RisuBard/issues)에 보고해주세요.
 
 ### 💾 데이터 보호
 
@@ -514,7 +514,7 @@ https://내PC이름.tail어쩌구.ts.net
 
 ### 🖥️ 서버 실행 관련
 
-- PocketRisu는 **서버 프로그램**입니다. 서버가 실행 중인 PC(또는 서버)를 끄거나 프로그램을 종료하면, 스마트폰 등 다른 기기에서 접속할 수 없습니다.
+- RisuBard는 **서버 프로그램**입니다. 서버가 실행 중인 PC(또는 서버)를 끄거나 프로그램을 종료하면, 스마트폰 등 다른 기기에서 접속할 수 없습니다.
 - 같은 PC의 브라우저에서 접속하는 경우에도 서버가 실행 중이어야 합니다.
 
 ### 🚫 사용 불가 기능

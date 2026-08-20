@@ -6,7 +6,7 @@
 
 > 🌐 Esta guía está traducida por máquina. Para obtener la información más precisa, consulte la versión en [inglés](../en/install.md) o [coreano](../ko/install.md).
 
-PocketRisu se puede instalar de cuatro formas.
+RisuBard se puede instalar de cuatro formas.
 
 - [1. Paquete portable](#1-paquete-portable) — Binario precompilado. No requiere Node.js.
 - [2. Docker](#2-docker) — Entorno de contenedores.
@@ -34,27 +34,27 @@ Descarga y ejecuta un binario precompilado. No requiere Node.js, Docker u otras 
 
 ### Descarga
 
-Obtén el archivo para tu OS desde la [página de Releases](https://github.com/PocketRisu/PocketRisu/releases).
+Obtén el archivo para tu OS desde la [página de Releases](https://github.com/rpaddict/RisuBard/releases).
 
 | OS                       | Archivo                                   |
 | ------------------------ | ----------------------------------------- |
-| Windows (x64)            | `PocketRisu-vX.X.X-win-x64.zip`           |
-| macOS (Apple Silicon)    | `PocketRisu-vX.X.X-macos-arm64.tar.gz`    |
-| Linux (x64)              | `PocketRisu-vX.X.X-linux-x64.tar.gz`      |
-| Linux (ARM)              | `PocketRisu-vX.X.X-linux-arm64.tar.gz`    |
+| Windows (x64)            | `RisuBard-vX.X.X-win-x64.zip`           |
+| macOS (Apple Silicon)    | `RisuBard-vX.X.X-macos-arm64.tar.gz`    |
+| Linux (x64)              | `RisuBard-vX.X.X-linux-x64.tar.gz`      |
+| Linux (ARM)              | `RisuBard-vX.X.X-linux-arm64.tar.gz`    |
 
 ### Ejecutar
 
 **Windows**
 
-Extrae el zip y haz doble clic en `PocketRisu.exe`. Un navegador se abre automáticamente en `http://localhost:6001`.
+Extrae el zip y haz doble clic en `RisuBard.exe`. Un navegador se abre automáticamente en `http://localhost:6001`.
 
 **macOS**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-macos-arm64.tar.gz
-xattr -cr PocketRisu-vX.X.X-macos-arm64
-open PocketRisu-vX.X.X-macos-arm64/PocketRisu.app
+tar -xzf RisuBard-vX.X.X-macos-arm64.tar.gz
+xattr -cr RisuBard-vX.X.X-macos-arm64
+open RisuBard-vX.X.X-macos-arm64/RisuBard.app
 ```
 
 El comando `xattr` es un paso único para evitar la advertencia "Apple no puede verificar".
@@ -62,8 +62,8 @@ El comando `xattr` es un paso único para evitar la advertencia "Apple no puede 
 **Linux**
 
 ```bash
-tar -xzf PocketRisu-vX.X.X-linux-*.tar.gz
-cd PocketRisu-vX.X.X-linux-*
+tar -xzf RisuBard-vX.X.X-linux-*.tar.gz
+cd RisuBard-vX.X.X-linux-*
 ./start.sh
 ```
 
@@ -76,10 +76,10 @@ Para servidores Linux/macOS sin interfaz gráfica, descarga y ejecuta la última
 **Linux (x64):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-linux-x64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-cd PocketRisu-${VERSION}-linux-x64
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-linux-x64.tar.gz" -o risubard.tar.gz
+tar -xzf risubard.tar.gz && rm risubard.tar.gz
+cd RisuBard-${VERSION}-linux-x64
 ./start.sh
 ```
 
@@ -88,11 +88,11 @@ cd PocketRisu-${VERSION}-linux-x64
 **macOS (Apple Silicon):**
 
 ```bash
-VERSION=$(curl -s https://api.github.com/repos/PocketRisu/PocketRisu/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/PocketRisu/PocketRisu/releases/download/${VERSION}/PocketRisu-${VERSION}-macos-arm64.tar.gz" -o pocketrisu.tar.gz
-tar -xzf pocketrisu.tar.gz && rm pocketrisu.tar.gz
-xattr -cr PocketRisu-${VERSION}-macos-arm64
-cd PocketRisu-${VERSION}-macos-arm64
+VERSION=$(curl -s https://api.github.com/repos/rpaddict/RisuBard/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/rpaddict/RisuBard/releases/download/${VERSION}/RisuBard-${VERSION}-macos-arm64.tar.gz" -o risubard.tar.gz
+tar -xzf risubard.tar.gz && rm risubard.tar.gz
+xattr -cr RisuBard-${VERSION}-macos-arm64
+cd RisuBard-${VERSION}-macos-arm64
 ./start.sh
 ```
 
@@ -123,7 +123,7 @@ Se ejecuta en un sistema con Docker o Docker Desktop instalado.
 ### Ejecutar
 
 ```bash
-curl -L https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/docker-compose.yml -o docker-compose.yml
+curl -L https://raw.githubusercontent.com/rpaddict/RisuBard/main/docker-compose.yml -o docker-compose.yml
 docker compose up -d
 ```
 
@@ -160,7 +160,7 @@ Instala desde el [sitio oficial de Node.js](https://nodejs.org/) si no está pre
 ### Instalar
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/install.sh | bash
 ```
 
 Se muestra un mensaje de estado cuando finaliza la instalación.
@@ -168,7 +168,7 @@ Se muestra un mensaje de estado cuando finaliza la instalación.
 ### Iniciar el servidor
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 pnpm runserver
 ```
 
@@ -177,14 +177,14 @@ Abre `http://localhost:6001` en tu navegador.
 ### Actualizar
 
 ```bash
-cd ~/pocketrisu
+cd ~/risubard
 ./update.sh
 ```
 
-> **Nota única para v1.5.x → v1.6.0**: Si instalaste mediante `install.sh` durante la era Risuai-NodeOnly (v1.5.x o anterior), reemplaza `update.sh` con la nueva versión una vez antes de tu primera actualización a v1.6.0. (El repositorio se renombró a PocketRisu y el `update.sh` antiguo no puede encontrar el nuevo directorio fuente.)
+> **Nota única para v1.5.x → v1.6.0**: Si instalaste mediante `install.sh` durante la era Risuai-NodeOnly (v1.5.x o anterior), reemplaza `update.sh` con la nueva versión una vez antes de tu primera actualización a v1.6.0. (El repositorio se renombró a RisuBard y el `update.sh` antiguo no puede encontrar el nuevo directorio fuente.)
 >
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/PocketRisu/PocketRisu/main/update.sh -o update.sh && chmod +x update.sh
+> curl -fsSL https://raw.githubusercontent.com/rpaddict/RisuBard/main/update.sh -o update.sh && chmod +x update.sh
 > ./update.sh
 > ```
 >
@@ -198,8 +198,8 @@ cd ~/pocketrisu
 Clona y compila manualmente el código fuente. Para desarrolladores que necesitan modificar o depurar código.
 
 ```bash
-git clone https://github.com/PocketRisu/PocketRisu.git
-cd PocketRisu
+git clone https://github.com/rpaddict/RisuBard.git
+cd RisuBard
 pnpm install
 pnpm build
 pnpm runserver

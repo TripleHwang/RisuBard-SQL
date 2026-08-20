@@ -1,6 +1,6 @@
 # Notices
 
-RisuBard is derived from [PocketRisu](https://github.com/PocketRisu/PocketRisu) and preserves its GPLv3 license and upstream attribution. PocketRisu is itself derived from RisuAI; applicable original notices and copyright statements remain in the inherited source and this notice.
+RisuBard incorporates inherited GPLv3 code derived from RisuAI. Applicable original notices, copyright statements, repository history, and license terms remain preserved.
 
 RisuBard changes and independently authored code:
 

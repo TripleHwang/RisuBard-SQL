@@ -2,11 +2,13 @@ import type {
     recordRequestLog,
     RequestLogSource,
 } from 'src/ts/requestLog'
+import type { RequestPurpose } from 'src/ts/requestPurpose'
 import type { RequestInjectionManifest } from 'src/ts/status/requestStatus'
 
 interface PluginRequestEvidenceInput {
     startedAt: number
     source: RequestLogSource
+    purpose?: RequestPurpose
     sessionChatId?: string
     generationId: string
     model: string
@@ -55,6 +57,7 @@ export function createPluginRequestEvidenceRecorder(
                 timestamp: input.startedAt,
                 category: 'llm',
                 source: input.source,
+                purpose: input.purpose,
                 chatId: input.generationId,
                 sessionChatId: input.sessionChatId,
                 generationId: input.generationId,

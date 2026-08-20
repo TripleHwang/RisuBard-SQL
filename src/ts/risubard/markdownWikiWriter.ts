@@ -24,6 +24,7 @@ export interface MarkdownWikiWriterModelCall {
     temperature: 0
     bias: Record<string, never>
     logSource: 'memory'
+    logPurpose: 'bardwiki-canonical-update'
 }
 
 interface WriterModelResponse {
@@ -141,6 +142,7 @@ export async function requestMarkdownWikiDraft(input: {
         temperature: 0,
         bias: {},
         logSource: 'memory',
+        logPurpose: 'bardwiki-canonical-update',
     }, 'memory')
     if (response.type !== 'success' || typeof response.result !== 'string') {
         throw new Error('Wiki draft model request failed')

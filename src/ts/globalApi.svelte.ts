@@ -31,6 +31,7 @@ import {
     createRequestLogScope, recordRequestLog, fetchRequestLogs,
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
+import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
 
 export const forageStorage = new AutoStorage()
 
@@ -1230,6 +1231,7 @@ interface GlobalFetchArgs {
      *  default filter and the usage statistics can tell them apart. */
     logCategory?: RequestLogCategory;
     logSource?: RequestLogSource;
+    logPurpose?: RequestPurpose;
     logModel?: string;
 }
 
@@ -1328,6 +1330,7 @@ function addFetchLogInGlobalFetch(response: any, success: boolean, url: string, 
         timestamp: started,
         category: arg.logCategory ?? 'other',
         source: arg.logSource ?? 'other',
+        purpose: arg.logPurpose ?? defaultRequestPurpose(arg.logSource ?? 'other'),
         chatId: arg.chatId,
         model: arg.logModel,
         url,
@@ -1974,6 +1977,7 @@ export interface FetchNativeArgs {
     /** Request-log classification; see GlobalFetchArgs for the same fields. */
     logCategory?: RequestLogCategory
     logSource?: RequestLogSource
+    logPurpose?: RequestPurpose
     logModel?: string
     /** Reports which transport was actually used. Fires regardless of
      *  logCategory, so a caller that logs at a higher level (the model-preset
@@ -1999,6 +2003,7 @@ export async function fetchNative(url: string, arg: FetchNativeArgs): Promise<Re
     const scope = createRequestLogScope({
         category: arg.logCategory ?? 'other',
         source: arg.logSource ?? 'other',
+        purpose: arg.logPurpose ?? defaultRequestPurpose(arg.logSource ?? 'other'),
         chatId: arg.chatId,
         model: arg.logModel,
         streaming: true,

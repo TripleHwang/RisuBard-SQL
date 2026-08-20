@@ -7,6 +7,7 @@ import { deepTouch } from "./gui/deepTouch.svelte";
 import { resetScriptCache } from "./process/scripts";
 import type { hubType } from "./characterCards";
 import type { PluginSafetyErrors } from "./plugins/pluginSafety";
+import type { PersonaSelection } from "./personaScopes";
 
 function updateSize(){
     SizeStore.set({
@@ -52,7 +53,7 @@ export const openThemePresetList = writable(false)
 export const openPersonaList = writable(false)
 export const openPersonaManager = writable(false)
 export const characterVaultOpen = writable(false)
-export const personaSelectCallback = writable<((index: number) => void) | null>(null)
+export const personaSelectCallback = writable<((selection: PersonaSelection) => void) | null>(null)
 export const openHypaV3PresetList = writable(false)
 export const bookmarkListOpen = writable(false)
 export const MobileGUI = writable(false)
@@ -192,6 +193,8 @@ export type MenuDef = {
     iconType:'html'|'img'|'none',
     callback: any,
     id: string,
+    pluginName: string,
+    layoutKey?: string,
 }
 
 export type ChatPanelDef = {

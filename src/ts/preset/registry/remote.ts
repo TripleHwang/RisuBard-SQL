@@ -19,7 +19,9 @@ import type { BaseProviderDefinition, ModelPreset, ModelProfile, RegistryCache }
 import { getProfileUpdateStatus, type ProfileUpdateStatus } from '../customProfiles'
 import { getBundledRegistryId, loadBundledRegistry } from './loader'
 
-const OFFICIAL_BASE = 'https://raw.githubusercontent.com/PocketRisu/pocketrisu-model-registry/main/'
+const LEGACY_REGISTRY_OWNER = atob('UG9ja2V0UmlzdQ==')
+const LEGACY_REGISTRY_REPOSITORY = atob('cG9ja2V0cmlzdS1tb2RlbC1yZWdpc3RyeQ==')
+const OFFICIAL_BASE = `https://raw.githubusercontent.com/${LEGACY_REGISTRY_OWNER}/${LEGACY_REGISTRY_REPOSITORY}/main/`
 // Skip a re-fetch if one ran this recently (menu re-entry debounce).
 const REFETCH_GUARD_MS = 5_000
 

@@ -41,6 +41,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
 
     let { subMenuOverride }: Props = $props()
     let activeSubMenu = $derived(subMenuOverride ?? $CharConfigSubMenu)
+    let currentCharacter = $derived(DBState.db.characters[$selectedCharID])
 
     let iconRemoveMode = $state(false)
     let pkgIncludeCharacter = $state(true)
@@ -78,35 +79,40 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     const firstMsgTok = { t: null as ReturnType<typeof setTimeout> | null, seq: 0 }
     const localNoteTok = { t: null as ReturnType<typeof setTimeout> | null, seq: 0 }
     $effect.pre(() => {
-        tokenizeField(() => (DBState.db.characters[$selectedCharID] as character).desc ?? '', n => tokens.desc = n, descTok)
+        if (!currentCharacter) return
+        tokenizeField(() => (currentCharacter as character).desc ?? '', n => tokens.desc = n, descTok)
     });
     $effect.pre(() => {
-        tokenizeField(() => DBState.db.characters[$selectedCharID].firstMessage ?? '', n => tokens.firstMsg = n, firstMsgTok)
+        if (!currentCharacter) return
+        tokenizeField(() => currentCharacter.firstMessage ?? '', n => tokens.firstMsg = n, firstMsgTok)
     });
     $effect.pre(() => {
-        const chara = DBState.db.characters[$selectedCharID]
-        tokenizeField(() => chara.chats[chara.chatPage].note ?? '', n => tokens.localNote = n, localNoteTok)
+        if (!currentCharacter) return
+        tokenizeField(() => currentCharacter.chats[currentCharacter.chatPage].note ?? '', n => tokens.localNote = n, localNoteTok)
     });
 
 
     let assetFileExtensions:string[] = $state([])
     let assetFilePath:string[] = $state([])
-    let licensed = $state((DBState.db.characters[$selectedCharID].type === 'character') ? (DBState.db.characters[$selectedCharID] as character).license : '')
+    let licensed = $state('')
 
     $effect.pre(() => {
-        emos = DBState.db.characters[$selectedCharID].emotionImages
+        if (!currentCharacter) return
+        emos = currentCharacter.emotionImages
     });
 
 
     $effect.pre(() => {
-        if(DBState.db.characters[$selectedCharID].type ==='character' && DBState.db.useAdditionalAssetsPreview){
-            if((DBState.db.characters[$selectedCharID] as character).additionalAssets){
-                for(let i = 0; i < (DBState.db.characters[$selectedCharID] as character).additionalAssets.length; i++){
-                    if((DBState.db.characters[$selectedCharID] as character).additionalAssets[i].length > 2 && (DBState.db.characters[$selectedCharID] as character).additionalAssets[i][2]) {
-                        assetFileExtensions[i] = (DBState.db.characters[$selectedCharID] as character).additionalAssets[i][2]
+        if (!currentCharacter) return
+        if(currentCharacter.type ==='character' && DBState.db.useAdditionalAssetsPreview){
+            const additionalAssets = (currentCharacter as character).additionalAssets
+            if(additionalAssets){
+                for(let i = 0; i < additionalAssets.length; i++){
+                    if(additionalAssets[i].length > 2 && additionalAssets[i][2]) {
+                        assetFileExtensions[i] = additionalAssets[i][2]
                     } else
-                        assetFileExtensions[i] = (DBState.db.characters[$selectedCharID] as character).additionalAssets[i][1].split('.').pop()
-                    getFileSrc((DBState.db.characters[$selectedCharID] as character).additionalAssets[i][1]).then((filePath) => {
+                        assetFileExtensions[i] = additionalAssets[i][1].split('.').pop()
+                    getFileSrc(additionalAssets[i][1]).then((filePath) => {
                         assetFilePath[i] = filePath
                     })
                 }
@@ -115,11 +121,13 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     });
 
     $effect.pre(() => {
-        licensed = (DBState.db.characters[$selectedCharID].type === 'character') ? (DBState.db.characters[$selectedCharID] as character).license : ''
+        if (!currentCharacter) return
+        licensed = (currentCharacter.type === 'character') ? (currentCharacter as character).license : ''
     });
     $effect.pre(() => {
-        if (DBState.db.characters[$selectedCharID].ttsMode === 'novelai' && (DBState.db.characters[$selectedCharID] as character).naittsConfig === undefined) {
-            (DBState.db.characters[$selectedCharID] as character).naittsConfig = {
+        if (!currentCharacter) return
+        if (currentCharacter.ttsMode === 'novelai' && (currentCharacter as character).naittsConfig === undefined) {
+            (currentCharacter as character).naittsConfig = {
                 customvoice: false,
                 voice: 'Aini',
                 version: 'v2'
@@ -127,8 +135,9 @@ import ShButton from "../UI/GUI/ShButton.svelte";
         }
     });
     $effect.pre(() => {
-        if (DBState.db.characters[$selectedCharID].ttsMode === 'gptsovits' && (DBState.db.characters[$selectedCharID] as character).gptSoVitsConfig === undefined) {
-            (DBState.db.characters[$selectedCharID] as character).gptSoVitsConfig = {
+        if (!currentCharacter) return
+        if (currentCharacter.ttsMode === 'gptsovits' && (currentCharacter as character).gptSoVitsConfig === undefined) {
+            (currentCharacter as character).gptSoVitsConfig = {
                 url: '',
                 use_auto_path: false,
                 ref_audio_path: '',
@@ -158,8 +167,9 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     }[] = $state([])
 
     $effect.pre(() => {
-        if (DBState.db.characters[$selectedCharID].ttsMode === 'openai' && (DBState.db.characters[$selectedCharID] as character).oaiTTSConfig === undefined) {
-            (DBState.db.characters[$selectedCharID] as character).oaiTTSConfig = {
+        if (!currentCharacter) return
+        if (currentCharacter.ttsMode === 'openai' && (currentCharacter as character).oaiTTSConfig === undefined) {
+            (currentCharacter as character).oaiTTSConfig = {
                 enabled: false,
                 format: 'mp3',
             };
@@ -167,8 +177,9 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     });
 
     $effect.pre(() => {
-        if (DBState.db.characters[$selectedCharID].ttsMode === 'fishspeech' && (DBState.db.characters[$selectedCharID] as character).fishSpeechConfig === undefined) {
-            (DBState.db.characters[$selectedCharID] as character).fishSpeechConfig = {
+        if (!currentCharacter) return
+        if (currentCharacter.ttsMode === 'fishspeech' && (currentCharacter as character).fishSpeechConfig === undefined) {
+            (currentCharacter as character).fishSpeechConfig = {
                 model: {
                     _id: '',
                     title: '',
@@ -244,6 +255,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     {/if}
 {/snippet}
 
+{#if currentCharacter}
 {#if activeSubMenu === 0}
     {#if licensed !== 'private'}
         <h2 class="mb-2 text-2xl font-bold">{language.characterInfo}</h2>
@@ -1199,6 +1211,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
             {language.applyModule}
         </Button>
 
+{/if}
 {/if}
 
 

@@ -9,6 +9,9 @@
         SaveIcon,
         Trash2Icon,
         PlusIcon,
+        ChevronDownIcon,
+        Maximize2Icon,
+        Minimize2,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import { v4 } from 'uuid'
@@ -27,6 +30,7 @@
     import { buildWikiFileTree } from 'src/ts/risubard/wikiFileTree'
     import { publishRisuBardMemoryActivity } from 'src/ts/risubard/memoryActivity'
     import { copyWikiDocumentToLorebook } from 'src/ts/risubard/wikiLorebookCopy'
+    import { normalizeMemoryWikiTreeHeight } from 'src/ts/risubard/memoryWikiLayout'
 
     type WikiDocument = NarrativeMemoryWikiMarkdown['documents'][number]
 
@@ -38,6 +42,7 @@
         selectedId?: string
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
+        onFocusModeChange?: (focused: boolean) => void
     }
 
     let {
@@ -48,6 +53,7 @@
         selectedId = $bindable(''),
         onChanged,
         onSelected,
+        onFocusModeChange,
     }: Props = $props()
     let creating = $state(false)
     let type = $state<CanonicalMarkdownWikiDocumentType>('character')
@@ -64,6 +70,13 @@
     let contextDocumentId = $state('')
     let contextX = $state(0)
     let contextY = $state(0)
+    let wikiEditorElement = $state<HTMLElement | null>(null)
+    let treeExpanded = $state(true)
+    let editorExpanded = $state(true)
+    let editorFocus = $state(false)
+    let treeHeight = $state(normalizeMemoryWikiTreeHeight(undefined))
+    let restoredTreeExpanded = true
+    let restoredEditorExpanded = true
 
     let tree = $derived(buildWikiFileTree(documents))
     let selected = $derived(
@@ -95,6 +108,12 @@
         onSelected?.(document.id)
     }
 
+    function selectDocument(document: WikiDocument) {
+        loadDocument(document)
+        treeExpanded = false
+        editorExpanded = true
+    }
+
     function startNew() {
         selectedId = ''
         creating = true
@@ -103,6 +122,55 @@
         markdown = ''
         error = ''
         notice = ''
+        treeExpanded = false
+        editorExpanded = true
+    }
+
+    function availableTreeHeight(): number {
+        const height = wikiEditorElement?.clientHeight ?? 0
+        return height > 0 ? height : 10_000
+    }
+
+    function setTreeHeight(value: number, availableHeight = availableTreeHeight()) {
+        treeHeight = normalizeMemoryWikiTreeHeight(value, availableHeight)
+    }
+
+    function resizeTree(event: PointerEvent) {
+        event.preventDefault()
+        if (!wikiEditorElement) return
+        const bounds = wikiEditorElement.getBoundingClientRect()
+        if (bounds.height <= 0) return
+        const update = (move: PointerEvent) => {
+            setTreeHeight(move.clientY - bounds.top - 44, bounds.height - 88)
+        }
+        const stop = () => {
+            window.removeEventListener('pointermove', update)
+            window.removeEventListener('pointerup', stop)
+        }
+        window.addEventListener('pointermove', update)
+        window.addEventListener('pointerup', stop, { once: true })
+    }
+
+    function resizeTreeByKeyboard(event: KeyboardEvent) {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+        event.preventDefault()
+        setTreeHeight(treeHeight + (event.key === 'ArrowDown' ? 24 : -24))
+    }
+
+    function setEditorFocus(focused: boolean) {
+        if (focused === editorFocus) return
+        if (focused) {
+            restoredTreeExpanded = treeExpanded
+            restoredEditorExpanded = editorExpanded
+            treeExpanded = false
+            editorExpanded = true
+        }
+        else {
+            treeExpanded = restoredTreeExpanded
+            editorExpanded = restoredEditorExpanded
+        }
+        editorFocus = focused
+        onFocusModeChange?.(focused)
     }
 
     function openContextMenu(event: MouseEvent, documentId: string) {
@@ -376,8 +444,32 @@
 
 <svelte:window onclick={closeContextMenuFromWindow} />
 
-<section class="wiki-editor" data-wiki-editor>
-    <nav class="file-tree" aria-label="위키 파일 트리">
+<section
+    class="wiki-editor"
+    class:tree-collapsed={!treeExpanded}
+    class:editor-collapsed={!editorExpanded}
+    class:editor-focus={editorFocus}
+    data-wiki-editor
+    data-tree-expanded={treeExpanded}
+    data-editor-expanded={editorExpanded}
+    data-editor-focus={editorFocus}
+    bind:this={wikiEditorElement}
+    style:--wiki-tree-height={`${treeHeight}px`}
+>
+    <div class="portrait-panel-header tree-panel-header">
+        <button
+            type="button"
+            data-wiki-toggle-tree
+            aria-expanded={treeExpanded}
+            aria-controls="risubard-wiki-file-tree"
+            onclick={() => treeExpanded = !treeExpanded}
+        >
+            <FolderIcon size={17} />
+            <span><strong>문서</strong><small>{documents.length}개</small></span>
+            <ChevronDownIcon size={18} class={treeExpanded ? '' : 'collapsed'} />
+        </button>
+    </div>
+    <nav id="risubard-wiki-file-tree" class="file-tree" aria-label="위키 파일 트리">
         <div class="tree-toolbar">
             <strong>WIKI</strong>
             <ShButton size="sm" variant="ghost" onclick={startNew} aria-label="새 문서">
@@ -385,6 +477,7 @@
             </ShButton>
         </div>
         <div class="wiki-health" aria-label="위키 건강도">
+            <span>{documents.length} 문서</span>
             <span>끊어진 링크 {health.danglingLinks.length}</span>
             <span>연결 없음 {health.unlinkedDocumentIds.length}</span>
         </div>
@@ -404,7 +497,7 @@
                                     class:active={selectedId === child.documentId}
                                     onclick={() => {
                                         const document = documents.find((item) => item.id === child.documentId)
-                                        if (document) loadDocument(document)
+                                        if (document) selectDocument(document)
                                     }}
                                     oncontextmenu={(event) => openContextMenu(event, child.documentId)}
                                     aria-label={`${child.title} ${child.readOnly ? '읽기 전용' : ''}`}
@@ -424,7 +517,7 @@
                     class:active={selectedId === node.documentId}
                     onclick={() => {
                         const document = documents.find((item) => item.id === node.documentId)
-                        if (document) loadDocument(document)
+                        if (document) selectDocument(document)
                     }}
                     oncontextmenu={(event) => openContextMenu(event, node.documentId)}
                     aria-label={node.title}
@@ -435,56 +528,97 @@
         {/each}
     </nav>
 
-    <div class="editor-pane">
-        <header class="editor-toolbar">
-            <label>
-                <span>항목 유형</span>
-                <select aria-label="항목 유형" bind:value={type} disabled={readOnly}>
-                    <option value="character">캐릭터</option>
-                    <option value="location">장소</option>
-                    <option value="faction">세력</option>
-                    <option value="item">사물</option>
-                    <option value="concept">개념</option>
-                    <option value="scene">현재 장면</option>
-                    <option value="other">기타</option>
-                </select>
-            </label>
-            <label class="title-field">
-                <span>항목 이름</span>
-                <input aria-label="항목 이름" bind:value={title} maxlength="160" readonly={readOnly} />
-            </label>
-            <div class="editor-actions">
+    <button
+        type="button"
+        class="editor-section-resizer"
+        data-wiki-tree-resizer
+        aria-label="문서 목록 높이 조절"
+        title="드래그하거나 위·아래 방향키로 문서 목록 높이 조절"
+        onpointerdown={resizeTree}
+        onkeydown={resizeTreeByKeyboard}
+    ><span aria-hidden="true"></span></button>
+
+    <div class="portrait-panel-header editor-panel-header">
+        <button
+            class="panel-toggle"
+            type="button"
+            data-wiki-toggle-editor
+            aria-expanded={editorExpanded}
+            aria-controls="risubard-wiki-editor-pane"
+            onclick={() => editorExpanded = !editorExpanded}
+        >
+            <FileIcon size={17} />
+            <span><strong>편집기</strong><small>{title || '문서를 선택하세요'}</small></span>
+            <ChevronDownIcon size={18} class={editorExpanded ? '' : 'collapsed'} />
+        </button>
+        <button
+            class="panel-focus"
+            type="button"
+            data-wiki-editor-focus
+            aria-label={editorFocus ? '집중 종료' : '편집기에 집중'}
+            aria-pressed={editorFocus}
+            onclick={() => setEditorFocus(!editorFocus)}
+        >
+            {#if editorFocus}<Minimize2 size={17} />
+            {:else}<Maximize2Icon size={17} />{/if}
+        </button>
+    </div>
+
+    <div id="risubard-wiki-editor-pane" class="editor-pane">
+        <header class="editor-header">
+            <div class="editor-title-row" data-wiki-title-row>
+                <label>
+                    <span>타입</span>
+                    <select aria-label="항목 유형" bind:value={type} disabled={readOnly}>
+                        <option value="character">캐릭터</option>
+                        <option value="location">장소</option>
+                        <option value="faction">세력</option>
+                        <option value="item">사물</option>
+                        <option value="concept">개념</option>
+                        <option value="scene">현재 장면</option>
+                        <option value="other">기타</option>
+                    </select>
+                </label>
+                <label class="title-field">
+                    <span>이름</span>
+                    <input aria-label="항목 이름" bind:value={title} maxlength="160" readonly={readOnly} />
+                </label>
+            </div>
+            <div class="editor-actions" data-wiki-action-toolbar>
+                <ShButton size="sm" variant="success" aria-label="저장" title="저장" onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
+                    <SaveIcon size={14} /> <span data-wiki-action-label>저장</span>
+                </ShButton>
+                <ShButton size="sm" variant="ghost" aria-label="되돌리기" title="되돌리기" onclick={revert} disabled={!dirty || saving}>
+                    <RotateCcwIcon size={14} /> <span data-wiki-action-label>되돌리기</span>
+                </ShButton>
                 <ShButton
                     size="sm"
                     variant="ghost"
+                    aria-label="로어북에 복사"
+                    title="로어북에 복사"
                     onclick={() => void copySelectedToLorebook()}
                     disabled={!selected || dirty || saving}
                 >
-                    <BookCopyIcon size={14} /> 로어북에 복사
-                </ShButton>
-                <ShButton size="sm" variant="ghost" onclick={revert} disabled={!dirty || saving}>
-                    <RotateCcwIcon size={14} /> 되돌리기
-                </ShButton>
-                <ShButton size="sm" variant="ghost" onclick={trash} disabled={!selected || creating || readOnly || saving}>
-                    <Trash2Icon size={14} /> 삭제
+                    <BookCopyIcon size={14} /> <span data-wiki-action-label>로어북에 복사</span>
                 </ShButton>
                 {#if selected?.type === 'event' && selected.status === 'active'}
-                    <ShButton size="sm" variant="ghost" onclick={retractEvent} disabled={saving}>
-                        <Trash2Icon size={14} /> 사건 영구 삭제
+                    <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={retractEvent} disabled={saving}>
+                        <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
+                    </ShButton>
+                {:else}
+                    <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={trash} disabled={!selected || creating || readOnly || saving}>
+                        <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
                     </ShButton>
                 {/if}
-                <ShButton size="sm" variant="success" onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
-                    <SaveIcon size={14} /> 저장
-                </ShButton>
             </div>
         </header>
-        <div class="document-meta">
-            <code>{creating ? '새 문서' : selected?.relativePath ?? '문서를 선택하세요'}</code>
+        {#if selected?.status === 'retracted' || readOnly || dirty}
+            <div class="document-meta">
             {#if selected?.status === 'retracted'}<span class="readonly-badge">철회된 사건 기록</span>
             {:else if readOnly}<span class="readonly-badge">읽기 전용 사건 기록</span>
             {:else if dirty}<span class="dirty-badge">저장하지 않은 변경</span>{/if}
-            {#if selected}<span class="context-badge">context: {selected.contextMode}</span>{/if}
-        </div>
+            </div>
+        {/if}
         <textarea
             class="markdown-editor"
             aria-label="Markdown"
@@ -530,11 +664,12 @@
 
 <style>
     .wiki-editor { display: grid; grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr); min-height: 27rem; border-bottom: 1px solid var(--risu-theme-darkborderc); }
+    .portrait-panel-header, .editor-section-resizer { display: none; }
     .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black); }
-    .tree-toolbar, .editor-toolbar { display: flex; align-items: center; gap: .5rem; }
+    .tree-toolbar, .editor-title-row { display: flex; align-items: center; gap: .5rem; }
     .tree-toolbar { justify-content: space-between; padding: .2rem .25rem .6rem; }
     .wiki-health { display: flex; flex-wrap: wrap; gap: .3rem; padding: 0 .25rem .55rem; color: var(--risu-theme-textcolor2); font-size: .65rem; }
-    .wiki-health span, .context-badge { border: 1px solid var(--risu-theme-darkborderc); border-radius: 999px; padding: .16rem .38rem; }
+    .wiki-health span { border: 1px solid var(--risu-theme-darkborderc); border-radius: 999px; padding: .16rem .38rem; }
     .tree-toolbar strong { color: var(--risu-theme-textcolor2); font: 700 .65rem/1 ui-monospace, monospace; letter-spacing: .16em; }
     .folder-row, .root-file, .folder-children button { width: 100%; display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .38rem .45rem; border-radius: .32rem; color: var(--risu-theme-textcolor); text-align: left; font-size: .74rem; }
     .folder-row { color: var(--risu-theme-textcolor2); font-weight: 700; }
@@ -543,12 +678,14 @@
     .folder-children { margin-left: .7rem; padding-left: .35rem; border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, var(--risu-theme-darkborderc)); }
     .root-file:hover, .folder-children button:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
     .root-file span, .folder-children span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .editor-pane { min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, black); }
-    .editor-toolbar { padding: .65rem .75rem; border-bottom: 1px solid var(--risu-theme-darkborderc); }
-    .editor-toolbar label { display: grid; gap: .2rem; color: var(--risu-theme-textcolor2); font-size: .62rem; font-weight: 700; }
-    .editor-toolbar select, .editor-toolbar input { box-sizing: border-box; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
-    .title-field { min-width: 9rem; flex: 1; }
-    .editor-actions { display: flex; align-items: end; gap: .25rem; margin-left: auto; padding-top: .8rem; }
+    .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, black); }
+    .editor-header { min-width: 0; border-bottom: 1px solid var(--risu-theme-darkborderc); }
+    .editor-title-row { min-width: 0; padding: .65rem .75rem; }
+    .editor-title-row label { display: grid; min-width: 0; gap: .2rem; color: var(--risu-theme-textcolor2); font-size: .62rem; font-weight: 700; }
+    .editor-title-row label:first-child { flex: 0 0 5.5rem; }
+    .editor-title-row select, .editor-title-row input { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
+    .title-field { flex: 1 1 12rem; }
+    .editor-actions { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: .25rem; overflow-x: auto; padding: .45rem .75rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
     .document-meta { display: flex; align-items: center; gap: .6rem; padding: .45rem .75rem; color: var(--risu-theme-textcolor2); font-size: .68rem; }
     .readonly-badge, .dirty-badge { padding: .16rem .38rem; border-radius: 999px; }
     .readonly-badge { background: color-mix(in srgb, var(--risu-theme-textcolor2) 14%, transparent); }
@@ -588,5 +725,170 @@
         outline: 0;
         background: color-mix(in srgb, var(--risu-theme-primary) 16%, transparent);
     }
-    @media (max-width: 720px) { .wiki-editor { grid-template-columns: 1fr; grid-template-rows: minmax(9rem, 32%) minmax(0, 1fr); } .file-tree { border-right: 0; border-bottom: 1px solid var(--risu-theme-darkborderc); } .editor-toolbar { flex-wrap: wrap; } .editor-actions { width: 100%; margin-left: 0; padding-top: 0; } }
+    @container wiki-editor-pane (max-width: 32rem) {
+        .editor-actions :global(button) { width: 2rem; padding-inline: .35rem; }
+        .editor-actions [data-wiki-action-label] { display: none; }
+    }
+    @media (orientation: portrait) {
+        .wiki-editor {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows:
+                2.75rem
+                minmax(0, var(--wiki-tree-height))
+                .8rem
+                2.75rem
+                minmax(0, 1fr);
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .portrait-panel-header {
+            display: flex;
+            min-width: 0;
+            border-bottom: 1px solid var(--risu-theme-darkborderc);
+            background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, black);
+        }
+        .portrait-panel-header > button {
+            display: flex;
+            width: auto;
+            min-height: 2.75rem;
+            align-items: center;
+            gap: .6rem;
+            padding: .35rem .75rem;
+            border: 0;
+            color: var(--risu-theme-textcolor);
+            background: transparent;
+            text-align: left;
+            touch-action: manipulation;
+        }
+        .portrait-panel-header > .panel-toggle { flex: 1 1 auto; min-width: 0; }
+        .portrait-panel-header > .panel-focus { flex: 0 0 2.75rem; justify-content: center; padding-inline: 0; }
+        .portrait-panel-header > button:active {
+            background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent);
+        }
+        .portrait-panel-header > button:focus-visible {
+            outline: 2px solid var(--risu-theme-primary);
+            outline-offset: -2px;
+        }
+        .portrait-panel-header button > span {
+            display: flex;
+            flex: 1;
+            min-width: 0;
+            align-items: baseline;
+            gap: .5rem;
+        }
+        .portrait-panel-header strong { font-size: .78rem; }
+        .portrait-panel-header small {
+            overflow: hidden;
+            color: var(--risu-theme-textcolor2);
+            font-size: .68rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .portrait-panel-header :global(svg:last-child) {
+            flex: 0 0 auto;
+            transition: transform .18s ease-out;
+        }
+        .portrait-panel-header :global(svg:last-child.collapsed) {
+            transform: rotate(-90deg);
+        }
+        .file-tree {
+            min-height: 0;
+            border-right: 0;
+            border-bottom: 1px solid var(--risu-theme-darkborderc);
+            overscroll-behavior: contain;
+        }
+        .folder-row, .root-file, .folder-children button { min-height: 2.75rem; }
+        .editor-section-resizer {
+            position: relative;
+            display: block;
+            width: 100%;
+            min-height: .8rem;
+            padding: 0;
+            border: 0;
+            border-block: 1px solid var(--risu-theme-darkborderc);
+            background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, transparent);
+            cursor: row-resize;
+            touch-action: none;
+        }
+        .editor-section-resizer::before {
+            position: absolute;
+            z-index: 2;
+            inset: -1.9rem 0 0;
+            content: '';
+        }
+        .editor-section-resizer span {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 3rem;
+            height: .2rem;
+            border-radius: 999px;
+            background: color-mix(in srgb, var(--risu-theme-textcolor2) 58%, transparent);
+            transform: translate(-50%, -50%);
+        }
+        .editor-section-resizer:focus-visible {
+            outline: 2px solid var(--risu-theme-primary);
+            outline-offset: -2px;
+        }
+        .editor-pane { min-height: 0; overflow: hidden; }
+        .editor-title-row {
+            flex-wrap: wrap;
+            gap: .6rem;
+            padding: .65rem .75rem;
+        }
+        .editor-title-row label:first-child { flex: 0 0 7.5rem; }
+        .editor-title-row select, .editor-title-row input {
+            min-height: 2.75rem;
+            font-size: 1rem;
+        }
+        .title-field { min-width: min(12rem, 100%); }
+        .editor-actions {
+            width: 100%;
+            align-items: center;
+            justify-content: flex-end;
+            gap: .5rem;
+            margin-left: 0;
+            padding: .5rem .75rem;
+        }
+        .editor-actions :global(button) { min-height: 2.75rem; }
+        .document-meta { flex-wrap: wrap; gap: .35rem .6rem; }
+        .markdown-editor {
+            min-height: 0;
+            padding: 1rem;
+            font-size: 1rem;
+            line-height: 1.65;
+            overscroll-behavior: contain;
+        }
+        .tree-collapsed {
+            grid-template-rows: 2.75rem 0 0 2.75rem minmax(0, 1fr);
+        }
+        .tree-collapsed .file-tree,
+        .tree-collapsed .editor-section-resizer { display: none; }
+        .editor-collapsed {
+            grid-template-rows:
+                2.75rem
+                minmax(0, 1fr)
+                0
+                2.75rem
+                0;
+        }
+        .editor-collapsed .editor-pane,
+        .editor-collapsed .editor-section-resizer { display: none; }
+        .tree-collapsed.editor-collapsed {
+            grid-template-rows: 2.75rem 0 0 2.75rem 0;
+        }
+        .editor-focus {
+            grid-template-rows: 2.75rem minmax(0, 1fr);
+        }
+        .editor-focus .tree-panel-header,
+        .editor-focus .file-tree,
+        .editor-focus .editor-section-resizer { display: none; }
+        .editor-focus .editor-panel-header { display: flex; grid-row: 1; }
+        .editor-focus .editor-pane { display: flex; grid-row: 2; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .portrait-panel-header :global(svg:last-child) { transition: none; }
+    }
 </style>

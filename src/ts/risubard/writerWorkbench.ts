@@ -27,6 +27,7 @@ export interface WriterModelCall {
     bias: Record<string, never>
     schema: string
     logSource: 'memory'
+    logPurpose: 'bardwiki-admin'
 }
 
 export interface WriterModelResponse {
@@ -158,6 +159,7 @@ export async function requestCharacterPromotionDraft(input: {
         bias: {},
         schema: promotionDraftSchema,
         logSource: 'memory',
+        logPurpose: 'bardwiki-admin',
     }, 'model')
     if (response.type !== 'success'
         || typeof response.result !== 'string') {

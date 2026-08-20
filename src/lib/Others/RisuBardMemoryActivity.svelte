@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { ActivityIcon, BotIcon, Clock3Icon, DownloadIcon, FileSearchIcon } from '@lucide/svelte'
+    import { ActivityIcon, BotIcon, ChevronDownIcon, Clock3Icon, DownloadIcon, FileSearchIcon, RefreshCwIcon } from '@lucide/svelte'
     import type { Message } from 'src/ts/storage/database.svelte'
     import {
         RISUBARD_MEMORY_ACTIVITY_EVENT,
@@ -7,13 +7,17 @@
         type RisuBardLiveActivity,
     } from 'src/ts/risubard/memoryActivity'
     import {
-        addLegacyInputEstimates,
+        addRetainedAssistantSummary,
         buildLegacyChatRequestEvidence,
         formatChatRequestEvidenceMarkdown,
         loadChatRequestEvidence,
         type ChatRequestEvidence,
     } from 'src/ts/risubard/chatRequestEvidence'
-    import type { RequestLogSource } from 'src/ts/requestLog'
+    import {
+        REQUEST_LOG_RECORDED_EVENT,
+        type RequestLogSource,
+    } from 'src/ts/requestLog'
+    import { requestPurposeLabels } from 'src/ts/requestPurpose'
     import type { RequestInjectionKind } from 'src/ts/status/requestStatus'
     import { downloadFile } from 'src/ts/globalApi.svelte'
 
@@ -29,6 +33,9 @@
     let liveScope = $state('')
     let evidenceExporting = $state<'markdown' | 'json' | ''>('')
     let evidenceExportError = $state('')
+    let evidenceLoading = $state(false)
+    let evidenceLoadError = $state('')
+    let evidenceLoadSequence = 0
     let storedEvidence = $state<ChatRequestEvidence | null>(null)
     let evidenceScope = $state('')
     let generationEntries = $derived(messages.flatMap((message) => {
@@ -36,6 +43,7 @@
         return message.role === 'char' && info?.risuBardContext
             ? [{
                 messageId: message.chatId ?? info.generationId ?? 'unknown',
+                generationId: info.generationId,
                 timestamp: message.time,
                 info,
             }]
@@ -47,6 +55,7 @@
     )))
     let entries = $derived(generationEntries.filter(
         (entry) => !recordedGenerationIds.has(entry.messageId)
+            && (!entry.generationId || !recordedGenerationIds.has(entry.generationId))
     ))
 
     const formatNumber = (value: number | null | undefined) =>
@@ -83,6 +92,45 @@
     }
     const formatTimestamp = (value: string | number) =>
         new Date(value).toLocaleString('ko-KR')
+    const formatDuration = (value: number | null | undefined) =>
+        value == null ? '확인 불가' : value < 1_000
+            ? `${value.toLocaleString()} ms`
+            : `${(value / 1_000).toFixed(1)}초`
+    const formatFirstTokenDuration = (value: number | null | undefined) =>
+        value == null ? '확인 불가 ms' : formatDuration(value)
+    const outcomeLabel = (outcome: 'done' | 'failed' | 'aborted') =>
+        outcome === 'done' ? '성공' : outcome === 'aborted' ? '중단' : '실패'
+    const requestLabel = (request: ChatRequestEvidence['requests'][number]) =>
+        request.purpose === 'chat-response'
+            ? '스토리 생성'
+            : request.purpose
+                ? requestPurposeLabels[request.purpose]
+                : sourceLabels[request.source]
+    const injectionGroup: Record<RequestInjectionKind, string> = {
+        systemPrompt: '시스템', jailbreak: '시스템', globalNote: '시스템',
+        authorNote: '시스템', instruction: '시스템', tool: '시스템',
+        character: '캐릭터', persona: '페르소나', lorebook: '로어북',
+        wiki: 'BardWiki', memory: 'BardWiki', exampleDialogue: '예시 대화',
+        chatHistory: '채팅', other: '기타',
+    }
+    const injectionGroupOrder = [
+        '시스템', '캐릭터', '페르소나', 'BardWiki', '로어북',
+        '채팅', '예시 대화', '기타',
+    ]
+    const groupedInjectionTokens = (
+        manifest: ChatRequestEvidence['requests'][number]['injectionManifest']
+    ) => {
+        if (!manifest) return []
+        const grouped = new Map<string, number>()
+        for (const item of manifest.items) {
+            const label = injectionGroup[item.kind]
+            grouped.set(label, (grouped.get(label) ?? 0) + item.tokens)
+        }
+        return injectionGroupOrder.flatMap((label) => {
+            const tokens = grouped.get(label) ?? 0
+            return tokens > 0 ? [{ label, tokens }] : []
+        })
+    }
     const legacyEvidence = () => buildLegacyChatRequestEvidence(
         chatId,
         generationEntries.map((entry) => ({
@@ -96,6 +144,27 @@
         })),
     )
 
+    async function refreshStoredEvidence() {
+        const targetChatId = chatId
+        const sequence = ++evidenceLoadSequence
+        evidenceLoading = true
+        evidenceLoadError = ''
+        try {
+            const evidence = await loadChatRequestEvidence(targetChatId)
+            if (evidenceScope === targetChatId && sequence === evidenceLoadSequence) {
+                storedEvidence = evidence
+            }
+        } catch (error) {
+            if (evidenceScope === targetChatId && sequence === evidenceLoadSequence) {
+                evidenceLoadError = error instanceof Error
+                    ? error.message
+                    : '보존 요청 로그를 불러오지 못했습니다.'
+            }
+        } finally {
+            if (sequence === evidenceLoadSequence) evidenceLoading = false
+        }
+    }
+
     async function exportRequestEvidence(format: 'markdown' | 'json') {
         if (evidenceExporting) return
         evidenceExporting = format
@@ -103,19 +172,22 @@
         try {
             const persisted = await loadChatRequestEvidence(chatId)
             storedEvidence = persisted
-            const evidence = persisted.requestCount > 0
+            const baseEvidence = persisted.requestCount > 0
                 ? persisted
                 : legacyEvidence()
-            if (evidence.requestCount === 0) {
+            if (baseEvidence.requestCount === 0) {
                 evidenceExportError = '이 채팅에 저장된 요청 증거가 없습니다.'
                 return
             }
-            const evidenceWithLegacy = await addLegacyInputEstimates(evidence, messages)
-            const stamp = evidenceWithLegacy.generatedAt.replaceAll(':', '-').replaceAll('.', '-')
+            const evidence = await addRetainedAssistantSummary(
+                baseEvidence,
+                messages,
+            )
+            const stamp = evidence.generatedAt.replaceAll(':', '-').replaceAll('.', '-')
             const extension = format === 'markdown' ? 'md' : 'json'
             const content = format === 'markdown'
-                ? formatChatRequestEvidenceMarkdown(evidenceWithLegacy)
-                : `${JSON.stringify(evidenceWithLegacy, null, 2)}\n`
+                ? formatChatRequestEvidenceMarkdown(evidence)
+                : `${JSON.stringify(evidence, null, 2)}\n`
             await downloadFile(`risubard-chat-evidence-${stamp}.${extension}`, content)
         } catch (error) {
             evidenceExportError = error instanceof Error
@@ -135,32 +207,45 @@
         if (evidenceScope !== chatId) {
             evidenceScope = chatId
             storedEvidence = null
-            void (async () => {
-                try {
-                    const evidence = await loadChatRequestEvidence(chatId)
-                    if (evidenceScope === chatId) storedEvidence = evidence
-                } catch {
-                    // The generation fallback remains available offline.
-                }
-            })()
+            void refreshStoredEvidence()
         }
         const receive = (event: Event) => {
             const detail = (event as CustomEvent<RisuBardLiveActivity>).detail
             if (detail.characterId !== characterId || detail.chatId !== chatId) return
             live = [detail, ...live].slice(0, 50)
         }
+        const receiveRecorded = (event: Event) => {
+            const detail = (event as CustomEvent<{
+                sessionChatIds?: string[]
+            }>).detail
+            if (!detail.sessionChatIds?.includes(chatId)) return
+            void refreshStoredEvidence()
+        }
         window.addEventListener(RISUBARD_MEMORY_ACTIVITY_EVENT, receive)
-        return () => window.removeEventListener(
-            RISUBARD_MEMORY_ACTIVITY_EVENT,
-            receive
-        )
+        window.addEventListener(REQUEST_LOG_RECORDED_EVENT, receiveRecorded)
+        return () => {
+            window.removeEventListener(RISUBARD_MEMORY_ACTIVITY_EVENT, receive)
+            window.removeEventListener(REQUEST_LOG_RECORDED_EVENT, receiveRecorded)
+        }
     })
 </script>
 
 <details class="activity-console" open data-memory-activity>
-    <summary><ActivityIcon size={15} /> 작업 로그 <span>{requestEntries.length + entries.length + live.length}</span></summary>
+    <summary class="activity-heading">
+        <ActivityIcon size={15} /> 작업 로그
+        <span class="history-counts">
+            보존 요청 {requestEntries.length + entries.length}
+            <i>·</i> 이번 실행 이벤트 {live.length}
+        </span>
+    </summary>
     <div class="evidence-toolbar">
-        <span>이 채팅의 요청 상태·토큰 구성 증거</span>
+        <span>현재 챗의 보존 요청 기록 · 최신순</span>
+        <button
+            type="button"
+            data-refresh-request-evidence
+            disabled={evidenceLoading}
+            onclick={() => refreshStoredEvidence()}
+		><span class:spin={evidenceLoading}><RefreshCwIcon size={12} /></span> 새로고침</button>
         <button
             type="button"
             data-export-request-evidence="markdown"
@@ -174,116 +259,225 @@
             onclick={() => exportRequestEvidence('json')}
         ><DownloadIcon size={12} /> JSON</button>
     </div>
+    {#if evidenceLoadError}<div class="evidence-error" role="status">{evidenceLoadError}</div>{/if}
     {#if evidenceExportError}<div class="evidence-error" role="status">{evidenceExportError}</div>{/if}
     <div class="activity-stream">
-        {#each live as item (`${item.timestamp}-${item.operation}`)}
-            <article class="live-entry">
-                <div class="entry-title"><Clock3Icon size={13} /><strong>{item.message}</strong></div>
-                <time datetime={new Date(item.timestamp).toISOString()}>{formatTimestamp(item.timestamp)}</time>
-                {#if item.wikiPaths?.length}
-                    <div class="path-list">
-                        {#each item.wikiPaths as path}
-                            <button type="button" onclick={() => onSelectPath?.(path)}>{path}</button>
-                        {/each}
-                    </div>
-                {/if}
-            </article>
-        {/each}
+        {#if live.length > 0}
+            <details class="live-session">
+                <summary class="section-toggle">
+                    <span><Clock3Icon size={13} /> 이번 실행의 실시간 이벤트</span>
+                    <small>{live.length}개 · 앱 재시작 시 초기화</small>
+                    <span class="fold-icon"><ChevronDownIcon size={14} /></span>
+                </summary>
+                <div class="live-list">
+                    {#each live as item (`${item.timestamp}-${item.operation}`)}
+                        <article class="live-entry">
+                            <div class="entry-title"><Clock3Icon size={13} /><strong>{item.message}</strong></div>
+                            <time datetime={new Date(item.timestamp).toISOString()}>{formatTimestamp(item.timestamp)}</time>
+                            {#if item.wikiPaths?.length}
+                                <div class="path-list">
+                                    {#each item.wikiPaths as path}
+                                        <button type="button" onclick={() => onSelectPath?.(path)}>{path}</button>
+                                    {/each}
+                                </div>
+                            {/if}
+                        </article>
+                    {/each}
+                </div>
+            </details>
+        {/if}
+
+        <div class="section-label">
+            <span>보존된 요청 기록</span>
+            <small>세부 정보는 각 카드를 펼쳐 확인</small>
+        </div>
         {#each requestEntries as request (request.id)}
-            <article class="request-entry" data-request-source={request.source}>
-                <div class="entry-title">
-                    <BotIcon size={13} />
-                    <span class="request-kind">{sourceLabels[request.source]}</span>
-                    <strong>{request.model ?? request.provider ?? '모델 확인 불가'}</strong>
-                    <code>{request.generationId ?? `#${request.id}`}</code>
-                </div>
-                <time datetime={request.timestamp}>{formatTimestamp(request.timestamp)}</time>
-                <div class="metrics">
-                    <span>결과 {request.outcome === 'done' ? '성공' : request.outcome === 'aborted' ? '중단' : '실패'}</span>
-                    <span>입력 {formatNumber(request.inputTokens)}</span>
-                    <span>출력 {formatNumber(request.outputTokens)}</span>
-                    <span>전체 {formatNumber(request.durationMs)} ms</span>
-                    <span>첫 응답 {formatNumber(request.firstTokenMs)} ms</span>
-                </div>
-                {#if request.injectionManifest}
-                    <div class="composition">
-                        <b>입력 구성 · {formatNumber(request.injectionManifest.totalTokens)} tokens{request.injectionManifest.estimated ? ' · 추정' : ''}</b>
-                        <div class="metrics">
-                            {#each request.injectionManifest.items as item}
-                                <span>{injectionLabels[item.kind]}{item.name ? ` · ${item.name}` : ''} {formatNumber(item.tokens)}</span>
+            <details class="request-entry" data-request-source={request.source}>
+                <summary class="request-summary">
+                    <span class="summary-line">
+                        <strong class="request-kind">{requestLabel(request)}</strong>
+                        <time datetime={request.timestamp}>{formatTimestamp(request.timestamp)}</time>
+                        <em class="outcome" data-outcome={request.outcome}>{outcomeLabel(request.outcome)}</em>
+                    </span>
+                    <span class="summary-metrics">
+                        <b>입력 {formatNumber(request.inputTokens)}</b>
+                        <b>출력 {formatNumber(request.outputTokens)}</b>
+                        <b>소요 {formatDuration(request.durationMs)}</b>
+                    </span>
+                    {#if request.injectionManifest}
+                        <span class="summary-groups">
+                            {#each groupedInjectionTokens(request.injectionManifest) as group}
+                                <b>{group.label} {formatNumber(group.tokens)}</b>
                             {/each}
-                        </div>
+                        </span>
+                    {/if}
+                    <span class="fold-icon"><ChevronDownIcon size={15} /></span>
+                </summary>
+                <div class="request-details">
+                    <div class="metadata-grid">
+                        <span><small>모델</small><strong>{request.model ?? '확인 불가'}</strong></span>
+                        <span><small>공급자</small><strong>{request.provider ?? '확인 불가'}</strong></span>
+                        <span><small>생성 ID</small><code>{request.generationId ?? `#${request.id}`}</code></span>
+                        <span><small>로그 종류</small><strong>{request.source}</strong></span>
+                        <span><small>첫 응답</small> <strong>{formatFirstTokenDuration(request.firstTokenMs)}</strong></span>
+                        <span><small>추론 / 캐시</small><strong>{formatNumber(request.reasoningTokens)} / {formatNumber(request.cachedTokens)}</strong></span>
+                        {#if request.selectedHistoryMessageCount !== undefined}
+                            <span><small>선택 채팅</small><strong>{request.selectedHistoryMessageCount}개</strong></span>
+                        {/if}
                     </div>
-                {/if}
-            </article>
+                    {#if request.injectionManifest}
+                        <div class="composition">
+                            <div class="detail-title">
+                                입력 상세 · {formatNumber(request.injectionManifest.totalTokens)} tokens
+                                {request.injectionManifest.estimated ? ' · 추정' : ''}
+                            </div>
+                            <div class="composition-list">
+                                {#each request.injectionManifest.items as item}
+                                    <span>
+                                        <span>{injectionLabels[item.kind]}{item.name ? ` · ${item.name}` : ''}</span>
+                                        <strong>{formatNumber(item.tokens)}</strong>
+                                    </span>
+                                {/each}
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+            </details>
         {/each}
+
+        {#if entries.length > 0}
+            <div class="section-label legacy-label">
+                <span>채팅에 남은 구형 생성 기록</span>
+                <small>상세 요청 행이 보존되기 전 기록</small>
+            </div>
+        {/if}
         {#each entries as entry (entry.messageId)}
-            <article class="generation-entry">
-                <div class="entry-title"><BotIcon size={13} /><span class="request-kind">답변 생성</span><strong>{entry.info.model ?? '모델 확인 불가'}</strong><code>{entry.messageId}</code></div>
-                {#if entry.timestamp}
-                    <time datetime={new Date(entry.timestamp).toISOString()}>{formatTimestamp(entry.timestamp)}</time>
-                {:else}
-                    <time>시각 확인 불가</time>
-                {/if}
-                <div class="metrics">
-                    <span>입력 {formatNumber(entry.info.inputTokens)}</span>
-                    <span>출력 {formatNumber(entry.info.outputTokens)}</span>
-                    <span>전체 {formatNumber(duration(entry.info.stageTiming))} ms</span>
-                    <span>검색 {entry.info.risuBardContext?.inquiryDurationMs ?? 0} ms</span>
-                    <span>위키 {entry.info.risuBardContext?.selectedTokens ?? 0} tokens</span>
-                    <span>도구 {entry.info.toolUsed ? '사용' : '없음'}</span>
-                </div>
-                <div class="trace-grid">
-                    <div>
-                        <b>최근 원문 메시지</b>
-                        <div class="chips">
-                            {#each entry.info.risuBardContext?.recentMessages ?? [] as recent}
-                                <code>{recent.role} · {recent.id}</code>
-                            {/each}
+            <details class="request-entry generation-entry">
+                <summary class="request-summary">
+                    <span class="summary-line">
+                        <strong class="request-kind">답변 생성 · 구형</strong>
+                        {#if entry.timestamp}
+                            <time datetime={new Date(entry.timestamp).toISOString()}>{formatTimestamp(entry.timestamp)}</time>
+                        {:else}
+                            <time>시각 확인 불가</time>
+                        {/if}
+                    </span>
+                    <span class="summary-metrics">
+                        <b>입력 {formatNumber(entry.info.inputTokens)}</b>
+                        <b>출력 {formatNumber(entry.info.outputTokens)}</b>
+                        <b>소요 {formatDuration(duration(entry.info.stageTiming))}</b>
+                    </span>
+                    <span class="summary-groups">
+                        <b>BardWiki {formatNumber(entry.info.risuBardContext?.selectedTokens)}</b>
+                        <b>선택 채팅 {entry.info.risuBardContext?.recentMessages.length ?? 0}개</b>
+                    </span>
+                    <span class="fold-icon"><ChevronDownIcon size={15} /></span>
+                </summary>
+                <div class="request-details">
+                    <div class="metadata-grid">
+                        <span><small>모델</small><strong>{entry.info.model ?? '확인 불가'}</strong></span>
+                        <span><small>생성 ID</small><code>{entry.messageId}</code></span>
+                        <span><small>검색</small><strong>{formatDuration(entry.info.risuBardContext?.inquiryDurationMs)}</strong></span>
+                        <span><small>도구</small><strong>{entry.info.toolUsed ? '사용' : '없음'}</strong></span>
+                    </div>
+                    <div class="trace-grid">
+                        <div>
+                            <div class="detail-title">최근 원문 메시지</div>
+                            <div class="chips">
+                                {#each entry.info.risuBardContext?.recentMessages ?? [] as recent}
+                                    <code>{recent.role} · {recent.id}</code>
+                                {/each}
+                            </div>
+                        </div>
+                        <div>
+                            <div class="detail-title"><FileSearchIcon size={12} /> 컨텍스트 문서</div>
+                            <div class="path-list">
+                                {#each entry.info.risuBardContext?.wikiPaths ?? [] as path}
+                                    <button type="button" onclick={() => onSelectPath?.(path)}>{path}</button>
+                                {:else}
+                                    <span>선택된 문서 없음</span>
+                                {/each}
+                            </div>
                         </div>
                     </div>
-                    <div>
-                        <b><FileSearchIcon size={12} /> 컨텍스트 문서</b>
-                        <div class="path-list">
-                            {#each entry.info.risuBardContext?.wikiPaths ?? [] as path}
-                                <button type="button" onclick={() => onSelectPath?.(path)}>{path}</button>
-                            {:else}
-                                <span>선택된 문서 없음</span>
-                            {/each}
-                        </div>
-                    </div>
                 </div>
-            </article>
-        {:else}
-            {#if live.length === 0 && requestEntries.length === 0}<div class="empty">이 채팅의 기록된 생성 작업이 없습니다.</div>{/if}
+            </details>
         {/each}
+
+        {#if live.length === 0 && requestEntries.length === 0 && entries.length === 0}
+            <div class="empty">이 채팅에 보존된 요청 기록이 없습니다.</div>
+        {/if}
     </div>
 </details>
 
 <style>
-    .activity-console { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-top: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 97%, black); }
-    summary { display: flex; align-items: center; gap: .45rem; padding: .6rem .85rem; cursor: pointer; color: var(--risu-theme-textcolor); font-size: .74rem; font-weight: 750; list-style: none; }
-    summary span { margin-left: auto; color: var(--risu-theme-textcolor2); font: .68rem ui-monospace, monospace; }
-    .evidence-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; padding: 0 .75rem .55rem; color: var(--risu-theme-textcolor2); font-size: .64rem; }
+    .activity-console { --activity-font-step: 1px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-top: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 97%, black); }
+    .activity-heading { display: flex; align-items: center; gap: .45rem; padding: .62rem .85rem; cursor: pointer; color: var(--risu-theme-textcolor); font-size: calc(.74rem + var(--activity-font-step)); font-weight: 800; list-style: none; }
+    .history-counts { display: flex; align-items: center; gap: .32rem; margin-left: auto; color: var(--risu-theme-textcolor2); font: calc(.62rem + var(--activity-font-step)) ui-monospace, monospace; font-style: normal; }
+    .history-counts i { opacity: .45; font-style: normal; }
+    .evidence-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; padding: 0 .75rem .55rem; color: var(--risu-theme-textcolor2); font-size: calc(.64rem + var(--activity-font-step)); }
     .evidence-toolbar > span { margin-right: auto; }
-    .evidence-toolbar button { display: inline-flex; align-items: center; gap: .25rem; padding: .25rem .42rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 26%, var(--risu-theme-darkborderc)); border-radius: .3rem; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent); font-size: .62rem; }
+    .evidence-toolbar button { display: inline-flex; align-items: center; gap: .25rem; padding: .25rem .42rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 26%, var(--risu-theme-darkborderc)); border-radius: .3rem; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent); font-size: calc(.62rem + var(--activity-font-step)); }
     .evidence-toolbar button:hover:not(:disabled) { background: color-mix(in srgb, var(--risu-theme-primary) 16%, transparent); }
     .evidence-toolbar button:disabled { opacity: .55; }
-    .evidence-error { margin: 0 .75rem .55rem; color: var(--risu-theme-error); font-size: .64rem; }
-    .activity-stream { display: grid; flex: 1; align-content: start; min-height: 0; overflow: auto; gap: .45rem; padding: 0 .75rem .75rem; }
-    article { display: grid; gap: .42rem; padding: .58rem .65rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 16%, var(--risu-theme-darkborderc)); border-radius: .42rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, transparent); }
-    .entry-title, b { display: flex; align-items: center; gap: .38rem; }
-    .entry-title code { margin-left: auto; color: var(--risu-theme-textcolor2); font-size: .62rem; }
-    .entry-title strong { font-size: .72rem; }
-    time, .empty, .path-list span { color: var(--risu-theme-textcolor2); font-size: .65rem; }
-    .request-kind { flex: 0 0 auto; padding: .18rem .34rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 34%, transparent); border-radius: 999px; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent); font-size: .6rem; font-weight: 750; }
-    .composition { display: grid; gap: .3rem; padding-top: .1rem; }
-    .metrics, .chips, .path-list { display: flex; flex-wrap: wrap; gap: .28rem .5rem; }
-    .metrics span, .chips code { padding: .18rem .35rem; border-radius: .25rem; color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-textcolor2) 7%, transparent); font-size: .62rem; }
+    .spin { animation: spin .8s linear infinite; }
+    .evidence-error { margin: 0 .75rem .55rem; padding: .42rem .55rem; border-left: 2px solid var(--risu-theme-error); color: var(--risu-theme-error); background: color-mix(in srgb, var(--risu-theme-error) 7%, transparent); font-size: calc(.64rem + var(--activity-font-step)); }
+    .activity-stream { display: grid; flex: 1; align-content: start; min-height: 0; overflow: auto; gap: .46rem; padding: 0 .75rem .75rem; }
+    .section-label { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .38rem .1rem .05rem; color: var(--risu-theme-textcolor); font-size: calc(.66rem + var(--activity-font-step)); font-weight: 800; letter-spacing: .02em; }
+    .section-label small { color: var(--risu-theme-textcolor2); font-size: calc(.58rem + var(--activity-font-step)); font-weight: 500; }
+    .legacy-label { margin-top: .2rem; }
+    .live-session { border: 1px dashed color-mix(in srgb, var(--risu-theme-textcolor2) 28%, transparent); border-radius: .45rem; background: color-mix(in srgb, var(--risu-theme-textcolor2) 3%, transparent); }
+    .section-toggle { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: .5rem; padding: .52rem .62rem; cursor: pointer; list-style: none; }
+    .section-toggle > span { display: flex; align-items: center; gap: .35rem; color: var(--risu-theme-textcolor); font-size: calc(.65rem + var(--activity-font-step)); font-weight: 750; }
+    .section-toggle small { color: var(--risu-theme-textcolor2); font-size: calc(.58rem + var(--activity-font-step)); }
+    .live-list { display: grid; gap: .35rem; padding: 0 .45rem .45rem; }
+    .live-entry { display: grid; gap: .35rem; padding: .5rem .58rem; border-radius: .35rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, transparent); }
+    .request-entry { position: relative; overflow: hidden; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 19%, var(--risu-theme-darkborderc)); border-radius: .48rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 93%, transparent); }
+    .request-entry::before { position: absolute; inset: 0 auto 0 0; width: 2px; content: ''; background: color-mix(in srgb, var(--risu-theme-primary) 72%, transparent); }
+    .request-summary { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .6rem; padding: .58rem .72rem .58rem .78rem; cursor: pointer; list-style: none; }
+    .request-summary:hover { background: color-mix(in srgb, var(--risu-theme-primary) 5%, transparent); }
+    .summary-line, .summary-metrics, .summary-groups { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .42rem; min-width: 0; }
+    .summary-line { grid-column: 1; }
+    .summary-line time { color: var(--risu-theme-textcolor2); font-size: calc(.61rem + var(--activity-font-step)); }
+    .request-kind { color: var(--risu-theme-textcolor); font-size: calc(.68rem + var(--activity-font-step)); font-weight: 850; }
+    .request-kind::before { content: '['; color: var(--risu-theme-primary); }
+    .request-kind::after { content: ']'; color: var(--risu-theme-primary); }
+    .outcome { padding: .12rem .32rem; border-radius: 999px; font-size: calc(.56rem + var(--activity-font-step)); font-style: normal; font-weight: 800; }
+    .outcome[data-outcome='done'] { color: var(--risu-theme-success, #62d394); background: color-mix(in srgb, var(--risu-theme-success, #62d394) 10%, transparent); }
+    .outcome[data-outcome='failed'] { color: var(--risu-theme-error); background: color-mix(in srgb, var(--risu-theme-error) 10%, transparent); }
+    .outcome[data-outcome='aborted'] { color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-textcolor2) 9%, transparent); }
+    .summary-metrics, .summary-groups { grid-column: 1; }
+    .summary-metrics b, .summary-groups b { padding: .16rem .34rem; border-radius: .26rem; font: 650 calc(.6rem + var(--activity-font-step)) ui-monospace, monospace; }
+    .summary-metrics b { color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-textcolor2) 8%, transparent); }
+    .summary-groups b { color: var(--risu-theme-textcolor2); border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); background: color-mix(in srgb, var(--risu-theme-primary) 4%, transparent); }
+    .fold-icon { grid-column: 2; grid-row: 1 / -1; align-self: center; color: var(--risu-theme-textcolor2); transition: transform .16s ease, color .16s ease; }
+    details[open] > summary .fold-icon { transform: rotate(180deg); color: var(--risu-theme-primary); }
+    .request-details { display: grid; gap: .62rem; padding: .62rem .72rem .72rem .78rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-primary) 12%, var(--risu-theme-darkborderc)); background: color-mix(in srgb, black 7%, transparent); }
+    .metadata-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
+    .metadata-grid > span { display: grid; gap: .16rem; min-width: 0; padding: .38rem .44rem; border-radius: .32rem; background: color-mix(in srgb, var(--risu-theme-textcolor2) 5%, transparent); }
+    .metadata-grid small { color: var(--risu-theme-textcolor2); font-size: calc(.54rem + var(--activity-font-step)); text-transform: uppercase; letter-spacing: .06em; }
+    .metadata-grid strong, .metadata-grid code { overflow: hidden; color: var(--risu-theme-textcolor); font-size: calc(.61rem + var(--activity-font-step)); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .composition { display: grid; gap: .35rem; }
+    .detail-title { display: flex; align-items: center; gap: .3rem; color: var(--risu-theme-textcolor2); font-size: calc(.58rem + var(--activity-font-step)); font-weight: 800; text-transform: uppercase; letter-spacing: .055em; }
+    .composition-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .24rem .55rem; }
+    .composition-list > span { display: flex; align-items: baseline; justify-content: space-between; gap: .55rem; min-width: 0; padding: .25rem .32rem; border-bottom: 1px dotted color-mix(in srgb, var(--risu-theme-textcolor2) 18%, transparent); color: var(--risu-theme-textcolor2); font-size: calc(.59rem + var(--activity-font-step)); }
+    .composition-list > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .composition-list strong { flex: 0 0 auto; color: var(--risu-theme-textcolor); font: 650 calc(.58rem + var(--activity-font-step)) ui-monospace, monospace; }
+    .entry-title { display: flex; align-items: center; gap: .38rem; }
+    .entry-title strong { font-size: calc(.64rem + var(--activity-font-step)); }
+    time, .empty, .path-list span { color: var(--risu-theme-textcolor2); font-size: calc(.61rem + var(--activity-font-step)); }
+    .chips, .path-list { display: flex; flex-wrap: wrap; gap: .28rem .4rem; }
+    .chips code { padding: .18rem .35rem; border-radius: .25rem; color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-textcolor2) 7%, transparent); font-size: calc(.58rem + var(--activity-font-step)); }
     .trace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
     .trace-grid > div { display: grid; align-content: start; gap: .3rem; min-width: 0; }
-    b { color: var(--risu-theme-textcolor2); font-size: .62rem; text-transform: uppercase; letter-spacing: .04em; }
-    .path-list button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: .18rem .35rem; border-radius: .25rem; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); font: .62rem ui-monospace, monospace; text-align: left; }
+    .path-list button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: .18rem .35rem; border-radius: .25rem; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); font: calc(.58rem + var(--activity-font-step)) ui-monospace, monospace; text-align: left; }
     .path-list button:hover { background: color-mix(in srgb, var(--risu-theme-primary) 18%, transparent); }
-    @media (max-width: 640px) { .trace-grid { grid-template-columns: 1fr; } }
+    .empty { padding: 1rem; border: 1px dashed color-mix(in srgb, var(--risu-theme-textcolor2) 20%, transparent); border-radius: .45rem; text-align: center; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 720px) {
+        .history-counts { align-items: flex-end; flex-direction: column; gap: .05rem; }
+        .history-counts i { display: none; }
+        .metadata-grid, .composition-list, .trace-grid { grid-template-columns: 1fr; }
+        .summary-line time { flex-basis: 100%; }
+    }
 </style>

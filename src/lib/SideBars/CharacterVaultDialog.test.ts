@@ -232,6 +232,110 @@ describe('CharacterVaultDialog', () => {
         expect(mocks.requestImmediateSave).toHaveBeenCalled()
     })
 
+    test('moves a dragged character card into the dropped folder and saves immediately', async () => {
+        await render()
+        const card = document.body.querySelector<HTMLButtonElement>(
+            '[aria-label="Alice 선택"]'
+        )!.closest('.character-card')!
+        const folder = document.body.querySelector<HTMLButtonElement>(
+            '[aria-label="Cast 폴더 열기"]'
+        )!.closest('.folder-row')!
+        const dataTransfer = new DataTransfer()
+        const dragEvent = (type: string, cancelable = false) => {
+            const event = new DragEvent(type, { bubbles: true, cancelable })
+            Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+            return event
+        }
+
+        card.dispatchEvent(dragEvent('dragstart'))
+        expect(dataTransfer.getData('application/x-risubard-character-vault'))
+            .toBe('a')
+        folder.dispatchEvent(dragEvent('dragover', true))
+        folder.dispatchEvent(dragEvent('drop', true))
+        await tick()
+
+        const target = mocks.db.characterOrder.find((entry) =>
+            typeof entry !== 'string' && entry.id === 'folder-1'
+        )
+        expect(typeof target === 'string' ? [] : target?.data).toEqual(['b', 'a'])
+        expect(mocks.requestImmediateSave).toHaveBeenCalled()
+        expect(document.body.querySelector('[aria-live="polite"]')?.textContent)
+            .toContain('Alice · Cast 폴더로 이동')
+    })
+
+    test('selects a character when the card body is clicked', async () => {
+        await render()
+        document.body.querySelector<HTMLElement>(
+            '.character-caption strong'
+        )!.click()
+        await tick()
+
+        expect(document.body.querySelector('[aria-label="Alice 선택"]')
+            ?.getAttribute('aria-pressed')).toBe('true')
+        expect(document.body.textContent).toContain('1명 선택')
+    })
+
+    test('selects a focused character card from the keyboard', async () => {
+        await render()
+        const card = document.body.querySelector<HTMLElement>(
+            '[aria-label^="Alice 캐릭터 카드"]'
+        )!
+        card.dispatchEvent(new KeyboardEvent('keydown', {
+            key: ' ', bubbles: true, cancelable: true,
+        }))
+        await tick()
+
+        expect(card.getAttribute('role')).toBe('checkbox')
+        expect(card.getAttribute('aria-checked')).toBe('true')
+    })
+
+    test('moves a dragged folder character back to unfiled and saves immediately', async () => {
+        await render()
+        click('Cast 폴더 열기')
+        await tick()
+        const card = document.body.querySelector<HTMLButtonElement>(
+            '[aria-label="Bryn 선택"]'
+        )!.closest('.character-card')!
+        const unfiled = Array.from(document.body.querySelectorAll<HTMLButtonElement>(
+            '.vault-rail > button'
+        )).find((button) => button.textContent?.includes('미분류'))!
+        const dataTransfer = new DataTransfer()
+        const dragEvent = (type: string, cancelable = false) => {
+            const event = new DragEvent(type, { bubbles: true, cancelable })
+            Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+            return event
+        }
+
+        card.dispatchEvent(dragEvent('dragstart'))
+        unfiled.dispatchEvent(dragEvent('dragover', true))
+        unfiled.dispatchEvent(dragEvent('drop', true))
+        await tick()
+
+        const folder = mocks.db.characterOrder.find((entry) =>
+            typeof entry !== 'string' && entry.id === 'folder-1'
+        )
+        expect(typeof folder === 'string' ? [] : folder?.data).toEqual([])
+        expect(mocks.db.characterOrder).toContain('b')
+        expect(mocks.requestImmediateSave).toHaveBeenCalled()
+        expect(document.body.querySelector('[aria-live="polite"]')?.textContent)
+            .toContain('Bryn · 미분류로 이동')
+    })
+
+    test('renames a character from its card and saves immediately', async () => {
+        mocks.alertInput.mockResolvedValue('  Alicia  ')
+        await render()
+
+        click('Alice 이름 변경')
+        await vi.waitFor(() => expect(mocks.db.characters[0].name).toBe('Alicia'))
+
+        expect(mocks.alertInput).toHaveBeenCalledWith(
+            '캐릭터 이름 변경', [], 'Alice'
+        )
+        expect(mocks.requestImmediateSave).toHaveBeenCalled()
+        expect(document.body.querySelector('[aria-live="polite"]')?.textContent)
+            .toContain('Alice → Alicia 이름 변경 완료')
+    })
+
     test('selects every character in the current filtered scope', async () => {
         await render()
         click('현재 목록 전체 선택')

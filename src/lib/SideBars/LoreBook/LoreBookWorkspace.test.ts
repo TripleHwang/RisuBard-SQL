@@ -7,13 +7,14 @@ import { mount, tick, unmount } from 'svelte'
 import { createClassComponent } from 'svelte/legacy'
 import type { loreBook } from 'src/ts/storage/database.svelte'
 import { languageEnglish } from 'src/lang/en'
+import { languageKorean } from 'src/lang/ko'
 import LoreBookWorkspace from './LoreBookWorkspace.svelte'
 import LoreBookWorkspaceDialog from './LoreBookWorkspaceDialog.svelte'
 import { createLorebookOwnerBinding } from './loreBookWorkspaceConnections'
 import { clearLorebookWorkspaceSessions } from './loreBookWorkspaceSession'
 
 const sortableMock = vi.hoisted(() => ({
-    options: undefined as Record<string, (...args: any[]) => unknown> | undefined,
+    options: undefined as Record<string, any> | undefined,
     create: vi.fn(),
     instances: [] as Array<{ destroy: ReturnType<typeof vi.fn> }>,
 }))
@@ -32,7 +33,7 @@ const environmentMock = vi.hoisted(() => ({
 
 vi.mock('sortablejs', () => ({
     default: {
-        create: vi.fn((_element: HTMLElement, options: Record<string, (...args: any[]) => unknown>) => {
+        create: vi.fn((_element: HTMLElement, options: Record<string, any>) => {
             sortableMock.options = options
             sortableMock.create(_element, options)
             const instance = { destroy: vi.fn() }
@@ -184,6 +185,67 @@ describe('LoreBookWorkspace', () => {
         expect(document.body.querySelector('[data-lorebook-search]')).not.toBeNull()
     })
 
+    it('renders activation status icons with unreachable and hidden row states', async () => {
+        await render([
+            entry('always', { alwaysActive: true, key: '' }),
+            entry('keyword', { key: 'castle' }),
+            entry('multiple', { key: 'castle', selective: true }),
+            entry('unreachable', { key: '   ', alwaysActive: false }),
+            entry('hidden', { enabled: false, alwaysActive: true }),
+        ])
+
+        expect(document.body.querySelector('[data-lorebook-row="always"] [data-lorebook-activation-status="always"]')).not.toBeNull()
+        expect(document.body.querySelector('[data-lorebook-row="keyword"] [data-lorebook-activation-status="keyword"]')).not.toBeNull()
+        expect(document.body.querySelector('[data-lorebook-row="multiple"] [data-lorebook-activation-status="multiple-key"]')).not.toBeNull()
+        expect(document.body.querySelector('[data-lorebook-row="unreachable"] [data-lorebook-activation-status="unreachable"]')).not.toBeNull()
+        expect(document.body.querySelector('[data-lorebook-row="unreachable"]')?.classList.contains('unreachable-entry')).toBe(true)
+        expect(document.body.querySelector('[data-lorebook-row="hidden"] [data-lorebook-status-hidden]')).not.toBeNull()
+        expect(document.body.querySelector('[data-lorebook-row="hidden"]')?.classList.contains('hidden-entry')).toBe(true)
+    })
+
+    it('maps the Hidden checkbox to enabled false', async () => {
+        const onChange = vi.fn()
+        await render([entry('one', { enabled: true })], { onChange })
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+
+        const hidden = document.body.querySelector<HTMLInputElement>('[data-lorebook-hidden]')!
+        expect(hidden.checked).toBe(false)
+        hidden.click()
+        await tick()
+
+        expect((onChange.mock.calls.at(-1)?.[0] as loreBook[])[0].enabled).toBe(false)
+    })
+
+    it('deletes a hovered row from its inline trash action', async () => {
+        const onChange = vi.fn()
+        await render([entry('one'), entry('two')], { onChange })
+
+        click('[data-lorebook-row-delete="one"]')
+        await vi.waitFor(() => expect(onChange).toHaveBeenCalled())
+
+        expect((onChange.mock.calls.at(-1)?.[0] as loreBook[]).map((item) => item.id)).toEqual(['two'])
+        expect(environmentMock.alertConfirm).toHaveBeenCalledOnce()
+    })
+
+    it('shares status icons, hidden semantics, and the inline trash action with the default lorebook editor', () => {
+        const source = readFileSync(resolve('src/lib/SideBars/LoreBook/LoreBookData.svelte'), 'utf8')
+
+        expect(source).toContain("import LoreBookStatusIcons from './LoreBookStatusIcons.svelte'")
+        expect(source).toContain('data-lorebook-inline-delete')
+        expect(source).toContain('data-lorebook-hidden')
+        expect(source).toContain('value.enabled = !hidden')
+    })
+
+    it('names enabled inversion Hidden and selective activation Multiple keys', () => {
+        expect(languageEnglish.lorebookWorkspace.hidden).toBe('Hidden')
+        expect(languageKorean.lorebookWorkspace.hidden).toBe('숨김')
+        expect(languageEnglish.lorebookWorkspace.selective).toBe('Multiple keys')
+        expect(languageKorean.lorebookWorkspace.selective).toBe('멀티플 키')
+        expect(languageEnglish.selective).toBe('Multiple keys')
+        expect(languageKorean.selective).toBe('멀티플 키')
+    })
+
     it('persists missing and duplicate IDs once when mounted', async () => {
         const onChange = vi.fn()
         await render([
@@ -237,13 +299,16 @@ describe('LoreBookWorkspace', () => {
 
     it('preserves a dirty active draft when a batch enabled change happens before blur', async () => {
         const onChange = vi.fn()
-        await render([entry('one', { content: 'before' })], { onChange })
+        await render([entry('one', { content: 'before' }), entry('two')], { onChange })
         click('[data-lorebook-row="one"] [data-lorebook-open]')
         await tick()
 
         const content = document.body.querySelector<HTMLTextAreaElement>('.lore-content')!
         content.value = 'dirty draft'
         content.dispatchEvent(new Event('input', { bubbles: true }))
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="two"] .row-main')!
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+        await tick()
         click('[data-lorebook-batch-enabled="false"]')
         await tick()
         content.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
@@ -527,10 +592,11 @@ describe('LoreBookWorkspace', () => {
         await render([
             entry('normal'),
             child,
+            entry('normal-2'),
             entry('folder', { mode: 'folder', key: '\uf000folder:places' }),
         ], { onChange })
 
-        for (const id of ['normal', 'link', 'folder']) {
+        for (const id of ['normal', 'link', 'normal-2', 'folder']) {
             document.body.querySelector<HTMLElement>(`[data-lorebook-row="${id}"] .row-main`)!
                 .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
             await tick()
@@ -539,7 +605,7 @@ describe('LoreBookWorkspace', () => {
         expect(document.body.querySelector('[data-lorebook-row="normal"]')?.classList.contains('selected')).toBe(true)
         expect(document.body.querySelector('[data-lorebook-row="link"]')?.classList.contains('selected')).toBe(false)
         expect(document.body.querySelector('[data-lorebook-row="folder"]')?.classList.contains('selected')).toBe(false)
-        expect(document.body.querySelector('[data-lorebook-batch]')?.textContent).toContain('1 selected')
+        expect(document.body.querySelector('[data-lorebook-batch]')?.textContent).toContain('2 selected')
         click('[data-lorebook-batch-enabled="false"]')
         await tick()
         expect((onChange.mock.calls.at(-1)?.[0] as loreBook[])[1]).toBe(child)
@@ -569,6 +635,58 @@ describe('LoreBookWorkspace', () => {
         await tick()
         expect(document.body.querySelector('[data-lorebook-batch]')).toBeNull()
         expect(document.body.querySelectorAll('[data-lorebook-row].selected')).toHaveLength(0)
+    })
+
+    it('collapses multiple selection to the entry clicked without a modifier', async () => {
+        await render([entry('a'), entry('b'), entry('c')])
+
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="a"] .row-main')!.click()
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="b"] .row-main')!
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+        await tick()
+        expect(document.body.querySelectorAll('[data-lorebook-row].selected')).toHaveLength(2)
+
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="c"] .row-main')!.click()
+        await tick()
+
+        expect(document.body.querySelector('[data-lorebook-batch]')).toBeNull()
+        expect(document.body.querySelectorAll('[data-lorebook-row].selected')).toHaveLength(1)
+        expect(document.body.querySelector('[data-lorebook-row="c"]')?.classList.contains('selected')).toBe(true)
+    })
+
+    it('clears multiple selection when a folder is clicked without a modifier', async () => {
+        await render([
+            entry('a'),
+            entry('b'),
+            entry('folder', { mode: 'folder', key: 'folder-key', comment: 'Folder' }),
+        ])
+
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="a"] .row-main')!.click()
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="b"] .row-main')!
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+        await tick()
+        expect(document.body.querySelectorAll('[data-lorebook-row].selected')).toHaveLength(2)
+
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="folder"] .row-main')!.click()
+        await tick()
+
+        expect(document.body.querySelector('[data-lorebook-batch]')).toBeNull()
+        expect(document.body.querySelectorAll('[data-lorebook-row].selected')).toHaveLength(0)
+    })
+
+    it('replaces the entry editor with the batch editor when multiple entries are selected', async () => {
+        await render([entry('a'), entry('b'), entry('c')])
+
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="a"] .row-main')!.click()
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="c"] .row-main')!
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+        await tick()
+
+        const editor = document.body.querySelector('[data-lorebook-editor]')!
+        const list = document.body.querySelector('[data-lorebook-list]')!
+        expect(editor.querySelector('[data-lorebook-batch]')).not.toBeNull()
+        expect(list.querySelector('[data-lorebook-batch]')).toBeNull()
+        expect(editor.querySelector('[data-lorebook-field="content"]')).toBeNull()
     })
 
     it('never renders private folder keys and uses the requested Solar disclosure icons', async () => {
@@ -713,7 +831,7 @@ describe('LoreBookWorkspace', () => {
             ]
             component.$set({ entries: ownerA.data })
             await tick()
-            expect(document.body.querySelector('[data-lorebook-batch]')?.textContent).toContain('1 selected')
+            expect(document.body.querySelector('[data-lorebook-batch]')).toBeNull()
             expect(document.body.querySelector('.editor-empty')).not.toBeNull()
 
             click('[data-lorebook-row="same"] [data-lorebook-open]')
@@ -862,6 +980,58 @@ describe('LoreBookWorkspace', () => {
         expect(changed.map((item) => item.id)).toEqual(['a', 'c', 'b'])
     })
 
+    it('uses the whole row as the drag surface without letting Sortable move the preview DOM', async () => {
+        await render([entry('a'), entry('b')])
+        const source = document.body.querySelector<HTMLElement>('[data-lorebook-row="a"]')!
+        const target = document.body.querySelector<HTMLElement>('[data-lorebook-row="b"]')!
+
+        expect(sortableMock.options?.handle).toBeUndefined()
+        expect(sortableMock.options?.filter).toContain('[data-lorebook-no-drag]')
+        expect(document.body.querySelector('[data-lorebook-drag-handle]')).toBeNull()
+        sortableMock.options?.onStart?.({ item: source })
+        const allowDomMove = sortableMock.options?.onMove?.({
+            dragged: source,
+            related: target,
+            relatedRect: rect(40, 80),
+        }, new MouseEvent('mousemove', { clientY: 45 }))
+        await tick()
+
+        expect(allowDomMove).toBe(false)
+        expect(target.dataset.dropPosition).toBe('before')
+    })
+
+    it('marks and moves the whole selected group when a selected row is dragged', async () => {
+        const onChange = vi.fn()
+        await render([entry('a'), entry('b'), entry('c'), entry('target')], { onChange })
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="a"] .row-main')!.click()
+        document.body.querySelector<HTMLElement>('[data-lorebook-row="c"] .row-main')!
+            .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
+        await tick()
+
+        const source = document.body.querySelector<HTMLElement>('[data-lorebook-row="c"]')!
+        const target = document.body.querySelector<HTMLElement>('[data-lorebook-row="target"]')!
+        const options = sortableMock.options!
+        options.onStart?.({ item: source })
+        await tick()
+
+        expect(document.body.querySelector('[data-lorebook-drag-count="2"]')).not.toBeNull()
+        expect(document.body.querySelectorAll('[data-lorebook-row].dragging-group')).toHaveLength(2)
+
+        options.onMove?.({
+            dragged: source,
+            related: target,
+            relatedRect: rect(120, 160),
+        }, new MouseEvent('mousemove', { clientY: 121 }))
+        await tick()
+        expect(target.dataset.dropPosition).toBe('before')
+
+        options.onEnd?.({ item: source, to: source.parentElement!, newIndex: 2 })
+        await tick()
+        expect((onChange.mock.calls.at(-1)?.[0] as loreBook[]).map((item) => item.id))
+            .toEqual(['b', 'a', 'c', 'target'])
+        expect(document.body.querySelector('[data-lorebook-drag-count]')).toBeNull()
+    })
+
     it('uses touch coordinates and excludes a self-related row when resolving a folder drop', async () => {
         const folderKey = '\uf000folder:places'
         const onChange = vi.fn()
@@ -884,6 +1054,8 @@ describe('LoreBookWorkspace', () => {
             touches: [{ clientY: 60 }],
             changedTouches: [{ clientY: 60 }],
         })
+        await tick()
+        expect(folder.dataset.dropPosition).toBe('inside')
         options.onEnd?.({ item: source, to: source.parentElement!, newIndex: 0 })
 
         const changed = onChange.mock.calls.at(-1)?.[0] as loreBook[]
@@ -1028,7 +1200,8 @@ describe('LoreBookWorkspaceDialog source contract', () => {
         expect(workspaceSource).toContain('scopeKey?: string')
         expect(source).toContain('scopeKey?: string')
         expect(source).toContain('{scopeKey}')
-        expect(workspaceSource).toContain('[data-lorebook-drag-handle], .folder-disclosure, .row-select-hit-area')
+        expect(workspaceSource).toContain('.folder-disclosure, .row-select-hit-area')
+        expect(workspaceSource).not.toContain('data-lorebook-drag-handle')
         expect(workspaceSource).toContain('.row-select-hit-area { display: grid; min-width: 3rem; min-height: 3rem; place-items: center; }')
         expect(workspaceSource).toContain('[data-lorebook-select] { width: 1rem; min-width: 1rem; height: 1rem; min-height: 1rem; margin: 0; }')
         expect(workspaceSource).not.toContain('.folder-disclosure, [data-lorebook-select]')
@@ -1049,6 +1222,52 @@ describe('LoreBookWorkspaceDialog source contract', () => {
         const contentFieldRule = workspaceSource.match(/\.content-field\s*\{([^}]*)\}/)?.[1]
 
         expect(contentFieldRule).toContain('grid-template-rows: auto minmax(0, 1fr)')
+    })
+
+    it('derives explicit hierarchy and drag colors from canonical theme tokens', () => {
+        const source = readFileSync(resolve('src/lib/SideBars/LoreBook/LoreBookWorkspace.svelte'), 'utf8')
+
+        for (const token of [
+            '--lore-surface-root',
+            '--lore-surface-folder',
+            '--lore-surface-child',
+            '--lore-hierarchy-line',
+            '--lore-selection',
+            '--lore-drop-target',
+        ]) expect(source).toContain(token)
+        expect(source).not.toContain('#c85d5d')
+    })
+
+    it('keeps the built-in light scheme on crisp neutral surfaces', () => {
+        const source = readFileSync(resolve('src/ts/gui/colorscheme.ts'), 'utf8')
+        const lightScheme = source.match(/"light":\s*\{([\s\S]*?)type:'light'/)?.[1]
+
+        expect(lightScheme).toContain('bgcolor: "#f7f7f8"')
+        expect(lightScheme).toContain('darkbg: "#ffffff"')
+        expect(lightScheme).toContain('darkBorderc: "#e5e7eb"')
+        expect(source).toContain("if(db.colorSchemeName === 'light')")
+        expect(source).toContain('safeStructuredClone(colorShemes.light)')
+    })
+
+    it('uses one OpenAI-style application font stack without lorebook typeface overrides', () => {
+        const workspaceSource = readFileSync(resolve(
+            'src/lib/SideBars/LoreBook/LoreBookWorkspace.svelte',
+        ), 'utf8')
+        const globalSource = readFileSync(resolve('src/styles.css'), 'utf8')
+        const colorSchemeSource = readFileSync(resolve('src/ts/gui/colorscheme.ts'), 'utf8')
+        const applicationStack = '"OpenAI Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif'
+
+        expect(globalSource).toContain(`--risu-font-family: ${applicationStack};`)
+        expect(colorSchemeSource).toContain(`'${applicationStack}'`)
+        expect(workspaceSource).not.toContain('ui-monospace')
+        expect(workspaceSource).not.toContain("'Cascadia Code'")
+        expect(workspaceSource).not.toContain('Georgia')
+        expect(workspaceSource).not.toContain("'Times New Roman'")
+        expect(workspaceSource).toContain('font-size: 100%;')
+        expect(workspaceSource).not.toContain('font-size: 110%;')
+        expect(workspaceSource).toContain('.row-title strong { font-size: .84rem; font-weight: 600; }')
+        expect(workspaceSource).toContain('.lore-content {')
+        expect(workspaceSource).toContain('font-family: inherit;')
     })
 
     it('mounts pointer resize/reset handlers and removes them on teardown', async () => {

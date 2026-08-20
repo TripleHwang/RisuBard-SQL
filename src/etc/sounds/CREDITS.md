@@ -1,6 +1,6 @@
 # Notification Sound Credits
 
-Bundled notification sounds used by PocketRisu's "Notification & Sound" settings.
+Bundled notification sounds used by RisuBard's "Notification & Sound" settings.
 
 All files below are sourced from **Mixkit** (<https://mixkit.co/free-sound-effects/>)
 under the **Mixkit Free License** — free for commercial use, no attribution

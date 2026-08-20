@@ -129,7 +129,7 @@
       </h1>
         <div class="grid w-full grid-cols-1 gap-4 p-2 md:grid-cols-2">
           <button class="group relative flex min-h-35 flex-col justify-center overflow-hidden rounded-2xl border border-borderc/10 bg-darkbg p-6 text-left transition-all duration-300 hover:-translate-y-1 hover:border-borderc/30 hover:bg-selected/50 hover:shadow-xl hover:shadow-darkbg/50" onclick={() => {
-            openURL("https://github.com/PocketRisu/PocketRisu")
+            openURL("https://github.com/rpaddict/RisuBard")
           }}>
             <div class="relative z-10 w-[68%] sm:w-[70%]">
               <h2 class="text-2xl font-bold tracking-tight text-textcolor">{language.relatedGithub}</h2>
@@ -155,7 +155,7 @@
             </div>
           </button>
           <button class="group relative flex min-h-35 flex-col justify-center overflow-hidden rounded-2xl border border-borderc/10 bg-darkbg p-6 text-left transition-all duration-300 hover:-translate-y-1 hover:border-borderc/30 hover:bg-selected/50 hover:shadow-xl hover:shadow-darkbg/50" onclick={() => {
-            openURL("mailto:contact@pocketrisu.com")
+            openURL("https://github.com/rpaddict/RisuBard/issues/new")
           }}>
             <div class="relative z-10 w-[68%] sm:w-[70%]">
               <h2 class="text-2xl font-bold tracking-tight text-textcolor">{language.relatedContactEmail}</h2>

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { XIcon, LinkIcon, SunIcon, BookCopyIcon, FolderIcon, FolderOpen, PlusIcon } from "@lucide/svelte";
+    import { BookCopyIcon, FolderIcon, FolderOpen, PlusIcon } from "@lucide/svelte";
     import { v4 } from "uuid";
     import { language } from "../../../lang";
     import { getCurrentCharacter, getCurrentChat, type loreBook } from "../../../ts/storage/database.svelte";
@@ -12,6 +12,10 @@
     import { tokenizeAccurate } from "src/ts/tokenizer";
     import { DBState } from "src/ts/stores.svelte";
     import LoreBookList from "./LoreBookList.svelte";
+    import LoreBookStatusIcons from './LoreBookStatusIcons.svelte'
+    import SolarIcon from './SolarIcon.svelte'
+    import { loreBookVisualStatus } from './loreBookVisualStatus'
+    import trashIcon from 'src/assets/solar-bold/trash-bin-trash-bold.svg'
 
     interface Props {
         value: loreBook;
@@ -40,6 +44,7 @@
     }: Props = $props();
     
     let open = $derived(isOpen)
+    let visualStatus = $derived(loreBookVisualStatus(value))
 
     let tokens = $state(0)
     let tokenTimer: ReturnType<typeof setTimeout> | null = null
@@ -107,6 +112,17 @@
         }
     }
 
+    function toggleAlwaysActive() {
+        if (value.mode === 'folder') {
+            for (let i = 0; i < externalLoreBooks.length; i++) {
+                if (externalLoreBooks[i].folder === value.key) {
+                    externalLoreBooks[i].alwaysActive = !value.alwaysActive
+                }
+            }
+        }
+        value.alwaysActive = !value.alwaysActive
+    }
+
     
 </script>
 <div class={"w-full flex flex-col " + (
@@ -114,6 +130,9 @@
         'pb-0 mb-0 border-0' : // Last item in container: no border
         'pb-2 mb-2 border-b border-b-selected last:pb-0 last:mb-0 last:border-0'
 )}
+    class:lore-row={true}
+    class:hidden-entry={visualStatus.hidden}
+    class:unreachable-entry={visualStatus.unreachable && !visualStatus.hidden}
     class:no-sort={value.mode === 'folder' && openFolders > 0}
     data-risu-idx={idx} data-risu-idgroup={idgroup}
 >
@@ -139,33 +158,13 @@
                 {/if}
             {/if}
             {#if value.mode === 'folder'}
-                <span>{value.comment.length === 0 ? "Unnamed Folder" : value.comment}</span>
+                <span class="lore-row-title">{value.comment.length === 0 ? "Unnamed Folder" : value.comment}</span>
             {:else}
-                <span>{value.comment.length === 0 ? value.key.length === 0 ? "Unnamed Lore" : value.key : value.comment}</span>
+                <span class="lore-row-title">{value.comment.length === 0 ? value.key.length === 0 ? "Unnamed Lore" : value.key : value.comment}</span>
             {/if}
         </button>
-        <button
-            class="mr-1"
-            class:text-textcolor2={!value.alwaysActive}
-            class:text-textcolor={value.alwaysActive}
-            onclick={async () => {
-                if(value.mode === 'folder'){
-                    for(let i = 0; i < externalLoreBooks.length; i++){
-                        if(externalLoreBooks[i].folder === value.key){
-                            externalLoreBooks[i].alwaysActive = !value.alwaysActive
-                        }
-                    }
-                }
-                value.alwaysActive = !value.alwaysActive
-            }}
-        >
-            {#if value.alwaysActive}
-                <SunIcon size={20} />
-            {:else}
-                <LinkIcon size={20} />
-            {/if}
-        </button>
-        <button class="valuer" onclick={async () => {
+        <span class="inline-status"><LoreBookStatusIcons entry={value} size="1.2rem" onActivationClick={toggleAlwaysActive} /></span>
+        <button class="inline-delete" data-lorebook-inline-delete aria-label={language.lorebookWorkspace.deleteEntry} title={language.lorebookWorkspace.deleteEntry} onclick={async () => {
             let shouldRemove = true;
             if (value.mode === 'folder' && externalLoreBooks.some(e => e.folder === value.key)) {
                 const firstConfirm = await alertConfirm(language.folderRemoveConfirm);
@@ -185,20 +184,21 @@
                 }
             }
         }}>
-            <XIcon size={20} />
+            <SolarIcon src={trashIcon} name="trash-bin-trash-bold" size="1.2rem" />
         </button>
     {:else}
         <button class="endflex valuer border-darkborderc" onclick={() => alertMd(language.childLoreDesc)}>
             <BookCopyIcon size={20} class="mr-1" />
-            <span>{getParentLoreName(value)}</span>
+            <span class="lore-row-title">{getParentLoreName(value)}</span>
         </button>
-        <button class="valuer" onclick={async () => {
+        <span class="inline-status"><LoreBookStatusIcons entry={value} size="1.2rem" /></span>
+        <button class="inline-delete" data-lorebook-inline-delete aria-label={language.lorebookWorkspace.deleteEntry} title={language.lorebookWorkspace.deleteEntry} onclick={async () => {
             const d = await alertConfirm(language.removeConfirm + getParentLoreName(value))
             if(d){
                 onRemove()
             }
         }}>
-            <XIcon size={20} />
+            <SolarIcon src={trashIcon} name="trash-bin-trash-bold" size="1.2rem" />
         </button>
     {/if}
     </div>
@@ -264,6 +264,9 @@
             <div class="flex items-center mt-4">
                 <Check bind:check={value.alwaysActive} name={language.alwaysActive}/>
             </div>
+            <div class="flex items-center mt-2" data-lorebook-hidden>
+                <Check check={value.enabled === false} onChange={(hidden: boolean) => value.enabled = !hidden} name={language.lorebookWorkspace.hidden}/>
+            </div>
             {#if !value.alwaysActive && getCurrentCharacter()?.globalLore?.includes(value) && DBState.db.localActivationInGlobalLorebook}
                 <div class="flex items-center mt-2">
                     <Check check={isLocallyActivated(value)} onChange={(check: boolean) => toggleLocalActive(check, value)} name={language.alwaysActiveInChat}/>
@@ -298,6 +301,17 @@
         display: flex;
         flex-grow: 1;
         cursor: pointer;
+    }
+
+    .inline-status { display: inline-flex; align-items: center; margin-right: .22rem; }
+    .inline-delete { display: inline-grid; width: 2rem; height: 2rem; flex: 0 0 2rem; padding: 0; place-items: center; border-radius: .38rem; color: var(--color-danger-500, #dc2626); opacity: 0; pointer-events: none; transition: opacity 140ms ease, background-color 140ms ease; }
+    .lore-row:hover .inline-delete, .lore-row:focus-within .inline-delete { opacity: 1; pointer-events: auto; }
+    .inline-delete:hover { background: color-mix(in srgb, var(--color-danger-500, #dc2626) 12%, transparent); }
+    .unreachable-entry .lore-row-title { color: var(--color-danger-500, #dc2626); }
+    .hidden-entry .lore-row-title { color: var(--color-textcolor2); opacity: .56; }
+
+    @media (hover: none) {
+        .inline-delete { opacity: 1; pointer-events: auto; }
     }
 
     /* Styles for SortableJS drag-and-drop feedback */
