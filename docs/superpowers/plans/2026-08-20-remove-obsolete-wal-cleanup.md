@@ -77,3 +77,27 @@ Actual: The changed files have no diagnostics. The repository-wide command remai
 git add docs/superpowers/plans/2026-08-20-remove-obsolete-wal-cleanup.md server/node/no-sqlite-runtime.test.ts server/node/server.cjs src/lib/Setting/Pages/SystemDashboard.svelte src/lang/en.ts src/lang/ko.ts
 git commit -m "refactor: remove obsolete WAL cleanup path"
 ```
+
+### Task 3: Remove residual no-op WAL maintenance internals
+
+**Files:**
+- Modify: `server/node/file-kv.cjs`
+- Modify: `server/node/server.cjs`
+- Modify: `server/node/no-sqlite-runtime.test.ts`
+
+- [x] **Step 1: Add a failing contract test for the no-op hook and stale server path**
+- [x] **Step 2: Remove `checkpointWal`, the empty backup-import block, and stale WAL comments**
+- [x] **Step 3: Verify file KV, legacy SQLite import, and `database.bin` recovery tests**
+
+### Task 4: Remove unreachable WAL/SHM dashboard wiring
+
+**Files:**
+- Modify: `src/lib/Setting/Pages/SystemDashboard.svelte`
+- Modify: `src/lang/en.ts`
+- Modify: `src/lang/ko.ts`
+- Modify: `server/node/no-sqlite-runtime.test.ts`
+
+- [x] **Step 1: Add a failing contract test for dashboard WAL/SHM references**
+- [x] **Step 2: Remove the zero-size dashboard rows, footprint terms, and unused translations**
+- [x] **Step 3: Keep the server's zero-valued response fields for older client compatibility**
+- [x] **Step 4: Verify CHARX, module, plugin, and end-to-end backup compatibility suites**

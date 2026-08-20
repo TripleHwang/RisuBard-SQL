@@ -209,7 +209,6 @@ function createFileKv(options = {}) {
         kvDelPrefix,
         kvList,
         kvListWithSizes,
-        checkpointWal: () => [],
         gcChunks,
         reclaimableChunkBytes,
         isDbBlobChunked: () => false,

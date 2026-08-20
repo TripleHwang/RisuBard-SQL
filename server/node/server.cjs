@@ -819,8 +819,8 @@ const DEFAULT_BACKUPS_DIR = path.join(process.cwd(), "backups");
 const BACKUP_PATH_CONFIG_KEY = 'config/server-backup-path';
 const MANAGED_BACKUP_PATH_ROOTS = new Set(['server', 'dist', 'scripts', 'bin', 'node_modules', '.update-tmp']);
 // Plaintext marker the updater reads to preserve a custom in-tree backup dir
-// during in-place updates. KV lives inside the SQLite DB so the updater (which
-// runs without npm deps) can't read it; this marker bridges that gap.
+// during in-place updates. The standalone updater does not load the server KV
+// implementation, so this marker bridges that gap.
 const BACKUP_PATH_MARKER = path.join(savePath, '__backup_path');
 
 function readBackupsDirConfig() {
@@ -2485,11 +2485,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         });
         coldStorageFailed = migration.coldStorageFailed || 0;
         initChatStore(dbObj);
-    }
-
-    try {
-    } catch (checkpointError) {
-        logger.warn('[Backup Import] WAL checkpoint after import failed:', checkpointError);
     }
 
     console.log(`[Backup Import] Complete: ${assetsRestored} assets restored, ${(bytesReceived / 1024 / 1024).toFixed(1)}MB processed`);
@@ -4256,7 +4251,7 @@ app.post('/api/backup/import', async (req, res, next) => {
     if (req.socket.server) req.socket.server.requestTimeout = 0;
 
     // NDJSON streaming keeps the response socket alive during long
-    // post-upload work (WAL checkpoint, cold-storage migration). Without it
+    // post-upload work (including cold-storage migration). Without it
     // a reverse proxy in front of the server can hit its response timeout
     // and bounce the request back to the client as 502 Bad Gateway.
     const wantsNdjson = String(req.headers['accept'] ?? '').includes('application/x-ndjson');
@@ -6478,7 +6473,7 @@ async function startServer() {
     }
 }
 
-// Graceful shutdown: flush pending patches and checkpoint WAL before exit
+// Graceful shutdown: flush pending patches before exit
 for (const sig of ['SIGTERM', 'SIGINT']) {
     process.on(sig, async () => {
         console.log(`[Server] Received ${sig}, flushing pending data...`);

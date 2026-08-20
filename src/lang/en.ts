@@ -2202,10 +2202,6 @@ export const languageEnglish = {
     // Per-row labels (shown in the breakdown list with ⓘ explanations)
     storageRowDbFile: "File data root",
     storageRowDbFileDesc: "Canonical JSON, JSONL, Markdown, and content-addressed object files.",
-    storageRowWal: "WAL (Write-Ahead Log)",
-    storageRowWalDesc: "Transient transaction log. Saves are written here first, then folded into the main file. Normal during use.",
-    storageRowShm: "SHM (shared memory)",
-    storageRowShmDesc: "Legacy server compatibility value; file-native storage does not create this file.",
     storageRowFileBackups: "Disk backups (.bin)",
     storageRowFileBackupsDesc: "Manual export backups stored on disk under the backups/ folder.",
     storageRowKvDatabase: "Compatibility projection",

@@ -47,4 +47,22 @@ describe('native SQLite removal', () => {
         expect(dashboard).not.toContain('/api/db/wal-checkpoint')
         expect(dashboard).not.toContain('walCleanupOpen')
     })
+
+    it('does not retain no-op WAL maintenance hooks', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const fileKv = fs.readFileSync(path.join(root, 'server', 'node', 'file-kv.cjs'), 'utf8')
+
+        expect(fileKv).not.toContain('checkpointWal')
+        expect(server).not.toMatch(/WAL checkpoint|checkpoint WAL|SQLite DB/)
+    })
+
+    it('does not render nonexistent WAL or SHM storage metrics', () => {
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+
+        expect(dashboard).not.toMatch(/stats\.files\.(?:wal|shm)/)
+        expect(dashboard).not.toMatch(/storageRow(?:Wal|Shm)/)
+    })
 })

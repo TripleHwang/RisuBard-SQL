@@ -2373,12 +2373,6 @@ export const languageKorean = {
   storageRowDbFile: "파일 데이터 루트",
   storageRowDbFileDesc:
     "사용자 정본 JSON·JSONL·Markdown과 content-addressed 오브젝트 파일이 저장됩니다.",
-  storageRowWal: "WAL (Write-Ahead Log)",
-  storageRowWalDesc:
-    "임시 트랜잭션 로그. 저장이 먼저 여기 기록된 뒤 본 파일에 통합됩니다. 사용 중엔 정상적으로 존재.",
-  storageRowShm: "SHM (공유 메모리)",
-  storageRowShmDesc:
-    "레거시 서버 호환용 값입니다. 파일 정본 저장소는 이 파일을 만들지 않습니다.",
   storageRowFileBackups: "디스크 백업 (.bin)",
   storageRowFileBackupsDesc:
     "수동으로 export한 백업 파일. backups/ 폴더에 보관됩니다.",
