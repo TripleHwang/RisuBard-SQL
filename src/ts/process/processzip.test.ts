@@ -3,7 +3,7 @@ import * as fflate from 'fflate'
 
 const mocks = vi.hoisted(() => ({
     saveAsset: vi.fn(async () => 'single-write'),
-    setItems: vi.fn(async () => undefined),
+    setItems: vi.fn<(entries: Array<{ key: string; value: Uint8Array }>) => Promise<void>>(async () => undefined),
 }))
 
 vi.mock('../globalApi.svelte', () => ({

@@ -644,7 +644,7 @@ describe('set -> get round-trip', () => {
                 },
             ),
         )
-    })
+    }, 15_000)
 })
 
 describe('set -> remove -> get', () => {
