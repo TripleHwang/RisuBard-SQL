@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">
-  <img src="assets/readme/risubard-hero.png" alt="RisuBard — Dynamic Memory-Driven AI Chat App" width="900">
+  <img src="assets/readme/risubard-hero.png" alt="RisuBard — Next-Gen LLM Storytelling Frontend" width="900">
 </h1>
 
 <p align="center">
