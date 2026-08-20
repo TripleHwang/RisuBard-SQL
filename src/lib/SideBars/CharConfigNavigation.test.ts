@@ -119,7 +119,9 @@ describe('character configuration navigation', () => {
         expect(sidebar).toMatch(
             /data-character-config-navigation[^>]*class="my-2 /
         )
-        expect(chatList).toContain('<section class="border-b border-darkborderc pb-2">')
+        expect(chatList).toContain(
+            '<section data-current-chat-section class="border-b border-darkborderc pb-2">'
+        )
         expect(chatList).not.toContain('<section class="mt-1 border-b')
     })
 })

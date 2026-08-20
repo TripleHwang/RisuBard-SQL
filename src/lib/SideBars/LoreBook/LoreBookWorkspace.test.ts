@@ -1239,14 +1239,23 @@ describe('LoreBookWorkspaceDialog source contract', () => {
     })
 
     it('keeps the built-in light scheme on crisp neutral surfaces', () => {
-        const source = readFileSync(resolve('src/ts/gui/colorscheme.ts'), 'utf8')
-        const lightScheme = source.match(/"light":\s*\{([\s\S]*?)type:'light'/)?.[1]
+        const paletteSource = readFileSync(resolve(
+            'src/ts/gui/colorschemePalettes.ts',
+        ), 'utf8')
+        const schemeSource = readFileSync(resolve(
+            'src/ts/gui/colorscheme.ts',
+        ), 'utf8')
+        const lightScheme = paletteSource.match(
+            /export const lightColorScheme:[\s\S]*?type: 'light',\s*}/,
+        )?.[0]
 
-        expect(lightScheme).toContain('bgcolor: "#f7f7f8"')
-        expect(lightScheme).toContain('darkbg: "#ffffff"')
-        expect(lightScheme).toContain('darkBorderc: "#e5e7eb"')
-        expect(source).toContain("if(db.colorSchemeName === 'light')")
-        expect(source).toContain('safeStructuredClone(colorShemes.light)')
+        expect(lightScheme).toContain("bgcolor: '#f7f7f8'")
+        expect(lightScheme).toContain("darkbg: '#ffffff'")
+        expect(lightScheme).toContain("darkBorderc: '#e5e7eb'")
+        expect(paletteSource).toContain('light: lightColorScheme')
+        expect(schemeSource).toContain(
+            'colorScheme = resolveBuiltInColorScheme(normalizedName, colorScheme)'
+        )
     })
 
     it('uses one OpenAI-style application font stack without lorebook typeface overrides', () => {

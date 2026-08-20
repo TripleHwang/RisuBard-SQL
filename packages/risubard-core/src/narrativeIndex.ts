@@ -31,10 +31,8 @@ export function compareNarrativeIds(left: string, right: string): number {
 }
 
 export function normalizeNarrativeTerms(text: string): string[] {
-    return [...new Set(
-        (text.toLowerCase().match(/[\p{L}\p{N}_:-]+/gu) ?? [])
-            .filter((term) => term.length > 0)
-    )].sort()
+    const terms: string[] = text.toLowerCase().match(/[\p{L}\p{N}_:-]+/gu) ?? []
+    return [...new Set(terms.filter((term) => term.length > 0))].sort()
 }
 
 function addPosting(

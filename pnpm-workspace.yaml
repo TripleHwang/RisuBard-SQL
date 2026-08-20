@@ -1,0 +1,11 @@
+packages:
+  - '.'
+
+onlyBuiltDependencies:
+  - '@swc/core'
+  - core-js
+  - esbuild
+  - msgpackr-extract
+  - onnxruntime-node
+  - protobufjs
+  - sharp

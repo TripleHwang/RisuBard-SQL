@@ -2,6 +2,7 @@
   "name": "risubard",
   "private": true,
   "version": "0.8.0",
+  "license": "GPL-3.0-only",
   "packageManager": "pnpm@10.34.1",
   "engines": {
     "node": ">=22.12.0"
@@ -125,15 +126,5 @@
     "vite": "^8.0.3",
     "vite-plugin-wasm": "3.6.0",
     "vitest": "^4.1.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@swc/core",
-      "core-js",
-      "esbuild",
-      "msgpackr-extract",
-      "onnxruntime-node",
-      "protobufjs"
-    ]
   }
 }
