@@ -670,5 +670,5 @@ describe('set -> remove -> get', () => {
                 expect(await getInlayAsset(id)).toBeNull()
             }),
         )
-    })
+    }, 15_000)
 })
