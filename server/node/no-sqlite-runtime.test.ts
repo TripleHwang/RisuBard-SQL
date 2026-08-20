@@ -75,5 +75,6 @@ describe('native SQLite removal', () => {
         expect(fileKv).not.toContain('isDbBlobChunked')
         expect(server).not.toMatch(/\bclearEntities\s*\(/)
         expect(server).not.toMatch(/\bisDbBlobChunked\s*\(/)
+        expect(server).not.toContain('function clearExistingData')
     })
 })

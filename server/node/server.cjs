@@ -4928,32 +4928,6 @@ function scanHexFilesInDir(dirPath) {
     return { hexFiles, count: hexFiles.length, totalSize, hasDatabase };
 }
 
-function clearExistingData() {
-    kvDelPrefix('assets/');
-    kvDelPrefix('inlay/');
-    kvDelPrefix('inlay_thumb/');
-    kvDelPrefix('inlay_meta/');
-    kvDelPrefix('inlay_info/');
-    // Composer drafts aren't part of a save folder; clear stale ones on import.
-    kvDelPrefix('drafts/');
-    // Drop the previous user's remote payloads. The new save folder usually
-    // brings its own remotes/<id>.local.bin files (INSERT OR REPLACE), but if
-    // the imported character ids reuse names from the prior user without
-    // shipping a matching payload, the migration's resolveRemote would silently
-    // stitch in stale cross-user data. Wiping here ensures only payloads
-    // that arrived in this import survive.
-    kvDelPrefix('remotes/');
-    // Cold-storage rows belong to the previous user's chats. The .bin import path
-    // (importBackupFromSource) already clears these; the save-folder path did not,
-    // leaving orphans that no dashboard or Optimize pass ever reclaims.
-    kvDelPrefix('coldstorage/');
-    // Clear remote-block migration marker — newly imported database.bin may
-    // contain REMOTE blocks (it usually does, since save-folder imports
-    // preserve upstream's split-character format) and we want the migration
-    // to re-evaluate against the new contents on the next ensureChatStore.
-    kvDel(REMOTE_MIGRATION_MARKER_KEY);
-}
-
 async function importHexFilesFromDir(dirPath) {
     const { hexFiles, hasDatabase } = scanHexFilesInDir(dirPath);
     if (hexFiles.length === 0) return { imported: 0 };

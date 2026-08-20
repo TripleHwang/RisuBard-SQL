@@ -109,6 +109,41 @@ git add docs/superpowers/plans/2026-08-20-remove-obsolete-chunk-internals.md ser
 git commit -m "refactor: remove obsolete chunk storage internals"
 ```
 
+### Task 4: Remove the unreachable save-folder cleanup helper
+
+**Files:**
+- Modify: `server/node/no-sqlite-runtime.test.ts`
+- Modify: `server/node/server.cjs`
+
+- [x] **Step 1: Add a failing absence contract**
+
+```ts
+expect(server).not.toContain('function clearExistingData')
+```
+
+- [x] **Step 2: Run the contract test and verify RED**
+
+Run: `pnpm vitest run --config vitest.config.server.ts server/node/no-sqlite-runtime.test.ts`
+
+Expected: FAIL because the uncalled helper is still defined.
+
+- [x] **Step 3: Delete only the `clearExistingData` function**
+
+Keep `importHexFilesFromDir`, `importHexEntries`, all `/api/migrate/save-folder/*` routes, `kvReplaceAll`, and `migrationMarkerPath` unchanged.
+
+- [x] **Step 4: Verify save-folder upload and remote-block compatibility**
+
+Run: `Remove-Item Env:RISUBARD_DATA_ROOT -ErrorAction SilentlyContinue; pnpm vitest run --config vitest.config.compat.ts test/compat/remote-block-migration.test.ts`
+
+Expected: PASS.
+
+- [x] **Step 5: Commit and push the slice**
+
+```powershell
+git add docs/superpowers/plans/2026-08-20-remove-obsolete-chunk-internals.md server/node/no-sqlite-runtime.test.ts server/node/server.cjs
+git commit -m "refactor: remove unreachable save-folder cleanup helper"
+```
+
 ## Later conservative phases
 
 1. Audit remaining compatibility-facade methods and remove only proven no-ops.
