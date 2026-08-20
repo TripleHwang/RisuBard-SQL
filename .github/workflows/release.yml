@@ -332,7 +332,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          name: "RisuBard ${{ github.ref_name }}"
           generate_release_notes: true
           draft: true
           files: |
