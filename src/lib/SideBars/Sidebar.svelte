@@ -36,7 +36,6 @@
     User2Icon,
     ChevronsLeft,
     ArrowRight,
-    ArchiveIcon,
   } from "@lucide/svelte";
     import {
   addCharacter,
@@ -66,6 +65,8 @@
   import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
   import shareIcon from 'src/assets/solar-bold/share-bold.svg';
   import magnifierBugIcon from 'src/assets/solar-bold/magnifier-bug-bold.svg';
+  import characterVaultIdle from 'src/assets/character-vault/books1-idle.png';
+  import characterVaultHover from 'src/assets/character-vault/books1-hover.gif';
   import { tooltip } from "src/ts/gui/tooltip";
   import { getCharacterVaultQuickAccess } from "src/ts/characterVault";
   import { getEffectivePersona } from "src/ts/personaScopes";
@@ -775,12 +776,24 @@
   >
     <button
       type="button"
-      class="character-toolbar-button character-toolbar-button--chat risu-button-lift"
+      class="character-toolbar-button character-toolbar-button--chat risu-button-lift group relative overflow-hidden p-0"
+      style="width: 56px; height: 56px;"
       aria-label="Character Vault 열기"
       title="Character Vault · 캐릭터 저장소"
       onclick={() => characterVaultOpen.set(true)}
     >
-      <ArchiveIcon size={21} />
+      <img
+        src={characterVaultIdle}
+        alt=""
+        draggable="false"
+        class="size-full object-contain transition-opacity group-hover:opacity-0"
+      />
+      <img
+        src={characterVaultHover}
+        alt=""
+        draggable="false"
+        class="absolute inset-0 size-full object-contain opacity-0 transition-opacity group-hover:opacity-100"
+      />
     </button>
   </div>
   <div data-quick-inventory class="character-list flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto pr-0" class:max-xs:hidden={$leftBarCollapsed} use:touchDragContainer>

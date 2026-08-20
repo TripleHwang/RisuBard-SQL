@@ -6,7 +6,7 @@ import { checkPersonaBinded, selectSingleFile, sleep } from "../util"
 import { v4 } from "uuid"
 import { convertExternalLorebook } from "./lorebook.svelte"
 import { compressImage } from '../media'
-import { decodeRPack, encodeRPack } from "../rpack/rpack_js"
+import { decodeRPack, decodeRPackBatch, encodeRPack } from "../rpack/rpack_js"
 import { HideIconStore, moduleBackgroundEmbedding, ReloadGUIPointer } from "../stores.svelte"
 import {get} from "svelte/store"
 import { convertCharacterToModule, convertModuleToCharacter } from "../interchangeability"
@@ -169,7 +169,7 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
     let module = main.module
 
     // Bulk writes use JSON/base64 under the server's 100 MB body limit.
-    const maxAssetBatchSize = 20
+    const maxAssetBatchSize = 50
     const maxAssetBatchBytes = 32 * 1024 * 1024
     const retryDelayMs = 5000
     const maxRetries = 3
@@ -239,21 +239,18 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
 
         for (let offset = 0; offset < tasks.length; offset += maxAssetBatchSize) {
             const decodeGroup = tasks.slice(offset, offset + maxAssetBatchSize)
-            const decoded = await Promise.all(decodeGroup.map(async (task) => {
-                try {
-                    return { task, data: await decodeRPack(task.data) } as DecodedAssetTask
-                } catch {
-                    failed.push(task)
-                    return null
-                }
-            }))
+            let decoded: DecodedAssetTask[]
+            try {
+                const decodedData = await decodeRPackBatch(decodeGroup.map(task => task.data))
+                decoded = decodeGroup.map((task, index) => ({ task, data: decodedData[index] }))
+            } catch {
+                failed.push(...decodeGroup)
+                continue
+            }
 
             let batch: DecodedAssetTask[] = []
             let batchBytes = 0
             for (const decodedTask of decoded) {
-                if (!decodedTask) {
-                    continue
-                }
                 if (batch.length > 0 && batchBytes + decodedTask.data.length > maxAssetBatchBytes) {
                     await persistBatch(batch)
                     batch = []

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
     alertWait: vi.fn(),
+    decodeRPackBatch: vi.fn<(data: Uint8Array[]) => Promise<Uint8Array[]>>(async (data) => data.map(item => Buffer.from(item))),
     decodeRPack: vi.fn<(data: Uint8Array) => Promise<Uint8Array>>(async (data) => Buffer.from(data)),
     hasher: vi.fn(async (data: Uint8Array) => `hash-${data[0]}`),
     saveAsset: vi.fn<(data: Uint8Array) => Promise<string>>(async () => 'single-write'),
@@ -46,6 +47,7 @@ vi.mock('uuid', () => ({ v4: vi.fn(() => 'new-module-id') }))
 vi.mock('./lorebook.svelte', () => ({ convertExternalLorebook: vi.fn() }))
 vi.mock('../media', () => ({ compressImage: vi.fn() }))
 vi.mock('../rpack/rpack_js', () => ({
+    decodeRPackBatch: mocks.decodeRPackBatch,
     decodeRPack: mocks.decodeRPack,
     encodeRPack: vi.fn(),
 }))
@@ -96,19 +98,21 @@ describe('readModule asset persistence', () => {
     beforeEach(() => {
         vi.clearAllMocks()
         mocks.decodeRPack.mockImplementation(async (data: Uint8Array) => Buffer.from(data))
+        mocks.decodeRPackBatch.mockImplementation(async (data: Uint8Array[]) => Promise.all(data.map(item => mocks.decodeRPack(item))))
         mocks.saveAsset.mockResolvedValue('single-write')
         mocks.setItems.mockResolvedValue(undefined)
     })
 
-    it('persists decoded assets through bounded bulk writes', async () => {
-        const module = await readModule(risumWithAssets(21))
+    it('persists decoded assets in server-sized batches', async () => {
+        const module = await readModule(risumWithAssets(51))
 
         expect(mocks.setItems).toHaveBeenCalledTimes(2)
-        expect(mocks.setItems.mock.calls[0][0]).toHaveLength(20)
+        expect(mocks.setItems.mock.calls[0][0]).toHaveLength(50)
         expect(mocks.setItems.mock.calls[1][0]).toHaveLength(1)
+        expect(mocks.decodeRPackBatch).toHaveBeenCalledTimes(2)
         expect(mocks.saveAsset).not.toHaveBeenCalled()
         expect(module.assets?.[0][1]).toBe('assets/hash-0.png')
-        expect(module.assets?.[20][1]).toBe('assets/hash-20.png')
+        expect(module.assets?.[50][1]).toBe('assets/hash-50.png')
     })
 
     it('uses the binary single-write path for an oversized asset', async () => {

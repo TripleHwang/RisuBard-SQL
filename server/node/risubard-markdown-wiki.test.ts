@@ -135,6 +135,46 @@ describe('Markdown narrative wiki', () => {
         expect(contents).toContain('created: "2026-08-08T06:07:08.000Z"')
     })
 
+    test('nests wiki document headings below the injected prompt-block heading', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+
+        const created = await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '라비안',
+            markdown: '# 라비안\n\n## 현재 상태\n\n기사다.',
+        })
+
+        expect(created.content).toBe(
+            '## 라비안\n\n### 현재 상태\n\n기사다.'
+        )
+        expect(created.content).not.toMatch(/^#\s/m)
+    })
+
+    test('projects legacy H1 files as nested headings when loading them', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const created = await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '라비안', markdown: '## 라비안\n\n### 현재 상태\n\n기사다.',
+        })
+        const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
+        const file = join(workspace.directory, ...created.relativePath.split('/'))
+        const stored = await fs.readFile(file, 'utf8')
+        await fs.writeFile(file, stored
+            .replace('## 라비안', '# 라비안')
+            .replace('### 현재 상태', '## 현재 상태'), 'utf8')
+
+        const loaded = (await wiki.loadView('character', 'chat')).documents
+            .find((document) => document.id === created.id)
+
+        expect(loaded?.content).toBe(
+            '## 라비안\n\n### 현재 상태\n\n기사다.'
+        )
+    })
+
     test('adds visible wikilinks for exact known titles on automatic writes', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
@@ -156,7 +196,7 @@ describe('Markdown narrative wiki', () => {
             ].join('\n'),
         })
 
-        expect(created.content).toContain('## 관련 문서')
+        expect(created.content).toContain('### 관련 문서')
         expect(created.content).toContain('- [[길버드]]')
         expect(created.links).toContain('길버드')
     })
@@ -897,8 +937,8 @@ describe('Markdown narrative wiki', () => {
             .find((document) => document.id === original.id)
         expect(current).toMatchObject({
             reviewStatus: 'unreviewed',
-            reviewBaseContent: '# 라비안\n\n검을 들고 있다.',
-            content: '# 라비안\n\n은빛 창을 들고 있다.',
+            reviewBaseContent: '## 라비안\n\n검을 들고 있다.',
+            content: '## 라비안\n\n은빛 창을 들고 있다.',
         })
     })
 
@@ -923,7 +963,7 @@ describe('Markdown narrative wiki', () => {
         })
         expect(reverted).toMatchObject({
             reviewStatus: 'reviewed',
-            content: '# 열쇠\n\n붉은 열쇠.',
+            content: '## 열쇠\n\n붉은 열쇠.',
         })
 
         const next = await wiki.saveCanonicalDocument({
@@ -939,7 +979,7 @@ describe('Markdown narrative wiki', () => {
         })
         expect(accepted).toMatchObject({
             reviewStatus: 'reviewed',
-            content: '# 열쇠\n\n금빛 열쇠.',
+            content: '## 열쇠\n\n금빛 열쇠.',
         })
         expect(accepted.reviewBaseContent).toBeUndefined()
     })

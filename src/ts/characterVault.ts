@@ -188,6 +188,24 @@ export function setCharacterVaultQuickAccess(
     }
 }
 
+export function pinCharacterVaultQuickAccess(
+    db: VaultDatabase,
+    characterId: string
+): void {
+    if (!characterIds(db).has(characterId)) return
+    const shortcut: CharacterVaultShortcut = {
+        kind: 'character',
+        id: characterId,
+    }
+    const key = shortcutKey(shortcut)
+    setCharacterVaultQuickAccess(db, [
+        shortcut,
+        ...getCharacterVaultQuickAccess(db).filter((entry) =>
+            shortcutKey(entry) !== key
+        ),
+    ])
+}
+
 export function toggleCharacterVaultQuickAccess(
     db: VaultDatabase,
     shortcut: CharacterVaultShortcut

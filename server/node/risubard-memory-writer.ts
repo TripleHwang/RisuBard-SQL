@@ -390,9 +390,9 @@ export function hasMemoryWriterContent(draft: MemoryWriterDraft): boolean {
 }
 
 export function serializeMemoryWriterDraft(draft: MemoryWriterDraft): string {
-    const lines = [`# ${draft.title}`]
+    const lines = [`## ${draft.title}`]
     if (draft.establishedEvents.length > 0) {
-        lines.push('', '## 이야기 요약', '')
+        lines.push('', '### 이야기 요약', '')
         lines.push(...draft.establishedEvents.map((item) =>
             item.startsWith('- ') ? item : `- ${item}`
         ))

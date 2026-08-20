@@ -133,9 +133,12 @@ function normalizeMarkdown(value: string): { title: string; content: string } {
     if (content.length === 0 || content.length > 12_000) {
         throw new Error('Markdown memory must contain 1-12000 characters')
     }
-    const heading = content.match(/^#\s+(.+)$/m)
+    if (/^#\s+\S+/m.test(content)) {
+        content = content.replace(/^(#{1,5})(?=\s)/gm, '$1#')
+    }
+    const heading = content.match(/^##\s+(.+)$/m)
     const title = (heading?.[1] ?? '서사 기록').trim().slice(0, 160)
-    if (!heading) content = `# ${title}\n\n${content}`
+    if (!heading) content = `## ${title}\n\n${content}`
     return { title, content }
 }
 
@@ -171,13 +174,13 @@ function appendKnownDocumentLinks(
     if (related.length === 0) return content
     const bullets = related.map((document) => `- [[${document.title}]]`)
         .join('\n')
-    if (/^##\s+관련 문서\s*$/m.test(content)) {
+    if (/^###\s+관련 문서\s*$/m.test(content)) {
         return content.replace(
-            /^##\s+관련 문서\s*$/m,
+            /^###\s+관련 문서\s*$/m,
             (heading) => `${heading}\n\n${bullets}`
         )
     }
-    return `${content}\n\n## 관련 문서\n\n${bullets}`
+    return `${content}\n\n### 관련 문서\n\n${bullets}`
 }
 
 function hashDocumentBytes(contents: string): string {
@@ -236,7 +239,7 @@ function parseDocument(
         throw new Error('Invalid Markdown wiki frontmatter')
     }
     const frontmatter = contents.slice(4, boundary)
-    const content = contents.slice(boundary + 5).trim()
+    const storedContent = contents.slice(boundary + 5).trim()
     const scalar = (key: string): string => {
         const match = frontmatter.match(new RegExp(`^${key}: (.+)$`, 'm'))
         if (!match) throw new Error(`Missing Markdown wiki ${key}`)
@@ -258,7 +261,8 @@ function parseDocument(
                 JSON.parse(line.trim().replace(/^-\s+/, ''))
             )
     }
-    const title = content.match(/^#\s+(.+)$/m)?.[1]?.trim()
+    const storedTitle = storedContent.match(/^#{1,2}\s+(.+)$/m)?.[1]?.trim()
+    const normalized = normalizeMarkdown(storedContent)
     const type = plainScalar('type')
     if (![
         'event', 'character', 'location', 'scene', 'faction', 'item',
@@ -300,11 +304,11 @@ function parseDocument(
                 'Markdown wiki supersededBy'
             ) }
             : {}),
-        title: required(title ?? '', 'Markdown wiki title'),
+        title: required(storedTitle ?? '', 'Markdown wiki title'),
         relativePath,
         sourceMessageIds: list('source_messages'),
         updated,
-        content,
+        content: normalized.content,
         links: list('links'),
         created: optionalScalar('created') ?? updated,
         authoring: (['automatic', 'ai-assisted', 'manual'].includes(
@@ -510,7 +514,7 @@ export function createMarkdownNarrativeWiki(
             'status: active',
             '---',
             '',
-            '# 서사 위키',
+            '## 서사 위키',
             '',
             ...documents.map((item) =>
                 `- [[${item.relativePath.replace(/\.md$/, '')}|${item.title}]]`
@@ -866,12 +870,12 @@ export function createMarkdownNarrativeWiki(
                 : undefined
             if (existingEvent?.type === 'event') {
                 const addition = normalized.content.replace(
-                    /^#\s+[^\r\n]+\r?\n*/,
+                    /^##\s+[^\r\n]+\r?\n*/,
                     ''
                 ).trim()
                 normalized = normalizeMarkdown([
                     existingEvent.content,
-                    '## 추가 분석',
+                    '### 추가 분석',
                     addition,
                 ].filter(Boolean).join('\n\n'))
             }
@@ -1181,8 +1185,8 @@ export function createMarkdownNarrativeWiki(
             }
             const normalized = normalizeMarkdown(input.markdown)
             const content = normalized.content.replace(
-                /^#\s+.+$/m,
-                `# ${title}`
+                /^##\s+.+$/m,
+                `## ${title}`
             )
             const prepared = prepareDocument({
                 id,

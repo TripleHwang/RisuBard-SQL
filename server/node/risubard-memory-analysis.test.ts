@@ -138,7 +138,7 @@ describe('memory analysis runner', () => {
             characterId: 'character-1',
             chatId: 'chat-1',
             sourceMessageIds: ['user-1', 'assistant-1'],
-            markdown: '# 다리의 붕괴\n\n## 이야기 요약\n\n- 다리가 무너졌다.',
+            markdown: '## 다리의 붕괴\n\n### 이야기 요약\n\n- 다리가 무너졌다.',
         })
         expect(applyDelta).not.toHaveBeenCalled()
     })

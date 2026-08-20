@@ -78,7 +78,7 @@ describe('RisuBard analysis settings', () => {
         expect(policy).toContain('턴별 행동 기록을 누적하지 않는다')
         expect(policy).toContain('상세 과거 행적은 사건 문서')
         expect(policy).toContain('이전 상태를 현재 사실처럼 병기하지 않는다')
-        expect(policy).toContain('## 작중 행적')
+        expect(policy).toContain('### 작중 행적')
         expect(policy).toContain('최대 16개')
         expect(policy).toContain('[[사건 문서 제목]]')
     })

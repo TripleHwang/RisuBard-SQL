@@ -23,7 +23,7 @@ const getVips = () => {
     }
     return _vipsPromise
 }
-const { kvGet, kvSet, kvSetMany, kvReplacePrefixes, kvReplaceAll, kvDel, kvList,
+const { kvGet, kvSet, kvSetMany, kvReplacePrefixesAsync, kvReplaceAllAsync, kvDel, kvList,
         kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities,
         gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
@@ -2422,7 +2422,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 writeStagingSidecarSync(id, info);
             }
         }
-        kvReplacePrefixes(stagedKvEntries, [
+        await kvReplacePrefixesAsync(stagedKvEntries, [
             'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
             'coldstorage/', 'drafts/', 'remotes/', REMOTE_MIGRATION_MARKER_KEY,
         ]);
@@ -4969,10 +4969,20 @@ async function importHexFilesFromDir(dirPath) {
     createBackupAndRotate();
     invalidateDbCache();
 
-    kvReplaceAll(hexFiles.map(hexFile => ({
-        key: Buffer.from(hexFile, 'hex').toString('utf-8'),
-        value: readFileSync(path.join(dirPath, hexFile)),
-    })));
+    const concurrency = Math.min(8, Math.max(1, (os.availableParallelism?.() ?? os.cpus().length) - 1));
+    let nextIndex = 0;
+    const entries = new Array(hexFiles.length);
+    await Promise.all(Array.from({ length: Math.min(concurrency, hexFiles.length) }, async () => {
+        while (nextIndex < hexFiles.length) {
+            const index = nextIndex++;
+            const hexFile = hexFiles[index];
+            entries[index] = {
+                key: Buffer.from(hexFile, 'hex').toString('utf-8'),
+                value: await fs.readFile(path.join(dirPath, hexFile)),
+            };
+        }
+    }));
+    await kvReplaceAllAsync(entries);
 
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
     return { imported: hexFiles.length };
@@ -4987,7 +4997,7 @@ async function importHexEntries(entries) {
     createBackupAndRotate();
     invalidateDbCache();
 
-    kvReplaceAll(entries);
+    await kvReplaceAllAsync(entries);
 
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
     return { imported: entries.length };
@@ -5076,7 +5086,12 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
         const fflate = require('fflate');
         let unzipped;
         try {
-            unzipped = fflate.unzipSync(new Uint8Array(zipBuffer));
+            unzipped = await new Promise((resolve, reject) => {
+                fflate.unzip(new Uint8Array(zipBuffer), (error, data) => {
+                    if (error) reject(error);
+                    else resolve(data);
+                });
+            });
         } catch {
             res.status(400).json({ error: 'Invalid or corrupted zip file' });
             return;

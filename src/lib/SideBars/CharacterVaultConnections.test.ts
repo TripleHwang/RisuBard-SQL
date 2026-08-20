@@ -30,6 +30,21 @@ describe('Character Vault sidebar integration', () => {
         expect(vault).not.toMatch(/>Vault<\/span>/)
     })
 
+    test('uses the books artwork and swaps to its animation on hover', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const vaultStart = sidebar.indexOf('data-character-vault-button')
+        const inventoryStart = sidebar.indexOf('data-quick-inventory')
+        const vault = sidebar.slice(vaultStart, inventoryStart)
+        expect(sidebar).toContain("import characterVaultIdle from 'src/assets/character-vault/books1-idle.png'")
+        expect(sidebar).toContain("import characterVaultHover from 'src/assets/character-vault/books1-hover.gif'")
+        expect(vault).toContain('src={characterVaultIdle}')
+        expect(vault).toContain('src={characterVaultHover}')
+        expect(vault).toContain('group-hover:opacity-0')
+        expect(vault).toContain('group-hover:opacity-100')
+        expect(vault).toContain('style="width: 56px; height: 56px;"')
+        expect(vault).not.toContain('<ArchiveIcon')
+    })
+
     test('aligns the square rail options control with the workspace header divider', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         expect(sidebar).toContain('data-sidebar-options')
@@ -46,6 +61,15 @@ describe('Character Vault sidebar integration', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         expect(sidebar).toContain('getCharacterVaultQuickAccess')
         expect(sidebar).toContain('<CharacterVaultDialog')
+    })
+
+    test('pins successful CharX imports at the top of quick access', () => {
+        const cards = source('src/ts/characterCards.ts')
+        const charxStart = cards.indexOf("if(f.name.endsWith('charx')")
+        const pngStart = cards.indexOf("if(!f.name.endsWith('png')", charxStart)
+        const charxImport = cards.slice(charxStart, pngStart)
+        expect(cards).toContain("import { pinCharacterVaultQuickAccess } from './characterVault'")
+        expect(charxImport).toContain('pinCharacterVaultQuickAccess(db, importedCharacter.chaId)')
     })
 
     test('exposes one shared modal state from the app stores', () => {

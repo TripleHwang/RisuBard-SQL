@@ -2,6 +2,8 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const fsp = require('fs/promises');
+const os = require('os');
 const path = require('path');
 const { atomicWriteJson, moveToTrash, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
 
@@ -10,6 +12,23 @@ const HEX_MIGRATION_MARKER = 'migration/legacy-hex-save-folder.json';
 
 function digest(data) {
     return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+async function digestAsync(data) {
+    return Buffer.from(await crypto.webcrypto.subtle.digest('SHA-256', data)).toString('hex');
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(items.length, Math.max(1, concurrency)) }, async () => {
+        while (nextIndex < items.length) {
+            const index = nextIndex++;
+            results[index] = await mapper(items[index], index);
+        }
+    });
+    await Promise.all(workers);
+    return results;
 }
 
 function writeObject(dataRoot, hash, data) {
@@ -37,6 +56,38 @@ function writeObject(dataRoot, hash, data) {
     }
 }
 
+async function writeObjectAsync(dataRoot, hash, data) {
+    const directory = path.join(dataRoot, 'kv', 'objects');
+    const target = path.join(directory, hash);
+    try {
+        await fsp.access(target);
+        return;
+    } catch {}
+    await fsp.mkdir(directory, { recursive: true });
+    const temp = path.join(directory, `.${hash}.${crypto.randomUUID()}.tmp`);
+    const handle = await fsp.open(temp, 'wx', 0o600);
+    try {
+        await handle.writeFile(data);
+        await handle.sync();
+    } finally {
+        await handle.close();
+    }
+    if (await digestAsync(await fsp.readFile(temp)) !== hash) {
+        await fsp.unlink(temp);
+        throw new Error(`Content object checksum verification failed: ${hash}`);
+    }
+    try {
+        await fsp.rename(temp, target);
+    } catch (error) {
+        try {
+            await fsp.access(target);
+            await fsp.unlink(temp);
+        } catch {
+            throw error;
+        }
+    }
+}
+
 function createFileKv(options = {}) {
     const dataRoot = path.resolve(options.dataRoot || path.join(process.cwd(), 'save'));
     fs.mkdirSync(dataRoot, { recursive: true });
@@ -48,6 +99,8 @@ function createFileKv(options = {}) {
     if (!manifest || manifest.schemaVersion !== 1 || typeof manifest.entries !== 'object') {
         throw new Error('Unsupported or corrupt file KV manifest');
     }
+    const objectWriteConcurrency = options.objectWriteConcurrency
+        ?? Math.min(8, Math.max(1, (os.availableParallelism?.() ?? os.cpus().length) - 1));
 
     function saveManifest() {
         manifest.updatedAt = Date.now();
@@ -83,6 +136,15 @@ function createFileKv(options = {}) {
         });
     }
 
+    async function prepareEntriesAsync(entries) {
+        return mapWithConcurrency(entries, objectWriteConcurrency, async ({ key, value }) => {
+            const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
+            const hash = await digestAsync(data);
+            await writeObjectAsync(dataRoot, hash, data);
+            return [key, { object: hash, size: data.length, updatedAt: Date.now() }];
+        });
+    }
+
     function kvSetMany(entries) {
         for (const [key, entry] of prepareEntries(entries)) manifest.entries[key] = entry;
         if (entries.length) saveManifest();
@@ -100,6 +162,23 @@ function createFileKv(options = {}) {
 
     function kvReplaceAll(entries) {
         manifest.entries = Object.fromEntries(prepareEntries(entries));
+        saveManifest();
+    }
+
+    async function kvReplacePrefixesAsync(entries, prefixes) {
+        const prepared = await prepareEntriesAsync(entries);
+        const next = { ...manifest.entries };
+        for (const key of Object.keys(next)) {
+            if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
+        }
+        for (const [key, entry] of prepared) next[key] = entry;
+        manifest.entries = next;
+        saveManifest();
+    }
+
+    async function kvReplaceAllAsync(entries) {
+        const prepared = await prepareEntriesAsync(entries);
+        manifest.entries = Object.fromEntries(prepared);
         saveManifest();
     }
 
@@ -201,7 +280,9 @@ function createFileKv(options = {}) {
         kvSet,
         kvSetMany,
         kvReplacePrefixes,
+        kvReplacePrefixesAsync,
         kvReplaceAll,
+        kvReplaceAllAsync,
         kvDel,
         kvSize,
         kvGetUpdatedAt,

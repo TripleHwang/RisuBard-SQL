@@ -26,7 +26,7 @@ describe('Markdown wiki writer', () => {
                 type: 'success',
                 result: '# 은촛대 수도회\n\n수도회 기록.',
             }),
-        })).resolves.toContain('# 은촛대 수도회')
+        })).resolves.toContain('## 은촛대 수도회')
     })
 
     test('creates a bounded Markdown draft without storage or an operation schema', async () => {
@@ -56,9 +56,9 @@ describe('Markdown wiki writer', () => {
             evidence,
             requestModel,
         })).resolves.toBe([
-            '# 라비안',
+            '## 라비안',
             '',
-            '## 현재 상태',
+            '### 현재 상태',
             '',
             '오른팔에 화상을 입었다.',
         ].join('\n'))
@@ -74,6 +74,7 @@ describe('Markdown wiki writer', () => {
         expect(submitted).not.toHaveProperty('schema')
         expect(submitted?.formated[1].content).toContain('소성당 전투')
         expect(submitted?.formated[1].content).not.toContain('E:\\')
+        expect(submitted?.formated[0].content).toContain('beginning with one ## title')
     })
 
     test('stores only after an explicit authenticated approval', async () => {

@@ -18,6 +18,7 @@ import { PngChunk } from "./pngChunk"
 import type { OnnxModelFiles } from "./process/transformers"
 import { CharXImporter, CharXSkippableChecker, CharXWriter } from "./process/processzip"
 import { exportModuleLegacy, readModule, type RisuModule } from "./process/modules"
+import { pinCharacterVaultQuickAccess } from './characterVault'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -112,6 +113,10 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
             return v as any
         }
         let db = getDatabase()
+        const importedCharacter = db.characters[db.characters.length - 1]
+        if(v && importedCharacter){
+            pinCharacterVaultQuickAccess(db, importedCharacter.chaId)
+        }
         return db.characters.length - 1
     }
 

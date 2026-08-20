@@ -14,6 +14,20 @@ function root() {
 afterEach(() => roots.splice(0).forEach(value => fs.rmSync(value, { recursive: true, force: true })))
 
 describe('file-native KV compatibility projection', () => {
+    it('prepares replacement objects asynchronously before publishing one manifest', async () => {
+        const dataRoot = root()
+        const store = createFileKv({ dataRoot })
+
+        await store.kvReplaceAllAsync([
+            { key: 'database/database.bin', value: Buffer.from('database') },
+            { key: 'assets/a', value: Buffer.from('asset-a') },
+        ])
+
+        const reopened = createFileKv({ dataRoot })
+        expect(reopened.kvList()).toEqual(['assets/a', 'database/database.bin'])
+        expect(reopened.kvGet('assets/a')?.toString()).toBe('asset-a')
+    })
+
     it('round-trips binary values and persists only a small manifest plus content objects', () => {
         const dataRoot = root()
         const store = createFileKv({ dataRoot })

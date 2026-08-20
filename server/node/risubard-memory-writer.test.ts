@@ -82,9 +82,9 @@ describe('BardWiki memory writer skill', () => {
         }))
 
         expect(serializeMemoryWriterDraft(draft)).toBe([
-            '# 성문 도착',
+            '## 성문 도착',
             '',
-            '## 이야기 요약',
+            '### 이야기 요약',
             '',
             '- [[라비안]]이 [[케사리아]] 성문에 도착했다.',
         ].join('\n'))

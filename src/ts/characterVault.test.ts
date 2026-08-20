@@ -7,6 +7,7 @@ import {
     deleteCharacterVaultFolder,
     getCharacterVaultQuickAccess,
     moveCharactersToVaultFolder,
+    pinCharacterVaultQuickAccess,
     setCharacterVaultQuickAccess,
     sortCharacterVaultCharacters,
     trashCharacterVaultCharacters,
@@ -89,6 +90,23 @@ describe('Character Vault state', () => {
         toggleCharacterVaultQuickAccess(db, { kind: 'character', id: 'a' })
 
         expect(db.characterVault?.quickAccess).toEqual([
+            { kind: 'folder', id: 'folder-1' },
+        ])
+    })
+
+    test('pins a newly imported character first without duplicate shortcuts', () => {
+        const db = makeDb()
+        setCharacterVaultQuickAccess(db, [
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'a' },
+        ])
+
+        pinCharacterVaultQuickAccess(db, 'c')
+        pinCharacterVaultQuickAccess(db, 'a')
+
+        expect(db.characterVault?.quickAccess).toEqual([
+            { kind: 'character', id: 'a' },
+            { kind: 'character', id: 'c' },
             { kind: 'folder', id: 'folder-1' },
         ])
     })
