@@ -35,4 +35,16 @@ describe('native SQLite removal', () => {
     it('does not retain the obsolete SQL chunk store', () => {
         expect(fs.existsSync(path.join(root, 'server', 'node', 'chunkStore.cjs'))).toBe(false)
     })
+
+    it('does not expose the obsolete WAL checkpoint route or dashboard control', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+
+        expect(server).not.toContain("app.post('/api/db/wal-checkpoint'")
+        expect(dashboard).not.toContain('/api/db/wal-checkpoint')
+        expect(dashboard).not.toContain('walCleanupOpen')
+    })
 })

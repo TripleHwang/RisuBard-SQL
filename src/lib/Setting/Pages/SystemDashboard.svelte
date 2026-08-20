@@ -85,8 +85,6 @@
     let optimizeOpen = $state(false)
     let optimizeMessage = $state('')
 
-    let walCleanupOpen = $state(false)
-
     // Default off = show only RisuAI internal breakdown (smaller scope, more
     // useful at-a-glance). Toggle on to expand the bar to disk-total scale
     // including "Other (system & apps)" and "Free space".
@@ -164,35 +162,6 @@
             modError = err instanceof Error ? err.message : String(err)
         } finally {
             modLoading = false
-        }
-    }
-
-    async function runWalCleanup() {
-        const ok = await alertConfirm(language.storageWalCleanupConfirm)
-        if (!ok) return
-        walCleanupOpen = true
-        try {
-            const auth = await forageStorage.createAuth()
-            const res = await fetch('/api/db/wal-checkpoint', {
-                method: 'POST',
-                headers: { 'risu-auth': auth },
-            })
-            const json = await res.json().catch(() => ({}))
-            if (!res.ok) {
-                notifyError(language.storageWalCleanupFailed + ': ' + (json?.error || `HTTP ${res.status}`))
-                return
-            }
-            const reclaimed = json.reclaimed ?? 0
-            if (reclaimed > 0) {
-                notifySuccess(language.storageWalCleanupDone(reclaimed, json.elapsedMs ?? 0))
-            } else {
-                notifySuccess(language.storageWalCleanupNoop)
-            }
-            await loadStats()
-        } catch (err) {
-            notifyError(language.storageWalCleanupFailed + ': ' + (err instanceof Error ? err.message : String(err)))
-        } finally {
-            walCleanupOpen = false
         }
     }
 
@@ -512,29 +481,6 @@
         </div>
     </div>
 
-    <!-- Legacy servers can still expose a WAL. File-native servers report 0. -->
-    {#if stats.files.wal > 0}
-    <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
-        <div class="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
-            <div class="flex items-center gap-2 text-textcolor">
-                <HardDriveIcon size={16} />
-                <span class="font-medium">{language.storageWalCleanup}</span>
-            </div>
-            <span class="text-textcolor2 text-sm tabular-nums">
-                {language.storageWalCleanupHeader(stats.files.wal)}
-            </span>
-        </div>
-        <p class="text-textcolor2 text-sm leading-relaxed mb-2">{language.storageWalCleanupWhat}</p>
-        <p class="text-textcolor2 text-sm leading-relaxed mb-3">{language.storageWalCleanupWhen}</p>
-        <div class="flex justify-end">
-            <ShButton variant="outline" onclick={runWalCleanup} disabled={walCleanupOpen}>
-                <HardDriveIcon size={16} />
-                {language.storageWalCleanup_btn}
-            </ShButton>
-        </div>
-    </div>
-    {/if}
-
     <!-- ③ File-object cleanup ──────────────────────────────────────────── -->
     <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
         <div class="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
@@ -800,4 +746,3 @@
 {/if}
 
 <ShLoadingDialog open={optimizeOpen} message={optimizeMessage} tier="top" />
-<ShLoadingDialog open={walCleanupOpen} message={language.storageWalCleanuping} tier="top" />

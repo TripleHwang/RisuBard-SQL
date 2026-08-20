@@ -2443,21 +2443,6 @@ export const languageKorean = {
 
   storageCleanup: "미참조 오브젝트 정리",
 
-  storageWalCleanup: "WAL 수동 정리",
-  storageWalCleanupHeader: (walSize: number) =>
-    `현재 WAL ${(walSize / 1024 / 1024).toFixed(1)} MB`,
-  storageWalCleanupWhat:
-    "레거시 write-ahead log를 보고하는 구형 서버에 연결했을 때만 표시되는 호환 기능입니다.",
-  storageWalCleanupWhen:
-    "파일 정본 서버는 원자 rename journal을 사용하므로 WAL을 만들지 않습니다.",
-  storageWalCleanup_btn: "WAL 정리",
-  storageWalCleanuping: "WAL 정리 중...",
-  storageWalCleanupConfirm: "WAL을 지금 정리할까요? 서버 저장이 잠시 멈춥니다.",
-  storageWalCleanupDone: (reclaimed: number, ms: number) =>
-    `${(reclaimed / 1024 / 1024).toFixed(1)} MB 회수 (${ms}ms).`,
-  storageWalCleanupNoop: "WAL은 이미 깨끗합니다.",
-  storageWalCleanupFailed: "WAL 정리 실패",
-
   storageBackups: "백업",
   storageBackupsManage: "백업 관리",
   storageBackupsAuto: "호환 스냅샷",

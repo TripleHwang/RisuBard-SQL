@@ -2256,18 +2256,6 @@ export const languageEnglish = {
 
     storageCleanup: "Clean up unreferenced objects",
 
-    storageWalCleanup: "Manual WAL cleanup",
-    storageWalCleanupHeader: (walSize: number) => `Current WAL ${(walSize / 1024 / 1024).toFixed(1)} MB`,
-    storageWalCleanupWhat: "This control is shown only when connected to an older server that still reports a legacy write-ahead log.",
-    storageWalCleanupWhen: "File-native servers use atomic rename journals and do not expose a WAL.",
-    storageWalCleanup_btn: "Clean up WAL",
-    storageWalCleanuping: "Cleaning up WAL...",
-    storageWalCleanupConfirm: "Clean up WAL now? Server saves will pause briefly.",
-    storageWalCleanupDone: (reclaimed: number, ms: number) =>
-        `Reclaimed ${(reclaimed / 1024 / 1024).toFixed(1)} MB in ${ms}ms.`,
-    storageWalCleanupNoop: "WAL is already clean.",
-    storageWalCleanupFailed: "WAL cleanup failed",
-
     storageBackups: "Backups",
     storageBackupsManage: "Manage backups",
     storageBackupsAuto: "Compatibility snapshots",

@@ -5610,30 +5610,6 @@ app.post('/api/db/optimize', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-app.post('/api/db/wal-checkpoint', async (req, res, next) => {
-    if (!await checkAuth(req, res)) return;
-    if (!checkActiveSession(req, res)) return;
-    try {
-        const saveDir = savePath;
-        const preWalSize = 0;
-
-        const result = await queueStorageOperation(async () => {
-            await flushPendingDb();
-            const t0 = Date.now();
-            const elapsed = Date.now() - t0;
-            const postWalSize = 0;
-            return {
-                ok: true,
-                elapsedMs: elapsed,
-                preWalSize,
-                postWalSize,
-                reclaimed: Math.max(0, preWalSize - postWalSize),
-            };
-        });
-        res.json(result);
-    } catch (err) { next(err); }
-});
-
 // ── Snapshot list (database/dbbackup-* keys) ─────────────────────────────────
 
 app.get('/api/db/snapshots/limits', async (req, res, next) => {
