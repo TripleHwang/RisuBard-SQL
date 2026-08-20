@@ -93,4 +93,22 @@ describe('native SQLite removal', () => {
         expect(dashboard).toContain('payload.sqlite?.reclaimable ?? 0')
         expect(server).not.toMatch(/const (?:pageSize|pageCount|freelistCount|journalMode|autoVacuum) =/)
     })
+
+    it('does not retain stale SQLite runtime wording in active frontend paths', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+        const chatDraft = fs.readFileSync(
+            path.join(root, 'src', 'ts', 'storage', 'chatDraft.ts'),
+            'utf8',
+        )
+        const diskSpaceError = 'Insufficient disk space for file-store optimization'
+
+        expect(server).toContain(diskSpaceError)
+        expect(dashboard).toContain(diskSpaceError)
+        expect(dashboard).not.toContain('VACUUM')
+        expect(chatDraft).not.toContain('server SQLite `kv` table')
+    })
 })

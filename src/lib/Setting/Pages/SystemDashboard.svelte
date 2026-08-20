@@ -185,7 +185,7 @@
             })
             const json = await res.json().catch(() => ({}))
             if (!res.ok) {
-                if (json?.error === 'Insufficient disk space for VACUUM' && json.required && json.free != null) {
+                if (json?.error === 'Insufficient disk space for file-store optimization' && json.required && json.free != null) {
                     notifyError(language.storageOptimizeNeedsSpace(json.required, json.free))
                 } else {
                     notifyError(language.storageOptimizeFailed + ': ' + (json?.error || `HTTP ${res.status}`))

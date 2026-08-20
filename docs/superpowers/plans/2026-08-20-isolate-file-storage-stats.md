@@ -139,3 +139,37 @@ Expected: PASS with the legacy wire response unchanged.
 git add docs/superpowers/plans/2026-08-20-isolate-file-storage-stats.md server/node/no-sqlite-runtime.test.ts server/node/server.cjs
 git commit -m "refactor: inline legacy storage stats constants"
 ```
+
+### Task 4: Remove stale SQLite runtime wording
+
+**Files:**
+- Modify: `server/node/no-sqlite-runtime.test.ts`
+- Modify: `src/lib/Setting/Pages/SystemDashboard.svelte`
+- Modify: `src/ts/storage/chatDraft.ts`
+
+- [x] **Step 1: Add a failing runtime-wording contract**
+
+Require the dashboard to recognize the current file-store disk-space error and
+forbid stale `VACUUM` and SQLite-table assumptions in active frontend code.
+
+- [x] **Step 2: Run the focused contract and verify RED**
+
+Run: `pnpm vitest run --config vitest.config.server.ts server/node/no-sqlite-runtime.test.ts`
+
+Expected: FAIL because both stale frontend references still exist.
+
+- [x] **Step 3: Update the current error discriminator and draft comment**
+
+Match `Insufficient disk space for file-store optimization` in the dashboard,
+and describe drafts as independent file-native KV entries.
+
+- [x] **Step 4: Run focused and compatibility tests**
+
+Run the server storage tests and the isolated compatibility suite.
+
+- [x] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-08-20-isolate-file-storage-stats.md server/node/no-sqlite-runtime.test.ts src/lib/Setting/Pages/SystemDashboard.svelte src/ts/storage/chatDraft.ts
+git commit -m "refactor: remove stale sqlite runtime wording"
+```
