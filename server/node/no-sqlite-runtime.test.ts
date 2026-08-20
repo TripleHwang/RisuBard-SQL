@@ -113,4 +113,17 @@ describe('native SQLite removal', () => {
         expect(dashboard).not.toContain('VACUUM')
         expect(chatDraft).not.toContain('server SQLite `kv` table')
     })
+
+    it('uses one destructive apply sequence for both save-folder import paths', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const migrationBlock = server.slice(
+            server.indexOf('// ── Save-folder migration endpoints'),
+            server.indexOf('// ── Storage dashboard endpoints'),
+        )
+
+        expect(migrationBlock.match(/await flushPendingDb\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/createBackupAndRotate\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/invalidateDbCache\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/kvReplaceAll\(/g)).toHaveLength(1)
+    })
 })

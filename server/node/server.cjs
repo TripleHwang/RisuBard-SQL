@@ -4928,22 +4928,24 @@ function scanHexFilesInDir(dirPath) {
     return { hexFiles, count: hexFiles.length, totalSize, hasDatabase };
 }
 
+async function replaceWithLegacySaveEntries(entries) {
+    await flushPendingDb();
+    createBackupAndRotate();
+    invalidateDbCache();
+    kvReplaceAll(entries);
+    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
+    return { imported: entries.length };
+}
+
 async function importHexFilesFromDir(dirPath) {
     const { hexFiles, hasDatabase } = scanHexFilesInDir(dirPath);
     if (hexFiles.length === 0) return { imported: 0 };
     if (!hasDatabase) throw new Error('Save folder does not contain database/database.bin');
 
-    await flushPendingDb();
-    createBackupAndRotate();
-    invalidateDbCache();
-
-    kvReplaceAll(hexFiles.map(hexFile => ({
+    return replaceWithLegacySaveEntries(hexFiles.map(hexFile => ({
         key: Buffer.from(hexFile, 'hex').toString('utf-8'),
         value: readFileSync(path.join(dirPath, hexFile)),
     })));
-
-    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: hexFiles.length };
 }
 
 async function importHexEntries(entries) {
@@ -4951,14 +4953,7 @@ async function importHexEntries(entries) {
     const hasDb = entries.some(e => e.key === 'database/database.bin');
     if (!hasDb) throw new Error('Data does not contain database/database.bin');
 
-    await flushPendingDb();
-    createBackupAndRotate();
-    invalidateDbCache();
-
-    kvReplaceAll(entries);
-
-    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: entries.length };
+    return replaceWithLegacySaveEntries(entries);
 }
 
 app.post('/api/migrate/save-folder/scan', async (req, res, next) => {
