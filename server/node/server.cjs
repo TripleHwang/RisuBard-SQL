@@ -5364,6 +5364,7 @@ app.get('/api/db/stats', async (req, res, next) => {
             files,
             disk,
             backupDisk,
+            storage: { reclaimable, mode: 'file-native' },
             sqlite: { pageSize, pageCount, freelistCount, reclaimable, journalMode, autoVacuum },
             // Legacy response shape retained for older dashboards. File-native KV
             // stores whole values as content objects rather than SQL blob chunks.

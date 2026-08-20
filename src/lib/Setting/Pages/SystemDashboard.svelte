@@ -32,6 +32,7 @@
         files: { db: number }
         disk: { free: number | null; total: number | null }
         backupDisk?: { free: number | null; total: number | null; path?: string; sameAsSaveDir?: boolean }
+        storage: { reclaimable: number; mode: string }
         sqlite: {
             pageSize: number; pageCount: number; freelistCount: number;
             reclaimable: number; journalMode: string; autoVacuum: number | string;
@@ -120,7 +121,14 @@
             const auth = await forageStorage.createAuth()
             const res = await fetch('/api/db/stats', { headers: { 'risu-auth': auth } })
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
-            stats = await res.json()
+            const payload = await res.json()
+            stats = {
+                ...payload,
+                storage: payload.storage ?? {
+                    reclaimable: payload.sqlite?.reclaimable ?? 0,
+                    mode: payload.sqlite?.journalMode ?? 'legacy',
+                },
+            }
         } catch (err) {
             loadError = err instanceof Error ? err.message : String(err)
         } finally {
@@ -228,7 +236,7 @@
         const uncategorizedKv = Math.max(0, stats.kvTotalBytes - knownKv)
         // File-store structural metadata and unreachable content-addressed
         // objects are reported through the legacy-compatible stats shape.
-        const reclaimable = stats.sqlite.reclaimable
+        const reclaimable = stats.storage.reclaimable
         const structuralOverhead = Math.max(0, stats.files.db - stats.kvTotalBytes - reclaimable)
         const rows: DiskRow[] = [
             { id: 'kv-database',     label: language.storageRowKvDatabase,     desc: language.storageRowKvDatabaseDesc,     size: dbRowSize,                     color: 'bg-rose-500' },
@@ -308,7 +316,7 @@
     const modRemaining = $derived((modules?.modules.length ?? 0) - modShown)
 
     // Referenced vs reclaimable file objects for the cleanup section bar.
-    const overheadUsed = $derived(stats ? Math.max(0, stats.files.db - stats.sqlite.reclaimable) : 0)
+    const overheadUsed = $derived(stats ? Math.max(0, stats.files.db - stats.storage.reclaimable) : 0)
 
     // ⓘ button: opens a small markdown modal. Works on touch (where hover
     // tooltips are unreachable) and via keyboard.
@@ -479,7 +487,7 @@
                 <span class="font-medium">{language.storageCleanup}</span>
             </div>
             <span class="text-textcolor2 text-sm tabular-nums">
-                {language.storageOptimizeHeader(stats.files.db, stats.sqlite.reclaimable)}
+                {language.storageOptimizeHeader(stats.files.db, stats.storage.reclaimable)}
             </span>
         </div>
 
@@ -505,7 +513,7 @@
             <Tooltip.Root>
                 <Tooltip.Trigger>
                     {#snippet child({ props })}
-                        <div {...props} class="bg-yellow-500 cursor-help" style:width={pctOf(stats.sqlite.reclaimable, stats.files.db).toFixed(3) + '%'}></div>
+                        <div {...props} class="bg-yellow-500 cursor-help" style:width={pctOf(stats.storage.reclaimable, stats.files.db).toFixed(3) + '%'}></div>
                     {/snippet}
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
@@ -515,20 +523,20 @@
                         collisionPadding={8}
                     >
                         <div class="font-medium">{language.storageOptimizeBarReclaimable}</div>
-                        <div class="text-textcolor2 tabular-nums">{fmtBytes(stats.sqlite.reclaimable)}</div>
+                        <div class="text-textcolor2 tabular-nums">{fmtBytes(stats.storage.reclaimable)}</div>
                     </Tooltip.Content>
                 </Tooltip.Portal>
             </Tooltip.Root>
         </div>
         <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-textcolor2 text-xs mb-3 tabular-nums">
             <span><span class="inline-block size-2 bg-primary rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarUsed} {fmtBytes(overheadUsed)}</span>
-            <span><span class="inline-block size-2 bg-yellow-500 rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarReclaimable} {fmtBytes(stats.sqlite.reclaimable)}</span>
+            <span><span class="inline-block size-2 bg-yellow-500 rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarReclaimable} {fmtBytes(stats.storage.reclaimable)}</span>
         </div>
 
         <p class="text-textcolor2 text-sm leading-relaxed mb-2">{language.storageOptimizeWhat}</p>
         <p class="text-textcolor2 text-sm leading-relaxed mb-3">{language.storageOptimizeWhen}</p>
         <div class="flex justify-end">
-            <ShButton variant="primary" onclick={runOptimize} disabled={stats.sqlite.reclaimable < 50 * 1024 * 1024}>
+            <ShButton variant="primary" onclick={runOptimize} disabled={stats.storage.reclaimable < 50 * 1024 * 1024}>
                 <SparklesIcon size={16} />
                 {language.storageOptimize}
             </ShButton>
@@ -724,10 +732,10 @@
     <!-- ⑧ Debug ─────────────────────────────────────────────────────────── -->
     <ShAccordion name={language.storageDebug} variant="card">
         <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-textcolor2 text-sm font-mono">
-            <div>storage_mode</div><div class="text-textcolor">{stats.sqlite.journalMode}</div>
+            <div>storage_mode</div><div class="text-textcolor">{stats.storage.mode}</div>
             <div>object_count</div><div class="text-textcolor tabular-nums">{stats.kvRows.toLocaleString()}</div>
             <div>object_bytes</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.kvTotalBytes)}</div>
-            <div>reclaimable</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.sqlite.reclaimable)}</div>
+            <div>reclaimable</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.storage.reclaimable)}</div>
             <div>etag</div><div class="text-textcolor truncate">{stats.etag ?? '—'}</div>
         </div>
     </ShAccordion>

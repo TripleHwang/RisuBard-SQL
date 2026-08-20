@@ -77,4 +77,19 @@ describe('native SQLite removal', () => {
         expect(server).not.toMatch(/\bisDbBlobChunked\s*\(/)
         expect(server).not.toContain('function clearExistingData')
     })
+
+    it('isolates native storage metrics from the legacy SQLite response', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+
+        expect(server).toContain("storage: { reclaimable, mode: 'file-native' }")
+        expect(server).toContain('sqlite: {')
+        expect(dashboard).toContain('stats.storage.reclaimable')
+        expect(dashboard).not.toContain('stats.sqlite.reclaimable')
+        expect(dashboard).toContain('payload.storage ??')
+        expect(dashboard).toContain('payload.sqlite?.reclaimable ?? 0')
+    })
 })
