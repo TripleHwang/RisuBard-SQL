@@ -173,3 +173,34 @@ Run the server storage tests and the isolated compatibility suite.
 git add docs/superpowers/plans/2026-08-20-isolate-file-storage-stats.md server/node/no-sqlite-runtime.test.ts src/lib/Setting/Pages/SystemDashboard.svelte src/ts/storage/chatDraft.ts
 git commit -m "refactor: remove stale sqlite runtime wording"
 ```
+
+### Task 5: Trim dead storage API surface
+
+**Files:**
+- Modify: `server/node/file-kv.test.ts`
+- Modify: `server/node/no-sqlite-runtime.test.ts`
+- Modify: `server/node/file-kv.cjs`
+- Modify: `src/lib/Setting/Pages/SystemDashboard.svelte`
+
+- [x] **Step 1: Add failing absence contracts**
+
+Require the file-KV facade not to expose its unused internal `dataRoot`, and
+require the normalized dashboard `Stats` type not to model the unused legacy
+`sqlite` response.
+
+- [x] **Step 2: Run focused tests and verify RED**
+
+Run both storage contract files and confirm the obsolete properties fail.
+
+- [x] **Step 3: Remove only the dead properties**
+
+Keep the server's legacy JSON response intact for older clients.
+
+- [x] **Step 4: Run focused and compatibility tests**
+
+- [x] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-08-20-isolate-file-storage-stats.md server/node/file-kv.test.ts server/node/no-sqlite-runtime.test.ts server/node/file-kv.cjs src/lib/Setting/Pages/SystemDashboard.svelte
+git commit -m "refactor: trim dead storage api surface"
+```

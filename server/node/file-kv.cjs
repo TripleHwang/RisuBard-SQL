@@ -196,7 +196,6 @@ function createFileKv(options = {}) {
     migrateLegacyHexFiles();
 
     return {
-        dataRoot,
         kvGet,
         kvSet,
         kvSetMany,

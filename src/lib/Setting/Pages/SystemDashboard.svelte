@@ -33,10 +33,6 @@
         disk: { free: number | null; total: number | null }
         backupDisk?: { free: number | null; total: number | null; path?: string; sameAsSaveDir?: boolean }
         storage: { reclaimable: number; mode: string }
-        sqlite: {
-            pageSize: number; pageCount: number; freelistCount: number;
-            reclaimable: number; journalMode: string; autoVacuum: number | string;
-        }
         prefixes: Record<string, PrefixInfo>
         kvRows: number
         kvTotalBytes: number
