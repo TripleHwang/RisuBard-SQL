@@ -275,7 +275,6 @@ function createFileKv(options = {}) {
     migrateLegacyHexFiles();
 
     return {
-        dataRoot,
         kvGet,
         kvSet,
         kvSetMany,
@@ -290,12 +289,9 @@ function createFileKv(options = {}) {
         kvDelPrefix,
         kvList,
         kvListWithSizes,
-        checkpointWal: () => [],
         gcChunks,
         reclaimableChunkBytes,
-        isDbBlobChunked: () => false,
         snapshotFootprint,
-        clearEntities: () => {},
     };
 }
 

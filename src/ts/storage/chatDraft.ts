@@ -2,8 +2,8 @@ import { forageStorage } from "../globalApi.svelte"
 
 // Per-chat composer drafts. The unsent text in the message input is stored
 // outside the chat content so that unmounting the chat view (e.g. opening
-// Settings) does not lose it. Each draft is its own forage key (a single row in
-// the server SQLite `kv` table), keyed by character + chat id, so it:
+// Settings) does not lose it. Each draft is its own forage key (an independent
+// file-native KV entry), keyed by character + chat id, so it:
 //   - syncs across devices (shared server backend),
 //   - is isolated from the chat body (a draft write never re-uploads the chat),
 //   - never touches the Chat schema (no data-compat concerns).

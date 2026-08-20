@@ -31,6 +31,7 @@ describe('file-native KV compatibility projection', () => {
     it('round-trips binary values and persists only a small manifest plus content objects', () => {
         const dataRoot = root()
         const store = createFileKv({ dataRoot })
+        expect(store).not.toHaveProperty('dataRoot')
         store.kvSet('database/database.bin', Buffer.from([0, 1, 2, 255]))
 
         const reopened = createFileKv({ dataRoot })

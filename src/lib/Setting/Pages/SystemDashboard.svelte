@@ -29,14 +29,10 @@
     // ── Types ────────────────────────────────────────────────────────────────
     interface PrefixInfo { totalSize: number; count: number }
     interface Stats {
-        files: { db: number; wal: number; shm: number }
+        files: { db: number }
         disk: { free: number | null; total: number | null }
         backupDisk?: { free: number | null; total: number | null; path?: string; sameAsSaveDir?: boolean }
-        sqlite: {
-            pageSize: number; pageCount: number; freelistCount: number;
-            reclaimable: number; journalMode: string; autoVacuum: number | string;
-        }
-        chunks?: { count: number; bytes: number; orphanBytes: number; liveChunked: boolean }
+        storage: { reclaimable: number; mode: string }
         prefixes: Record<string, PrefixInfo>
         kvRows: number
         kvTotalBytes: number
@@ -85,8 +81,6 @@
     let optimizeOpen = $state(false)
     let optimizeMessage = $state('')
 
-    let walCleanupOpen = $state(false)
-
     // Default off = show only RisuAI internal breakdown (smaller scope, more
     // useful at-a-glance). Toggle on to expand the bar to disk-total scale
     // including "Other (system & apps)" and "Free space".
@@ -123,7 +117,14 @@
             const auth = await forageStorage.createAuth()
             const res = await fetch('/api/db/stats', { headers: { 'risu-auth': auth } })
             if (!res.ok) throw new Error(`HTTP ${res.status}`)
-            stats = await res.json()
+            const payload = await res.json()
+            stats = {
+                ...payload,
+                storage: payload.storage ?? {
+                    reclaimable: payload.sqlite?.reclaimable ?? 0,
+                    mode: payload.sqlite?.journalMode ?? 'legacy',
+                },
+            }
         } catch (err) {
             loadError = err instanceof Error ? err.message : String(err)
         } finally {
@@ -167,35 +168,6 @@
         }
     }
 
-    async function runWalCleanup() {
-        const ok = await alertConfirm(language.storageWalCleanupConfirm)
-        if (!ok) return
-        walCleanupOpen = true
-        try {
-            const auth = await forageStorage.createAuth()
-            const res = await fetch('/api/db/wal-checkpoint', {
-                method: 'POST',
-                headers: { 'risu-auth': auth },
-            })
-            const json = await res.json().catch(() => ({}))
-            if (!res.ok) {
-                notifyError(language.storageWalCleanupFailed + ': ' + (json?.error || `HTTP ${res.status}`))
-                return
-            }
-            const reclaimed = json.reclaimed ?? 0
-            if (reclaimed > 0) {
-                notifySuccess(language.storageWalCleanupDone(reclaimed, json.elapsedMs ?? 0))
-            } else {
-                notifySuccess(language.storageWalCleanupNoop)
-            }
-            await loadStats()
-        } catch (err) {
-            notifyError(language.storageWalCleanupFailed + ': ' + (err instanceof Error ? err.message : String(err)))
-        } finally {
-            walCleanupOpen = false
-        }
-    }
-
     async function runOptimize() {
         const ok = await alertConfirm(language.storageOptimizeConfirm)
         if (!ok) return
@@ -209,7 +181,7 @@
             })
             const json = await res.json().catch(() => ({}))
             if (!res.ok) {
-                if (json?.error === 'Insufficient disk space for VACUUM' && json.required && json.free != null) {
+                if (json?.error === 'Insufficient disk space for file-store optimization' && json.required && json.free != null) {
                     notifyError(language.storageOptimizeNeedsSpace(json.required, json.free))
                 } else {
                     notifyError(language.storageOptimizeFailed + ': ' + (json?.error || `HTTP ${res.status}`))
@@ -249,26 +221,19 @@
         const inlayKvTotal = get('inlay/') + get('inlay_thumb/') + get('inlay_meta/') + get('inlay_info/')
         const inlayFsBytes = stats.inlayFsBytes ?? 0
         const inlayTotal = inlayKvTotal + inlayFsBytes
-        // database.bin is a rebuildable compatibility projection. Large values
-        // are content-addressed objects, so count their physical size here.
-        const chunkedDbBytes = stats.chunks?.bytes ?? 0
-        // A small DB (≤ chunk threshold) stays a raw kv value rather than chunks,
-        // so count it here — otherwise the database row reads 0 and its bytes get
-        // mislabeled as "uncategorized". Keyed on whether the *live* blob is
-        // chunked (not whether any chunks exist — snapshots may be chunked while a
-        // shrunken live DB is raw).
-        const rawDbBlob = stats.chunks?.liveChunked ? 0 : get('database/database.bin')
-        const dbRowSize = chunkedDbBytes + rawDbBlob
+        // database.bin is a rebuildable compatibility projection stored as one
+        // file-KV value. SQL blob chunking is no longer part of the runtime.
+        const dbRowSize = get('database/database.bin')
         // Known kv prefixes I track explicitly — kv-side only. If anything
         // else lives in kv (test keys, migration leftovers), it shows up
         // under "uncategorized" so the bar always sums correctly.
         const knownKv =
-            get('assets/') + inlayKvTotal + get('remotes/') + get('coldstorage/') + rawDbBlob
+            get('assets/') + inlayKvTotal + get('remotes/') + get('coldstorage/') + dbRowSize
         const uncategorizedKv = Math.max(0, stats.kvTotalBytes - knownKv)
         // File-store structural metadata and unreachable content-addressed
         // objects are reported through the legacy-compatible stats shape.
-        const reclaimable = stats.sqlite.reclaimable
-        const structuralOverhead = Math.max(0, stats.files.db - stats.kvTotalBytes - chunkedDbBytes - reclaimable)
+        const reclaimable = stats.storage.reclaimable
+        const structuralOverhead = Math.max(0, stats.files.db - stats.kvTotalBytes - reclaimable)
         const rows: DiskRow[] = [
             { id: 'kv-database',     label: language.storageRowKvDatabase,     desc: language.storageRowKvDatabaseDesc,     size: dbRowSize,                     color: 'bg-rose-500' },
             { id: 'kv-assets',       label: language.storageRowKvAssets,       desc: language.storageRowKvAssetsDesc,       size: get('assets/'),                color: 'bg-amber-500' },
@@ -278,8 +243,6 @@
             { id: 'kv-uncat',        label: language.storageRowKvUncategorized, desc: language.storageRowKvUncategorizedDesc, size: uncategorizedKv,             color: 'bg-stone-600' },
             { id: 'overhead',        label: language.storageRowSqliteOverhead, desc: language.storageRowSqliteOverheadDesc, size: structuralOverhead,            color: 'bg-zinc-500' },
             { id: 'reclaimable',     label: language.storageRowReclaimablePages, desc: language.storageRowReclaimablePagesDesc, size: reclaimable,               color: 'bg-yellow-500' },
-            { id: 'wal',             label: language.storageRowWal,            desc: language.storageRowWalDesc,            size: stats.files.wal,               color: 'bg-sky-500' },
-            { id: 'shm',             label: language.storageRowShm,            desc: language.storageRowShmDesc,            size: stats.files.shm,               color: 'bg-lime-500' },
             // File backups are only on the same disk as save/ when sameAsSaveDir
             // is true. If user pointed backupsDir at a different mount, those
             // bytes don't belong in this chart's geometry — they're shown in
@@ -296,7 +259,7 @@
     // don't consume save/ space).
     const risuFootprint = $derived(
         stats
-            ? stats.files.db + stats.files.wal + stats.files.shm
+            ? stats.files.db
               + (stats.backupDisk?.sameAsSaveDir !== false ? stats.backups.file.totalSize : 0)
               + (stats.inlayFsBytes ?? 0)
             : 0
@@ -349,7 +312,7 @@
     const modRemaining = $derived((modules?.modules.length ?? 0) - modShown)
 
     // Referenced vs reclaimable file objects for the cleanup section bar.
-    const overheadUsed = $derived(stats ? Math.max(0, stats.files.db - stats.sqlite.reclaimable) : 0)
+    const overheadUsed = $derived(stats ? Math.max(0, stats.files.db - stats.storage.reclaimable) : 0)
 
     // ⓘ button: opens a small markdown modal. Works on touch (where hover
     // tooltips are unreachable) and via keyboard.
@@ -512,29 +475,6 @@
         </div>
     </div>
 
-    <!-- Legacy servers can still expose a WAL. File-native servers report 0. -->
-    {#if stats.files.wal > 0}
-    <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
-        <div class="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
-            <div class="flex items-center gap-2 text-textcolor">
-                <HardDriveIcon size={16} />
-                <span class="font-medium">{language.storageWalCleanup}</span>
-            </div>
-            <span class="text-textcolor2 text-sm tabular-nums">
-                {language.storageWalCleanupHeader(stats.files.wal)}
-            </span>
-        </div>
-        <p class="text-textcolor2 text-sm leading-relaxed mb-2">{language.storageWalCleanupWhat}</p>
-        <p class="text-textcolor2 text-sm leading-relaxed mb-3">{language.storageWalCleanupWhen}</p>
-        <div class="flex justify-end">
-            <ShButton variant="outline" onclick={runWalCleanup} disabled={walCleanupOpen}>
-                <HardDriveIcon size={16} />
-                {language.storageWalCleanup_btn}
-            </ShButton>
-        </div>
-    </div>
-    {/if}
-
     <!-- ③ File-object cleanup ──────────────────────────────────────────── -->
     <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
         <div class="flex items-baseline justify-between gap-2 mb-3 flex-wrap">
@@ -543,7 +483,7 @@
                 <span class="font-medium">{language.storageCleanup}</span>
             </div>
             <span class="text-textcolor2 text-sm tabular-nums">
-                {language.storageOptimizeHeader(stats.files.db, stats.sqlite.reclaimable)}
+                {language.storageOptimizeHeader(stats.files.db, stats.storage.reclaimable)}
             </span>
         </div>
 
@@ -569,7 +509,7 @@
             <Tooltip.Root>
                 <Tooltip.Trigger>
                     {#snippet child({ props })}
-                        <div {...props} class="bg-yellow-500 cursor-help" style:width={pctOf(stats.sqlite.reclaimable, stats.files.db).toFixed(3) + '%'}></div>
+                        <div {...props} class="bg-yellow-500 cursor-help" style:width={pctOf(stats.storage.reclaimable, stats.files.db).toFixed(3) + '%'}></div>
                     {/snippet}
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
@@ -579,20 +519,20 @@
                         collisionPadding={8}
                     >
                         <div class="font-medium">{language.storageOptimizeBarReclaimable}</div>
-                        <div class="text-textcolor2 tabular-nums">{fmtBytes(stats.sqlite.reclaimable)}</div>
+                        <div class="text-textcolor2 tabular-nums">{fmtBytes(stats.storage.reclaimable)}</div>
                     </Tooltip.Content>
                 </Tooltip.Portal>
             </Tooltip.Root>
         </div>
         <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-textcolor2 text-xs mb-3 tabular-nums">
             <span><span class="inline-block size-2 bg-primary rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarUsed} {fmtBytes(overheadUsed)}</span>
-            <span><span class="inline-block size-2 bg-yellow-500 rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarReclaimable} {fmtBytes(stats.sqlite.reclaimable)}</span>
+            <span><span class="inline-block size-2 bg-yellow-500 rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarReclaimable} {fmtBytes(stats.storage.reclaimable)}</span>
         </div>
 
         <p class="text-textcolor2 text-sm leading-relaxed mb-2">{language.storageOptimizeWhat}</p>
         <p class="text-textcolor2 text-sm leading-relaxed mb-3">{language.storageOptimizeWhen}</p>
         <div class="flex justify-end">
-            <ShButton variant="primary" onclick={runOptimize} disabled={(stats.sqlite.reclaimable + (stats.chunks?.orphanBytes ?? 0)) < 50 * 1024 * 1024}>
+            <ShButton variant="primary" onclick={runOptimize} disabled={stats.storage.reclaimable < 50 * 1024 * 1024}>
                 <SparklesIcon size={16} />
                 {language.storageOptimize}
             </ShButton>
@@ -788,10 +728,10 @@
     <!-- ⑧ Debug ─────────────────────────────────────────────────────────── -->
     <ShAccordion name={language.storageDebug} variant="card">
         <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-textcolor2 text-sm font-mono">
-            <div>storage_mode</div><div class="text-textcolor">{stats.sqlite.journalMode}</div>
+            <div>storage_mode</div><div class="text-textcolor">{stats.storage.mode}</div>
             <div>object_count</div><div class="text-textcolor tabular-nums">{stats.kvRows.toLocaleString()}</div>
             <div>object_bytes</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.kvTotalBytes)}</div>
-            <div>reclaimable</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.sqlite.reclaimable)}</div>
+            <div>reclaimable</div><div class="text-textcolor tabular-nums">{fmtBytes(stats.storage.reclaimable)}</div>
             <div>etag</div><div class="text-textcolor truncate">{stats.etag ?? '—'}</div>
         </div>
     </ShAccordion>
@@ -800,4 +740,3 @@
 {/if}
 
 <ShLoadingDialog open={optimizeOpen} message={optimizeMessage} tier="top" />
-<ShLoadingDialog open={walCleanupOpen} message={language.storageWalCleanuping} tier="top" />

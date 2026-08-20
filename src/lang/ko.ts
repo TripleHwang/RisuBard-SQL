@@ -2373,12 +2373,6 @@ export const languageKorean = {
   storageRowDbFile: "파일 데이터 루트",
   storageRowDbFileDesc:
     "사용자 정본 JSON·JSONL·Markdown과 content-addressed 오브젝트 파일이 저장됩니다.",
-  storageRowWal: "WAL (Write-Ahead Log)",
-  storageRowWalDesc:
-    "임시 트랜잭션 로그. 저장이 먼저 여기 기록된 뒤 본 파일에 통합됩니다. 사용 중엔 정상적으로 존재.",
-  storageRowShm: "SHM (공유 메모리)",
-  storageRowShmDesc:
-    "레거시 서버 호환용 값입니다. 파일 정본 저장소는 이 파일을 만들지 않습니다.",
   storageRowFileBackups: "디스크 백업 (.bin)",
   storageRowFileBackupsDesc:
     "수동으로 export한 백업 파일. backups/ 폴더에 보관됩니다.",
@@ -2442,21 +2436,6 @@ export const languageKorean = {
   storageOptimizeFailed: "정리 실패",
 
   storageCleanup: "미참조 오브젝트 정리",
-
-  storageWalCleanup: "WAL 수동 정리",
-  storageWalCleanupHeader: (walSize: number) =>
-    `현재 WAL ${(walSize / 1024 / 1024).toFixed(1)} MB`,
-  storageWalCleanupWhat:
-    "레거시 write-ahead log를 보고하는 구형 서버에 연결했을 때만 표시되는 호환 기능입니다.",
-  storageWalCleanupWhen:
-    "파일 정본 서버는 원자 rename journal을 사용하므로 WAL을 만들지 않습니다.",
-  storageWalCleanup_btn: "WAL 정리",
-  storageWalCleanuping: "WAL 정리 중...",
-  storageWalCleanupConfirm: "WAL을 지금 정리할까요? 서버 저장이 잠시 멈춥니다.",
-  storageWalCleanupDone: (reclaimed: number, ms: number) =>
-    `${(reclaimed / 1024 / 1024).toFixed(1)} MB 회수 (${ms}ms).`,
-  storageWalCleanupNoop: "WAL은 이미 깨끗합니다.",
-  storageWalCleanupFailed: "WAL 정리 실패",
 
   storageBackups: "백업",
   storageBackupsManage: "백업 관리",

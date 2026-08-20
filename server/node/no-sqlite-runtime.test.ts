@@ -35,4 +35,95 @@ describe('native SQLite removal', () => {
     it('does not retain the obsolete SQL chunk store', () => {
         expect(fs.existsSync(path.join(root, 'server', 'node', 'chunkStore.cjs'))).toBe(false)
     })
+
+    it('does not expose the obsolete WAL checkpoint route or dashboard control', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+
+        expect(server).not.toContain("app.post('/api/db/wal-checkpoint'")
+        expect(dashboard).not.toContain('/api/db/wal-checkpoint')
+        expect(dashboard).not.toContain('walCleanupOpen')
+    })
+
+    it('does not retain no-op WAL maintenance hooks', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const fileKv = fs.readFileSync(path.join(root, 'server', 'node', 'file-kv.cjs'), 'utf8')
+
+        expect(fileKv).not.toContain('checkpointWal')
+        expect(server).not.toMatch(/WAL checkpoint|checkpoint WAL|SQLite DB/)
+    })
+
+    it('does not render nonexistent WAL or SHM storage metrics', () => {
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+
+        expect(dashboard).not.toMatch(/stats\.files\.(?:wal|shm)/)
+        expect(dashboard).not.toMatch(/storageRow(?:Wal|Shm)/)
+        expect(dashboard).not.toMatch(/stats\.chunks/)
+    })
+
+    it('does not retain obsolete entity or SQL-chunk helpers', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const fileKv = fs.readFileSync(path.join(root, 'server', 'node', 'file-kv.cjs'), 'utf8')
+
+        expect(fileKv).not.toContain('clearEntities')
+        expect(fileKv).not.toContain('isDbBlobChunked')
+        expect(server).not.toMatch(/\bclearEntities\s*\(/)
+        expect(server).not.toMatch(/\bisDbBlobChunked\s*\(/)
+        expect(server).not.toContain('function clearExistingData')
+    })
+
+    it('isolates native storage metrics from the legacy SQLite response', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+
+        expect(server).toContain("storage: { reclaimable, mode: 'file-native' }")
+        expect(server).toContain('sqlite: {')
+        expect(dashboard).toContain('stats.storage.reclaimable')
+        expect(dashboard).not.toContain('stats.sqlite.reclaimable')
+        expect(dashboard).toContain('payload.storage ??')
+        expect(dashboard).toContain('payload.sqlite?.reclaimable ?? 0')
+        const statsInterface = dashboard.match(/interface Stats \{[\s\S]*?\n    \}/)?.[0] ?? ''
+        expect(statsInterface).not.toContain('sqlite:')
+        expect(server).not.toMatch(/const (?:pageSize|pageCount|freelistCount|journalMode|autoVacuum) =/)
+    })
+
+    it('does not retain stale SQLite runtime wording in active frontend paths', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const dashboard = fs.readFileSync(
+            path.join(root, 'src', 'lib', 'Setting', 'Pages', 'SystemDashboard.svelte'),
+            'utf8',
+        )
+        const chatDraft = fs.readFileSync(
+            path.join(root, 'src', 'ts', 'storage', 'chatDraft.ts'),
+            'utf8',
+        )
+        const diskSpaceError = 'Insufficient disk space for file-store optimization'
+
+        expect(server).toContain(diskSpaceError)
+        expect(dashboard).toContain(diskSpaceError)
+        expect(dashboard).not.toContain('VACUUM')
+        expect(chatDraft).not.toContain('server SQLite `kv` table')
+    })
+
+    it('uses one destructive apply sequence for both save-folder import paths', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const migrationBlock = server.slice(
+            server.indexOf('// ── Save-folder migration endpoints'),
+            server.indexOf('// ── Storage dashboard endpoints'),
+        )
+
+        expect(migrationBlock.match(/await flushPendingDb\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/createBackupAndRotate\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/invalidateDbCache\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/kvReplaceAllAsync\(/g)).toHaveLength(1)
+    })
 })

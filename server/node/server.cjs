@@ -24,7 +24,7 @@ const getVips = () => {
     return _vipsPromise
 }
 const { kvGet, kvSet, kvSetMany, kvReplacePrefixesAsync, kvReplaceAllAsync, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities,
+        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
         gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
@@ -819,8 +819,8 @@ const DEFAULT_BACKUPS_DIR = path.join(process.cwd(), "backups");
 const BACKUP_PATH_CONFIG_KEY = 'config/server-backup-path';
 const MANAGED_BACKUP_PATH_ROOTS = new Set(['server', 'dist', 'scripts', 'bin', 'node_modules', '.update-tmp']);
 // Plaintext marker the updater reads to preserve a custom in-tree backup dir
-// during in-place updates. KV lives inside the SQLite DB so the updater (which
-// runs without npm deps) can't read it; this marker bridges that gap.
+// during in-place updates. The standalone updater does not load the server KV
+// implementation, so this marker bridges that gap.
 const BACKUP_PATH_MARKER = path.join(savePath, '__backup_path');
 
 function readBackupsDirConfig() {
@@ -2485,11 +2485,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         });
         coldStorageFailed = migration.coldStorageFailed || 0;
         initChatStore(dbObj);
-    }
-
-    try {
-    } catch (checkpointError) {
-        logger.warn('[Backup Import] WAL checkpoint after import failed:', checkpointError);
     }
 
     console.log(`[Backup Import] Complete: ${assetsRestored} assets restored, ${(bytesReceived / 1024 / 1024).toFixed(1)}MB processed`);
@@ -4256,7 +4251,7 @@ app.post('/api/backup/import', async (req, res, next) => {
     if (req.socket.server) req.socket.server.requestTimeout = 0;
 
     // NDJSON streaming keeps the response socket alive during long
-    // post-upload work (WAL checkpoint, cold-storage migration). Without it
+    // post-upload work (including cold-storage migration). Without it
     // a reverse proxy in front of the server can hit its response timeout
     // and bounce the request back to the client as 502 Bad Gateway.
     const wantsNdjson = String(req.headers['accept'] ?? '').includes('application/x-ndjson');
@@ -4933,41 +4928,19 @@ function scanHexFilesInDir(dirPath) {
     return { hexFiles, count: hexFiles.length, totalSize, hasDatabase };
 }
 
-function clearExistingData() {
-    kvDelPrefix('assets/');
-    kvDelPrefix('inlay/');
-    kvDelPrefix('inlay_thumb/');
-    kvDelPrefix('inlay_meta/');
-    kvDelPrefix('inlay_info/');
-    // Composer drafts aren't part of a save folder; clear stale ones on import.
-    kvDelPrefix('drafts/');
-    // Drop the previous user's remote payloads. The new save folder usually
-    // brings its own remotes/<id>.local.bin files (INSERT OR REPLACE), but if
-    // the imported character ids reuse names from the prior user without
-    // shipping a matching payload, the migration's resolveRemote would silently
-    // stitch in stale cross-user data. Wiping here ensures only payloads
-    // that arrived in this import survive.
-    kvDelPrefix('remotes/');
-    // Cold-storage rows belong to the previous user's chats. The .bin import path
-    // (importBackupFromSource) already clears these; the save-folder path did not,
-    // leaving orphans that no dashboard or Optimize pass ever reclaims.
-    kvDelPrefix('coldstorage/');
-    // Clear remote-block migration marker — newly imported database.bin may
-    // contain REMOTE blocks (it usually does, since save-folder imports
-    // preserve upstream's split-character format) and we want the migration
-    // to re-evaluate against the new contents on the next ensureChatStore.
-    kvDel(REMOTE_MIGRATION_MARKER_KEY);
-    clearEntities();
+async function replaceWithLegacySaveEntries(entries) {
+    await flushPendingDb();
+    createBackupAndRotate();
+    invalidateDbCache();
+    await kvReplaceAllAsync(entries);
+    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
+    return { imported: entries.length };
 }
 
 async function importHexFilesFromDir(dirPath) {
     const { hexFiles, hasDatabase } = scanHexFilesInDir(dirPath);
     if (hexFiles.length === 0) return { imported: 0 };
     if (!hasDatabase) throw new Error('Save folder does not contain database/database.bin');
-
-    await flushPendingDb();
-    createBackupAndRotate();
-    invalidateDbCache();
 
     const concurrency = Math.min(8, Math.max(1, (os.availableParallelism?.() ?? os.cpus().length) - 1));
     let nextIndex = 0;
@@ -4982,10 +4955,7 @@ async function importHexFilesFromDir(dirPath) {
             };
         }
     }));
-    await kvReplaceAllAsync(entries);
-
-    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: hexFiles.length };
+    return replaceWithLegacySaveEntries(entries);
 }
 
 async function importHexEntries(entries) {
@@ -4993,14 +4963,7 @@ async function importHexEntries(entries) {
     const hasDb = entries.some(e => e.key === 'database/database.bin');
     if (!hasDb) throw new Error('Data does not contain database/database.bin');
 
-    await flushPendingDb();
-    createBackupAndRotate();
-    invalidateDbCache();
-
-    await kvReplaceAllAsync(entries);
-
-    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: entries.length };
+    return replaceWithLegacySaveEntries(entries);
 }
 
 app.post('/api/migrate/save-folder/scan', async (req, res, next) => {
@@ -5324,23 +5287,9 @@ app.get('/api/db/stats', async (req, res, next) => {
             backupDisk = { ...bDisk, path: backupsDir, sameAsSaveDir };
         }
 
-        const pageSize = 0;
-        const pageCount = 0;
-        const freelistCount = 0;
-        const journalMode = 'atomic-rename';
-        const autoVacuum = 'file-gc';
         const reclaimable = reclaimableChunkBytes();
 
         const dbBlobSize = kvSize(DB_BLOB_KEY) || 0;
-
-        // Physical storage of the chunked DB blob (and all snapshots, which share
-        // chunks). This is where the blob bytes actually live post-chunking — kv
-        // holds only a tiny marker, so the chart must count this table separately.
-        const chunkStat = { c: 0, b: 0 };
-        // Bytes the next gc() would reclaim (true orphans + chunks pinned only by
-        // stale/raw-overwritten manifests) — drives the Optimize button.
-        const orphanChunkBytes = reclaimableChunkBytes();
-        const liveChunked = isDbBlobChunked();
 
         // Prefix breakdown — split database/ into the live blob vs rotated backups.
         const prefixes = {};
@@ -5420,8 +5369,18 @@ app.get('/api/db/stats', async (req, res, next) => {
             files,
             disk,
             backupDisk,
-            sqlite: { pageSize, pageCount, freelistCount, reclaimable, journalMode, autoVacuum },
-            chunks: { count: chunkStat.c, bytes: chunkStat.b, orphanBytes: orphanChunkBytes, liveChunked },
+            storage: { reclaimable, mode: 'file-native' },
+            sqlite: {
+                pageSize: 0,
+                pageCount: 0,
+                freelistCount: 0,
+                reclaimable,
+                journalMode: 'atomic-rename',
+                autoVacuum: 'file-gc',
+            },
+            // Legacy response shape retained for older dashboards. File-native KV
+            // stores whole values as content objects rather than SQL blob chunks.
+            chunks: { count: 0, bytes: 0, orphanBytes: reclaimable, liveChunked: false },
             prefixes,
             kvRows,
             kvTotalBytes,
@@ -5619,30 +5578,6 @@ app.post('/api/db/optimize', async (req, res, next) => {
                 postDbSize,
                 reclaimed: Math.max(0, preDbSize - postDbSize),
                 chunksReclaimed: gcDeleted,
-            };
-        });
-        res.json(result);
-    } catch (err) { next(err); }
-});
-
-app.post('/api/db/wal-checkpoint', async (req, res, next) => {
-    if (!await checkAuth(req, res)) return;
-    if (!checkActiveSession(req, res)) return;
-    try {
-        const saveDir = savePath;
-        const preWalSize = 0;
-
-        const result = await queueStorageOperation(async () => {
-            await flushPendingDb();
-            const t0 = Date.now();
-            const elapsed = Date.now() - t0;
-            const postWalSize = 0;
-            return {
-                ok: true,
-                elapsedMs: elapsed,
-                preWalSize,
-                postWalSize,
-                reclaimed: Math.max(0, preWalSize - postWalSize),
             };
         });
         res.json(result);
@@ -6517,7 +6452,7 @@ async function startServer() {
     }
 }
 
-// Graceful shutdown: flush pending patches and checkpoint WAL before exit
+// Graceful shutdown: flush pending patches before exit
 for (const sig of ['SIGTERM', 'SIGINT']) {
     process.on(sig, async () => {
         console.log(`[Server] Received ${sig}, flushing pending data...`);

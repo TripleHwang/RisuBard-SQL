@@ -42,7 +42,10 @@ jobs:
             server/
             package.json
             pnpm-lock.yaml
+            pnpm-workspace.yaml
             update.sh
+            LICENSE
+            NOTICE.md
           retention-days: 1
 
   portable:

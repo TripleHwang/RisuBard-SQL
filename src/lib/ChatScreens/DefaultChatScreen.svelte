@@ -1152,7 +1152,7 @@ import { isMobile } from 'src/ts/platform'
                         </ShDropdownMenuContent>
                     </ShDropdownMenu>
                 {:else}
-                    <div onclick={(e) => {
+                    <button type="button" aria-label={language.add} onclick={() => {
                         DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.push({
                             role: 'char',
                             data: ''
@@ -1162,14 +1162,14 @@ import { isMobile } from 'src/ts/platform'
                          class="shrink-0 flex justify-center items-center w-9 h-9 rounded-full text-textcolor hover:bg-primary/20 transition-colors cursor-pointer"
                     >
                         <Plus size={20} />
-                    </div>
+                    </button>
                 {/if}
 
                 {#if DBState.db.useChatSticker}
-                    <div onclick={()=>{toggleStickers = !toggleStickers}}
+                    <button type="button" aria-label={language.useChatSticker} onclick={()=>{toggleStickers = !toggleStickers}}
                          class={"shrink-0 flex justify-center items-center w-9 h-9 rounded-full hover:bg-primary/20 transition-colors cursor-pointer "+(toggleStickers ? 'text-green-500':'text-textcolor')}>
                         <Laugh size={20}/>
-                    </div>
+                    </button>
                 {/if}
 
                 <textarea class="text-input-area outline-hidden text-textcolor px-2 py-1.5 min-w-0 bg-transparent input-text text-base resize-none overflow-x-hidden max-w-full"
