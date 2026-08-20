@@ -91,5 +91,6 @@ describe('native SQLite removal', () => {
         expect(dashboard).not.toContain('stats.sqlite.reclaimable')
         expect(dashboard).toContain('payload.storage ??')
         expect(dashboard).toContain('payload.sqlite?.reclaimable ?? 0')
+        expect(server).not.toMatch(/const (?:pageSize|pageCount|freelistCount|journalMode|autoVacuum) =/)
     })
 })

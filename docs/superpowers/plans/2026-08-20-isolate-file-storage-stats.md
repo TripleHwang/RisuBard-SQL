@@ -93,3 +93,49 @@ Actual: Storage tests passed 14/14, CHARX/module/plugin tests passed 51/51, and 
 git add docs/superpowers/plans/2026-08-20-isolate-file-storage-stats.md server/node/no-sqlite-runtime.test.ts server/node/server.cjs src/lib/Setting/Pages/SystemDashboard.svelte
 git commit -m "refactor: isolate file-native storage stats"
 ```
+
+### Task 3: Inline legacy-only SQLite constants
+
+**Files:**
+- Modify: `server/node/no-sqlite-runtime.test.ts`
+- Modify: `server/node/server.cjs`
+
+- [x] **Step 1: Add a failing absence contract**
+
+```ts
+expect(server).not.toMatch(/const (?:pageSize|pageCount|freelistCount|journalMode|autoVacuum) =/)
+```
+
+- [x] **Step 2: Run the contract test and verify RED**
+
+Run: `pnpm vitest run --config vitest.config.server.ts server/node/no-sqlite-runtime.test.ts`
+
+Expected: FAIL because the legacy-only temporary variables still exist.
+
+- [x] **Step 3: Inline the unchanged legacy response values**
+
+Delete the five temporary declarations and retain their exact JSON values:
+
+```js
+sqlite: {
+    pageSize: 0,
+    pageCount: 0,
+    freelistCount: 0,
+    reclaimable,
+    journalMode: 'atomic-rename',
+    autoVacuum: 'file-gc',
+},
+```
+
+- [x] **Step 4: Run focused and compatibility tests**
+
+Run the server storage tests and the isolated compatibility suite.
+
+Expected: PASS with the legacy wire response unchanged.
+
+- [x] **Step 5: Commit and push**
+
+```powershell
+git add docs/superpowers/plans/2026-08-20-isolate-file-storage-stats.md server/node/no-sqlite-runtime.test.ts server/node/server.cjs
+git commit -m "refactor: inline legacy storage stats constants"
+```

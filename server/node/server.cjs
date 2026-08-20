@@ -5277,11 +5277,6 @@ app.get('/api/db/stats', async (req, res, next) => {
             backupDisk = { ...bDisk, path: backupsDir, sameAsSaveDir };
         }
 
-        const pageSize = 0;
-        const pageCount = 0;
-        const freelistCount = 0;
-        const journalMode = 'atomic-rename';
-        const autoVacuum = 'file-gc';
         const reclaimable = reclaimableChunkBytes();
 
         const dbBlobSize = kvSize(DB_BLOB_KEY) || 0;
@@ -5365,7 +5360,14 @@ app.get('/api/db/stats', async (req, res, next) => {
             disk,
             backupDisk,
             storage: { reclaimable, mode: 'file-native' },
-            sqlite: { pageSize, pageCount, freelistCount, reclaimable, journalMode, autoVacuum },
+            sqlite: {
+                pageSize: 0,
+                pageCount: 0,
+                freelistCount: 0,
+                reclaimable,
+                journalMode: 'atomic-rename',
+                autoVacuum: 'file-gc',
+            },
             // Legacy response shape retained for older dashboards. File-native KV
             // stores whole values as content objects rather than SQL blob chunks.
             chunks: { count: 0, bytes: 0, orphanBytes: reclaimable, liveChunked: false },
