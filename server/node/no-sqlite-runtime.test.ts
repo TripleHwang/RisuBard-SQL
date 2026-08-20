@@ -64,5 +64,16 @@ describe('native SQLite removal', () => {
 
         expect(dashboard).not.toMatch(/stats\.files\.(?:wal|shm)/)
         expect(dashboard).not.toMatch(/storageRow(?:Wal|Shm)/)
+        expect(dashboard).not.toMatch(/stats\.chunks/)
+    })
+
+    it('does not retain obsolete entity or SQL-chunk helpers', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+        const fileKv = fs.readFileSync(path.join(root, 'server', 'node', 'file-kv.cjs'), 'utf8')
+
+        expect(fileKv).not.toContain('clearEntities')
+        expect(fileKv).not.toContain('isDbBlobChunked')
+        expect(server).not.toMatch(/\bclearEntities\s*\(/)
+        expect(server).not.toMatch(/\bisDbBlobChunked\s*\(/)
     })
 })

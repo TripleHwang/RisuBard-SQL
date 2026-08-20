@@ -211,9 +211,7 @@ function createFileKv(options = {}) {
         kvListWithSizes,
         gcChunks,
         reclaimableChunkBytes,
-        isDbBlobChunked: () => false,
         snapshotFootprint,
-        clearEntities: () => {},
     };
 }
 

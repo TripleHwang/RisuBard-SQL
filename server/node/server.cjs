@@ -24,8 +24,8 @@ const getVips = () => {
     return _vipsPromise
 }
 const { kvGet, kvSet, kvSetMany, kvReplacePrefixes, kvReplaceAll, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities,
-        gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
+        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
+        gcChunks, reclaimableChunkBytes, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
     logger, installProcessHandlers, expressErrorMiddleware,
@@ -4952,7 +4952,6 @@ function clearExistingData() {
     // preserve upstream's split-character format) and we want the migration
     // to re-evaluate against the new contents on the next ensureChatStore.
     kvDel(REMOTE_MIGRATION_MARKER_KEY);
-    clearEntities();
 }
 
 async function importHexFilesFromDir(dirPath) {
@@ -5313,15 +5312,6 @@ app.get('/api/db/stats', async (req, res, next) => {
 
         const dbBlobSize = kvSize(DB_BLOB_KEY) || 0;
 
-        // Physical storage of the chunked DB blob (and all snapshots, which share
-        // chunks). This is where the blob bytes actually live post-chunking — kv
-        // holds only a tiny marker, so the chart must count this table separately.
-        const chunkStat = { c: 0, b: 0 };
-        // Bytes the next gc() would reclaim (true orphans + chunks pinned only by
-        // stale/raw-overwritten manifests) — drives the Optimize button.
-        const orphanChunkBytes = reclaimableChunkBytes();
-        const liveChunked = isDbBlobChunked();
-
         // Prefix breakdown — split database/ into the live blob vs rotated backups.
         const prefixes = {};
         prefixes[DB_BLOB_KEY] = { totalSize: dbBlobSize, count: dbBlobSize > 0 ? 1 : 0 };
@@ -5401,7 +5391,9 @@ app.get('/api/db/stats', async (req, res, next) => {
             disk,
             backupDisk,
             sqlite: { pageSize, pageCount, freelistCount, reclaimable, journalMode, autoVacuum },
-            chunks: { count: chunkStat.c, bytes: chunkStat.b, orphanBytes: orphanChunkBytes, liveChunked },
+            // Legacy response shape retained for older dashboards. File-native KV
+            // stores whole values as content objects rather than SQL blob chunks.
+            chunks: { count: 0, bytes: 0, orphanBytes: reclaimable, liveChunked: false },
             prefixes,
             kvRows,
             kvTotalBytes,
