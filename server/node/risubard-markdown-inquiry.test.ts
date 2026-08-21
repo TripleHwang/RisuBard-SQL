@@ -184,6 +184,49 @@ describe('progressive Markdown inquiry', () => {
         expect(result.sources[0]?.content).toContain('## 작중 행적')
     })
 
+    test('reserves linked event evidence for past causal analysis', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '진우가 초반에 주인공 자리를 잃은 원인과 세부 사건을 분석해 줘.',
+            tokenBudget: { target: 256, maximum: 512 },
+            documents: [
+                document({
+                    id: 'jinwoo', type: 'character', title: '진우',
+                    relativePath: 'characters/jinwoo.md',
+                    content: [
+                        '# 진우',
+                        '',
+                        '## 작중 행적',
+                        '',
+                        '- [[교실의 폭발]] 뒤 관계가 악화됐다.',
+                        '- [[훼손된 신발]] 뒤 범행을 고백했다.',
+                        '',
+                        '초반 주인공 자리와 원인을 다루는 압축 요약이다. '.repeat(2),
+                    ].join('\n'),
+                    links: ['교실의 폭발', '훼손된 신발'],
+                }),
+                document({
+                    id: 'outburst', type: 'event', title: '교실의 폭발',
+                    relativePath: 'events/outburst.md',
+                    content: '# 교실의 폭발\n\n진우는 필통을 책상에 내던지며 미나에게 소리쳤다. 필통은 미나에게 던진 것이 아니며, 행동의 대상과 고함의 대상은 구분된다. 이 사건 뒤 진우는 교실을 나갔다.',
+                }),
+                document({
+                    id: 'shoes', type: 'event', title: '훼손된 신발',
+                    relativePath: 'events/shoes.md',
+                    content: '# 훼손된 신발\n\n미나는 이미 진우와 대화를 거부했고, 신발을 훼손한 범인이 진우라는 사실은 나중의 고백 전까지 몰랐다. 따라서 신발 훼손은 미나가 당시에 진우를 거부한 원인이 아니며, 범인에 관한 지식은 고백 뒤에 생겼다.',
+                }),
+            ],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual(
+            expect.arrayContaining([
+                'narrative-memory:wiki:events/outburst.md',
+                'narrative-memory:wiki:events/shoes.md',
+            ])
+        )
+        expect(result.metrics.selectedTokens).toBeLessThanOrEqual(256)
+        expect(result.metrics.auxiliaryModelCalls).toBe(0)
+    })
+
     test('counts Korean text against the token budget instead of a character heuristic', () => {
         const documents = Array.from({ length: 4 }, (_, index) => document({
             id: `required-${index}`,

@@ -11,6 +11,7 @@ const MAX_EXPANDED_DOCUMENTS_PER_HOP = 8
 const MAX_EDGES_PER_DOCUMENT = 16
 const MAX_INSPECTED_EDGES = 256
 const MAX_HOPS = 2
+const MAX_RESERVED_HISTORICAL_EVENTS = 2
 
 const QUERY_STOPWORDS = new Set([
     '그는', '그녀는', '그들은', '나는', '우리는', '이것', '그것', '저것',
@@ -95,6 +96,14 @@ function queryTerms(value: string): string[] {
     return [...new Set(normalized(value).split(/[^\p{L}\p{N}_]+/u)
         .filter((term) => term.length > 1 && !QUERY_STOPWORDS.has(term)))]
         .slice(0, 32)
+}
+
+function hasHistoricalEvidenceIntent(value: string): boolean {
+    const past = /(?:과거|예전|이전|당시|처음|초반|원래|회상|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時)/i
+        .test(value)
+    const causalOrDetail = /(?:왜|원인|이유|계기|인과|영향|분석|세부|근거|why|cause|reason|trigger|analysis|detail|evidence)/i
+        .test(value)
+    return past || causalOrDetail
 }
 
 function normalizedLinkTarget(rawLink: string): string {
@@ -359,7 +368,7 @@ export function inquireMarkdownDocuments(
         if (inspectedEdgeCount >= MAX_INSPECTED_EDGES) break
     }
 
-    const pastIntent = /(?:과거|예전|이전|당시|처음|원래|회상|기억|past|previous|before|formerly|used to|昔|以前|当時)/i
+    const pastIntent = /(?:과거|예전|이전|당시|처음|초반|원래|회상|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時)/i
         .test(input.currentInput)
     const currentIntent = /(?:현재|지금|최신|상태|current|now|latest|status|現在|今)/i
         .test(input.currentInput)
@@ -408,8 +417,6 @@ export function inquireMarkdownDocuments(
             tokens: countInquiryTokens(content),
         }
     })
-    const selected: typeof prepared = []
-    let selectedTokens = 0
     const tokenBudget = normalizeRisuBardInquiryTokenBudget(
         input.tokenBudget?.target,
         input.tokenBudget?.maximum
@@ -418,16 +425,40 @@ export function inquireMarkdownDocuments(
         .test(input.currentInput)
         ? tokenBudget.maximum
         : tokenBudget.target
-    for (const candidate of prepared) {
-        const required = requiredIds.has(candidate.document.id)
-        if (!required && selectedTokens + candidate.tokens > selectedTokenBudget) {
-            continue
-        }
-        if (required && selectedTokens + candidate.tokens > tokenBudget.maximum) {
+    const selected: typeof prepared = []
+    const selectedIds = new Set<string>()
+    let selectedTokens = 0
+    for (const candidate of prepared.filter((item) =>
+        requiredIds.has(item.document.id))) {
+        if (selectedTokens + candidate.tokens > tokenBudget.maximum) {
             throw new Error('Required wiki context exceeds token budget')
         }
         selected.push(candidate)
+        selectedIds.add(candidate.document.id)
         selectedTokens += candidate.tokens
+    }
+    const addOptionalIfFits = (candidate: (typeof prepared)[number]) => {
+        if (selectedIds.has(candidate.document.id)
+            || selectedTokens + candidate.tokens > selectedTokenBudget) {
+            return false
+        }
+        selected.push(candidate)
+        selectedIds.add(candidate.document.id)
+        selectedTokens += candidate.tokens
+        return true
+    }
+    if (hasHistoricalEvidenceIntent(input.currentInput)
+        && !chronologyIntent) {
+        for (const candidate of prepared.filter((item) =>
+            !requiredIds.has(item.document.id)
+            && item.document.type === 'event'
+        ).slice(0, MAX_RESERVED_HISTORICAL_EVENTS)) {
+            addOptionalIfFits(candidate)
+        }
+    }
+    for (const candidate of prepared) {
+        const required = requiredIds.has(candidate.document.id)
+        if (!required) addOptionalIfFits(candidate)
     }
 
     return {
