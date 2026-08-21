@@ -2,14 +2,16 @@
     import { onDestroy, onMount, tick } from 'svelte'
     import Sortable from 'sortablejs/modular/sortable.core.esm.js'
     import { v4 } from 'uuid'
-    import { Maximize2Icon, PlusIcon } from '@lucide/svelte'
+    import { Maximize2Icon, PlusIcon, SparklesIcon } from '@lucide/svelte'
     import { language } from 'src/lang'
     import SettingPage from 'src/lib/UI/GUI/SettingPage.svelte'
     import Help from 'src/lib/Others/Help.svelte'
     import TextAreaInput from 'src/lib/UI/GUI/TextAreaInput.svelte'
     import TextInput from 'src/lib/UI/GUI/TextInput.svelte'
     import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
-    import { alertConfirm, alertSelect } from 'src/ts/alert'
+    import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
+    import PersonaBuilder from '../../Others/PersonaBuilder.svelte'
+    import { alertConfirm, alertSelect, notifySuccess } from 'src/ts/alert'
     import { getCharImage } from 'src/ts/characters'
     import { tooltip } from 'src/ts/gui/tooltip'
     import {
@@ -49,6 +51,8 @@
     let popupEditorTimer: ReturnType<typeof setInterval> | null = null
     let stopPersonaGridResize: (() => void) | null = null
     let stopDescriptionResize: (() => void) | null = null
+    let personaBuilderOpen = $state(false)
+    let personaBuilderTarget = $state<RisuPersona | null>(null)
 
     const currentCharacter = $derived(DBState.db.characters[$selectedCharID])
 
@@ -152,6 +156,17 @@
         characterSelectedIndex = characterPersonas.indexOf(clone)
         editingPersona = clone
         bindCharacterPersona(clone)
+        void requestImmediateSave()
+    }
+
+    function cloneCharacterPersonaToGlobal(): void {
+        if (activeScope !== 'character' || !editingPersona) return
+        const clone = clonePersonaToStore(editingPersona, DBState.db.personas, v4)
+        activeScope = 'global'
+        const index = DBState.db.personas.indexOf(clone)
+        changeUserPersona(index, 'noSave')
+        editingPersona = clone
+        void resetSortable()
         void requestImmediateSave()
     }
 
@@ -317,6 +332,23 @@
         }, 100)
     }
 
+    function openPersonaBuilder(): void {
+        if (!editingPersona) return
+        personaBuilderTarget = editingPersona
+        personaBuilderOpen = true
+    }
+
+    async function copyPersonaBuilderDraft(draft: string): Promise<void> {
+        if (!editingPersona || editingPersona !== personaBuilderTarget) return
+        if (editingPersona.personaPrompt.trim()
+            && editingPersona.personaPrompt.trim() !== draft.trim()
+            && !await alertConfirm(language.settingsWorkspace.personaManager.builder.copyConfirm)) return
+        editingPersona.personaPrompt = draft
+        syncGlobalLegacyFields()
+        await requestImmediateSave()
+        notifySuccess(language.settingsWorkspace.personaManager.builder.copied)
+    }
+
     $effect(() => {
         if (activeScope !== 'global' || !editingPersona) return
         editingPersona.name
@@ -346,9 +378,11 @@
 <SettingPage title={language.persona} showTitle={!embedded}>
     <div data-persona-scope-tabs class="persona-scope-tabs" role="tablist" aria-label={language.persona}>
         <button role="tab" aria-selected={activeScope === 'global'} class:active={activeScope === 'global'} onclick={() => switchScope('global')}>
+            <SolarBoldIcon name="earth" size={17} />
             {language.settingsWorkspace.personaManager.globalTab}
         </button>
         <button role="tab" aria-selected={activeScope === 'character'} class:active={activeScope === 'character'} onclick={() => switchScope('character')}>
+            <SolarBoldIcon name="people-nearby" size={17} />
             {language.settingsWorkspace.personaManager.characterTab}
         </button>
     </div>
@@ -473,6 +507,14 @@
                         onpointerdown={startDescriptionResize}
                         onkeydown={resizeDescriptionByKeyboard}
                     ><span></span></button>
+                    <div class="builder-launch">
+                        <ShButton
+                            data-persona-builder-open
+                            variant="soft-primary"
+                            size="sm"
+                            onclick={openPersonaBuilder}
+                        ><SparklesIcon size={15} />{language.settingsWorkspace.personaManager.builder.launch}</ShButton>
+                    </div>
                 </section>
                 <div class="action-toolbar" aria-label={language.persona}>
                     <button
@@ -491,6 +533,14 @@
                             use:tooltip={language.settingsWorkspace.personaManager.cloneToCharacter}
                             onclick={cloneGlobalPersonaToCharacter}
                         ><SolarBoldIcon name="people-nearby" size={19} /></button>
+                    {:else}
+                        <button
+                            class="icon-button"
+                            aria-label={language.settingsWorkspace.personaManager.cloneToGlobal}
+                            title={language.settingsWorkspace.personaManager.cloneToGlobal}
+                            use:tooltip={language.settingsWorkspace.personaManager.cloneToGlobal}
+                            onclick={cloneCharacterPersonaToGlobal}
+                        ><SolarBoldIcon name="earth" size={19} /></button>
                     {/if}
                     <button
                         class="icon-button"
@@ -520,12 +570,21 @@
     {/if}
 </SettingPage>
 
+{#if personaBuilderTarget}
+    <PersonaBuilder
+        bind:open={personaBuilderOpen}
+        personaName={personaBuilderTarget.name}
+        currentDescription={personaBuilderTarget.personaPrompt}
+        onCopyDraft={copyPersonaBuilderDraft}
+    />
+{/if}
+
 <style>
-    .persona-scope-tabs { display: flex; gap: .25rem; margin-bottom: .75rem; padding: .25rem; overflow-x: auto; border: 1px solid var(--color-darkborderc); border-radius: .75rem; background: color-mix(in srgb, var(--color-darkbg) 78%, transparent); }
-    .persona-scope-tabs button { flex: 1 0 auto; padding: .58rem 1rem; border-radius: .55rem; color: var(--color-textcolor2); font-size: .86rem; font-weight: 650; }
+    .persona-scope-tabs { display: flex; gap: .25rem; min-width: 0; margin-bottom: .75rem; padding: .25rem; overflow-x: auto; border: 1px solid var(--color-darkborderc); border-radius: .75rem; background: var(--color-surface-raised); }
+    .persona-scope-tabs button { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: .4rem; min-width: 5.5rem; padding: .52rem .75rem; border-radius: .55rem; color: var(--color-textcolor2); font-size: .84rem; font-weight: 650; }
     .persona-scope-tabs button.active { color: var(--color-textcolor); background: var(--color-selected); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-borderc) 40%, transparent); }
     .persona-grid-shell { width: 100%; }
-    .persona-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: .65rem; width: 100%; overflow-y: auto; padding: 1rem; border: 1px solid var(--color-darkborderc); border-radius: .65rem; scrollbar-gutter: stable; }
+    .persona-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: .65rem; width: 100%; overflow-y: auto; padding: 1rem; border: 1px solid var(--color-darkborderc); border-radius: .65rem; background: var(--color-surface-raised); scrollbar-gutter: stable; }
     .persona-grid-resizer { width: 100%; height: .75rem; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
     .persona-grid-resizer span { width: 2.75rem; height: .2rem; border-radius: 999px; background: var(--color-darkborderc); transition: width .15s ease, background .15s ease; }
     .persona-grid-resizer:hover span, .persona-grid-resizer:focus-visible span { width: 3.5rem; background: var(--color-borderc); }
@@ -536,7 +595,7 @@
     .persona-create:hover { border-color: var(--color-borderc); color: var(--color-textcolor); background: var(--color-selected); }
     .persona-tile img, .persona-placeholder, .persona-portrait { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
     .persona-placeholder { background: color-mix(in srgb, var(--color-textcolor2) 65%, var(--color-darkbg)); }
-    .persona-editor { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 1rem 1.25rem; width: 100%; margin-top: .75rem; padding: 1rem; border: 1px solid var(--color-darkborderc); border-radius: .65rem; }
+    .persona-editor { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 1rem 1.25rem; width: 100%; margin-top: .75rem; padding: 1rem; border: 1px solid var(--color-darkborderc); border-radius: .65rem; background: var(--color-surface-raised); }
     .portrait-column { min-width: 0; }
     .portrait-wrap { position: relative; width: 8.5rem; height: 8.5rem; }
     .portrait-button, .persona-placeholder.large { width: 8.5rem; height: 8.5rem; overflow: hidden; border-radius: .6rem; }
@@ -551,11 +610,12 @@
     .description-heading { display: flex; align-items: center; justify-content: space-between; min-height: 2rem; margin-bottom: .35rem; }
     .popup-editor-button { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: .45rem; color: var(--color-textcolor2); }
     .popup-editor-button:hover { color: var(--color-textcolor); background: var(--color-selected); }
-    .description-editor { min-height: 10rem; overflow: hidden; }
+    .description-editor { min-height: 10rem; overflow: hidden; border-radius: .55rem; background: var(--color-surface-inset); }
     .description-editor :global(> div) { height: 100%; min-height: 0; }
     .description-resizer { width: 100%; height: .75rem; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
     .description-resizer span { width: 2.75rem; height: .2rem; border-radius: 999px; background: var(--color-darkborderc); transition: width .15s ease, background .15s ease; }
     .description-resizer:hover span, .description-resizer:focus-visible span { width: 3.5rem; background: var(--color-borderc); }
+    .builder-launch { display: flex; justify-content: flex-end; margin-top: .25rem; }
     .action-toolbar { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .45rem; padding-top: .85rem; border-top: 1px solid var(--color-darkborderc); }
     .icon-button { width: 2.35rem; height: 2.35rem; display: grid; place-items: center; border: 1px solid var(--color-darkborderc); border-radius: .58rem; color: var(--color-textcolor2); background: color-mix(in srgb, var(--color-darkbg) 78%, transparent); transition: color .15s ease, border-color .15s ease, background .15s ease, transform .15s ease; }
     .icon-button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--color-borderc); color: var(--color-textcolor); background: var(--color-selected); }

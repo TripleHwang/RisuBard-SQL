@@ -33,14 +33,30 @@ describe('persona scope UI connections', () => {
         expect(manager.match(/destroySortable\(\)/g)?.length).toBeGreaterThanOrEqual(3)
     })
 
-    test('offers numbered duplication and clone-to-character actions on the global tab', () => {
+    test('offers note-numbered duplication and cloning in both directions', () => {
         const manager = source('src/lib/Setting/Pages/PersonaSettings.svelte')
 
         expect(manager).toContain('clonePersonaToStore')
         expect(manager).toContain('duplicateGlobalPersona')
         expect(manager).toContain('cloneGlobalPersonaToCharacter')
+        expect(manager).toContain('cloneCharacterPersonaToGlobal')
         expect(manager).toContain('language.settingsWorkspace.personaManager.duplicate')
         expect(manager).toContain('language.settingsWorkspace.personaManager.cloneToCharacter')
+        expect(manager).toContain('language.settingsWorkspace.personaManager.cloneToGlobal')
+    })
+
+    test('renders compact icon scope tabs without folder controls', () => {
+        const manager = source('src/lib/Setting/Pages/PersonaSettings.svelte')
+        const icons = source('src/lib/UI/Icons/SolarBoldIcon.svelte')
+
+        expect(manager).not.toContain('data-persona-folder-create')
+        expect(manager).not.toContain('ensurePersonaFolders')
+        expect(manager).not.toContain('renamePersonaFolder')
+        expect(manager).not.toContain('removePersonaFolder')
+        for (const name of ['earth', 'people-nearby']) {
+            expect(manager).toContain(`name="${name}"`)
+            expect(icons).toContain(`'${name}'`)
+        }
     })
 
     test('renders a scrollable square thumbnail rail with a matching create tile', () => {
@@ -86,6 +102,20 @@ describe('persona scope UI connections', () => {
         expect(manager).toContain('localStorage.setItem')
         expect(manager).toContain('actionBar={false}')
         expect(manager).toContain('openDescriptionEditor')
+    })
+
+    test('opens the persona builder below the description and copies its draft back safely', () => {
+        const manager = source('src/lib/Setting/Pages/PersonaSettings.svelte')
+
+        expect(manager).toContain("import PersonaBuilder from '../../Others/PersonaBuilder.svelte'")
+        expect(manager).toContain('data-persona-builder-open')
+        expect(manager).toContain('personaBuilderOpen')
+        expect(manager).toContain('copyPersonaBuilderDraft')
+        expect(manager).toContain('editingPersona.personaPrompt = draft')
+        expect(manager).toContain('requestImmediateSave()')
+        expect(manager.indexOf('data-persona-description-resizer')).toBeLessThan(
+            manager.indexOf('data-persona-builder-open'),
+        )
     })
 
     test('uses Solar Bold icon buttons for persona actions and portrait mode', () => {

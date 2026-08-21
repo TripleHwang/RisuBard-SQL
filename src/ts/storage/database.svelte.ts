@@ -1098,6 +1098,13 @@ export interface RisuPersona {
     embeddedModule?:RisuModule
 }
 
+export interface PersonaBuilderPromptPreset {
+    id: string
+    kind: 'task' | 'style'
+    name: string
+    content: string
+}
+
 export interface Database{
     characterVault?: import('../characterVault').CharacterVaultState
     characters: character[],
@@ -1175,6 +1182,7 @@ export interface Database{
     themePresets:themePreset[]
     themePresetsId:number
     togglePresets?:TogglePreset[]
+    personaBuilderPromptPresets?:PersonaBuilderPromptPreset[]
     sdProvider: string
     webUiUrl:string
     sdSteps:number

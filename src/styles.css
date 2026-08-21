@@ -7,6 +7,9 @@
 
   --color-bgcolor: var(--risu-theme-bgcolor);
   --color-darkbg: var(--risu-theme-darkbg);
+  --color-surface-base: var(--risu-theme-darkbg);
+  --color-surface-raised: color-mix(in srgb, var(--risu-theme-bgcolor) 72%, var(--risu-theme-selected));
+  --color-surface-inset: color-mix(in srgb, var(--risu-theme-darkbg) 86%, var(--risu-theme-bgcolor));
   --color-borderc: var(--risu-theme-borderc);
   --color-selected: var(--risu-theme-selected);
   --color-draculared: var(--risu-theme-draculared);
