@@ -86,6 +86,7 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
         const importer = new CharXImporter()
         importer.alertInfo = true
         await importer.parse(f.data)
+        await importer.done()
         const cardData = importer.cardData
         if(!cardData){
             alertError(language.errors.noData)
@@ -107,7 +108,6 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
                 lorebook = md.lorebook
             }
         }
-        await importer.done()
         let v = await importCharacterCardSpec(card, undefined, 'normal', importer.assets, lorebook, f.returnCharacter)
         if(f.returnCharacter){
             return v as any
