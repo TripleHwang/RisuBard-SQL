@@ -34,8 +34,12 @@ continues with static character/lore context and recent messages.
 Wiki analysis and main-response history have separate recent-message windows,
 each configurable from 1 through 100 and defaulting to 12. Main-response
 history can omit earlier user turns, but always retains the latest user request.
-Inquiry always selects the current-scene page when it exists, selects matching
-canonical pages, and excludes event documents with no positive lexical match.
+Inquiry always selects the current-scene page when it exists and uses positive
+lexical matches as direct seeds for matching canonical pages. It follows
+derived `[[wikilinks]]` for up to two hops, so connected event evidence does not
+need its own direct lexical match. Past, causal, and detail-checking questions
+reserve up to two fitting event excerpts inside the same target token budget;
+chronology-list questions continue to prefer the compressed character history.
 Each canonical document also has a program-owned `context` policy: `always`
 is required input, `auto` needs a positive lexical match, and `never` is
 excluded from automatic inquiry. Required context that exceeds the fixed

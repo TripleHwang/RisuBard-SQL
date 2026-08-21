@@ -121,7 +121,7 @@ Run: `npx vitest run --config vitest.config.server.ts server/node/risubard-markd
 
 Expected: PASS, including the existing chronology test that intentionally uses only the compressed `작중 행적` section.
 
-- [ ] **Step 5: Commit the retrieval change**
+- [x] **Step 5: Commit the retrieval change**
 
 ```bash
 git add server/node/risubard-markdown-inquiry.ts server/node/risubard-markdown-inquiry.test.ts
@@ -134,7 +134,7 @@ git commit -m "fix: reserve event evidence for historical inquiry"
 - Modify: `src/ts/risubard/narrativeContext.test.ts`
 - Modify: `src/ts/risubard/narrativeContext.ts`
 
-- [ ] **Step 1: Write the failing prompt-composition test**
+- [x] **Step 1: Write the failing prompt-composition test**
 
 Add a test that requires the response prompt to explain the event/source hierarchy and prohibit the three observed inference errors:
 
@@ -156,13 +156,13 @@ it('grounds historical answers without inventing omitted relations', () => {
 })
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run: `npx vitest run src/ts/risubard/narrativeContext.test.ts -t "grounds historical answers"`
 
 Expected: FAIL because the current prompt labels all selected material only as `Relevant narrative memory`.
 
-- [ ] **Step 3: Add a compact evidence contract to source prompts**
+- [x] **Step 3: Add a compact evidence contract to source prompts**
 
 In `createNarrativeSourcesPrompt`, prepend the following section only when at least one inquiry source exists:
 
@@ -177,13 +177,13 @@ const NARRATIVE_EVIDENCE_RULES = [
 
 Keep the rules inside the existing `characterBudget` slice and before source bodies so truncation cannot remove the instruction while leaving unqualified evidence.
 
-- [ ] **Step 4: Run the narrative context suite**
+- [x] **Step 4: Run the narrative context suite**
 
 Run: `npx vitest run src/ts/risubard/narrativeContext.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the response-grounding change**
+- [x] **Step 5: Commit the response-grounding change**
 
 ```bash
 git add src/ts/risubard/narrativeContext.ts src/ts/risubard/narrativeContext.test.ts
@@ -196,7 +196,7 @@ git commit -m "fix: ground responses in detailed event evidence"
 - Modify: `src/ts/risubard/risuBardSettings.test.ts`
 - Modify: `src/ts/risubard/risuBardSettings.ts`
 
-- [ ] **Step 1: Write the failing writing-policy assertions**
+- [x] **Step 1: Write the failing writing-policy assertions**
 
 Extend `keeps character canon compact while preserving detailed event evidence`:
 
@@ -206,13 +206,13 @@ expect(policy).toContain('시간적 선후를 인과로 바꾸지 않는다')
 expect(policy).toContain('사건 당시 인물별 지식 경계를 유지한다')
 ```
 
-- [ ] **Step 2: Run the focused settings test and verify it fails**
+- [x] **Step 2: Run the focused settings test and verify it fails**
 
 Run: `npx vitest run src/ts/risubard/risuBardSettings.test.ts -t "keeps character canon compact"`
 
 Expected: FAIL because the existing concise style names the fields but does not explicitly prohibit relation completion or causal strengthening.
 
-- [ ] **Step 3: Add a mandatory fidelity rule shared by every writing style**
+- [x] **Step 3: Add a mandatory fidelity rule shared by every writing style**
 
 Add this line to `buildRisuBardEventWritingPolicy` after the selected style instruction, so standard, concise, ultra-concise, and custom styles all receive it:
 
@@ -222,13 +222,13 @@ Add this line to `buildRisuBardEventWritingPolicy` after the selected style inst
 
 Do not duplicate detailed event prose into character canon; the existing `[[사건 문서 제목]]` link remains the lossless evidence path.
 
-- [ ] **Step 4: Run the settings suite**
+- [x] **Step 4: Run the settings suite**
 
 Run: `npx vitest run src/ts/risubard/risuBardSettings.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the compression-policy change**
+- [x] **Step 5: Commit the compression-policy change**
 
 ```bash
 git add src/ts/risubard/risuBardSettings.ts src/ts/risubard/risuBardSettings.test.ts
@@ -242,7 +242,7 @@ git commit -m "fix: preserve relations in canonical compression"
 - Modify: `E:/Risuwork/JellyBard/project_wiki/markdown_narrative_wiki.md`
 - Modify: `src/ts/risubard/README.md`
 
-- [ ] **Step 1: Update the canonical inquiry contract**
+- [x] **Step 1: Update the canonical inquiry contract**
 
 Replace selection rule 6 in `project_wiki/inquiry_context_compiler.md` with:
 
@@ -250,7 +250,7 @@ Replace selection rule 6 in `project_wiki/inquiry_context_compiler.md` with:
 6. 현재 상태 질문은 지속 정본에 작은 lane affinity를 준다. 과거·회상·원인·세부 검증 질문은 연결된 사건 후보가 목표 token 예산 안에 존재하면 점수순 일반 선택 전에 사건을 최대 2개 보존한다. 사건 보존은 목표 token 예산, 문서 수, 탐색 깊이와 보조 모델 0회 상한을 늘리지 않는다. 작중 행적을 순서대로 나열하는 질문은 압축된 캐릭터 `작중 행적`을 우선해 사건 보존을 적용하지 않는다. 소설가 결과에 관련 지속 정본과 사건 후보가 모두 존재하면 한 종류가 전체 상한을 독점하지 않도록 각각 최소 한 자리를 보존한다.
 ```
 
-- [ ] **Step 2: Document evidence precedence**
+- [x] **Step 2: Document evidence precedence**
 
 Add to `project_wiki/markdown_narrative_wiki.md` after the inquiry excerpt paragraph:
 
@@ -258,11 +258,11 @@ Add to `project_wiki/markdown_narrative_wiki.md` after the inquiry excerpt parag
 과거 세부사항에서는 사건 문서가 압축 정본보다 우선하는 상세 근거다. 응답은 정본에서 생략된 행동 대상·장소를 추정하거나 시간적 선후를 인과로 강화하거나 사건 당시의 인물별 지식 경계를 넘지 않는다. 근거가 세부사항을 확정하지 않으면 임의로 완성하지 않고 불확실성을 유지한다.
 ```
 
-- [ ] **Step 3: Update the adapter note**
+- [x] **Step 3: Update the adapter note**
 
 In `src/ts/risubard/README.md`, replace the stale statement that event documents need their own positive lexical match with a description of direct seeds, two-hop links, and the bounded historical-event reservation.
 
-- [ ] **Step 4: Run targeted verification**
+- [x] **Step 4: Run targeted verification**
 
 Run:
 
@@ -274,7 +274,7 @@ git diff --check
 
 Expected: all tests PASS and `git diff --check` exits 0. The regression must report no auxiliary model calls and no selected-token increase beyond the configured 256-token target.
 
-- [ ] **Step 5: Commit public documentation**
+- [x] **Step 5: Commit public documentation**
 
 ```bash
 git add src/ts/risubard/README.md
