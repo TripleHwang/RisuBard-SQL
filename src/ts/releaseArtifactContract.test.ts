@@ -29,4 +29,19 @@ describe('release artifact contract', () => {
         expect(workflow).toContain('name: Smoke test portable server')
         expect(workflow).toContain('node server/node/server.cjs')
     })
+
+    it('publishes only RisuBard artifacts and container images', () => {
+        const releaseWorkflow = readFileSync(
+            resolve('.github/workflows/release.yml'),
+            'utf8',
+        )
+        const dockerWorkflow = readFileSync(
+            resolve('.github/workflows/docker-build.yml'),
+            'utf8',
+        )
+
+        expect(releaseWorkflow).not.toContain('RisuAI-NodeOnly')
+        expect(dockerWorkflow).not.toContain('mrbart3885/risuai-nodeonly')
+        expect(dockerWorkflow).not.toContain('GHCR_LEGACY_PAT')
+    })
 })
