@@ -347,6 +347,22 @@ describe('actual narrative inquiry prompt', () => {
         expect(prompt).not.toContain('Memory 16')
     })
 
+    it('grounds historical answers without inventing omitted relations', () => {
+        const prompt = createNarrativeSourcesPrompt([{
+            id: 'narrative-memory:wiki:events/outburst.md',
+            kind: 'memory',
+            role: 'system',
+            content: '진우는 필통을 책상에 내던지며 미나에게 소리쳤다.',
+            tokens: 24,
+            priority: 120,
+        }], '')!
+
+        expect(prompt).toContain('event documents are the detailed evidence')
+        expect(prompt).toContain('Do not invent an omitted action target or location')
+        expect(prompt).toContain('Do not turn temporal order into causation')
+        expect(prompt).toContain('character knowledge boundary')
+    })
+
     it('keeps a source identity when its content is truncated by the prompt budget', () => {
         const source = {
             id: 'narrative-memory:wiki:places/bridge.md',

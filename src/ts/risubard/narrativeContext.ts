@@ -50,6 +50,13 @@ export interface NarrativeInquiryResponse {
     }
 }
 
+const NARRATIVE_EVIDENCE_RULES = [
+    'Narrative evidence rules:',
+    '- For past details, event documents are the detailed evidence; canonical summaries are compressed navigation and current-state context.',
+    '- Do not invent an omitted action target or location. Do not turn temporal order into causation or cross a character knowledge boundary.',
+    '- If sources do not establish a detail, preserve uncertainty instead of completing it.',
+].join('\n')
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -281,12 +288,14 @@ export function createNarrativeSourcesPrompt(
     baseline = '',
     characterBudget = 12_000
 ): string | null {
+    const selectedSources = sources.slice(0, 16)
     const sections = [
+        selectedSources.length > 0 ? NARRATIVE_EVIDENCE_RULES : '',
         baseline.trim().length > 0
             ? `Current narrative baseline:\n${baseline.trim()}`
             : '',
-        sources.slice(0, 16).length > 0
-            ? `Relevant narrative memory:\n${sources.slice(0, 16)
+        selectedSources.length > 0
+            ? `Relevant narrative memory:\n${selectedSources
                 .map((source) =>
                     `- [source ${JSON.stringify(source.id)}] ${source.content}`
                 )
