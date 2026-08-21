@@ -1,4 +1,5 @@
 <script lang="ts">
+    import markdownit from 'markdown-it'
     import {
         FileIcon,
         FileLock2Icon,
@@ -14,6 +15,7 @@
         Minimize2,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
+    import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
     import { v4 } from 'uuid'
     import { forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte'
     import { DBState } from 'src/ts/stores.svelte'
@@ -43,6 +45,7 @@
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
         onFocusModeChange?: (focused: boolean) => void
+        onOpenFindReplace?: () => void
     }
 
     let {
@@ -54,6 +57,7 @@
         onChanged,
         onSelected,
         onFocusModeChange,
+        onOpenFindReplace,
     }: Props = $props()
     let creating = $state(false)
     let type = $state<CanonicalMarkdownWikiDocumentType>('character')
@@ -74,9 +78,17 @@
     let treeExpanded = $state(true)
     let editorExpanded = $state(true)
     let editorFocus = $state(false)
+    let markdownPreview = $state(false)
     let treeHeight = $state(normalizeMemoryWikiTreeHeight(undefined))
     let restoredTreeExpanded = true
     let restoredEditorExpanded = true
+
+    const markdownRenderer = markdownit({
+        html: false,
+        breaks: false,
+        linkify: false,
+        typographer: true,
+    })
 
     let tree = $derived(buildWikiFileTree(documents))
     let selected = $derived(
@@ -610,6 +622,26 @@
                         <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
                     </ShButton>
                 {/if}
+                <ShButton
+                    size="sm"
+                    variant="ghost"
+                    aria-label="모두 바꾸기"
+                    title="모두 바꾸기"
+                    data-wiki-open-find-replace
+                    onclick={() => onOpenFindReplace?.()}
+                >
+                    <SolarBoldIcon name="magnifier" size={14} />
+                    <span data-wiki-action-label>모두 바꾸기</span>
+                </ShButton>
+                <label class="markdown-preview-toggle" title="마크다운 미리보기">
+                    <input
+                        type="checkbox"
+                        bind:checked={markdownPreview}
+                        aria-label="마크다운 미리보기"
+                        data-wiki-markdown-toggle
+                    />
+                    <span>MD</span>
+                </label>
             </div>
         </header>
         {#if selected?.status === 'retracted' || readOnly || dirty}
@@ -619,14 +651,20 @@
             {:else if dirty}<span class="dirty-badge">저장하지 않은 변경</span>{/if}
             </div>
         {/if}
-        <textarea
-            class="markdown-editor"
-            aria-label="Markdown"
-            bind:value={markdown}
-            readonly={readOnly}
-            maxlength="12000"
-            spellcheck="false"
-        ></textarea>
+        {#if markdownPreview}
+            <article class="markdown-preview" data-wiki-markdown-preview>
+                {@html markdownRenderer.render(markdown)}
+            </article>
+        {:else}
+            <textarea
+                class="markdown-editor"
+                aria-label="Markdown"
+                bind:value={markdown}
+                readonly={readOnly}
+                maxlength="12000"
+                spellcheck="false"
+            ></textarea>
+        {/if}
         <div class="editor-status" aria-live="polite">
             {#if error}<span class="error">{error}</span>
             {:else if notice}<span class="success">{notice}</span>
@@ -686,13 +724,34 @@
     .editor-title-row select, .editor-title-row input { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
     .title-field { flex: 1 1 12rem; }
     .editor-actions { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: .25rem; overflow-x: auto; padding: .45rem .75rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
+    .markdown-preview-toggle { display: inline-flex; flex: 0 0 auto; min-height: 2rem; align-items: center; gap: .32rem; padding: 0 .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .34rem; color: var(--risu-theme-textcolor2); font: 700 .67rem/1 ui-monospace, monospace; cursor: pointer; user-select: none; }
+    .markdown-preview-toggle:hover { border-color: color-mix(in srgb, var(--risu-theme-primary) 55%, var(--risu-theme-darkborderc)); color: var(--risu-theme-textcolor); }
+    .markdown-preview-toggle:has(input:checked) { border-color: color-mix(in srgb, var(--risu-theme-primary) 65%, var(--risu-theme-darkborderc)); color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 12%, transparent); }
+    .markdown-preview-toggle input { width: .82rem; height: .82rem; margin: 0; accent-color: var(--risu-theme-primary); }
     .document-meta { display: flex; align-items: center; gap: .6rem; padding: .45rem .75rem; color: var(--risu-theme-textcolor2); font-size: .68rem; }
     .readonly-badge, .dirty-badge { padding: .16rem .38rem; border-radius: 999px; }
     .readonly-badge { background: color-mix(in srgb, var(--risu-theme-textcolor2) 14%, transparent); }
     .dirty-badge { color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 14%, transparent); }
-    .markdown-editor { flex: 1; min-height: 20rem; resize: none; padding: .9rem 1rem; border: 0; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); outline: 0; color: var(--risu-theme-textcolor); background: transparent; font: .78rem/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; tab-size: 4; }
+    .markdown-editor { flex: 1; min-height: 20rem; overflow-y: scroll; resize: none; padding: .9rem 1rem; border: 0; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); outline: 0; color: var(--risu-theme-textcolor); background: transparent; font: .78rem/1.7 ui-monospace, SFMono-Regular, Consolas, monospace; scrollbar-color: color-mix(in srgb, var(--risu-theme-textcolor2) 42%, transparent) transparent; scrollbar-gutter: stable; scrollbar-width: thin; tab-size: 4; }
+    .markdown-editor::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--risu-theme-textcolor2) 42%, transparent); }
     .markdown-editor:focus { box-shadow: inset 3px 0 color-mix(in srgb, var(--risu-theme-primary) 60%, transparent); }
     .markdown-editor[readonly] { opacity: .86; }
+    .markdown-preview { flex: 1; min-height: 20rem; margin: 0; overflow: auto; padding: 1rem 1.15rem 2rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); color: var(--risu-theme-textcolor); font-size: .82rem; line-height: 1.7; }
+    .markdown-preview :global(h1), .markdown-preview :global(h2), .markdown-preview :global(h3), .markdown-preview :global(h4) { margin: 1.2em 0 .5em; color: var(--risu-theme-textcolor); line-height: 1.3; }
+    .markdown-preview :global(h1:first-child), .markdown-preview :global(h2:first-child), .markdown-preview :global(h3:first-child) { margin-top: 0; }
+    .markdown-preview :global(h1) { font-size: 1.35rem; }
+    .markdown-preview :global(h2) { font-size: 1.15rem; }
+    .markdown-preview :global(h3) { font-size: 1rem; }
+    .markdown-preview :global(p) { margin: .55rem 0; }
+    .markdown-preview :global(ul), .markdown-preview :global(ol) { margin: .55rem 0; padding-left: 1.45rem; }
+    .markdown-preview :global(table) { width: 100%; margin: .75rem 0; border-collapse: collapse; font-size: .78rem; }
+    .markdown-preview :global(th), .markdown-preview :global(td) { padding: .42rem .55rem; border: 1px solid var(--risu-theme-darkborderc); text-align: left; }
+    .markdown-preview :global(th) { background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); font-weight: 750; }
+    .markdown-preview :global(blockquote) { margin: .75rem 0; padding: .15rem .8rem; border-left: 3px solid var(--risu-theme-primary); color: var(--risu-theme-textcolor2); }
+    .markdown-preview :global(code) { padding: .08rem .28rem; border-radius: .25rem; background: color-mix(in srgb, var(--risu-theme-primary) 14%, transparent); font: .76rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .markdown-preview :global(pre) { overflow-x: auto; padding: .75rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .4rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, black); }
+    .markdown-preview :global(pre code) { padding: 0; background: transparent; }
+    .markdown-preview :global(a) { color: var(--risu-theme-primary); text-decoration: underline; text-underline-offset: .15em; }
     .editor-status { min-height: 1.8rem; padding: .35rem .75rem; color: var(--risu-theme-textcolor2); font-size: .66rem; }
     .error { color: var(--risu-theme-draculared); }
     .success { color: var(--risu-theme-success); }

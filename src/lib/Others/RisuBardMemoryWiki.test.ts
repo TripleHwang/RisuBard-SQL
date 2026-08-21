@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const mocks = vi.hoisted(() => ({
     loadNarrativeMemoryWiki: vi.fn(),
@@ -25,6 +27,7 @@ const mocks = vi.hoisted(() => ({
             chats: Array<{
                 id: string
                 isStreaming?: boolean
+                risuBardSettings?: Record<string, unknown>
                 message: Array<{
                     role: 'user' | 'char'
                     data: string
@@ -120,6 +123,41 @@ afterEach(async () => {
 })
 
 describe('RisuBardMemoryWiki', () => {
+    test('renders above plugin FABs and uses the BARDWIKI title', () => {
+        const dockSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+        ), 'utf8')
+        const fabSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/PluginFloatingActionButtons.svelte'
+        ), 'utf8')
+        const chatSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/ChatScreens/DefaultChatScreen.svelte'
+        ), 'utf8')
+        const korean = readFileSync(resolve(
+            process.cwd(), 'src/lang/ko.ts'
+        ), 'utf8')
+
+        const dockLayer = Number(dockSource.match(
+            /\.memory-wiki-dock\s*\{[\s\S]*?z-index:\s*(\d+)/
+        )?.[1])
+        const fabLayer = Number(fabSource.match(/\bz-(\d+)\b/)?.[1])
+
+        expect(dockLayer).toBeGreaterThan(fabLayer)
+        const chatPaneStart = chatSource.indexOf(
+            '<main class="relative z-0 h-full min-w-0 flex-1"'
+        )
+        const chatPaneEnd = chatSource.indexOf('</main>', chatPaneStart)
+        const pluginFabs = chatSource.indexOf(
+            '<PluginFloatingActionButtons', chatPaneStart
+        )
+        expect(chatPaneStart).toBeGreaterThanOrEqual(0)
+        expect(pluginFabs).toBeGreaterThan(chatPaneStart)
+        expect(pluginFabs).toBeLessThan(chatPaneEnd)
+        expect(korean).toContain(
+            'risuBardMemoryWiki: "BARDWIKI - 리스바드 메모리"'
+        )
+    })
+
     test('opens detailed Memory Wiki help from the title row', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown',
@@ -231,18 +269,28 @@ describe('RisuBardMemoryWiki', () => {
             props: { open: true, characterId: 'character', chatId: 'chat' },
         })
 
-        await vi.waitFor(() => {
-            const toolbarButton = document.querySelector(
-                '.dock-header [data-memory-view="replace"]'
-            )
-            expect(toolbarButton).not.toBeNull()
-            expect(toolbarButton?.querySelector('svg')).not.toBeNull()
-        })
-        document.querySelector<HTMLButtonElement>(
-            '[data-memory-view="replace"]'
-        )?.click()
         await vi.waitFor(() => expect(document.querySelector(
-            '[data-find-replace]'
+            '[data-wiki-open-find-replace]'
+        )).not.toBeNull())
+        const openFindReplace = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-open-find-replace]'
+        )!
+        openFindReplace.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-find-replace-dialog]'
+        )).not.toBeNull())
+        expect(document.querySelector(
+            '[data-find-replace-dialog] [data-solar-icon="magnifier"]'
+        )).toBeNull()
+        document.querySelector<HTMLElement>('[data-find-replace-dialog]')?.click()
+        expect(document.querySelector('[data-find-replace-dialog]')).not.toBeNull()
+        document.querySelector<HTMLElement>('[data-find-replace-overlay]')?.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-find-replace-dialog]'
+        )).toBeNull())
+        openFindReplace.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-find-replace-dialog]'
         )).not.toBeNull())
         const find = document.querySelector<HTMLInputElement>(
             '[data-find-replace-find]'
@@ -433,12 +481,13 @@ describe('RisuBardMemoryWiki', () => {
         })
     })
 
-    test('keeps chat history policy out of the wiki settings menu', async () => {
+    test('exposes the main RisuBard options as current-chat settings', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown',
             wikiPath: 'C:\\wiki',
             documents: [],
         })
+        mocks.db.characters = [{ chaId: 'character', chats: [{ id: 'chat', message: [] }] }]
         const target = document.createElement('div')
         document.body.appendChild(target)
         mounted = mount(RisuBardMemoryWiki, {
@@ -449,12 +498,21 @@ describe('RisuBardMemoryWiki', () => {
         await vi.waitFor(() => {
             expect(document.body.querySelector('[data-memory-settings]')).not.toBeNull()
         })
-        expect(document.body.querySelector('[data-memory-recent-message-count]')).toBeNull()
-        expect(document.body.querySelector('[data-response-recent-message-count]')).toBeNull()
-        expect(document.body.querySelector('[data-response-include-user-messages]')).toBeNull()
+        expect(document.body.querySelector('[data-chat-risubard-settings]')).not.toBeNull()
+        expect(document.body.textContent).toContain('분석 최근 메시지')
+        expect(document.body.textContent).toContain('응답 최근 메시지')
+        expect(document.body.textContent).toContain('정본 문체')
+        const settingsSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardCurrentChatSettings.svelte'
+        ), 'utf8')
+        expect(settingsSource.match(/font-size:\s*calc\([^;]+\+\s*4px\)/g))
+            .toHaveLength(4)
     })
 
-    test('uses one compact top navigation and moves document count into the sidebar', async () => {
+    test('uses a separate icon toolbar below the title and moves document count into the sidebar', async () => {
+        const source = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+        ), 'utf8')
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown',
             wikiPath: 'C:\\Users\\reader\\RisuBard\\wiki',
@@ -480,6 +538,8 @@ describe('RisuBardMemoryWiki', () => {
         await vi.waitFor(() => {
             const views = document.body.querySelector('.dock-views')
             expect(views).not.toBeNull()
+            expect(views?.parentElement?.classList.contains('dock-header')).toBe(true)
+            expect(views?.previousElementSibling?.classList.contains('dock-titlebar')).toBe(true)
             expect(views?.querySelector('[data-risubard-force-wiki-update]'))
                 .not.toBeNull()
             expect(views?.querySelector('[data-memory-settings]')).not.toBeNull()
@@ -496,10 +556,29 @@ describe('RisuBardMemoryWiki', () => {
         const forceUpdate = document.body.querySelector(
             '[data-risubard-force-wiki-update]'
         )!
+        const actions = document.body.querySelector('.dock-view-actions')!
         const workspace = document.body.querySelector('[data-memory-view="workspace"]')!
+        const story = document.body.querySelector('[data-memory-view="story"]')!
         const log = document.body.querySelector('[data-memory-view="log"]')!
         const settings = document.body.querySelector('[data-memory-settings]')!
+        expect(forceUpdate.classList.contains('force-update-button')).toBe(true)
+        expect(forceUpdate.querySelector('.force-update-idle')).not.toBeNull()
+        expect(forceUpdate.querySelector('.force-update-hover')).not.toBeNull()
+        expect(actions.contains(workspace)).toBe(true)
+        expect(workspace.querySelector('[data-solar-icon="notebook"]')).not.toBeNull()
+        expect(story.querySelector('[data-memory-icon="scroll"]')).not.toBeNull()
+        expect(actions.querySelector('[data-memory-view="replace"]')).toBeNull()
+        expect(settings.querySelector('[data-solar-icon="settings"]')).not.toBeNull()
+        expect(source).toMatch(/\.force-update-button\s*\{[^}]*width:\s*52px[^}]*height:\s*52px/s)
+        expect(source).toMatch(/\.dock-views\s*\{[^}]*height:\s*52px[^}]*padding:\s*0\s+\.48rem/s)
+        expect(source).toMatch(/\.dock-identity strong\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
+        expect(source).toMatch(/\.settings-popover\s*\{[^}]*background:\s*var\(--risu-theme-bgcolor\)/s)
+        expect(source).toMatch(/\.dock-view-actions\s*\{[^}]*margin-left:\s*auto/s)
         expect(forceUpdate.compareDocumentPosition(workspace)
+            & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+        expect(workspace.compareDocumentPosition(story)
+            & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+        expect(story.compareDocumentPosition(log)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
         expect(log.compareDocumentPosition(settings)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
@@ -739,10 +818,11 @@ describe('RisuBardMemoryWiki', () => {
         })
     })
 
-    test('stores whether RisuBard uses the helper or main model', async () => {
+    test('stores the selected RisuBard model on the current chat', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown', wikiPath: 'C:\\wiki', documents: [],
         })
+        mocks.db.characters = [{ chaId: 'character', chats: [{ id: 'chat', message: [] }] }]
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardMemoryWiki, {
             target,
@@ -759,7 +839,9 @@ describe('RisuBardMemoryWiki', () => {
         select.value = 'model'
         select.dispatchEvent(new Event('change', { bubbles: true }))
         await vi.waitFor(() => {
-            expect(mocks.db.risuBardModelMode).toBe('model')
+            expect(mocks.db.characters?.[0].chats[0].risuBardSettings)
+                .toEqual(expect.objectContaining({ risuBardModelMode: 'model' }))
+            expect(mocks.db.risuBardModelMode).toBeUndefined()
         })
     })
 

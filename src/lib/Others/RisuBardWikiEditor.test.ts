@@ -87,11 +87,11 @@ describe('RisuBardWikiEditor', () => {
         expect(toolbar).not.toBeNull()
         expect([...toolbar!.querySelectorAll('button')].map((button) =>
             button.textContent?.trim()
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
-        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(4)
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
+        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(5)
         expect([...toolbar!.querySelectorAll('button')].map((button) =>
             button.getAttribute('aria-label')
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
 
         const source = readFileSync(
             'src/lib/Others/RisuBardWikiEditor.svelte',
@@ -102,6 +102,92 @@ describe('RisuBardWikiEditor', () => {
         expect(source).toMatch(/\.editor-actions\s*\{[^}]*flex-wrap:\s*nowrap/s)
         expect(document.body.textContent).not.toContain('characters/라비안.md')
         expect(document.body.textContent).not.toContain('context: auto')
+    })
+
+    it('keeps a visible vertical scrollbar in the Markdown editor', () => {
+        const source = readFileSync(
+            'src/lib/Others/RisuBardWikiEditor.svelte',
+            'utf8'
+        )
+
+        expect(source).toMatch(
+            /\.markdown-editor\s*\{[^}]*overflow-y:\s*scroll[^}]*scrollbar-gutter:\s*stable[^}]*scrollbar-width:\s*thin/s
+        )
+        expect(source).toMatch(
+            /\.markdown-editor::\-webkit-scrollbar-thumb\s*\{[^}]*background-color:\s*color-mix\(/s
+        )
+    })
+
+    it('opens find and replace from the editor toolbar with the bold magnifier', async () => {
+        const onOpenFindReplace = vi.fn()
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: {
+                characterId: 'character', chatId: 'chat', documents,
+                onOpenFindReplace,
+            },
+        })
+        await tick()
+
+        const button = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-open-find-replace]'
+        )!
+        expect(button).not.toBeNull()
+        expect(button.querySelector('[data-solar-icon="magnifier"]')).not.toBeNull()
+        button.click()
+        expect(onOpenFindReplace).toHaveBeenCalledOnce()
+    })
+
+    it('toggles a live, safe Markdown preview from the editor toolbar', async () => {
+        const previewDocuments = [{
+            ...documents[0],
+            content: [
+                '## 라비안',
+                '',
+                '**기사**',
+                '',
+                '| 항목 | 현재값 |',
+                '|---|---:|',
+                '| 자금 | 10 |',
+                '',
+                '<script>window.wikiPreviewExecuted = true</script>',
+            ].join('\n'),
+        }]
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: {
+                characterId: 'character', chatId: 'chat',
+                documents: previewDocuments,
+            },
+        })
+        await tick()
+
+        const toggle = document.querySelector<HTMLInputElement>(
+            '[data-wiki-markdown-toggle]'
+        )!
+        expect(toggle).not.toBeNull()
+        expect(toggle.checked).toBe(false)
+        expect(document.querySelector('[data-wiki-markdown-preview]')).toBeNull()
+
+        toggle.click()
+        await tick()
+
+        const preview = document.querySelector<HTMLElement>(
+            '[data-wiki-markdown-preview]'
+        )!
+        expect(preview.querySelector('h2')?.textContent).toBe('라비안')
+        expect(preview.querySelector('strong')?.textContent).toBe('기사')
+        expect(preview.querySelector('table')).not.toBeNull()
+        expect(preview.querySelector('script')).toBeNull()
+        expect(preview.textContent).toContain('<script>')
+        expect(document.querySelector('[aria-label="Markdown"]')).toBeNull()
+
+        toggle.click()
+        await tick()
+        expect(document.querySelector('[data-wiki-markdown-preview]')).toBeNull()
+        expect(document.querySelector<HTMLTextAreaElement>(
+            '[aria-label="Markdown"]'
+        )?.value).toBe(previewDocuments[0].content)
     })
 
     it('exposes collapsible portrait panels, touch resizing, and editor focus', async () => {
@@ -258,7 +344,7 @@ describe('RisuBardWikiEditor', () => {
         const toolbar = document.querySelector('[data-wiki-action-toolbar]')!
         expect([...toolbar.querySelectorAll('button')].map((button) =>
             button.textContent?.trim()
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
         const deleteButton = [...toolbar.querySelectorAll('button')]
             .find((button) => button.textContent?.trim() === '삭제')!
         deleteButton.click()
