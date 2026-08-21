@@ -1,170 +1,170 @@
 <p align="center">
-  <strong>English</strong> · <a href="README.ko.md">한국어</a>
+  <a href="README.en.md">English</a> · <strong>한국어</strong>
 </p>
 
 <h1 align="center">
-  <img src="assets/readme/risubard-hero.png" alt="RisuBard — Next-Gen LLM Storytelling Frontend" width="900">
+  <img src="assets/readme/risubard-hero.png" alt="RisuBard — 차세대 LLM 스토리텔링 프론트엔드" width="900">
 </h1>
 
 <p align="center">
-  A self-hosted AI roleplay frontend with bounded-context narrative memory.
+  고정 예산 서사 메모리를 사용하는 셀프 호스팅 AI 캐릭터 채팅 프론트엔드
 </p>
 
 <p align="center">
   <a href="https://github.com/rpaddict/RisuBard/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/rpaddict/RisuBard?display_name=tag&sort=semver"></a>
-  <a href="LICENSE"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
+  <a href="LICENSE"><img alt="라이선스: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/rpaddict/RisuBard/releases">Download</a></strong> ·
-  <a href="docs/en/install.md">Installation</a> ·
-  <a href="docs/en/migration.md">Migrate from RisuAI</a> ·
-  <a href="https://github.com/rpaddict/RisuBard/issues">Issues</a>
+  <strong><a href="https://github.com/rpaddict/RisuBard/releases">다운로드</a></strong> ·
+  <a href="docs/ko/install.md">설치</a> ·
+  <a href="docs/ko/migration.md">RisuAI에서 이전</a> ·
+  <a href="https://github.com/rpaddict/RisuBard/issues">이슈</a>
 </p>
 
-RisuBard is built for character conversations that outgrow a model's context window. It preserves the original chat as evidence, maintains reusable narrative state in Obsidian-compatible Markdown, and compiles only the relevant memory into each bounded model request.
+RisuBard는 모델의 컨텍스트 창보다 오래 이어지는 캐릭터 채팅을 위해 만들어졌습니다. 원본 대화는 근거로 보존하고, 장기 서사 상태는 Obsidian 호환 Markdown에 기록하며, 매 요청에는 관련된 기억만 명시적인 예산 안에서 선별해 넣습니다.
 
-You keep the existing RisuAI ecosystem—characters, CHARX cards, lorebooks, modules, prompt presets, provider adapters, and plugin integration paths—while gaining a file-native storage architecture and a long-term memory system designed for persistent stories.
+기존 RisuAI 생태계의 캐릭터, CHARX 카드, 로어북, 모듈, 프롬프트 프리셋, 모델 제공자와 플러그인 연결 경로를 유지하면서 파일 정본 저장 구조와 지속적인 이야기를 위한 장기 메모리를 제공합니다.
 
-> RisuBard does not include or host an AI model. Connect a local model or a remote provider that you control.
+> RisuBard는 AI 모델을 포함하거나 호스팅하지 않습니다. 사용자가 관리하는 로컬 모델 또는 원격 모델 제공자를 연결해 사용합니다.
 
-## Contents
+## 목차
 
-- [Why RisuBard?](#why-risubard)
-- [How it works](#how-it-works)
-- [Features](#features)
-- [Quick start](#quick-start)
-- [Compatibility and migration](#compatibility-and-migration)
-- [Data and privacy](#data-and-privacy)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [Lineage and license](#lineage-and-license)
+- [왜 RisuBard인가?](#왜-risubard인가)
+- [작동 방식](#작동-방식)
+- [주요 기능](#주요-기능)
+- [빠른 시작](#빠른-시작)
+- [호환성과 데이터 이전](#호환성과-데이터-이전)
+- [데이터와 개인정보](#데이터와-개인정보)
+- [문서](#문서)
+- [기여](#기여)
+- [계보와 라이선스](#계보와-라이선스)
 
-## Why RisuBard?
-
-<p align="center">
-  <img src="assets/readme/why-risubard-01-en.png" alt="An AI hits memory and cost limits after rereading a growing story every turn" width="900">
-</p>
+## 왜 RisuBard인가?
 
 <p align="center">
-  <img src="assets/readme/why-risubard-02-en.png" alt="The AI compares the workload to memorizing four books again for every new page" width="900">
+  <img src="assets/readme/why-risubard-01.png" alt="길어진 전체 스토리를 매번 읽느라 비용과 기억 한계에 부딪힌 AI" width="900">
 </p>
 
 <p align="center">
-  <img src="assets/readme/why-risubard-03-en.png" alt="RisuBard explains keeping notes on major facts and looking up details only when needed" width="900">
+  <img src="assets/readme/why-risubard-02.png" alt="한 페이지를 쓸 때마다 책 네 권을 다시 외우는 어려움을 설명하는 AI" width="900">
 </p>
 
 <p align="center">
-  <img src="assets/readme/why-risubard-04-en.png" alt="RisuBard records and updates story events and characters in a wiki" width="900">
+  <img src="assets/readme/why-risubard-03.png" alt="핵심 정보는 메모하고 필요한 세부 정보만 찾아보자고 설명하는 리스바드" width="900">
 </p>
 
-Long-running character chats eventually collide with a simple constraint: a model request cannot keep growing forever. Re-sending the entire conversation becomes expensive and ultimately exceeds the model's context window. Replacing the past with a single rolling summary can fit the limit, but important state, causality, and character knowledge may disappear.
+<p align="center">
+  <img src="assets/readme/why-risubard-04.png" alt="사건과 인물을 위키에 기록하고 갱신하는 RisuBard 작업 방식" width="900">
+</p>
 
-RisuBard separates three responsibilities:
+캐릭터 채팅이 길어지면 피할 수 없는 제약에 도달합니다. 모델 요청은 영원히 커질 수 없습니다. 전체 대화를 매번 다시 보내는 방식은 갈수록 비싸지고 결국 모델의 컨텍스트 창을 넘습니다. 과거를 하나의 누적 요약으로 대체하면 크기는 줄지만 중요한 상태, 인과관계와 캐릭터별 지식이 사라질 수 있습니다.
 
-- **Original chat** is preserved as evidence and history.
-- **BardWiki** stores durable narrative state as readable Markdown.
-- **Model context** is compiled for each request under explicit token limits.
+RisuBard는 세 가지 책임을 분리합니다.
 
-The result is a conversation whose stored history can continue growing without making the prompt budget grow with it.
+- **원본 채팅**은 근거와 기록으로 보존합니다.
+- **BardWiki**는 지속되는 서사 상태를 읽을 수 있는 Markdown으로 저장합니다.
+- **모델 컨텍스트**는 매 요청마다 명시적인 토큰 상한 안에서 컴파일합니다.
 
-## How it works
+따라서 저장된 대화가 계속 늘어나더라도 프롬프트 예산이 함께 증가하지 않습니다.
+
+## 작동 방식
 
 ```text
-Confirmed conversation
-  ├─ original messages remain available as evidence
-  └─ durable events and state update the Markdown BardWiki
+확정된 대화
+  ├─ 원본 메시지는 근거로 보존
+  └─ 지속되는 사건과 상태는 Markdown BardWiki에 반영
 
-Next model request
-  ├─ character and world foundation
-  ├─ current scene
-  ├─ relevant BardWiki documents
-  ├─ a bounded window of recent messages
-  └─ the current user input
+다음 모델 요청
+  ├─ 캐릭터와 세계관 기반
+  ├─ 현재 장면
+  ├─ 관련 BardWiki 문서
+  ├─ 제한된 최근 원문 메시지
+  └─ 현재 사용자 입력
              │
              ▼
-      fixed-budget compiler
+       고정 예산 컴파일러
              │
              ▼
-      your configured model
+      사용자가 설정한 모델
 ```
 
-Required context is never silently discarded. Optional memories are selected by relevance and priority, and the budget does not automatically expand with chat length or wiki size. A request manifest records what was included, excluded, or truncated without storing API keys or hidden reasoning.
+필수 컨텍스트는 조용히 버리지 않습니다. 선택 자료는 관련도와 우선순위에 따라 고르고, 채팅 길이나 위키 크기가 커져도 예산은 자동으로 늘어나지 않습니다. 요청 manifest는 API 키나 숨겨진 사고 과정을 기록하지 않으면서 무엇이 포함·제외·축소되었는지 보여줍니다.
 
-## Features
+## 주요 기능
 
-- **Wiki-driven long-story memory:** RisuBard minimizes replay of old chat history, records durable events and character state in BardWiki, and retrieves relevant notes for each request—keeping context bounded as stories grow.
-- **Visual-novel-style save/load:** Create named checkpoints for each chat, preview the recent conversation, and restore an earlier point without treating the whole chat as one irreversible timeline.
-- **Plain-file data ownership:** Characters, chats, settings, indexes, and narrative memory live as ordinary files instead of being trapped in one opaque database. Atomic writes, journals, revisions, and trash-based deletion limit the blast radius of corruption and make recovery practical.
-- **Per-chat personas with an AI builder:** Assign a different persona to each chat and create or refine personas with AI assistance.
-- **Character Vault:** Browse, search, group, move, duplicate, import, export, and clean up large character collections from one workspace.
-- **Lorebook workspace:** Search and organize entries, edit keys and activation rules, and manage folders in a full-featured editor.
-- **Rebuilt interface:** Chat, settings, memory, character, persona, save, and lorebook workflows have been redesigned for clearer everyday use.
+- **위키 기반 장기 서사 메모리:** 오래된 챗 기록의 반복 전송을 최소화하고, 지속되는 사건과 인물 상태를 BardWiki에 기록한 뒤 요청마다 관련 메모를 찾아 조립합니다. 이야기가 길어져도 모델 컨텍스트는 제한된 크기로 유지됩니다.
+- **비주얼 노벨식 세이브/로드:** 각 챗에 이름 있는 체크포인트를 만들고 최근 대화를 미리 본 뒤 원하는 시점으로 복원할 수 있습니다. 하나의 되돌릴 수 없는 타임라인에 대화를 가둘 필요가 없습니다.
+- **일반 파일로 소유하는 데이터:** 캐릭터, 채팅, 설정, 인덱스와 서사 메모리를 하나의 불투명한 데이터베이스가 아닌 일반 파일로 저장합니다. 원자 저장, journal, revision과 휴지통 삭제로 손상 범위를 제한하고 복구하기 쉽게 만듭니다.
+- **챗별 페르소나와 AI 빌더:** 챗마다 서로 다른 페르소나를 지정하고 AI의 도움으로 페르소나를 만들거나 다듬을 수 있습니다.
+- **캐릭터 저장소:** 많은 캐릭터를 한 화면에서 탐색하고 검색하며 폴더별로 분류하고, 이동·복제·가져오기·내보내기·정리할 수 있습니다.
+- **로어북 작업공간:** 항목 검색과 폴더 정리, 키와 활성화 규칙 편집을 하나의 강력한 편집기에서 처리합니다.
+- **새롭게 설계한 인터페이스:** 챗, 설정, 메모리, 캐릭터, 페르소나, 세이브와 로어북 작업 흐름을 일상적으로 사용하기 쉽게 다시 설계했습니다.
 
-| BardWiki memory workspace | Chat save/load |
+| BardWiki 메모리 작업공간 | 채팅 세이브/로드 |
 | --- | --- |
-| ![BardWiki beside an active character chat](assets/readme/bardwiki-workspace.png) | ![Named save points with conversation previews](assets/readme/chat-save-slots.png) |
-| **Character Vault** | **Lorebook editor** |
-| ![Searchable character collection organized into folders](assets/readme/character-vault.png) | ![Lorebook workspace with folders, keys, and activation settings](assets/readme/lorebook-editor.png) |
+| ![캐릭터 채팅 옆에서 사용하는 BardWiki](assets/readme/bardwiki-workspace.png) | ![최근 대화 미리보기가 포함된 채팅 세이브 슬롯](assets/readme/chat-save-slots.png) |
+| **캐릭터 저장소** | **로어북 편집기** |
+| ![폴더와 검색을 지원하는 캐릭터 저장소](assets/readme/character-vault.png) | ![폴더, 키와 활성화 설정을 편집하는 로어북 작업공간](assets/readme/lorebook-editor.png) |
 
-## Quick start
+## 빠른 시작
 
-The portable package is the simplest way to run RisuBard. It does not require Node.js or Docker.
+포터블 패키지는 RisuBard를 실행하는 가장 간단한 방법이며 Node.js나 Docker가 필요하지 않습니다.
 
-1. Open [GitHub Releases](https://github.com/rpaddict/RisuBard/releases).
-2. Download and extract the package for your platform.
-3. Start RisuBard and open `http://localhost:6001`.
+1. [GitHub Releases](https://github.com/rpaddict/RisuBard/releases)를 엽니다.
+2. 운영체제에 맞는 패키지를 내려받아 압축을 풉니다.
+3. RisuBard를 실행하고 `http://localhost:6001`을 엽니다.
 
-| Platform | Package | Start |
+| 플랫폼 | 패키지 | 실행 |
 | --- | --- | --- |
-| Windows x64 | `RisuBard-vX.Y.Z-win-x64.zip` | Double-click `RisuBard.exe` |
-| Linux x64 | `RisuBard-vX.Y.Z-linux-x64.tar.gz` | Run `./start.sh` |
-| Linux ARM64 | `RisuBard-vX.Y.Z-linux-arm64.tar.gz` | Run `./start.sh` |
-| macOS Apple Silicon | `RisuBard-vX.Y.Z-macos-arm64.tar.gz` | Open `RisuBard.app` |
+| Windows x64 | `RisuBard-vX.Y.Z-win-x64.zip` | `RisuBard.exe` 더블클릭 |
+| Linux x64 | `RisuBard-vX.Y.Z-linux-x64.tar.gz` | `./start.sh` 실행 |
+| Linux ARM64 | `RisuBard-vX.Y.Z-linux-arm64.tar.gz` | `./start.sh` 실행 |
+| macOS Apple Silicon | `RisuBard-vX.Y.Z-macos-arm64.tar.gz` | `RisuBard.app` 열기 |
 
-For Docker, source builds, remote access, updates, and platform-specific requirements, read the [complete installation guide](docs/en/install.md).
+Docker, 소스 빌드, 원격 접속, 업데이트와 플랫폼별 요구사항은 [전체 설치 가이드](docs/ko/install.md)를 참고하세요.
 
-## Compatibility and migration
+## 호환성과 데이터 이전
 
-RisuBard is designed to extend an existing collection rather than strand it. The migration tools accept a normal RisuAI `.bin` backup, a zipped Node save folder, or a direct save-folder copy for large installations.
+RisuBard는 기존 컬렉션을 버리지 않고 확장할 수 있도록 설계했습니다. 일반 RisuAI `.bin` 백업, 압축한 Node save 폴더 또는 대용량 설치를 위한 save 폴더 직접 복사를 지원합니다.
 
-Back up the source installation before migrating, then follow the [RisuAI migration guide](docs/en/migration.md). Imports are validated before they replace active data, and the original `risuai.db` is copied to migration backups before an optional one-time extraction.
+이전하기 전에 원본 설치를 백업한 다음 [RisuAI 데이터 이전 가이드](docs/ko/migration.md)를 따르세요. 가져온 데이터는 활성 상태를 교체하기 전에 검증하며, 기존 `risuai.db`는 선택적인 일회성 추출 전에 migration backup으로 복사합니다.
 
-Compatibility is a release gate: automated suites cover backup round-trips, cold storage, remote blocks, settings-only exports, legacy presets, CHARX-related application paths, modules, and plugins.
+호환성은 릴리스 게이트입니다. 자동화된 테스트가 백업 왕복, cold storage, remote block, 설정 전용 내보내기, 레거시 프리셋, CHARX 관련 적용 경로, 모듈과 플러그인을 검증합니다.
 
-## Data and privacy
+## 데이터와 개인정보
 
-RisuBard runs on infrastructure you control and stores canonical user data as ordinary files under its data root. You can set a separate absolute path with `RISUBARD_DATA_ROOT`; application code and user data do not need to share a directory.
+RisuBard는 사용자가 관리하는 환경에서 실행되며 사용자 데이터 정본을 데이터 루트 아래의 일반 파일로 저장합니다. `RISUBARD_DATA_ROOT`로 별도의 절대 경로를 지정할 수 있으므로 앱 코드와 사용자 데이터를 같은 디렉터리에 둘 필요가 없습니다.
 
-Model traffic follows the provider you configure. Requests sent to a remote model provider are subject to that provider's data policy; requests to a local model remain within the environment you operate. RisuBard's request logs omit request and response bodies, authentication headers, URLs, API keys, and hidden reasoning.
+모델 통신은 사용자가 설정한 제공자를 따릅니다. 원격 모델 제공자에 보낸 요청에는 해당 제공자의 데이터 정책이 적용되며, 로컬 모델 요청은 사용자가 운영하는 환경 안에 머뭅니다. RisuBard의 요청 로그는 요청·응답 본문, 인증 헤더, URL, API 키와 숨겨진 사고 과정을 기록하지 않습니다.
 
-Read [File-native user data](docs/en/file-native-storage.md) for the storage tree, crash-safety guarantees, backup behavior, and Termux restrictions.
+저장 트리, 강제 종료 안전성, 백업 동작과 Termux 제약은 [파일 정본 사용자 데이터](docs/ko/file-native-storage.md)를 참고하세요.
 
-## Documentation
+## 문서
 
-| Topic | English | 한국어 |
+| 주제 | 한국어 | English |
 | --- | --- | --- |
-| Installation and updates | [Installation](docs/en/install.md) | [설치](docs/ko/install.md) |
-| Migrating from RisuAI | [Migration](docs/en/migration.md) | [데이터 이전](docs/ko/migration.md) |
-| BardWiki memory | — | [메모리 사용 안내](docs/ko/memory-wiki.md) |
-| File-native storage | [Storage](docs/en/file-native-storage.md) | [파일 정본 저장](docs/ko/file-native-storage.md) |
-| Remote access | [Remote access](docs/en/remote.md) | [원격 접속](docs/ko/remote.md) |
-| Android | [Termux](docs/en/termux.md) | [Termux](docs/ko/termux.md) |
-| Architecture | [Code boundaries](docs/architecture/code-boundaries.md) | [Code boundaries](docs/architecture/code-boundaries.md) |
+| 설치와 업데이트 | [설치](docs/ko/install.md) | [Installation](docs/en/install.md) |
+| RisuAI에서 이전 | [데이터 이전](docs/ko/migration.md) | [Migration](docs/en/migration.md) |
+| BardWiki 메모리 | [메모리 사용 안내](docs/ko/memory-wiki.md) | — |
+| 파일 정본 저장 | [파일 정본 저장](docs/ko/file-native-storage.md) | [Storage](docs/en/file-native-storage.md) |
+| 원격 접속 | [원격 접속](docs/ko/remote.md) | [Remote access](docs/en/remote.md) |
+| Android | [Termux](docs/ko/termux.md) | [Termux](docs/en/termux.md) |
+| 아키텍처 | [Code boundaries](docs/architecture/code-boundaries.md) | [Code boundaries](docs/architecture/code-boundaries.md) |
 
-Additional translated installation and migration guides are available in `docs/de`, `docs/cn`, `docs/es`, `docs/vi`, and `docs/zh-Hant`.
+`docs/de`, `docs/cn`, `docs/es`, `docs/vi`, `docs/zh-Hant`에도 번역된 설치·이전 문서가 있습니다.
 
-## Project status
+## 프로젝트 상태
 
-RisuBard is under active development. Keep a current backup before migrating important data, and check the [release notes](https://github.com/rpaddict/RisuBard/releases) for changes that affect storage or compatibility.
+RisuBard는 활발하게 개발 중입니다. 중요한 데이터를 이전하기 전에 최신 백업을 만들고, 저장 또는 호환성에 영향을 주는 변경은 [릴리스 노트](https://github.com/rpaddict/RisuBard/releases)에서 확인하세요.
 
-The repository validates releases with Svelte and TypeScript checks, browser and server unit tests, compatibility round-trips, and a production build.
+저장소는 Svelte·TypeScript 검사, 브라우저·서버 단위 테스트, 호환성 왕복 테스트와 프로덕션 빌드로 릴리스를 검증합니다.
 
-## Contributing
+## 기여
 
-Issues, design discussions, documentation improvements, tests, and pull requests are welcome. For a substantial behavioral or architectural change, open an issue first so that compatibility and migration requirements can be agreed on before implementation.
+이슈, 설계 토론, 문서 개선, 테스트와 Pull Request를 환영합니다. 동작이나 아키텍처를 크게 바꾸는 작업은 구현 전에 이슈를 열어 호환성과 이전 요구사항을 먼저 합의해 주세요.
 
-Before submitting code, run:
+코드를 제출하기 전에 다음 명령을 실행합니다.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -174,10 +174,10 @@ pnpm test:compat
 pnpm build
 ```
 
-Changes must preserve existing CHARX, module, plugin, preset, and import/export compatibility unless an explicit migration path is included.
+명시적인 이전 경로가 없는 변경은 기존 CHARX, 모듈, 플러그인, 프리셋과 가져오기·내보내기 호환성을 보존해야 합니다.
 
-## Lineage and license
+## 계보와 라이선스
 
-RisuBard is built on inherited GPLv3 RisuAI code and retains that project's license obligations and attribution. Independently authored RisuBard components are kept behind documented code boundaries so that provenance remains inspectable as the architecture evolves.
+RisuBard는 GPLv3 RisuAI 코드에서 출발했으며 해당 프로젝트의 라이선스 의무와 저작자 표시를 유지합니다. 독립적으로 작성된 RisuBard 구성요소는 문서화된 코드 경계 뒤에 두어 구조가 발전해도 코드의 계보를 확인할 수 있게 합니다.
 
-This repository is licensed under **GNU General Public License v3.0 only**. See [LICENSE](LICENSE), [NOTICE.md](NOTICE.md), and the [code-boundary architecture](docs/architecture/code-boundaries.md).
+이 저장소는 **GNU General Public License v3.0 only**로 배포됩니다. [LICENSE](LICENSE), [NOTICE.md](NOTICE.md)와 [코드 경계 아키텍처](docs/architecture/code-boundaries.md)를 참고하세요.
