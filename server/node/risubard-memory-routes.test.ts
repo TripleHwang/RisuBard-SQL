@@ -97,21 +97,23 @@ describe('RisuBard memory routes', () => {
                 'x-risubard-save-id': 'save-1',
                 'x-risubard-chat-name': Buffer.from('모험').toString('base64url'),
                 'x-risubard-turn-count': '7',
+                'x-risubard-latest-message-id': 'assistant-7',
             },
             body: Buffer.from([1, 2, 3]),
         }, harness.response, vi.fn())
         expect(service.createMemorySave).toHaveBeenCalledWith({
             characterId: 'character', sourceChatId: 'chat-1',
             saveId: 'save-1', sourceChatName: '모험', turnCount: 7,
+            latestMessageId: 'assistant-7',
             chatBytes: Buffer.from([1, 2, 3]),
         })
         expect(harness.response.body).toEqual(summary)
 
         await harness.routes.get('/api/risubard/memory/save-slot/list')!({
-            body: { characterId: 'character' },
+            body: { characterId: 'character', sourceChatId: 'chat-1' },
         }, harness.response, vi.fn())
         expect(service.listMemorySaves).toHaveBeenCalledWith({
-            characterId: 'character',
+            characterId: 'character', sourceChatId: 'chat-1',
         })
         expect(harness.response.body).toEqual([summary])
     })

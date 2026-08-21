@@ -34,6 +34,7 @@ export interface alertData{
 export interface NotifyOptions {
     description?: string
     source?: string
+    duration?: number
 }
 
 type AlertGenerationInfoStoreData = {
@@ -243,11 +244,17 @@ export function notifyInfo(msg: unknown, opts?: NotifyOptions) {
     toast.info(message, opts?.description ? { description: opts.description } : undefined)
 }
 
-export function notifySuccess(msg: unknown, opts?: Pick<NotifyOptions, 'description'>) {
+export function notifySuccess(
+    msg: unknown,
+    opts?: Pick<NotifyOptions, 'description' | 'duration'>
+) {
     // Intentionally not logged (decision 4-2): success feedback has low timeline value.
     clearTransitionalAlert()
     const { message } = normalizeErrorMessage(msg)
-    toast.success(message, opts?.description ? { description: opts.description } : undefined)
+    toast.success(message, opts ? {
+        ...(opts.description ? { description: opts.description } : {}),
+        ...(opts.duration !== undefined ? { duration: opts.duration } : {}),
+    } : undefined)
 }
 
 export function alertWait(msg:string){

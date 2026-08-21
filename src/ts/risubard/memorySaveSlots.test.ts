@@ -9,6 +9,8 @@ import {
     previewMemorySaveSlot,
     prepareMemorySaveLoad,
     renameMemorySaveSlot,
+    latestChatMessageId,
+    shouldConfirmMemorySaveLoad,
 } from './memorySaveSlots'
 
 const chat: Chat = {
@@ -31,12 +33,27 @@ const chat: Chat = {
 const summary = {
     saveId: 'save-1', sourceChatId: 'chat-1', sourceChatName: '성문 앞',
     createdAt: '2026-08-14T08:00:00.000Z', turnCount: 1,
+    latestMessageId: 'assistant-1',
     latestEvent: { title: '성문이 열렸다', excerpt: '경비병이 허락했다.' },
 }
 
 describe('memory save slot client', () => {
     test('counts only visible assistant story turns', () => {
         expect(countChatTurns(chat.message)).toBe(1)
+        expect(latestChatMessageId(chat.message)).toBe('assistant-1')
+        expect(latestChatMessageId([
+            ...chat.message,
+            { role: 'user', data: '아직 ID가 없는 최신 메시지' },
+        ])).toBeUndefined()
+    })
+
+    test('asks before load unless the current story matches the newest save', () => {
+        expect(shouldConfirmMemorySaveLoad('assistant-1', [summary])).toBe(false)
+        expect(shouldConfirmMemorySaveLoad('unsaved-message', [summary])).toBe(true)
+        expect(shouldConfirmMemorySaveLoad('assistant-1', [{
+            ...summary,
+            latestMessageId: undefined,
+        }])).toBe(true)
     })
 
     test('sends a binary full-chat snapshot with bounded metadata headers', async () => {
@@ -56,6 +73,7 @@ describe('memory save slot client', () => {
         expect(calls[0].url).toBe('/api/risubard/memory/save-slot')
         const headers = calls[0].init?.headers as Record<string, string>
         expect(headers['x-risubard-turn-count']).toBe('1')
+        expect(headers['x-risubard-latest-message-id']).toBe('assistant-1')
         const encodedName = headers['x-risubard-chat-name']
             .replaceAll('-', '+').replaceAll('_', '/')
         expect(Buffer.from(encodedName, 'base64').toString('utf8')).toBe('성문 앞')
@@ -64,7 +82,10 @@ describe('memory save slot client', () => {
 
     test('lists strict summaries and decodes a prepared chat load', async () => {
         const savedBytes = encodeMemorySaveChat(chat)
-        const fetchImpl = vi.fn(async (url: URL | RequestInfo) => {
+        const fetchMock = vi.fn(async (
+            url: URL | RequestInfo,
+            _init?: RequestInit
+        ) => {
             if (String(url).endsWith('/list')) {
                 return new Response(JSON.stringify([summary]))
             }
@@ -74,12 +95,16 @@ describe('memory save slot client', () => {
                     'x-risubard-fork-token': 'load-token',
                 },
             })
-        }) as unknown as typeof fetch
+        })
+        const fetchImpl = fetchMock as unknown as typeof fetch
 
         await expect(listMemorySaveSlots({
-            characterId: 'character', fetchImpl,
+            characterId: 'character', sourceChatId: 'chat-1', fetchImpl,
             createAuth: async () => 'auth',
         })).resolves.toEqual([summary])
+        expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+            characterId: 'character', sourceChatId: 'chat-1',
+        })
         const loaded = await prepareMemorySaveLoad({
             characterId: 'character', saveId: 'save-1',
             destinationChatId: 'loaded-chat', fetchImpl,

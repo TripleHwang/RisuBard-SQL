@@ -21,7 +21,7 @@
     import { notifyError, notifySuccess } from 'src/ts/alert';
     import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
-    import { createMemorySaveSlot, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
+    import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
     import { language } from 'src/lang';
     let openChatList = $state(false)
     let openModuleList = $state(false)
@@ -81,6 +81,17 @@
     async function loadSavedChat(saveId: string): Promise<void> {
         const character = currentCharacter
         if(!character?.chaId) return
+        const chatIdx = character.chatPage
+        if(character.chats[chatIdx]?._placeholder){
+            await ensureChatHydrated(character.chats, chatIdx, character.chaId)
+        }
+        const currentChat = character.chats[chatIdx]
+        if(!currentChat?.id || currentChat._placeholder){
+            throw new Error('현재 채팅 전체 내용을 불러오지 못했습니다.')
+        }
+        if(currentChat.isStreaming){
+            throw new Error('응답 생성이 끝난 뒤 저장 파일을 불러와 주세요.')
+        }
         const destinationChatId = v4()
         const prepared = await prepareMemorySaveLoad({
             characterId: character.chaId,
@@ -117,7 +128,10 @@
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             }).catch(() => undefined)
-            void requestImmediateSave({ forceFullWrite: true })
+            await requestImmediateSave({
+                forceFullWrite: true,
+                rejectOnFailure: true,
+            })
             throw error
         }
         await completeMemoryWikiFork({
@@ -130,7 +144,7 @@
         })
         changeChatTo(0)
         saveSlotsOpen = false
-        notifySuccess('세이브를 새 채팅으로 불러왔습니다.')
+        notifySuccess('스토리 불러오기 완료', { duration: 3000 })
     }
 
     $effect(() => {
@@ -251,6 +265,10 @@
     <RisuBardSaveSlotsDialog
         open={saveSlotsOpen}
         characterId={currentCharacter.chaId}
+        currentChatId={currentCharacter.chats[currentCharacter.chatPage]?.id}
+        currentLatestMessageId={latestChatMessageId(
+            currentCharacter.chats[currentCharacter.chatPage]?.message ?? []
+        )}
         onOpenChange={(open) => { saveSlotsOpen = open }}
         onLoad={loadSavedChat}
     />

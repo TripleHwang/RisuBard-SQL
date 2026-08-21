@@ -159,36 +159,46 @@ export async function completeMemoryWikiFork(input: {
     if (body.action !== 'finalize' && body.action !== 'discard') {
         throw new Error('Invalid memory fork completion action')
     }
-    const response = await invokeBrowserFetch(
-        input.fetchImpl,
-        '/api/risubard/memory/fork/complete',
-        {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-                'content-type': 'application/json',
-                'risu-auth': await input.createAuth(),
-            },
-            body: JSON.stringify(body),
-        }
-    )
-    if (!response.ok) {
-        const failure: unknown = await response.json().catch(() => undefined)
-        const detail = isRecord(failure)
-            && typeof failure.error === 'string'
-            && failure.error.length <= 1_000
-            ? `: ${failure.error}`
-            : ''
-        throw new Error(
-            `Memory fork completion failed with status ${response.status}${detail}`
+    const completeOnce = async (): Promise<MemoryWikiForkCompletionReceipt> => {
+        const response = await invokeBrowserFetch(
+            input.fetchImpl,
+            '/api/risubard/memory/fork/complete',
+            {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'content-type': 'application/json',
+                    'risu-auth': await input.createAuth(),
+                },
+                body: JSON.stringify(body),
+            }
         )
+        if (!response.ok) {
+            const failure: unknown = await response.json()
+                .catch(() => undefined)
+            const detail = isRecord(failure)
+                && typeof failure.error === 'string'
+                && failure.error.length <= 1_000
+                ? `: ${failure.error}`
+                : ''
+            throw new Error(
+                `Memory fork completion failed with status ${response.status}${detail}`
+            )
+        }
+        const value: unknown = await response.json()
+        if (!isRecord(value)
+            || Object.keys(value).length !== 2
+            || value.action !== input.action
+            || value.completed !== true) {
+            throw new Error('Invalid memory fork completion receipt')
+        }
+        return { action: input.action, completed: true }
     }
-    const value: unknown = await response.json()
-    if (!isRecord(value)
-        || Object.keys(value).length !== 2
-        || value.action !== input.action
-        || value.completed !== true) {
-        throw new Error('Invalid memory fork completion receipt')
+    try {
+        return await completeOnce()
     }
-    return { action: input.action, completed: true }
+    catch (error) {
+        if (input.action !== 'finalize') throw error
+        return completeOnce()
+    }
 }

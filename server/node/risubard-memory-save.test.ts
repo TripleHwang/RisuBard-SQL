@@ -59,6 +59,7 @@ describe('memory save slots', () => {
         expect(await listMemorySaveSlots({
             userDataDirectory: root,
             characterId: 'character',
+            sourceChatId: 'chat-source',
         })).toEqual([saved])
 
         const prepared = await prepareMemorySaveLoad({
@@ -72,6 +73,15 @@ describe('memory save slots', () => {
         const destination = resolveMemoryWorkspace(
             root, 'character', 'chat-loaded'
         )
+        await expect(fs.stat(destination.directory))
+            .rejects.toMatchObject({ code: 'ENOENT' })
+        await completeMemoryWorkspaceFork({
+            userDataDirectory: root,
+            characterId: 'character',
+            destinationChatId: 'chat-loaded',
+            forkToken: prepared.fork.forkToken,
+            action: 'finalize',
+        })
         await expect(fs.readFile(
             join(destination.directory, 'wiki', 'current-scene.md'),
             'utf8'
@@ -91,16 +101,63 @@ describe('memory save slots', () => {
         })
     })
 
+    test('replaces an existing current-chat wiki and restores it on discard', async () => {
+        const root = await createRoot()
+        const source = resolveMemoryWorkspace(root, 'character', 'chat-source')
+        const current = resolveMemoryWorkspace(root, 'character', 'chat-current')
+        const sourceScene = join(source.directory, 'wiki', 'current-scene.md')
+        const currentScene = join(current.directory, 'wiki', 'current-scene.md')
+        await fs.mkdir(dirname(sourceScene), { recursive: true })
+        await fs.mkdir(dirname(currentScene), { recursive: true })
+        await fs.writeFile(sourceScene, '# 저장 장면\n', 'utf8')
+        await fs.writeFile(currentScene, '# 현재 장면\n', 'utf8')
+        await createMemorySaveSlot({
+            userDataDirectory: root, characterId: 'character',
+            sourceChatId: 'chat-source', saveId: 'save-replace',
+            sourceChatName: '저장본', turnCount: 1,
+            chatBytes: Buffer.from([1]),
+        })
+
+        const prepared = await prepareMemorySaveLoad({
+            userDataDirectory: root, characterId: 'character',
+            saveId: 'save-replace', destinationChatId: 'chat-current',
+        })
+        await expect(fs.readFile(currentScene, 'utf8')).resolves.toContain('현재 장면')
+        await completeMemoryWorkspaceFork({
+            userDataDirectory: root, characterId: 'character',
+            destinationChatId: 'chat-current',
+            forkToken: prepared.fork.forkToken, action: 'discard',
+        })
+        await expect(fs.readFile(currentScene, 'utf8')).resolves.toContain('현재 장면')
+
+        const finalized = await prepareMemorySaveLoad({
+            userDataDirectory: root, characterId: 'character',
+            saveId: 'save-replace', destinationChatId: 'chat-current',
+        })
+        await completeMemoryWorkspaceFork({
+            userDataDirectory: root, characterId: 'character',
+            destinationChatId: 'chat-current',
+            forkToken: finalized.fork.forkToken, action: 'finalize',
+        })
+        await expect(fs.readFile(currentScene, 'utf8')).resolves.toContain('저장 장면')
+        await expect(completeMemoryWorkspaceFork({
+            userDataDirectory: root, characterId: 'character',
+            destinationChatId: 'chat-current',
+            forkToken: finalized.fork.forkToken, action: 'finalize',
+        })).resolves.toEqual({ action: 'finalize', completed: true })
+    })
+
     test('lists complete slots newest first and ignores incomplete directories', async () => {
         const root = await createRoot()
-        for (const [saveId, createdAt] of [
-            ['older', '2026-08-14T07:00:00.000Z'],
-            ['newer', '2026-08-14T09:00:00.000Z'],
+        for (const [saveId, createdAt, sourceChatId] of [
+            ['older', '2026-08-14T07:00:00.000Z', 'source'],
+            ['newer', '2026-08-14T09:00:00.000Z', 'source'],
+            ['other-chat', '2026-08-14T10:00:00.000Z', 'other'],
         ] as const) {
             await createMemorySaveSlot({
                 userDataDirectory: root,
                 characterId: 'character',
-                sourceChatId: 'source',
+                sourceChatId,
                 saveId,
                 sourceChatName: '모험',
                 turnCount: 1,
@@ -116,6 +173,7 @@ describe('memory save slots', () => {
         const slots = await listMemorySaveSlots({
             userDataDirectory: root,
             characterId: 'character',
+            sourceChatId: 'source',
         })
         expect(slots.map((slot) => slot.saveId)).toEqual(['newer', 'older'])
     })
@@ -143,6 +201,7 @@ describe('memory save slots', () => {
         })
         await expect(listMemorySaveSlots({
             userDataDirectory: root, characterId: 'character',
+            sourceChatId: 'chat-source',
         })).resolves.toEqual([])
     })
 })

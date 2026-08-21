@@ -948,7 +948,7 @@ import { isMobile } from 'src/ts/platform'
 
 
 <div class="w-full h-full relative flex overflow-hidden" data-chat-wiki-workspace style={customStyle}>
-    <main class="relative h-full min-w-0 flex-1" data-chat-pane>
+    <main class="relative z-0 h-full min-w-0 flex-1" data-chat-pane>
     
     {#if DBState.db.nodeOnlyScrollButtonType !== 'off' && currentChat.length > 0}
         <div
@@ -1272,7 +1272,7 @@ import { isMobile } from 'src/ts/platform'
                         <button
                                 type="button"
                                 data-risubard-wiki-button
-                                onclick={() => memoryWikiOpen = true}
+                                onclick={() => memoryWikiOpen = !memoryWikiOpen}
                                 aria-label={language.risuBardMemoryOpenManual}
                                 title={language.risuBardMemoryOpenManual}
                                 class="relative z-10 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-orange-500 text-white shadow-sm hover:bg-orange-400 active:bg-orange-600 transition-colors"
@@ -1520,6 +1520,11 @@ import { isMobile } from 'src/ts/platform'
         </div>
 
     {/if}
+        <PluginFloatingActionButtons
+            buttons={additionalFloatingActionButtons}
+            placements={DBState.db.pluginFabPlacements}
+            onPlacementChange={setPluginFabPlacement}
+        />
     </main>
     {#if currentCharacter?.chaId && currentChatSlot?.id}
         <RisuBardMemoryWiki
@@ -1532,12 +1537,6 @@ import { isMobile } from 'src/ts/platform'
         />
     {/if}
 </div>
-
-<PluginFloatingActionButtons
-    buttons={additionalFloatingActionButtons}
-    placements={DBState.db.pluginFabPlacements}
-    onPlacementChange={setPluginFabPlacement}
-/>
 
 {#if composerFullscreen}
     <div class="fixed inset-0 z-50 bg-bgcolor flex flex-col p-4">

@@ -62,10 +62,12 @@ describe('RisuBard memory CommonJS runtime', () => {
             latestEvent: expect.objectContaining({ title: '성문이 열렸다' }),
         }))
 
-        await expect(service.listMemorySaves({ characterId: 'character' }))
+        await expect(service.listMemorySaves({
+            characterId: 'character', sourceChatId: 'chat-1',
+        }))
             .resolves.toEqual([summary])
         expect(listSaveSlots).toHaveBeenCalledWith({
-            userDataDirectory, characterId: 'character',
+            userDataDirectory, characterId: 'character', sourceChatId: 'chat-1',
         })
 
         await expect(service.prepareMemorySaveLoad({

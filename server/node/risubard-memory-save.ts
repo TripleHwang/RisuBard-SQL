@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path'
 import {
     completeMemoryWorkspaceFork,
     forkMemoryWorkspace,
+    replaceMemoryWorkspace,
+    resolveMemoryReplacementStaging,
     type MemoryForkReceipt,
 } from './risubard-memory-fork'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
@@ -22,6 +24,7 @@ export interface MemorySaveSlotSummary {
     sourceChatName: string
     createdAt: string
     turnCount: number
+    latestMessageId?: string
     latestEvent?: MemorySaveEventPreview
 }
 
@@ -67,9 +70,12 @@ function parseEventPreview(value: unknown): MemorySaveEventPreview {
 function parseManifest(value: unknown): StoredMemorySaveManifest {
     if (!isRecord(value)) throw new Error('Invalid memory save manifest')
     const hasEvent = value.latestEvent !== undefined
+    const hasLatestMessageId = value.latestMessageId !== undefined
     const keys = [
         'schemaVersion', 'saveId', 'sourceChatId', 'sourceChatName',
-        'createdAt', 'turnCount', ...(hasEvent ? ['latestEvent'] : []),
+        'createdAt', 'turnCount',
+        ...(hasLatestMessageId ? ['latestMessageId'] : []),
+        ...(hasEvent ? ['latestEvent'] : []),
     ]
     if (Object.keys(value).length !== keys.length
         || !keys.every((key) => Object.hasOwn(value, key))
@@ -90,6 +96,12 @@ function parseManifest(value: unknown): StoredMemorySaveManifest {
         sourceChatName: required(value.sourceChatName, 'saved chat name', 512),
         createdAt: value.createdAt,
         turnCount: value.turnCount as number,
+        ...(hasLatestMessageId ? {
+            latestMessageId: required(
+                value.latestMessageId,
+                'saved latest message ID'
+            ),
+        } : {}),
         ...(hasEvent ? { latestEvent: parseEventPreview(value.latestEvent) } : {}),
     }
 }
@@ -159,6 +171,7 @@ export async function createMemorySaveSlot(input: {
     saveId: string
     sourceChatName: string
     turnCount: number
+    latestMessageId?: string
     chatBytes: Uint8Array
     createdAt?: string
     latestEvent?: MemorySaveEventPreview
@@ -185,6 +198,12 @@ export async function createMemorySaveSlot(input: {
         sourceChatName,
         createdAt,
         turnCount: input.turnCount,
+        ...(input.latestMessageId ? {
+            latestMessageId: required(
+                input.latestMessageId,
+                'latestMessageId'
+            ),
+        } : {}),
         ...(input.latestEvent
             ? { latestEvent: parseEventPreview(input.latestEvent) }
             : {}),
@@ -238,8 +257,10 @@ export async function createMemorySaveSlot(input: {
 export async function listMemorySaveSlots(input: {
     userDataDirectory: string
     characterId: string
+    sourceChatId: string
 }, options: { fileSystem?: SaveFileSystem } = {}): Promise<MemorySaveSlotSummary[]> {
     const fileSystem = options.fileSystem ?? nodeFs
+    const sourceChatId = required(input.sourceChatId, 'sourceChatId')
     const probe = resolveMemoryWorkspace(
         input.userDataDirectory,
         required(input.characterId, 'characterId'),
@@ -266,6 +287,7 @@ export async function listMemorySaveSlots(input: {
             const manifest = parseManifest(JSON.parse(
                 await fileSystem.readFile(manifestPath, 'utf8')
             ))
+            if (manifest.sourceChatId !== sourceChatId) continue
             if (workspaceFor(
                 input.userDataDirectory, input.characterId, manifest.saveId
             ).directory !== directory) continue
@@ -349,25 +371,25 @@ export async function prepareMemorySaveLoad(input: {
         await fileSystem.readFile(manifestPath, 'utf8')
     ))
     const chatBytes = Buffer.from(await fileSystem.readFile(chatPath))
-    const fork = await forkMemoryWorkspace({
+    const fork = await replaceMemoryWorkspace({
         userDataDirectory: input.userDataDirectory,
         characterId: required(input.characterId, 'characterId'),
         sourceChatId,
         destinationChatId: required(
             input.destinationChatId, 'destinationChatId'
         ),
-        mode: 'copy',
-    })
+    }, { fileSystem: fileSystem as typeof nodeFs })
     try {
-        const destination = resolveMemoryWorkspace(
+        const destinationDirectory = resolveMemoryReplacementStaging(
             input.userDataDirectory,
             input.characterId,
-            input.destinationChatId
+            input.destinationChatId,
+            fork.forkToken
         )
-        await fileSystem.rm(join(destination.directory, SAVE_MANIFEST), {
+        await fileSystem.rm(join(destinationDirectory, SAVE_MANIFEST), {
             force: false,
         })
-        await fileSystem.rm(join(destination.directory, SAVE_CHAT), {
+        await fileSystem.rm(join(destinationDirectory, SAVE_CHAT), {
             force: false,
         })
         return { chatBytes, save: summaryOf(manifest), fork }

@@ -107,19 +107,40 @@ describe('chat file save slot connections', () => {
         expect(dialogSource).toContain('previewMemorySaveSlot')
         expect(dialogSource).toContain('grid-template-columns: minmax(0, 1fr)')
         expect(dialogSource).not.toContain('minmax(0, 1.35fr)')
-        expect(dialogSource).toContain('height: min(30vh, 18rem)')
         expect(dialogSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
         expect(dialogSource).toContain('@media (max-width: 767px)')
-        expect(dialogSource).toContain('height: 30vh')
+        expect(dialogSource).toContain('height: 70vh')
+        expect(dialogSource).not.toContain('SAVE_SLOT_DIALOG_GEOMETRY_KEY')
+        expect(dialogSource).not.toContain('bind:contentElement')
+        expect(dialogSource).not.toContain('class="save-dialog__drag-handle"')
+        expect(dialogSource).toContain('data-preview-resize-handle')
+        expect(dialogSource).toContain('role="separator"')
+        expect(dialogSource).toContain('overflow-y: scroll')
+        expect(dialogSource).toContain('scrollbar-gutter: stable')
+        expect(dialogSource).toContain('size={48}')
+        expect(dialogSource).toContain('[턴 {slot.turnCount}]')
+        expect(dialogSource).toContain("'{selectedSlot.sourceChatName}'의 최근 대화")
+        expect(dialogSource).toContain('currentChatId: string')
+        expect(dialogSource).toContain('sourceChatId: currentChatId')
+        expect(chatScreenSource).toContain(
+            'currentChatId={currentCharacter.chats[currentCharacter.chatPage]?.id}'
+        )
     })
 
-    test('finalizes a loaded wiki only after the new chat is persisted', () => {
+    test('loads into a new chat and finalizes its wiki only after persistence', () => {
+        expect(chatScreenSource).toContain('const destinationChatId = v4()')
+        expect(chatScreenSource).toContain('destinationChatId,')
+        expect(chatScreenSource).toContain('loadedChat.id = destinationChatId')
+        expect(chatScreenSource).toContain('character.chats.unshift(loadedChat)')
+        expect(chatScreenSource).toContain('changeChatTo(0)')
         expect(chatScreenSource).toMatch(
             /prepareMemorySaveLoad[\s\S]*requestImmediateSave[\s\S]*action: 'finalize'/
         )
         expect(chatScreenSource).toMatch(
             /catch\(error\)[\s\S]*action: 'discard'/
         )
+        expect(chatScreenSource).not.toContain('void requestImmediateSave({ forceFullWrite: true })')
+        expect(chatScreenSource).toContain("notifySuccess('스토리 불러오기 완료', { duration: 3000 })")
     })
 
     test('uses the defined theme tokens for opaque save slot surfaces', () => {

@@ -84,10 +84,17 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
         completeMemoryFork: (input) => serialized(
             input.characterId,
             input.destinationChatId,
-            () => completeForkWorkspace({
-                userDataDirectory,
-                ...input,
-            })
+            async () => {
+                const completed = await completeForkWorkspace({
+                    userDataDirectory,
+                    ...input,
+                })
+                wiki.invalidateCache(
+                    input.characterId,
+                    input.destinationChatId
+                )
+                return completed
+            }
         ),
         createMemorySave: (input) => serializedMany([
             [input.characterId, input.sourceChatId],

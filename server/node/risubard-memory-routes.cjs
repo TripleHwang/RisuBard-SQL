@@ -75,12 +75,17 @@ function registerRisuBardMemoryRoutes(app, options) {
             const turnCount = Number(requestHeader(
                 req, 'x-risubard-turn-count'
             ))
+            const latestMessageId = requestHeader(
+                req, 'x-risubard-latest-message-id'
+            )
             if (!hasBoundedId(characterId)
                 || !hasBoundedId(sourceChatId)
                 || !hasBoundedId(saveId)
                 || !sourceChatName
                 || !Number.isSafeInteger(turnCount)
                 || turnCount < 0
+                || (latestMessageId !== undefined
+                    && !hasBoundedId(latestMessageId))
                 || !Buffer.isBuffer(req.body)
                 || req.body.byteLength === 0
                 || req.body.byteLength > 100 * 1024 * 1024) {
@@ -93,6 +98,7 @@ function registerRisuBardMemoryRoutes(app, options) {
                 saveId,
                 sourceChatName,
                 turnCount,
+                ...(latestMessageId ? { latestMessageId } : {}),
                 chatBytes: req.body,
             }))
         }
@@ -109,8 +115,9 @@ function registerRisuBardMemoryRoutes(app, options) {
     app.post('/api/risubard/memory/save-slot/list', async (req, res, next) => {
         try {
             if (!await options.auth(req, res)) return
-            if (!hasExactKeys(req.body, ['characterId'])
-                || !hasBoundedId(req.body.characterId)) {
+            if (!hasExactKeys(req.body, ['characterId', 'sourceChatId'])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.sourceChatId)) {
                 res.status(400).send({ error: 'Invalid memory save list request' })
                 return
             }

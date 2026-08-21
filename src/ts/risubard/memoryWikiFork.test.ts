@@ -101,6 +101,24 @@ describe('memory wiki fork client', () => {
             })
     })
 
+    test('retries an uncertain finalize with the same token', async () => {
+        let attempt = 0
+        const fetchImpl = vi.fn(async () => {
+            attempt += 1
+            if (attempt === 1) throw new TypeError('response lost')
+            return new Response(JSON.stringify({
+                action: 'finalize', completed: true,
+            }), { headers: { 'content-type': 'application/json' } })
+        }) as unknown as typeof fetch
+
+        await expect(completeMemoryWikiFork({
+            characterId: 'character', destinationChatId: 'chat',
+            forkToken: 'token-1', action: 'finalize', fetchImpl,
+            createAuth: async () => 'auth',
+        })).resolves.toEqual({ action: 'finalize', completed: true })
+        expect(fetchImpl).toHaveBeenCalledTimes(2)
+    })
+
     test('rejects HTTP failures and malformed success receipts', async () => {
         await expect(forkMemoryWiki({
             characterId: 'character', sourceChatId: 'source',

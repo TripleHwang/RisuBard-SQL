@@ -80,6 +80,31 @@ interface StoredDocument {
 
 const FORK_MARKER = '.risubard-fork.json'
 
+function replacementBackupPath(directory: string, forkToken: string): string {
+    return `${directory}.restore-${Buffer.from(forkToken).toString('base64url')}`
+}
+
+function replacementStagingPath(directory: string, forkToken: string): string {
+    return `${directory}.replace-${Buffer.from(forkToken).toString('base64url')}`
+}
+
+function completionReceiptPath(directory: string, forkToken: string): string {
+    return `${directory}.fork-complete-${Buffer.from(forkToken).toString('base64url')}.json`
+}
+
+export function resolveMemoryReplacementStaging(
+    userDataDirectory: string,
+    characterId: string,
+    destinationChatId: string,
+    forkToken: string
+): string {
+    return replacementStagingPath(resolveMemoryWorkspace(
+        userDataDirectory,
+        required(characterId, 'characterId'),
+        required(destinationChatId, 'destinationChatId')
+    ).directory, required(forkToken, 'forkToken'))
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -659,6 +684,84 @@ export async function forkMemoryWorkspace(
     }
 }
 
+export async function replaceMemoryWorkspace(
+    input: Omit<MemoryForkInput, 'mode' | 'retainedMessageIds' | 'messageIds'>,
+    options: { fileSystem?: ForkFileSystem } = {}
+): Promise<MemoryForkReceipt> {
+    required(input.characterId, 'characterId')
+    required(input.sourceChatId, 'sourceChatId')
+    required(input.destinationChatId, 'destinationChatId')
+    if (input.sourceChatId === input.destinationChatId) {
+        throw new Error('Memory replacement source and destination must differ')
+    }
+    const fileSystem = options.fileSystem ?? nodeFs
+    const source = resolveMemoryWorkspace(
+        input.userDataDirectory,
+        input.characterId,
+        input.sourceChatId
+    )
+    const destination = resolveMemoryWorkspace(
+        input.userDataDirectory,
+        input.destinationCharacterId ?? input.characterId,
+        input.destinationChatId
+    )
+    await ensureSafeParent(
+        fileSystem,
+        input.userDataDirectory,
+        dirname(destination.directory)
+    )
+    const forkToken = randomUUID()
+    const staging = replacementStagingPath(destination.directory, forkToken)
+    let sourceExists = false
+    let hadDestination = false
+    try {
+        await fileSystem.mkdir(staging)
+        try {
+            const status = await fileSystem.lstat(source.directory)
+            if (status.isSymbolicLink() || !status.isDirectory()) {
+                throw new Error('Memory replacement source workspace is unsafe')
+            }
+            sourceExists = true
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+        if (sourceExists) {
+            await copyDirectoryContents(fileSystem, source.directory, staging)
+        }
+        await fileSystem.rm(join(staging, FORK_MARKER), { force: true })
+        if (await exists(fileSystem, destination.directory)) {
+            const status = await fileSystem.lstat(destination.directory)
+            if (status.isSymbolicLink() || !status.isDirectory()) {
+                throw new Error('Memory replacement destination is unsafe')
+            }
+            hadDestination = true
+        }
+        await fileSystem.writeFile(
+            join(staging, FORK_MARKER),
+            JSON.stringify({
+                destinationChatId: input.destinationChatId,
+                forkToken,
+                replacement: true,
+                hadDestination,
+            }),
+            'utf8'
+        )
+        return {
+            mode: 'copy',
+            sourceExists,
+            destinationChatId: input.destinationChatId,
+            warnings: [],
+            forkToken,
+        }
+    }
+    catch (error) {
+        await fileSystem.rm(staging, { recursive: true, force: true })
+            .catch(() => undefined)
+        throw error
+    }
+}
+
 export async function completeMemoryWorkspaceFork(
     input: CompleteMemoryForkInput,
     options: { fileSystem?: ForkFileSystem } = {}
@@ -680,34 +783,62 @@ export async function completeMemoryWorkspaceFork(
         input.userDataDirectory,
         dirname(destination.directory)
     )
-    let directoryStatus
+    const receiptPath = completionReceiptPath(
+        destination.directory,
+        input.forkToken
+    )
+    let receipt: Record<string, unknown> | undefined
     try {
-        directoryStatus = await fileSystem.lstat(destination.directory)
+        const parsed: unknown = JSON.parse(await fileSystem.readFile(
+            receiptPath,
+            'utf8'
+        ))
+        if (!isRecord(parsed)
+            || parsed.destinationChatId !== input.destinationChatId
+            || parsed.forkToken !== input.forkToken
+            || parsed.action !== input.action
+            || typeof parsed.completed !== 'boolean') {
+            throw new Error('Memory fork completion token/action does not match')
+        }
+        receipt = parsed
+        if (receipt.completed) {
+            return { action: input.action, completed: true }
+        }
     }
     catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            throw new Error('Memory fork marker is missing')
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const staging = replacementStagingPath(
+        destination.directory,
+        input.forkToken
+    )
+    if (await exists(fileSystem, destination.directory)) {
+        const destinationStatus = await fileSystem.lstat(destination.directory)
+        if (destinationStatus.isSymbolicLink()
+            || !destinationStatus.isDirectory()) {
+            throw new Error('Memory fork destination workspace is unsafe')
         }
-        throw error
     }
-    if (directoryStatus.isSymbolicLink() || !directoryStatus.isDirectory()) {
-        throw new Error('Memory fork destination workspace is unsafe')
-    }
-    const markerPath = join(destination.directory, FORK_MARKER)
-    let markerText: string
-    try {
-        const markerStatus = await fileSystem.lstat(markerPath)
-        if (markerStatus.isSymbolicLink() || !markerStatus.isFile()) {
-            throw new Error('Memory fork marker is unsafe')
+    const destinationMarker = join(destination.directory, FORK_MARKER)
+    const stagingMarker = join(staging, FORK_MARKER)
+    let markerPath = await exists(fileSystem, stagingMarker)
+        ? stagingMarker
+        : destinationMarker
+    if (!await exists(fileSystem, markerPath)) {
+        if (receipt) {
+            await fileSystem.writeFile(receiptPath, JSON.stringify({
+                ...receipt,
+                completed: true,
+            }), 'utf8')
+            return { action: input.action, completed: true }
         }
-        markerText = await fileSystem.readFile(markerPath, 'utf8')
+        throw new Error('Memory fork marker is missing')
     }
-    catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            throw new Error('Memory fork marker is missing')
-        }
-        throw error
+    const markerStatus = await fileSystem.lstat(markerPath)
+    if (markerStatus.isSymbolicLink() || !markerStatus.isFile()) {
+        throw new Error('Memory fork marker is unsafe')
     }
+    const markerText = await fileSystem.readFile(markerPath, 'utf8')
     let marker: unknown
     try {
         marker = JSON.parse(markerText)
@@ -715,12 +846,88 @@ export async function completeMemoryWorkspaceFork(
     catch {
         throw new Error('Memory fork marker is invalid')
     }
+    const replacement = isRecord(marker) && marker.replacement === true
+    const expectedKeys = replacement
+        ? ['destinationChatId', 'forkToken', 'replacement', 'hadDestination']
+        : ['destinationChatId', 'forkToken']
     if (!isRecord(marker)
-        || Object.keys(marker).length !== 2
+        || Object.keys(marker).length !== expectedKeys.length
+        || !expectedKeys.every((key) => Object.hasOwn(marker, key))
         || marker.destinationChatId !== input.destinationChatId
-        || marker.forkToken !== input.forkToken) {
+        || marker.forkToken !== input.forkToken
+        || (replacement && typeof marker.hadDestination !== 'boolean')) {
         throw new Error('Memory fork token does not match')
     }
+    if (replacement) {
+        const backup = replacementBackupPath(
+            destination.directory,
+            input.forkToken
+        )
+        await fileSystem.writeFile(receiptPath, JSON.stringify({
+            destinationChatId: input.destinationChatId,
+            forkToken: input.forkToken,
+            action: input.action,
+            completed: false,
+        }), 'utf8')
+        if (input.action === 'finalize') {
+            if (markerPath === stagingMarker) {
+                if (marker.hadDestination
+                    && !await exists(fileSystem, backup)) {
+                    await fileSystem.rename(destination.directory, backup)
+                }
+                await fileSystem.rename(staging, destination.directory)
+                markerPath = destinationMarker
+            }
+            await fileSystem.rm(markerPath, { force: false })
+            await fileSystem.writeFile(receiptPath, JSON.stringify({
+                destinationChatId: input.destinationChatId,
+                forkToken: input.forkToken,
+                action: input.action,
+                completed: true,
+            }), 'utf8')
+            if (marker.hadDestination) {
+                await fileSystem.rm(backup, { recursive: true, force: false })
+                    .catch(() => undefined)
+            }
+        }
+        else {
+            if (markerPath === stagingMarker) {
+                await fileSystem.rm(staging, { recursive: true, force: false })
+            }
+            else if (marker.hadDestination) {
+                const displaced = `${destination.directory}.discard-${randomUUID()}`
+                await fileSystem.rename(destination.directory, displaced)
+                try {
+                    await fileSystem.rename(backup, destination.directory)
+                }
+                catch (error) {
+                    await fileSystem.rename(displaced, destination.directory)
+                        .catch(() => undefined)
+                    throw error
+                }
+                await fileSystem.rm(displaced, { recursive: true, force: false })
+            }
+            else {
+                await fileSystem.rm(destination.directory, {
+                    recursive: true,
+                    force: false,
+                })
+            }
+            await fileSystem.writeFile(receiptPath, JSON.stringify({
+                destinationChatId: input.destinationChatId,
+                forkToken: input.forkToken,
+                action: input.action,
+                completed: true,
+            }), 'utf8')
+        }
+        return { action: input.action, completed: true }
+    }
+    await fileSystem.writeFile(receiptPath, JSON.stringify({
+        destinationChatId: input.destinationChatId,
+        forkToken: input.forkToken,
+        action: input.action,
+        completed: false,
+    }), 'utf8')
     if (input.action === 'discard') {
         await fileSystem.rm(destination.directory, {
             recursive: true,
@@ -730,5 +937,11 @@ export async function completeMemoryWorkspaceFork(
     else {
         await fileSystem.rm(markerPath, { force: false })
     }
+    await fileSystem.writeFile(receiptPath, JSON.stringify({
+        destinationChatId: input.destinationChatId,
+        forkToken: input.forkToken,
+        action: input.action,
+        completed: true,
+    }), 'utf8')
     return { action: input.action, completed: true }
 }

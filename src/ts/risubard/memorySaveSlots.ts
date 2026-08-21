@@ -19,6 +19,7 @@ export interface MemorySaveSlotSummary {
     sourceChatName: string
     createdAt: string
     turnCount: number
+    latestMessageId?: string
     latestEvent?: MemorySaveEventPreview
 }
 
@@ -63,8 +64,10 @@ function parseEvent(value: unknown): MemorySaveEventPreview {
 function parseSummary(value: unknown): MemorySaveSlotSummary {
     if (!isRecord(value)) throw new Error('Invalid memory save summary')
     const hasEvent = value.latestEvent !== undefined
+    const hasLatestMessageId = value.latestMessageId !== undefined
     const keys = [
         'saveId', 'sourceChatId', 'sourceChatName', 'createdAt', 'turnCount',
+        ...(hasLatestMessageId ? ['latestMessageId'] : []),
         ...(hasEvent ? ['latestEvent'] : []),
     ]
     if (Object.keys(value).length !== keys.length
@@ -85,6 +88,12 @@ function parseSummary(value: unknown): MemorySaveSlotSummary {
         sourceChatName: value.sourceChatName,
         createdAt: value.createdAt,
         turnCount: value.turnCount as number,
+        ...(hasLatestMessageId ? {
+            latestMessageId: boundedId(
+                value.latestMessageId as string,
+                'Latest saved message ID'
+            ),
+        } : {}),
         ...(hasEvent ? { latestEvent: parseEvent(value.latestEvent) } : {}),
     }
 }
@@ -104,6 +113,32 @@ export function countChatTurns(messages: readonly Message[]): number {
         && !message.isComment
         && !message.disabled
     ).length
+}
+
+export function latestChatMessageId(
+    messages: readonly Message[]
+): string | undefined {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index]
+        if (message.isComment || message.disabled) continue
+        return typeof message.chatId === 'string' && message.chatId.trim()
+            ? message.chatId
+            : undefined
+    }
+    return undefined
+}
+
+export function shouldConfirmMemorySaveLoad(
+    currentLatestMessageId: string | undefined,
+    slots: readonly MemorySaveSlotSummary[]
+): boolean {
+    const newest = [...slots].sort((left, right) =>
+        right.createdAt.localeCompare(left.createdAt)
+        || right.saveId.localeCompare(left.saveId)
+    )[0]
+    return !currentLatestMessageId
+        || !newest?.latestMessageId
+        || newest.latestMessageId !== currentLatestMessageId
 }
 
 export function encodeMemorySaveChat(chat: Chat): Uint8Array {
@@ -137,6 +172,7 @@ export async function createMemorySaveSlot(input: {
     delete snapshot._placeholder
     snapshot.isStreaming = false
     delete snapshot.activeStreamingDisplayOptimizationMode
+    const latestMessageId = latestChatMessageId(snapshot.message)
     const response = await invokeBrowserFetch(
         input.fetchImpl,
         '/api/risubard/memory/save-slot',
@@ -153,6 +189,9 @@ export async function createMemorySaveSlot(input: {
                 'x-risubard-turn-count': String(
                     countChatTurns(snapshot.message)
                 ),
+                ...(latestMessageId ? {
+                    'x-risubard-latest-message-id': latestMessageId,
+                } : {}),
             },
             body: requestBody(encodeMemorySaveChat(snapshot)),
         }
@@ -168,6 +207,7 @@ export async function createMemorySaveSlot(input: {
 
 export async function listMemorySaveSlots(input: {
     characterId: string
+    sourceChatId: string
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
 }): Promise<MemorySaveSlotSummary[]> {
@@ -183,6 +223,7 @@ export async function listMemorySaveSlots(input: {
             },
             body: JSON.stringify({
                 characterId: boundedId(input.characterId, 'Character ID'),
+                sourceChatId: boundedId(input.sourceChatId, 'Chat ID'),
             }),
         }
     )
