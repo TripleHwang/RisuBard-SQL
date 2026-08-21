@@ -147,6 +147,7 @@ RisuBard는 사용자가 관리하는 환경에서 실행되며 사용자 데이
 | 설치와 업데이트 | [설치](docs/ko/install.md) | [Installation](docs/en/install.md) |
 | RisuAI에서 이전 | [데이터 이전](docs/ko/migration.md) | [Migration](docs/en/migration.md) |
 | BardWiki 메모리 | [메모리 사용 안내](docs/ko/memory-wiki.md) | — |
+| BardWiki 장기 채팅 실험 | [속도·품질·비용 보고서](docs/ko/memory-wiki-long-chat-experiment.md) | — |
 | 파일 정본 저장 | [파일 정본 저장](docs/ko/file-native-storage.md) | [Storage](docs/en/file-native-storage.md) |
 | 원격 접속 | [원격 접속](docs/ko/remote.md) | [Remote access](docs/en/remote.md) |
 | Android | [Termux](docs/ko/termux.md) | [Termux](docs/en/termux.md) |
