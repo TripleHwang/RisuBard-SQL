@@ -22,6 +22,11 @@
     import { PlusIcon, PencilIcon, TrashIcon, DownloadIcon, HardDriveUploadIcon } from "@lucide/svelte";
     import { alertError, alertInput, alertConfirm, notifySuccess, notifyError } from "src/ts/alert";
     import { createHypaV3Preset } from "src/ts/process/memory/hypav3";
+    import {
+        NOVEL_AI_IMAGE_MODELS,
+        supportsNovelAIImageNoiseSchedule,
+        supportsNovelAIImageVibeTransfer,
+    } from "src/ts/process/novelAIImage";
 
     let { embedded = false }: { embedded?: boolean } = $props();
 
@@ -293,14 +298,9 @@
 
             <span class="text-textcolor">Model <Help key="naiModel"/></span>
             <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgModel} >
-                <OptionInput value="nai-diffusion-4-5-full" >nai-diffusion-4-5-full</OptionInput>
-                <OptionInput value="nai-diffusion-4-5-curated" >nai-diffusion-4-5-curated</OptionInput>
-                <OptionInput value="nai-diffusion-4-full" >nai-diffusion-4-full</OptionInput>
-                <OptionInput value="nai-diffusion-4-curated-preview" >nai-diffusion-4-curated-preview</OptionInput>
-                <OptionInput value="nai-diffusion-3" >nai-diffusion-3</OptionInput>
-                <OptionInput value="nai-diffusion-furry-3" >nai-diffusion-furry-3</OptionInput>
-                <OptionInput value="nai-diffusion-2" >nai-diffusion-2</OptionInput>
-
+                {#each NOVEL_AI_IMAGE_MODELS as model}
+                    <OptionInput value={model}>{model}</OptionInput>
+                {/each}
             </SelectInput>
 
             <span class="text-textcolor">Width <Help key="naiWidth"/></span>
@@ -333,13 +333,15 @@
                 </SelectInput>
             {/if}
 
-            <span class="text-textcolor">Noise Schedule <Help key="naiNoiseSchedule"/></span>
-            <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgConfig.noise_schedule}>
-                <OptionInput value="native" >native</OptionInput>
-                <OptionInput value="karras" >karras</OptionInput>
-                <OptionInput value="exponential" >exponential</OptionInput>
-                <OptionInput value="polyexponential" >polyexponential</OptionInput>
-            </SelectInput>
+            {#if supportsNovelAIImageNoiseSchedule(DBState.db.NAIImgModel)}
+                <span class="text-textcolor">Noise Schedule <Help key="naiNoiseSchedule"/></span>
+                <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgConfig.noise_schedule}>
+                    <OptionInput value="native" >native</OptionInput>
+                    <OptionInput value="karras" >karras</OptionInput>
+                    <OptionInput value="exponential" >exponential</OptionInput>
+                    <OptionInput value="polyexponential" >polyexponential</OptionInput>
+                </SelectInput>
+            {/if}
 
             <span class="text-textcolor">steps <Help key="naiSteps"/></span>
             <NumberInput className="mt-2" marginBottom min={0} max={2048} bind:value={DBState.db.NAIImgConfig.steps}/>
@@ -348,16 +350,18 @@
             <span class="text-textcolor">CFG rescale <Help key="naiCFGRescale"/></span>
             <NumberInput className="mt-2" marginBottom min={0} max={1} bind:value={DBState.db.NAIImgConfig.cfg_rescale}/>
 
-            <span class="text-textcolor">Image Reference <Help key="naiImageReference"/></span>
-            <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgConfig.reference_mode}>
-                <OptionInput value="" >None</OptionInput>
-                <OptionInput value="vibe" >Vibe Trasfer</OptionInput>
-                {#if DBState.db.NAIImgModel === 'nai-diffusion-4-5-full' || DBState.db.NAIImgModel === 'nai-diffusion-4-5-curated'}
-                    <OptionInput value="character" >Character Reference</OptionInput>
-                {/if}
-            </SelectInput>
+            {#if supportsNovelAIImageVibeTransfer(DBState.db.NAIImgModel)}
+                <span class="text-textcolor">Image Reference <Help key="naiImageReference"/></span>
+                <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgConfig.reference_mode}>
+                    <OptionInput value="" >None</OptionInput>
+                    <OptionInput value="vibe" >Vibe Trasfer</OptionInput>
+                    {#if DBState.db.NAIImgModel === 'nai-diffusion-4-5-full' || DBState.db.NAIImgModel === 'nai-diffusion-4-5-curated'}
+                        <OptionInput value="character" >Character Reference</OptionInput>
+                    {/if}
+                </SelectInput>
+            {/if}
 
-            {#if DBState.db.NAIImgConfig.reference_mode === 'vibe'}
+            {#if supportsNovelAIImageVibeTransfer(DBState.db.NAIImgModel) && DBState.db.NAIImgConfig.reference_mode === 'vibe'}
                 <div class="relative">
                 <button class="mb-4" onclick={async () => {
                     const file = await selectSingleFile(['naiv4vibe'])

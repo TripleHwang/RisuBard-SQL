@@ -7,6 +7,10 @@ import { CharEmotion } from "../stores.svelte"
 import type { OpenAIChat } from "./index.svelte"
 import { processZip } from "./processzip"
 import random from "lodash/random"
+import {
+    sanitizeNovelAIImageParameters,
+    supportsNovelAIImageVibeTransfer,
+} from "./novelAIImage"
 
 export async function stableDiff(currentChar:character,prompt:string){
     let db = getDatabase()
@@ -214,7 +218,9 @@ export async function generateAIImage(genPrompt:string, currentChar:character, n
         }
 
         // Add vibe reference_image_multiple if exists
-        if(db.NAIImgConfig.reference_mode === 'vibe' && db.NAIImgConfig.vibe_data) {
+        if(supportsNovelAIImageVibeTransfer(db.NAIImgModel)
+        && db.NAIImgConfig.reference_mode === 'vibe'
+        && db.NAIImgConfig.vibe_data) {
             const vibeData = db.NAIImgConfig.vibe_data;
             // Determine which model to use based on vibe_model_selection or fallback to current model
             const modelKey = db.NAIImgConfig.vibe_model_selection || 
@@ -320,6 +326,11 @@ export async function generateAIImage(genPrompt:string, currentChar:character, n
                 commonReq.body.parameters.director_reference_strength_values = [1]
             }
         }
+
+        commonReq.body.parameters = sanitizeNovelAIImageParameters(
+            db.NAIImgModel,
+            commonReq.body.parameters,
+        )
 
         if(db.NAII2I){
             let seed = random(0, 1000000000);
