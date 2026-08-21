@@ -242,7 +242,15 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
             let decoded: DecodedAssetTask[]
             try {
                 const decodedData = await decodeRPackBatch(decodeGroup.map(task => task.data))
-                decoded = decodeGroup.map((task, index) => ({ task, data: decodedData[index] }))
+                decoded = []
+                for (let index = 0; index < decodeGroup.length; index++) {
+                    const data = decodedData[index]
+                    if (!data || data.length === 0) {
+                        failed.push(decodeGroup[index])
+                        continue
+                    }
+                    decoded.push({ task: decodeGroup[index], data })
+                }
             } catch {
                 failed.push(...decodeGroup)
                 continue

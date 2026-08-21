@@ -6,9 +6,9 @@ class FakeWorker {
     posted = 0
     pending: Array<{ id: number }> = []
 
-    postMessage(message: { id: number }) {
+    postMessage(message: { id: number; data: ArrayBuffer }, transfer: Transferable[]) {
         this.posted += 1
-        this.pending.push(message)
+        this.pending.push(structuredClone(message, { transfer }))
     }
 
     complete(value: number) {
@@ -60,6 +60,28 @@ describe('RPackDecoderPool', () => {
 
         const result = await resultPromise
         expect(result.map((item: Uint8Array) => item[0])).toEqual([10, 20, 30, 40])
+        pool.terminate()
+    })
+
+    it('transfers only a Buffer view without detaching its shared parent', async () => {
+        const rpack = await import('./rpack_js.js') as Record<string, any>
+        const workers: FakeWorker[] = []
+        const pool = new rpack.RPackDecoderPool(1, () => {
+            const worker = new FakeWorker()
+            workers.push(worker)
+            return worker
+        })
+        const parent = Buffer.allocUnsafeSlow(6)
+        parent.set([10, 11, 12, 13, 14, 15])
+        const view = parent.subarray(2, 4)
+
+        const resultPromise = pool.decodeAll([view])
+        const transferredBytes = (workers[0].pending[0] as { data: ArrayBuffer }).data.byteLength
+        workers[0].complete(20)
+        await resultPromise
+
+        expect(transferredBytes).toBe(2)
+        expect([...parent]).toEqual([10, 11, 12, 13, 14, 15])
         pool.terminate()
     })
 })

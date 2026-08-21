@@ -129,4 +129,13 @@ describe('readModule asset persistence', () => {
         expect(mocks.saveAsset).toHaveBeenCalledTimes(1)
         expect(module.assets?.[0][1]).toBe('single-write')
     })
+
+    it('rejects empty decoded assets instead of persisting them', async () => {
+        mocks.decodeRPackBatch.mockResolvedValue([new Uint8Array(0)])
+
+        await expect(readModule(risumWithAssets(1))).rejects.toThrow('Failed to save 1 assets')
+
+        expect(mocks.setItems).not.toHaveBeenCalled()
+        expect(mocks.saveAsset).not.toHaveBeenCalled()
+    })
 })

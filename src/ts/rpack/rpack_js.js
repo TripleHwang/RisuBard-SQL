@@ -72,7 +72,7 @@ export class RPackDecoderPool {
         for (const slot of this.slots) {
             if (slot.current || this.queue.length === 0) continue;
             const job = this.queue.shift();
-            const input = job.data.slice();
+            const input = new Uint8Array(job.data);
             slot.current = job;
             slot.worker.postMessage({ id: job.id, data: input.buffer }, [input.buffer]);
         }
