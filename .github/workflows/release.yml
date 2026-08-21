@@ -40,6 +40,8 @@ jobs:
           path: |
             dist/
             server/
+            packages/risubard-core/
+            src/ts/risubard/
             package.json
             pnpm-lock.yaml
             pnpm-workspace.yaml
@@ -94,6 +96,32 @@ jobs:
           cd portable
           echo "node-linker=hoisted" > .npmrc
           pnpm install --prod --frozen-lockfile
+
+      - name: Smoke test portable server
+        shell: bash
+        run: |
+          cd portable
+          LOG_FILE="$(mktemp)"
+          PORT=0 RISU_UPDATE_CHECK=false node server/node/server.cjs >"$LOG_FILE" 2>&1 &
+          SERVER_PID=$!
+          cleanup() {
+            kill "$SERVER_PID" 2>/dev/null || true
+            wait "$SERVER_PID" 2>/dev/null || true
+            rm -f "$LOG_FILE"
+          }
+          trap cleanup EXIT
+          for _ in {1..30}; do
+            if grep -qE '\[Server\] (HTTP|HTTPS) server is running\.' "$LOG_FILE"; then
+              exit 0
+            fi
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              cat "$LOG_FILE"
+              exit 1
+            fi
+            sleep 1
+          done
+          cat "$LOG_FILE"
+          exit 1
 
       - name: Extract version
         id: version

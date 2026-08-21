@@ -17,4 +17,16 @@ describe('release artifact contract', () => {
         expect(workflow).toMatch(/^\s+LICENSE\s*$/m)
         expect(workflow).toMatch(/^\s+NOTICE\.md\s*$/m)
     })
+
+    it('ships runtime source trees and smoke-tests the portable server', () => {
+        const workflow = readFileSync(
+            resolve('.github/workflows/release.yml'),
+            'utf8',
+        )
+
+        expect(workflow).toMatch(/^\s+packages\/risubard-core\/\s*$/m)
+        expect(workflow).toMatch(/^\s+src\/ts\/risubard\/\s*$/m)
+        expect(workflow).toContain('name: Smoke test portable server')
+        expect(workflow).toContain('node server/node/server.cjs')
+    })
 })
