@@ -46,6 +46,30 @@ interface WireMessage {
     tool_calls?: WireToolCall[]
 }
 
+const MAX_DEEPSEEK_RESPONSE_SCHEMA_CHARACTERS = 32_000
+
+function deepSeekStructuredOutputMessage(
+    preset: ModelPreset,
+    responseSchema: Record<string, unknown> | undefined,
+): AdapterChatMessage | undefined {
+    if (preset.profileSnapshot.providerBaseId !== 'deepseek'
+        || !responseSchema) {
+        return undefined
+    }
+    const serializedSchema = JSON.stringify(responseSchema)
+    if (serializedSchema.length > MAX_DEEPSEEK_RESPONSE_SCHEMA_CHARACTERS) {
+        return undefined
+    }
+    return {
+        role: 'system',
+        content: [
+            'Return exactly one JSON object matching this JSON Schema.',
+            'Do not return Markdown, code fences, or commentary.',
+            serializedSchema,
+        ].join('\n'),
+    }
+}
+
 export async function sendChatRequest(
     preset: ModelPreset,
     options: AdapterChatOptions,
@@ -159,9 +183,19 @@ async function prepareOpenAiBody(
     // values / schema (not the customBody-merged body), then overwrite the
     // body fields after the shared merge so customBody collisions lose.
     const modelId = resolveWireModelId(preset, { vendorName: 'OpenAI-compatible' })
-    prepared.body.messages = options.messages.map(toWireMessage)
+    const structuredOutputMessage = deepSeekStructuredOutputMessage(
+        preset,
+        options.responseSchema,
+    )
+    prepared.body.messages = [
+        ...(structuredOutputMessage ? [structuredOutputMessage] : []),
+        ...options.messages,
+    ].map(toWireMessage)
     prepared.body.model = modelId
     prepared.body.stream = stream
+    if (structuredOutputMessage) {
+        prepared.body.response_format = { type: 'json_object' }
+    }
     // Streaming responses carry no usage unless it is requested. Only set when
     // the user opted in: a strict OpenAI-compatible server can 400 on an
     // unknown field, and that would break the generation, not just the stats.

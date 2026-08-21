@@ -1,16 +1,11 @@
 export const patchNote = {
-    version: "1.110",
+    version: "0.8.3",
     content: 
 `
-# Update 1.110 (Modules Update)
-- Improved module GUI
-  - Added search bar
-  - Now modules are ordered by name
-  - Now global modules are ordered in the end of the list in the chat GUI
-- Added module export and import from Realm
-- Added preset import from Realm
-- Added \`{{position::<name>}}\` CBS
-   - This CBS will be replaced to lorebooks that uses \`@@position pt_<name>\` decorator
+# RisuBard 0.8.3
+- 바드위키 보조 모델 호환성을 개선했습니다.
+  - DeepSeek 네이티브 모델로 이야기와 작업 공간을 갱신할 때 구조화 JSON이 안정적으로 생성됩니다.
+  - 일반 채팅과 다른 제공자 모델의 요청 방식은 변경하지 않습니다.
 `
 }
 

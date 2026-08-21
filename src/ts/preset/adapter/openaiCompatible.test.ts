@@ -113,6 +113,58 @@ function captureFetch(response: Response | (() => Response)): {
 }
 
 describe('sendChatRequest (non-stream)', () => {
+    test('adds JSON mode and the response schema only for structured DeepSeek requests', async () => {
+        const { fetchImpl, calls } = captureFetch(
+            jsonResponse({ choices: [{ message: { content: '{"value":"ok"}' } }] }),
+        )
+        const responseSchema = {
+            type: 'object',
+            additionalProperties: false,
+            required: ['value'],
+            properties: { value: { type: 'string' } },
+        }
+
+        await sendChatRequest(
+            makePreset({
+                profileSnapshot: makeSnapshot({ providerBaseId: 'deepseek' }),
+            }),
+            { messages: userMessages, responseSchema, fetchImpl },
+            { apiKey: 'sk' },
+        )
+
+        expect(calls[0].body.response_format).toEqual({ type: 'json_object' })
+        const wire = calls[0].body.messages as Array<Record<string, unknown>>
+        expect(wire[0]).toMatchObject({ role: 'system' })
+        expect(wire[0].content).toContain('Return exactly one JSON object')
+        expect(wire[0].content).toContain(JSON.stringify(responseSchema))
+        expect(wire.slice(1)).toEqual(userMessages)
+    })
+
+    test('does not add DeepSeek JSON hints to ordinary or other-provider requests', async () => {
+        const { fetchImpl, calls } = captureFetch(() =>
+            jsonResponse({ choices: [{ message: { content: 'ok' } }] }),
+        )
+        const responseSchema = { type: 'object' }
+
+        await sendChatRequest(
+            makePreset({
+                profileSnapshot: makeSnapshot({ providerBaseId: 'deepseek' }),
+            }),
+            { messages: userMessages, fetchImpl },
+            { apiKey: 'sk' },
+        )
+        await sendChatRequest(
+            makePreset(),
+            { messages: userMessages, responseSchema, fetchImpl },
+            { apiKey: 'sk' },
+        )
+
+        expect(calls[0].body.response_format).toBeUndefined()
+        expect(calls[0].body.messages).toEqual(userMessages)
+        expect(calls[1].body.response_format).toBeUndefined()
+        expect(calls[1].body.messages).toEqual(userMessages)
+    })
+
     test('builds OpenAI-compatible body and parses choices/usage', async () => {
         const { fetchImpl, calls } = captureFetch(
             jsonResponse({
