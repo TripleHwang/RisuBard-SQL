@@ -106,6 +106,11 @@ function hasHistoricalEvidenceIntent(value: string): boolean {
     return past || causalOrDetail
 }
 
+function hasLinkedCharacterIntent(value: string): boolean {
+    return /(?:인물|누구|동료|관계|주변|함께|연결|people|who|companion|relationship|with whom|人物|誰|仲間|関係)/i
+        .test(value)
+}
+
 function normalizedLinkTarget(rawLink: string): string {
     return normalized(rawLink.split('|')[0]?.split('#')[0] ?? '')
 }
@@ -374,6 +379,10 @@ export function inquireMarkdownDocuments(
         .test(input.currentInput)
     const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline)/i
         .test(input.currentInput)
+    const historicalEvidenceIntent = hasHistoricalEvidenceIntent(
+        input.currentInput
+    )
+    const linkedCharacterIntent = hasLinkedCharacterIntent(input.currentInput)
     const chronologySummaryIds = new Set(
         chronologyIntent
             ? eligibleDocuments.filter((document) =>
@@ -388,6 +397,12 @@ export function inquireMarkdownDocuments(
         .filter((candidate) => !requiredIds.has(candidate.document.id))
         .filter((candidate) => chronologySummaryIds.size === 0
             || candidate.document.type !== 'event')
+        .filter((candidate) => candidate.document.type !== 'character'
+            || candidate.hop === 0
+            || candidate.directScore > 0
+            || historicalEvidenceIntent
+            || chronologyIntent
+            || linkedCharacterIntent)
         .map((candidate) => ({
             ...candidate,
             score: candidateScore(candidate, pastIntent, currentIntent),
@@ -447,8 +462,7 @@ export function inquireMarkdownDocuments(
         selectedTokens += candidate.tokens
         return true
     }
-    if (hasHistoricalEvidenceIntent(input.currentInput)
-        && !chronologyIntent) {
+    if (historicalEvidenceIntent && !chronologyIntent) {
         for (const candidate of prepared.filter((item) =>
             !requiredIds.has(item.document.id)
             && item.document.type === 'event'

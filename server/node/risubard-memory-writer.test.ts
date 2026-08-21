@@ -26,6 +26,16 @@ describe('BardWiki memory writer skill', () => {
         )
     })
 
+    test('gates canonical rewrites on concrete durable changes', () => {
+        expect(memoryWriterSystemPrompt).toContain('구체적인 지속 변화')
+        expect(memoryWriterSystemPrompt).toContain('사건 문서만으로 충분한 행동')
+        expect(memoryWriterSystemPrompt).toContain('정본 후보를 만들지 마라')
+        expect(memoryWriterSystemPrompt).toContain('소지품')
+        expect(memoryWriterSystemPrompt).toContain('인물별 지식')
+        expect(memoryWriterSystemPrompt).toContain('중요한 인과 전환점')
+        expect(memoryWriterSystemPrompt).toContain('누락하지 마라')
+    })
+
     test('publishes a strict bounded JSON schema', () => {
         const schema = JSON.parse(memoryWriterDraftSchema)
         expect(schema).toMatchObject({

@@ -10,8 +10,11 @@ application owns safe file names and YAML frontmatter, then atomically writes
 an Obsidian-compatible `wiki/events/*.md` evidence document.
 
 Automatic confirmation searches the wiki using the configured recent raw
-message window through the confirmed message. In automatic mode, structured
-canonical candidates trigger at most eight serial full-Markdown rewrites.
+message window through the confirmed message. It proposes canonical rewrites
+only for concrete durable changes that are not already represented; an event
+that needs no canonical change skips the rewrite model. Necessary persistent
+identity, relationship, knowledge, inventory, goal, constraint, and state
+changes remain eligible, up to eight canonical targets.
 Changed pages are immediately active but marked unreviewed; the first prior
 version is kept under `.risubard-review/` and every replacement is archived
 under `.risubard-history/`. The audit UI exposes before/after text, acceptance,
@@ -40,6 +43,10 @@ derived `[[wikilinks]]` for up to two hops, so connected event evidence does not
 need its own direct lexical match. Past, causal, and detail-checking questions
 reserve up to two fitting event excerpts inside the same target token budget;
 chronology-list questions continue to prefer the compressed character history.
+Ordinary forward-scene requests omit character pages reached only through a
+link. Explicit character, relationship, historical, causal, and chronology
+requests retain that traversal. Recent raw messages remain the primary current
+scene evidence, so a current-scene page is optional rather than auto-required.
 Each canonical document also has a program-owned `context` policy: `always`
 is required input, `auto` needs a positive lexical match, and `never` is
 excluded from automatic inquiry. Required context that exceeds the fixed

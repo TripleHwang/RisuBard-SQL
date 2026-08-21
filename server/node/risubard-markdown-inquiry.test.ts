@@ -227,6 +227,65 @@ describe('progressive Markdown inquiry', () => {
         expect(result.metrics.auxiliaryModelCalls).toBe(0)
     })
 
+    test('does not spend forward-scene budget on linked-only characters', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '리리아는 소리가 나지 않는 길을 선택한다.',
+            documents: [
+                document({
+                    id: 'lelia', type: 'character', title: '리리아',
+                    relativePath: 'characters/lelia.md',
+                    content: '# 리리아\n\n식칼을 들고 복도에 있다.\n\n[[부리 마스크 간수]] [[하니아]]',
+                    links: ['부리 마스크 간수', '하니아'],
+                }),
+                document({
+                    id: 'guard', type: 'character', title: '부리 마스크 간수',
+                    relativePath: 'characters/guard.md',
+                    content: '# 부리 마스크 간수\n\n사망했다.',
+                }),
+                document({
+                    id: 'hania', type: 'character', title: '하니아',
+                    relativePath: 'characters/hania.md',
+                    content: '# 하니아\n\n현재 위치는 불명이다.',
+                }),
+            ],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual([
+            'narrative-memory:wiki:characters/lelia.md',
+        ])
+    })
+
+    test('keeps linked characters for explicit relationship questions', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '리리아와 연결된 인물은 누구인가?',
+            documents: [
+                document({
+                    id: 'lelia', type: 'character', title: '리리아',
+                    relativePath: 'characters/lelia.md',
+                    content: '# 리리아\n\n[[부리 마스크 간수]] [[하니아]]와 연결되어 있다.',
+                    links: ['부리 마스크 간수', '하니아'],
+                }),
+                document({
+                    id: 'guard', type: 'character', title: '부리 마스크 간수',
+                    relativePath: 'characters/guard.md',
+                    content: '# 부리 마스크 간수\n\n사망했다.',
+                }),
+                document({
+                    id: 'hania', type: 'character', title: '하니아',
+                    relativePath: 'characters/hania.md',
+                    content: '# 하니아\n\n현재 위치는 불명이다.',
+                }),
+            ],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual(
+            expect.arrayContaining([
+                'narrative-memory:wiki:characters/guard.md',
+                'narrative-memory:wiki:characters/hania.md',
+            ])
+        )
+    })
+
     test('counts Korean text against the token budget instead of a character heuristic', () => {
         const documents = Array.from({ length: 4 }, (_, index) => document({
             id: `required-${index}`,
