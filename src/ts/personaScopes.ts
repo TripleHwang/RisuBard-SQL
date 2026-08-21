@@ -56,19 +56,23 @@ export function getEffectivePersona(
     return persona ? { persona, scope: 'global', index } : null
 }
 
-export function nextPersonaCopyName(name: string, reservedNames: Iterable<string>): string {
-    const normalizedName = name.trim() || 'New Persona'
-    const reserved = new Set(reservedNames)
-    if (!reserved.has(normalizedName)) return normalizedName
-    const match = /^(.*?)(?:\s+(\d+))?$/.exec(normalizedName)
-    const baseName = match?.[1]?.trim() || normalizedName
-    const sourceNumber = match?.[2] ? Number(match[2]) : 1
-    let number = Math.max(2, sourceNumber + 1)
-    let candidate = `${baseName} ${number}`
-    while (reserved.has(candidate)) {
-        candidate = `${baseName} ${++number}`
+export function nextPersonaCopyNote(source: RisuPersona, target: RisuPersona[]): string | undefined {
+    const collisions = target.filter((persona) => persona.name === source.name)
+    if (collisions.length === 0) return source.note
+
+    const sourceNote = source.note?.trimEnd() ?? ''
+    const baseNote = sourceNote.replace(/\s*\(\d+\)$/, '').trimEnd()
+    const suffixPattern = baseNote
+        ? new RegExp(`^${escapeRegExp(baseNote)}\\s+\\((\\d+)\\)$`)
+        : /^\((\d+)\)$/
+    let highest = 0
+    for (const persona of collisions) {
+        const note = persona.note?.trim() ?? ''
+        const match = suffixPattern.exec(note)
+        if (match) highest = Math.max(highest, Number(match[1]))
     }
-    return candidate
+    const next = highest + 1
+    return baseNote ? `${baseNote} (${next})` : `(${next})`
 }
 
 export function clonePersonaToStore(
@@ -77,8 +81,13 @@ export function clonePersonaToStore(
     createId: () => string,
 ): RisuPersona {
     const clone = safeStructuredClone(source)
-    clone.name = nextPersonaCopyName(source.name, target.map((persona) => persona.name))
+    clone.name = source.name
+    clone.note = nextPersonaCopyNote(source, target)
     clone.id = createId()
     target.push(clone)
     return clone
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

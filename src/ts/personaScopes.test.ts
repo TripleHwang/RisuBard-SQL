@@ -5,7 +5,7 @@ import {
     ensureCharacterPersonas,
     getCharacterPersonas,
     getEffectivePersona,
-    nextPersonaCopyName,
+    nextPersonaCopyNote,
     resolvePersonaById,
 } from './personaScopes'
 
@@ -67,25 +67,35 @@ describe('persona scopes', () => {
         expect(character.personas).toBe(store)
     })
 
-    test('numbers repeated persona clones and assigns a fresh stable id', () => {
-        expect(nextPersonaCopyName('Writer', ['Writer', 'Writer 2', 'Other']))
-            .toBe('Writer 3')
-        expect(nextPersonaCopyName('Writer 2', ['Writer', 'Writer 2']))
-            .toBe('Writer 3')
-
+    test('keeps duplicate names and numbers the note instead', () => {
         const source = persona('Writer', 'source-id')
-        const target = [source, persona('Writer 2', 'second-id')]
+        source.note = 'Main'
+        const second = persona('Writer', 'second-id')
+        second.note = 'Main (1)'
+        const target = [source, second]
         const clone = clonePersonaToStore(source, target, () => 'clone-id')
 
-        expect(clone).toMatchObject({ name: 'Writer 3', id: 'clone-id' })
+        expect(nextPersonaCopyNote(source, target.slice(0, 2))).toBe('Main (2)')
+        expect(clone).toMatchObject({ name: 'Writer', note: 'Main (2)', id: 'clone-id' })
         expect(target).toEqual([source, expect.objectContaining({ id: 'second-id' }), clone])
         expect(clone).not.toBe(source)
     })
 
-    test('keeps the original name when cloning into a character store without a collision', () => {
+    test('keeps the original name and note when cloning without a collision', () => {
         const source = persona('Writer', 'source-id')
+        source.note = 'Main'
         const target: RisuPersona[] = []
 
-        expect(clonePersonaToStore(source, target, () => 'clone-id').name).toBe('Writer')
+        expect(clonePersonaToStore(source, target, () => 'clone-id')).toMatchObject({
+            name: 'Writer',
+            note: 'Main',
+        })
     })
+
+    test('uses a bare parenthesized number when the duplicate has no note', () => {
+        const source = persona('Writer', 'source-id')
+
+        expect(clonePersonaToStore(source, [source], () => 'clone-id').note).toBe('(1)')
+    })
+
 })
