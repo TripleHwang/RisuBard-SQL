@@ -17,13 +17,20 @@ export interface StorySoFarEntry {
 
 function storySection(content: string): string[] {
     const lines = content.replace(/\r\n/g, '\n').split('\n')
-    const heading = lines.findIndex((line) =>
-        /^##\s+(이야기 요약|확정된 사건)\s*$/.test(line.trim())
-    )
+    let headingLevel = 0
+    const heading = lines.findIndex((line) => {
+        const match = /^(#{2,3})\s+(이야기 요약|확정된 사건)\s*$/.exec(
+            line.trim()
+        )
+        if (!match) return false
+        headingLevel = match[1].length
+        return true
+    })
     if (heading < 0) return []
     const items: string[] = []
     for (const line of lines.slice(heading + 1)) {
-        if (/^##\s+/.test(line.trim())) break
+        const nextHeading = /^(#{1,6})\s+/.exec(line.trim())
+        if (nextHeading && nextHeading[1].length <= headingLevel) break
         const match = line.match(/^\s*[-*]\s+(.+?)\s*$/)
         if (match) items.push(match[1].replace(/\[\[([^\]]+)\]\]/g, '$1'))
     }

@@ -939,7 +939,7 @@ export function createMemoryAnalysisRunner(
                                 )
                                 continue
                             }
-                            if (!/^#\s+\S/m.test(rewritten)) {
+                            if (!/^#{1,2}\s+\S/m.test(rewritten)) {
                                 const error = new Error(
                                     `Invalid automatic canonical Markdown: ${entry.candidate.title}`
                                 )

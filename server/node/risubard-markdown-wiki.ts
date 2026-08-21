@@ -525,6 +525,9 @@ export function createMarkdownNarrativeWiki(
     }
 
     return {
+        invalidateCache(characterId: string, chatId: string): void {
+            documentCache.delete(workspaceFor(characterId, chatId).directory)
+        },
         async snapshotBeforeTurn(input: {
             characterId: string
             chatId: string
@@ -1367,7 +1370,11 @@ export function createMarkdownNarrativeWiki(
                 updated: now().toISOString(),
             })
             await fileSystem.rm(file, { force: true })
-            await rebuildIndex(input.characterId, input.chatId)
+            try {
+                await rebuildIndex(input.characterId, input.chatId)
+            } catch {
+                documentCache.delete(workspace.directory)
+            }
             return prepared.document
         },
 

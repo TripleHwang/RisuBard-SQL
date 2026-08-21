@@ -472,10 +472,10 @@ describe('memory analysis runner', () => {
                 schemaVersion: 1,
                 documents: [{
                     candidateIndex: 0,
-                    markdown: '# 사만다\n\n수석 생물학자다.',
+                    markdown: '## 사만다\n\n수석 생물학자다.',
                 }, {
                     candidateIndex: 1,
-                    markdown: '# 아만다\n\n특별 감사관이다.',
+                    markdown: '## 아만다\n\n특별 감사관이다.',
                 }],
             })
         })
@@ -510,8 +510,8 @@ describe('memory analysis runner', () => {
         expect(saveCanonicalDocument).toHaveBeenCalledTimes(2)
         expect(saveCanonicalDocument.mock.calls.map(([input]) => input.markdown))
             .toEqual([
-                '# 사만다\n\n수석 생물학자다.',
-                '# 아만다\n\n특별 감사관이다.',
+                '## 사만다\n\n수석 생물학자다.',
+                '## 아만다\n\n특별 감사관이다.',
             ])
     })
 

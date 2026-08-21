@@ -53,4 +53,12 @@ describe('story so far projection', () => {
         })
     })
 
+    it('reads summaries after the wiki loader normalizes legacy headings', () => {
+        const entries = buildStorySoFar([event({
+            content: '## 기본 사건\n\n### 이야기 요약\n\n- 남아 있던 사건을 표시한다.\n\n### 관련 문서\n\n- 무시한다.',
+        })])
+
+        expect(entries[0]?.summary).toEqual(['남아 있던 사건을 표시한다.'])
+    })
+
 })

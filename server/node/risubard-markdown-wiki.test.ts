@@ -100,6 +100,46 @@ describe('Markdown narrative wiki', () => {
             source.id.includes('wiki:items/'))).toBe(true)
     })
 
+    test('invalidates documents replaced outside the wiki writer', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '교체 전', markdown: '# 교체 전\n\n이전 내용.',
+        })
+        await wiki.inquire({
+            characterId: 'character', chatId: 'chat', currentInput: '교체 전',
+        })
+        await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'source', type: 'character',
+            title: '교체 후', markdown: '# 교체 후\n\n새 내용.',
+        })
+        const workspace = resolveMarkdownWikiWorkspace(
+            root, 'character', 'chat'
+        )
+        const sourceWorkspace = resolveMarkdownWikiWorkspace(
+            root, 'character', 'source'
+        )
+        const [sourceFile] = await fs.readdir(
+            sourceWorkspace.charactersDirectory
+        )
+        await fs.rm(workspace.charactersDirectory, { recursive: true })
+        await fs.mkdir(workspace.charactersDirectory, { recursive: true })
+        await fs.copyFile(
+            join(sourceWorkspace.charactersDirectory, sourceFile),
+            join(workspace.charactersDirectory, sourceFile)
+        )
+
+        wiki.invalidateCache('character', 'chat')
+        const inquiry = await wiki.inquire({
+            characterId: 'character', chatId: 'chat', currentInput: '교체 후',
+        })
+        expect(inquiry.sources.some((source) =>
+            source.content.includes('새 내용')
+        )).toBe(true)
+    })
+
     test('creates an AI-free canonical page with program-owned metadata', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
@@ -547,6 +587,48 @@ describe('Markdown narrative wiki', () => {
         expect(inquiry.sources.some((source) =>
             source.content.includes('히사시')
         )).toBe(false)
+    })
+
+    test('keeps a completed event retraction successful when index refresh fails', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
+        let failIndexWrites = false
+        const failingIndexFileSystem = {
+            ...fs,
+            writeFile: async (...args: unknown[]) => {
+                if (failIndexWrites
+                    && String(args[0]).startsWith(`${workspace.indexFile}.tmp-`)) {
+                    throw new Error('index persistence failed')
+                }
+                return (fs.writeFile as unknown as (
+                    ...values: unknown[]
+                ) => Promise<void>)(...args)
+            },
+        } as unknown as NonNullable<
+            Parameters<typeof createMarkdownNarrativeWiki>[1]
+        >['fileSystem']
+        const wiki = createMarkdownNarrativeWiki(root, {
+            fileSystem: failingIndexFileSystem,
+        })
+        const event = await wiki.saveConfirmedTurn({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['user-1', 'assistant-1'],
+            markdown: '# 삭제할 사건\n\n이미 끝난 사건이다.',
+        })
+        failIndexWrites = true
+
+        await expect(wiki.retractEvent({
+            characterId: 'character',
+            chatId: 'chat',
+            documentId: event.id,
+            expectedContentHash: event.contentHash,
+        })).resolves.toMatchObject({ id: event.id, status: 'retracted' })
+        await expect(fs.access(join(
+            workspace.directory, ...event.relativePath.split('/')
+        ))).rejects.toMatchObject({ code: 'ENOENT' })
+        expect((await wiki.loadView('character', 'chat')).documents
+            .some((document) => document.id === event.id)).toBe(false)
     })
 
     test('purges legacy retracted event files when loading the wiki', async () => {
