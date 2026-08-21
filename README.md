@@ -12,7 +12,6 @@
 
 <p align="center">
   <a href="https://github.com/rpaddict/RisuBard/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/rpaddict/RisuBard?display_name=tag&sort=semver"></a>
-  <a href="https://github.com/rpaddict/RisuBard/actions/workflows/pr-check.yml"><img alt="Build status" src="https://github.com/rpaddict/RisuBard/actions/workflows/pr-check.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
 </p>
 
@@ -33,7 +32,7 @@ You keep the existing RisuAI ecosystem—characters, CHARX cards, lorebooks, mod
 
 - [Why RisuBard?](#why-risubard)
 - [How it works](#how-it-works)
-- [Highlights](#highlights)
+- [Features](#features)
 - [Quick start](#quick-start)
 - [Compatibility and migration](#compatibility-and-migration)
 - [Data and privacy](#data-and-privacy)
@@ -92,40 +91,21 @@ Next model request
 
 Required context is never silently discarded. Optional memories are selected by relevance and priority, and the budget does not automatically expand with chat length or wiki size. A request manifest records what was included, excluded, or truncated without storing API keys or hidden reasoning.
 
-## Highlights
+## Features
 
-### Bounded-context narrative memory
+- **Wiki-driven long-story memory:** RisuBard minimizes replay of old chat history, records durable events and character state in BardWiki, and retrieves relevant notes for each request—keeping context bounded as stories grow.
+- **Visual-novel-style save/load:** Create named checkpoints for each chat, preview the recent conversation, and restore an earlier point without treating the whole chat as one irreversible timeline.
+- **Plain-file data ownership:** Characters, chats, settings, indexes, and narrative memory live as ordinary files instead of being trapped in one opaque database. Atomic writes, journals, revisions, and trash-based deletion limit the blast radius of corruption and make recovery practical.
+- **Per-chat personas with an AI builder:** Assign a different persona to each chat and create or refine personas with AI assistance.
+- **Character Vault:** Browse, search, group, move, duplicate, import, export, and clean up large character collections from one workspace.
+- **Lorebook workspace:** Search and organize entries, edit keys and activation rules, and manage folders in a full-featured editor.
+- **Rebuilt interface:** Chat, settings, memory, character, persona, save, and lorebook workflows have been redesigned for clearer everyday use.
 
-- Explicit limits for recent messages, selected memory, analysis input, and response reservation
-- Relevant memories selected per request instead of replaying the complete history
-- Safe fallback to character foundations and recent messages if memory inquiry fails
-
-### Markdown BardWiki
-
-- Obsidian-compatible Markdown for characters, locations, factions, items, concepts, scenes, and events
-- Automatic narrative analysis plus direct human editing
-- Per-document `always`, `auto`, and `never` context policies
-- History, snapshots, trash, health checks, and hash-safe conflict protection
-
-### File-native user data
-
-- Canonical JSON, JSONL, Markdown, and content-addressed assets instead of SQLite or one database blob
-- Lazy loading for characters, chats, assets, and indexes
-- Atomic writes, recoverable journals, revisions, and trash-based deletion
-- Rebuildable compatibility projections for inherited clients and exports
-
-### RisuAI ecosystem compatibility
-
-- CHARX character cards, lorebooks, modules, prompt presets, and existing provider paths
-- Legacy `.bin`, save-folder, and optional `risuai.db` migration paths
-- Compatibility export for moving data back into existing workflows
-- Existing module and plugin integration boundaries preserved
-
-### Self-hosted and portable
-
-- Portable packages for Windows x64, Linux x64/ARM64, and macOS Apple Silicon
-- Docker, source installation, and Android Termux guides
-- Optional update notification and self-update support for portable packages
+| BardWiki memory workspace | Chat save/load |
+| --- | --- |
+| ![BardWiki beside an active character chat](assets/readme/bardwiki-workspace.png) | ![Named save points with conversation previews](assets/readme/chat-save-slots.png) |
+| **Character Vault** | **Lorebook editor** |
+| ![Searchable character collection organized into folders](assets/readme/character-vault.png) | ![Lorebook workspace with folders, keys, and activation settings](assets/readme/lorebook-editor.png) |
 
 ## Quick start
 

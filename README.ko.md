@@ -12,7 +12,6 @@
 
 <p align="center">
   <a href="https://github.com/rpaddict/RisuBard/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/rpaddict/RisuBard?display_name=tag&sort=semver"></a>
-  <a href="https://github.com/rpaddict/RisuBard/actions/workflows/pr-check.yml"><img alt="빌드 상태" src="https://github.com/rpaddict/RisuBard/actions/workflows/pr-check.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="라이선스: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
 </p>
 
@@ -33,7 +32,7 @@ RisuBard는 모델의 컨텍스트 창보다 오래 이어지는 캐릭터 채�
 
 - [왜 RisuBard인가?](#왜-risubard인가)
 - [작동 방식](#작동-방식)
-- [주요 특징](#주요-특징)
+- [주요 기능](#주요-기능)
 - [빠른 시작](#빠른-시작)
 - [호환성과 데이터 이전](#호환성과-데이터-이전)
 - [데이터와 개인정보](#데이터와-개인정보)
@@ -92,40 +91,21 @@ RisuBard는 세 가지 책임을 분리합니다.
 
 필수 컨텍스트는 조용히 버리지 않습니다. 선택 자료는 관련도와 우선순위에 따라 고르고, 채팅 길이나 위키 크기가 커져도 예산은 자동으로 늘어나지 않습니다. 요청 manifest는 API 키나 숨겨진 사고 과정을 기록하지 않으면서 무엇이 포함·제외·축소되었는지 보여줍니다.
 
-## 주요 특징
+## 주요 기능
 
-### 고정 예산 서사 메모리
+- **위키 기반 장기 서사 메모리:** 오래된 챗 기록의 반복 전송을 최소화하고, 지속되는 사건과 인물 상태를 BardWiki에 기록한 뒤 요청마다 관련 메모를 찾아 조립합니다. 이야기가 길어져도 모델 컨텍스트는 제한된 크기로 유지됩니다.
+- **비주얼 노벨식 세이브/로드:** 각 챗에 이름 있는 체크포인트를 만들고 최근 대화를 미리 본 뒤 원하는 시점으로 복원할 수 있습니다. 하나의 되돌릴 수 없는 타임라인에 대화를 가둘 필요가 없습니다.
+- **일반 파일로 소유하는 데이터:** 캐릭터, 채팅, 설정, 인덱스와 서사 메모리를 하나의 불투명한 데이터베이스가 아닌 일반 파일로 저장합니다. 원자 저장, journal, revision과 휴지통 삭제로 손상 범위를 제한하고 복구하기 쉽게 만듭니다.
+- **챗별 페르소나와 AI 빌더:** 챗마다 서로 다른 페르소나를 지정하고 AI의 도움으로 페르소나를 만들거나 다듬을 수 있습니다.
+- **캐릭터 저장소:** 많은 캐릭터를 한 화면에서 탐색하고 검색하며 폴더별로 분류하고, 이동·복제·가져오기·내보내기·정리할 수 있습니다.
+- **로어북 작업공간:** 항목 검색과 폴더 정리, 키와 활성화 규칙 편집을 하나의 강력한 편집기에서 처리합니다.
+- **새롭게 설계한 인터페이스:** 챗, 설정, 메모리, 캐릭터, 페르소나, 세이브와 로어북 작업 흐름을 일상적으로 사용하기 쉽게 다시 설계했습니다.
 
-- 최근 메시지, 선택 메모리, 분석 입력과 응답 예약량에 명시적인 상한 적용
-- 전체 기록 재전송 대신 요청마다 관련 기억 선별
-- 메모리 inquiry가 실패해도 캐릭터 기반과 최근 메시지로 안전하게 진행
-
-### Markdown BardWiki
-
-- 캐릭터, 장소, 세력, 사물, 개념, 장면과 사건을 Obsidian 호환 Markdown으로 저장
-- 자동 서사 분석과 사용자의 직접 편집을 함께 지원
-- 문서별 `always`, `auto`, `never` 컨텍스트 정책
-- history, snapshot, 휴지통, 건강도 검사와 hash 기반 충돌 방지
-
-### 파일 정본 사용자 데이터
-
-- SQLite나 하나의 데이터베이스 BLOB 대신 JSON, JSONL, Markdown과 content-addressed 에셋 사용
-- 캐릭터, 채팅, 에셋과 인덱스의 지연 로딩
-- 원자 저장, 복구 가능한 journal, revision과 휴지통 삭제
-- 기존 클라이언트와 내보내기를 위한 재생성 가능한 호환 투영본
-
-### RisuAI 생태계 호환성
-
-- CHARX 캐릭터 카드, 로어북, 모듈, 프롬프트 프리셋과 기존 모델 제공자 경로
-- 기존 `.bin`, save 폴더와 선택적인 `risuai.db` 이전 경로
-- 기존 워크플로로 데이터를 옮길 수 있는 호환 내보내기
-- 기존 모듈과 플러그인 연결 경계 유지
-
-### 셀프 호스팅과 포터블 배포
-
-- Windows x64, Linux x64/ARM64, macOS Apple Silicon용 포터블 패키지
-- Docker, 소스 설치와 Android Termux 가이드
-- 포터블 패키지의 선택적 업데이트 알림과 셀프 업데이트
+| BardWiki 메모리 작업공간 | 채팅 세이브/로드 |
+| --- | --- |
+| ![캐릭터 채팅 옆에서 사용하는 BardWiki](assets/readme/bardwiki-workspace.png) | ![최근 대화 미리보기가 포함된 채팅 세이브 슬롯](assets/readme/chat-save-slots.png) |
+| **캐릭터 저장소** | **로어북 편집기** |
+| ![폴더와 검색을 지원하는 캐릭터 저장소](assets/readme/character-vault.png) | ![폴더, 키와 활성화 설정을 편집하는 로어북 작업공간](assets/readme/lorebook-editor.png) |
 
 ## 빠른 시작
 
