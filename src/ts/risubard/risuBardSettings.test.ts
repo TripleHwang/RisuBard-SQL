@@ -82,6 +82,9 @@ describe('RisuBard analysis settings', () => {
         expect(policy).toContain('### 작중 행적')
         expect(policy).toContain('최대 16개')
         expect(policy).toContain('[[사건 문서 제목]]')
+        expect(policy).toContain('원문에 없는 행동 대상이나 장소를 보충하지 않는다')
+        expect(policy).toContain('시간적 선후를 인과로 바꾸지 않는다')
+        expect(policy).toContain('사건 당시 인물별 지식 경계를 유지한다')
     })
 
     test('resolves current-chat overrides over normalized global defaults', () => {
