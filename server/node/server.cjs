@@ -25,7 +25,7 @@ const getVips = () => {
 }
 const { kvGet, kvSet, kvSetMany, kvReplacePrefixesAsync, kvReplaceAllAsync, kvDel, kvList,
         kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
-        gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
+        gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
     logger, installProcessHandlers, expressErrorMiddleware,
@@ -121,11 +121,10 @@ function currentPersistWarning() {
     return lastPersistFailure;
 }
 
-// ─── Server-side database backup (DB-only snapshots) ────────────────────────
+// ─── Compatibility snapshot retention and file-object GC ───────────────────
 //
-// Snapshots live as `database/dbbackup-{ts}.bin` keys inside the kv table.
-// They're created on every successful persist (with a cooldown) and rotated
-// to fit user-configured count/size limits — see SNAPSHOT_LIMIT_* below.
+// Existing `database/dbbackup-{ts}.bin` keys remain readable for old clients,
+// but the file-native runtime no longer creates new compatibility snapshots.
 const SNAPSHOT_LIMIT_COUNT_KEY = 'config/snapshot-max-count';
 const SNAPSHOT_LIMIT_BYTES_KEY = 'config/snapshot-max-bytes';
 const SNAPSHOT_LIMIT_DEFAULT_COUNT = 20;
@@ -135,12 +134,10 @@ const SNAPSHOT_LIMIT_MIN_COUNT = 1;
 const SNAPSHOT_LIMIT_MAX_COUNT = 100;
 const SNAPSHOT_LIMIT_MIN_BYTES = 10 * 1024 * 1024;        // 10 MB
 const SNAPSHOT_LIMIT_MAX_BYTES = 50 * 1024 * 1024 * 1024; // 50 GB
-const LEGACY_BACKUP_INTERVAL_ENV = Buffer.from('UE9DS0VUUklTVV9CQUNLVVBfSU5URVJWQUxfTVM=', 'base64').toString('utf8');
-const backupIntervalOverride = process.env.RISUBARD_BACKUP_INTERVAL_MS ?? process.env[LEGACY_BACKUP_INTERVAL_ENV];
-const BACKUP_INTERVAL_MS = backupIntervalOverride
-    ? Number(backupIntervalOverride)
-    : 5 * 60 * 1000; // 5 minutes (override for tests to force snapshot creation)
-let lastBackupTime = null;
+const GC_INTERVAL_MS = 5 * 60 * 1000;
+const GC_MIN_AGE_MS = 60 * 60 * 1000;
+const GC_BATCH_SIZE = 5000;
+let lastGcTime = null;
 
 function readSnapshotConfigInt(key, fallback, min, max) {
     try {
@@ -214,16 +211,15 @@ function snapshotUsage() {
     return { count: keys.length, bytes, logicalBytes };
 }
 
-function createBackupAndRotate() {
+function maybeCollectUnreferencedObjects() {
     const now = Date.now();
-    if (lastBackupTime && now - lastBackupTime < BACKUP_INTERVAL_MS) {
-        return;
+    if (lastGcTime && now - lastGcTime < GC_INTERVAL_MS) return;
+    lastGcTime = now;
+    try {
+        gcChunks({ minAgeMs: GC_MIN_AGE_MS, maxDeletes: GC_BATCH_SIZE, now });
+    } catch (error) {
+        logger.warn('[File GC] background cleanup failed:', error?.message || error);
     }
-    lastBackupTime = now;
-
-    const backupKey = `${DB_BACKUP_PREFIX}${(now / 100).toFixed()}.bin`;
-    kvCopyValue('database/database.bin', backupKey);
-    trimSnapshotsToLimits();
 }
 
 async function flushPendingDb() {
@@ -242,7 +238,7 @@ async function flushPendingDb() {
                 persistCanonicalProjection(fullDb);
             }
         }
-        createBackupAndRotate();
+        maybeCollectUnreferencedObjects();
     }
 }
 
@@ -297,7 +293,7 @@ function normalizeOrphanFolderIds(dbObj) {
 }
 
 async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
-    const { createBackup = false, migrationResult = null } = options;
+    const { runMaintenance = false, migrationResult = null } = options;
     // Convert legacy REMOTE-block layouts to inline format before decoding.
     // If migration ran it overwrote database.bin, so the caller's `raw` is
     // stale and we re-read from KV. Idempotent on the no-op path.
@@ -331,9 +327,7 @@ async function decodeDatabaseWithPersistentChatIds(raw, options = {}) {
     if (needsPersist) {
         kvSet('database/database.bin', Buffer.from(encodeRisuSaveLegacy(dbObj)));
         persistCanonicalProjection(dbObj);
-        if (createBackup) {
-            createBackupAndRotate();
-        }
+        if (runMaintenance) maybeCollectUnreferencedObjects();
     }
     if (migrationResult) {
         migrationResult.coldStorageFailed = coldRestoreResult.failed;
@@ -523,10 +517,8 @@ async function migrateRemoteBlocksIfNeeded() {
     logger.info('[Migration] REMOTE blocks detected in database.bin; converting to inline format');
 
     // Pre-migration backup so a botched migration can be rolled back manually.
-    // Use a dedicated prefix — `database/dbbackup-` is on a 20-snapshot rotation
-    // whose timestamp parser would assign this entry ts=0 (because of the
-    // non-numeric suffix), making it the first to evict. The migration safety
-    // net must outlive ordinary backup churn.
+    // Use a dedicated prefix so compatibility-snapshot trimming or manual
+    // removal cannot evict this migration safety copy.
     const backupKey = `migration-backup/pre-remote-fix-${Date.now()}.bin`;
     kvCopyValue('database/database.bin', backupKey);
 
@@ -578,7 +570,7 @@ async function ensureChatStore() {
         return;
     }
     const dbObj = await decodeDatabaseWithPersistentChatIds(raw, {
-        createBackup: true,
+        runMaintenance: true,
     });
     initChatStore(dbObj);
 }
@@ -2273,7 +2265,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     }
 
     await flushPendingDb();
-    createBackupAndRotate();
+    maybeCollectUnreferencedObjects();
 
     try {
         for await (const chunk of dataSource) {
@@ -2480,7 +2472,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     if (dbRaw) {
         const migration = {};
         const dbObj = await decodeDatabaseWithPersistentChatIds(dbRaw, {
-            createBackup: false,
+            runMaintenance: false,
             migrationResult: migration,
         });
         coldStorageFailed = migration.coldStorageFailed || 0;
@@ -3384,7 +3376,7 @@ app.get('/api/read', async (req, res, next) => {
             if (key === 'database/database.bin') {
                 try {
                     const dbObj = await decodeDatabaseWithPersistentChatIds(value, {
-                        createBackup: true,
+                        runMaintenance: true,
                     });
                     initChatStore(dbObj);
                     const stripped = normalizeJSON(stripChatsFromDb(dbObj));
@@ -3656,7 +3648,7 @@ app.post('/api/write', async (req, res, next) => {
                 }
                 // ETag based on stripped version (what client sees)
                 dbEtag = computeBufferEtag(fileContent);
-                createBackupAndRotate();
+                maybeCollectUnreferencedObjects();
             }
 
             res.send({
@@ -3818,9 +3810,9 @@ app.post('/api/patch', async (req, res, next) => {
                     clearPersistFailure();
                     if (decodedKey === 'database/database.bin') {
                         try {
-                            createBackupAndRotate();
+                            maybeCollectUnreferencedObjects();
                         } catch (backupErr) {
-                            logger.warn(`[Patch] Backup rotation failed for ${decodedKey}:`, backupErr);
+                            logger.warn(`[Patch] File GC failed for ${decodedKey}:`, backupErr);
                         }
                     }
                 } catch (error) {
@@ -4884,9 +4876,9 @@ app.post('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
                     // failure isn't attributed to data loss.
                     clearPersistFailure();
                     try {
-                        createBackupAndRotate();
+                        maybeCollectUnreferencedObjects();
                     } catch (backupErr) {
-                        logger.warn('[ChatContent] Backup rotation failed:', backupErr);
+                        logger.warn('[ChatContent] File GC failed:', backupErr);
                     }
                 } catch (error) {
                     logger.error('[ChatContent] Error persisting chat:', error);
@@ -4930,7 +4922,7 @@ function scanHexFilesInDir(dirPath) {
 
 async function replaceWithLegacySaveEntries(entries) {
     await flushPendingDb();
-    createBackupAndRotate();
+    maybeCollectUnreferencedObjects();
     invalidateDbCache();
     await kvReplaceAllAsync(entries);
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
@@ -5259,7 +5251,7 @@ app.get('/api/db/stats', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     try {
         const saveDir = savePath;
-        const fileStoreBytes = kvListWithSizes('').reduce((sum, item) => sum + item.size, 0);
+        const fileStoreBytes = objectStoreBytes();
         const files = {
             db: fileStoreBytes,
             wal: 0,
@@ -5552,32 +5544,21 @@ app.post('/api/db/optimize', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
     try {
-        const saveDir = savePath;
-        const preDbSize = kvListWithSizes('').reduce((sum, item) => sum + item.size, 0);
-
-        const { free } = await diskFreeStat(saveDir);
-        if (preDbSize > 0 && free != null && free < preDbSize * 1.2) {
-            return res.status(400).json({
-                error: 'Insufficient disk space for file-store optimization',
-                required: Math.ceil(preDbSize * 1.2),
-                free,
-            });
-        }
+        const preStoreBytes = objectStoreBytes();
 
         const result = await queueStorageOperation(async () => {
             await flushPendingDb();
             const t0 = Date.now();
-            let gcDeleted = 0;
-            try { gcDeleted = gcChunks(); } catch (e) { logger.warn('[Optimize] object gc failed:', e?.message || e); }
+            const gcResult = gcChunks();
             const elapsed = Date.now() - t0;
-            const postDbSize = kvListWithSizes('').reduce((sum, item) => sum + item.size, 0);
+            const postStoreBytes = objectStoreBytes();
             return {
                 ok: true,
                 elapsedMs: elapsed,
-                preDbSize,
-                postDbSize,
-                reclaimed: Math.max(0, preDbSize - postDbSize),
-                chunksReclaimed: gcDeleted,
+                preDbSize: preStoreBytes,
+                postDbSize: postStoreBytes,
+                reclaimed: gcResult.bytes,
+                chunksReclaimed: gcResult.count,
             };
         });
         res.json(result);
@@ -5707,7 +5688,7 @@ app.post('/api/db/snapshots/restore', async (req, res, next) => {
                 const raw = kvGet(DB_BLOB_KEY);
                 if (raw) {
                     const dbObj = await decodeDatabaseWithPersistentChatIds(raw, {
-                        createBackup: false,
+                        runMaintenance: false,
                     });
                     initChatStore(dbObj);
                     // Migration may have rewritten database.bin — etag must

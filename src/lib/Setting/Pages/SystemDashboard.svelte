@@ -13,34 +13,25 @@
         SparklesIcon,
         TriangleAlertIcon,
         InfoIcon,
-        ArchiveIcon,
         BlocksIcon,
-        ShieldCheckIcon,
-        SaveIcon,
     } from '@lucide/svelte'
     import { alertConfirm, alertMd, notifyError, notifySuccess } from 'src/ts/alert'
     import { forageStorage } from 'src/ts/globalApi.svelte'
-    import { SystemSubmenuIndex, settingsOpen } from 'src/ts/stores.svelte'
+    import { settingsOpen } from 'src/ts/stores.svelte'
     import { getDatabase } from 'src/ts/storage/database.svelte'
     import { changeChar } from 'src/ts/characters'
-    import { SystemTab } from 'src/ts/routing'
-    import { language, getCurrentLocale } from 'src/lang'
+    import { language } from 'src/lang'
 
     // ── Types ────────────────────────────────────────────────────────────────
     interface PrefixInfo { totalSize: number; count: number }
     interface Stats {
         files: { db: number }
         disk: { free: number | null; total: number | null }
-        backupDisk?: { free: number | null; total: number | null; path?: string; sameAsSaveDir?: boolean }
         storage: { reclaimable: number; mode: string }
         prefixes: Record<string, PrefixInfo>
         kvRows: number
         kvTotalBytes: number
         inlayFsBytes?: number
-        backups: {
-            kv: { count: number; totalSize: number; oldest: number | null; newest: number | null }
-            file: { count: number; totalSize: number; oldest: number | null; newest: number | null }
-        }
         trashed: { count: number; expiredCount: number; available: boolean }
         orphan: { count: number; totalSize: number; available: boolean }
         etag: string | null
@@ -96,19 +87,6 @@
         if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
         return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
     }
-    function fmtDate(ms: number | null | undefined): string {
-        if (!ms) return '—'
-        const d = new Date(ms)
-        return d.toLocaleString(getCurrentLocale(), {
-            year: 'numeric', month: '2-digit', day: '2-digit',
-            hour: '2-digit', minute: '2-digit',
-        })
-    }
-    function fmtDateShort(ms: number | null | undefined): string {
-        if (!ms) return '—'
-        return new Date(ms).toLocaleDateString(getCurrentLocale())
-    }
-
     // ── Fetch ────────────────────────────────────────────────────────────────
     async function loadStats() {
         loading = true
@@ -181,11 +159,7 @@
             })
             const json = await res.json().catch(() => ({}))
             if (!res.ok) {
-                if (json?.error === 'Insufficient disk space for file-store optimization' && json.required && json.free != null) {
-                    notifyError(language.storageOptimizeNeedsSpace(json.required, json.free))
-                } else {
-                    notifyError(language.storageOptimizeFailed + ': ' + (json?.error || `HTTP ${res.status}`))
-                }
+                notifyError(language.storageOptimizeFailed + ': ' + (json?.error || `HTTP ${res.status}`))
                 return
             }
             notifySuccess(language.storageOptimizeDone(json.reclaimed ?? 0, json.elapsedMs ?? 0))
@@ -243,25 +217,13 @@
             { id: 'kv-uncat',        label: language.storageRowKvUncategorized, desc: language.storageRowKvUncategorizedDesc, size: uncategorizedKv,             color: 'bg-stone-600' },
             { id: 'overhead',        label: language.storageRowSqliteOverhead, desc: language.storageRowSqliteOverheadDesc, size: structuralOverhead,            color: 'bg-zinc-500' },
             { id: 'reclaimable',     label: language.storageRowReclaimablePages, desc: language.storageRowReclaimablePagesDesc, size: reclaimable,               color: 'bg-yellow-500' },
-            // File backups are only on the same disk as save/ when sameAsSaveDir
-            // is true. If user pointed backupsDir at a different mount, those
-            // bytes don't belong in this chart's geometry — they're shown in
-            // the dedicated Backups card instead.
-            ...(stats.backupDisk?.sameAsSaveDir !== false
-                ? [{ id: 'file-backup', label: language.storageRowFileBackups, desc: language.storageRowFileBackupsDesc, size: stats.backups.file.totalSize, color: 'bg-fuchsia-500' }]
-                : []),
         ]
         return rows.filter(r => r.size > 0)
     })
 
-    // Footprint relative to save/ disk — file backups counted only when they
-    // live on the same filesystem as save/ (otherwise they're elsewhere and
-    // don't consume save/ space).
     const risuFootprint = $derived(
         stats
-            ? stats.files.db
-              + (stats.backupDisk?.sameAsSaveDir !== false ? stats.backups.file.totalSize : 0)
-              + (stats.inlayFsBytes ?? 0)
+            ? stats.files.db + (stats.inlayFsBytes ?? 0)
             : 0
     )
 
@@ -676,56 +638,7 @@
         {/if}
     </div>
 
-    <!-- ⑦ Backups ─ summary only; full management lives in the Backups tab ─ -->
-    <div class="border border-darkborderc bg-darkbg/40 rounded-md p-4 mb-4">
-        <div class="flex items-center justify-between gap-2 mb-3">
-            <div class="flex items-center gap-2 text-textcolor">
-                <ArchiveIcon size={16} />
-                <span class="font-medium">{language.storageBackups}</span>
-            </div>
-            <ShButton variant="outline" size="sm" onclick={() => SystemSubmenuIndex.set(SystemTab.Backups)}>
-                {language.storageBackupsManage}
-            </ShButton>
-        </div>
-
-        <div class="flex flex-col gap-1 mb-4">
-            <div class="flex items-baseline justify-between gap-2">
-                <div class="flex items-center gap-2 text-textcolor">
-                    <SaveIcon size={14} />
-                    <span class="font-medium text-sm">{language.storageBackupsManual}</span>
-                </div>
-                <span class="text-textcolor2 text-sm tabular-nums">
-                    {stats.backups.file.count > 0 ? language.storageBackupsCount(stats.backups.file.count, stats.backups.file.totalSize) : language.storageBackupsEmpty}
-                </span>
-            </div>
-            <p class="text-textcolor2 text-sm leading-relaxed">{language.storageBackupsManualDesc}</p>
-            {#if stats.backups.file.oldest && stats.backups.file.newest}
-                <div class="text-textcolor2 text-xs opacity-70 tabular-nums">
-                    {language.storageBackupsRange(fmtDateShort(stats.backups.file.oldest), fmtDateShort(stats.backups.file.newest))}
-                </div>
-            {/if}
-        </div>
-
-        <div class="flex flex-col gap-1 pt-4 border-t border-darkborderc/50">
-            <div class="flex items-baseline justify-between gap-2">
-                <div class="flex items-center gap-2 text-textcolor">
-                    <ShieldCheckIcon size={14} />
-                    <span class="font-medium text-sm">{language.storageBackupsAuto}</span>
-                </div>
-                <span class="text-textcolor2 text-sm tabular-nums">
-                    {stats.backups.kv.count > 0 ? language.storageBackupsCount(stats.backups.kv.count, stats.backups.kv.totalSize) : language.storageBackupsEmpty}
-                </span>
-            </div>
-            <p class="text-textcolor2 text-sm leading-relaxed">{language.storageBackupsAutoDesc}</p>
-            {#if stats.backups.kv.oldest && stats.backups.kv.newest}
-                <div class="text-textcolor2 text-xs opacity-70 tabular-nums">
-                    {language.storageBackupsRange(fmtDate(stats.backups.kv.oldest), fmtDate(stats.backups.kv.newest))}
-                </div>
-            {/if}
-        </div>
-    </div>
-
-    <!-- ⑧ Debug ─────────────────────────────────────────────────────────── -->
+    <!-- ⑦ Debug ─────────────────────────────────────────────────────────── -->
     <ShAccordion name={language.storageDebug} variant="card">
         <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-textcolor2 text-sm font-mono">
             <div>storage_mode</div><div class="text-textcolor">{stats.storage.mode}</div>

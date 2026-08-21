@@ -64,10 +64,54 @@ describe('file-native KV compatibility projection', () => {
             { key: 'assets/a', size: 3 },
             { key: 'assets/b', size: 4 },
         ])
+        expect(store.objectStoreBytes()).toBe(9)
         store.kvDelPrefix('assets/')
         expect(store.kvList()).toEqual(['settings/c'])
         expect(store.reclaimableChunkBytes()).toBe(7)
-        expect(store.gcChunks()).toBe(2)
+        expect(store.gcChunks()).toEqual({ count: 2, bytes: 7 })
+        expect(store.objectStoreBytes()).toBe(2)
+        expect(fs.existsSync(path.join(dataRoot, 'trash'))).toBe(false)
+    })
+
+    it('keeps recent unreachable objects during grace-period cleanup', () => {
+        const dataRoot = root()
+        const store = createFileKv({ dataRoot })
+        const objectsDir = path.join(dataRoot, 'kv', 'objects')
+
+        const oldValue = Buffer.from('old-orphan')
+        store.kvSet('assets/old', oldValue)
+        const oldObject = fs.readdirSync(objectsDir)[0]
+        store.kvSet('assets/old', Buffer.from('current-old'))
+
+        const beforeRecent = new Set(fs.readdirSync(objectsDir))
+        const recentValue = Buffer.from('recent-orphan')
+        store.kvSet('assets/recent', recentValue)
+        const recentObject = fs.readdirSync(objectsDir).find(name => !beforeRecent.has(name))!
+        store.kvSet('assets/recent', Buffer.from('current-recent'))
+
+        const now = Date.now()
+        fs.utimesSync(path.join(objectsDir, oldObject), new Date(now - 2 * 60 * 60 * 1000), new Date(now - 2 * 60 * 60 * 1000))
+        fs.utimesSync(path.join(objectsDir, recentObject), new Date(now - 30 * 60 * 1000), new Date(now - 30 * 60 * 1000))
+
+        expect(store.gcChunks({ minAgeMs: 60 * 60 * 1000, now })).toEqual({
+            count: 1,
+            bytes: oldValue.length,
+        })
+        expect(fs.existsSync(path.join(objectsDir, oldObject))).toBe(false)
+        expect(fs.existsSync(path.join(objectsDir, recentObject))).toBe(true)
+    })
+
+    it('limits automatic cleanup work to the requested batch size', () => {
+        const dataRoot = root()
+        const store = createFileKv({ dataRoot })
+        store.kvSet('assets/a', Buffer.from('old-a'))
+        store.kvSet('assets/a', Buffer.from('current-a'))
+        store.kvSet('assets/b', Buffer.from('old-b'))
+        store.kvSet('assets/b', Buffer.from('current-b'))
+
+        expect(store.reclaimableChunkBytes()).toBe(10)
+        expect(store.gcChunks({ maxDeletes: 1 })).toEqual({ count: 1, bytes: 5 })
+        expect(store.reclaimableChunkBytes()).toBe(5)
     })
 
     it('imports the legacy hexadecimal save-folder layout once without overwriting canonical values', () => {

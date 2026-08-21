@@ -5,7 +5,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
-const { atomicWriteJson, moveToTrash, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
+const { atomicWriteJson, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
 
 const MANIFEST_PATH = 'kv/manifest.json';
 const HEX_MIGRATION_MARKER = 'migration/legacy-hex-save-folder.json';
@@ -241,10 +241,37 @@ function createFileKv(options = {}) {
         }, 0);
     }
 
-    function gcChunks() {
+    function objectStoreBytes() {
+        const directory = path.join(dataRoot, 'kv', 'objects');
+        if (!fs.existsSync(directory)) return 0;
+        return fs.readdirSync(directory).reduce((total, name) => {
+            if (!/^[a-f0-9]{64}$/.test(name)) return total;
+            try { return total + fs.statSync(path.join(directory, name)).size; }
+            catch { return total; }
+        }, 0);
+    }
+
+    function gcChunks(options = {}) {
+        const minAgeMs = Number.isFinite(options.minAgeMs) ? Math.max(0, options.minAgeMs) : 0;
+        const maxDeletes = Number.isFinite(options.maxDeletes)
+            ? Math.max(0, Math.floor(options.maxDeletes))
+            : Number.POSITIVE_INFINITY;
+        const now = Number.isFinite(options.now) ? options.now : Date.now();
         const objects = reclaimableObjects();
-        for (const name of objects) moveToTrash(dataRoot, path.join('kv', 'objects', name));
-        return objects.length;
+        let count = 0;
+        let bytes = 0;
+        for (const name of objects) {
+            if (count >= maxDeletes) break;
+            const objectPath = path.join(dataRoot, 'kv', 'objects', name);
+            try {
+                const stat = fs.statSync(objectPath);
+                if (minAgeMs > 0 && now - stat.mtimeMs < minAgeMs) continue;
+                fs.unlinkSync(objectPath);
+                count += 1;
+                bytes += stat.size;
+            } catch {}
+        }
+        return { count, bytes };
     }
 
     function snapshotFootprint(key) {
@@ -291,6 +318,7 @@ function createFileKv(options = {}) {
         kvListWithSizes,
         gcChunks,
         reclaimableChunkBytes,
+        objectStoreBytes,
         snapshotFootprint,
     };
 }

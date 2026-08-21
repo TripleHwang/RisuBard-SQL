@@ -2289,7 +2289,7 @@ export const languageEnglish = {
     storageOptimizeBarUsed: "In use",
     storageOptimizeBarReclaimable: "Reclaimable",
     storageOptimizeWhat: "Cleanup removes unreferenced content-addressed objects after validating the active manifest. Canonical user files are not modified.",
-    storageOptimizeWhen: "Run this after a large delete or import when the unreferenced-object portion grows. Saves pause briefly while manifests are checked.",
+    storageOptimizeWhen: "Unreferenced objects older than one hour are cleaned automatically in the background. Run cleanup now to reclaim space immediately.",
     storageOptimizeConfirm: "Clean up now? Server saves will pause for a few seconds.",
     storageOptimizeNeedsSpace: (need: number, free: number) =>
         `Not enough disk space. Need ~${(need / 1024 / 1024).toFixed(0)} MB, free ${(free / 1024 / 1024).toFixed(0)} MB.`,
@@ -2342,7 +2342,7 @@ export const languageEnglish = {
     // Data migration (formerly "Account & Files")
     migration: "Data Migration",
     migrationDesc: "Move data between RisuAI (or compatible systems) and RisuBard: import from upstream, or export to upstream-compatible format.",
-    migrationInfoBackupMoved: "Server backups, local backups, and DB snapshots have moved to [System → Backups].",
+    migrationInfoBackupMoved: "Full backup export and settings backup have moved to [System → Backups].",
     migrationGotoBackupTab: "Open Backups tab",
     migrationLegacyAccordion: "RisuAI-style backup (legacy)",
     migrationLegacyDesc: "Helpers for backing up and exporting in upstream RisuAI-compatible formats. Use the Backups tab for everyday backup tasks.",
@@ -2352,7 +2352,7 @@ export const languageEnglish = {
 
     // System → Backups tab
     systemBackups: "Backups",
-    backupTabDesc: "Manage snapshots, full backups, and local backups in one place.",
+    backupTabDesc: "Export all user data as a full backup or restore it from a file.",
 
     backupSnapshot: "Snapshot (DB only)",
     backupSnapshotEmpty: "No snapshots.",
@@ -2419,8 +2419,8 @@ export const languageEnglish = {
     backupServerPathFailed: "Failed to update backup location",
 
     backupLocal: "Local backup",
-    backupLocalDesc: "Download a backup to your device or restore from a file on your device.",
-    backupLocalDownload: "Download backup to device",
+    backupLocalDesc: "Download or restore a full backup containing characters, chats, assets, settings, BardWiki, and novelist manuscripts.",
+    backupLocalDownload: "Download full backup",
     backupLocalDownloadDesc: "Generate a fresh backup from current data and download it directly to your device.",
     backupLocalRestoreDesc: "Restore from a backup file on your device.",
 
@@ -2456,7 +2456,7 @@ export const languageEnglish = {
     moveInsteadOfCopyOnCMPConvert: "Move Instead of Copy on CMP Convert",
 
     showRequestStatus: "Show request status",
-    risuBardMemoryWiki: "RisuBard Memory",
+    risuBardMemoryWiki: "BARDWIKI - RisuBard Memory",
     risuBardMemoryWikiDescription: "Inspect current memory and stage explicit writer changes for this chat.",
     risuBardSettings: {
         common: {
@@ -2545,7 +2545,7 @@ export const languageEnglish = {
     risuBardMemoryEmpty: "No RisuBard memory has been created for this chat yet.",
     risuBardMemoryLoadFailed: "Could not load this chat's memory.",
     risuBardMemoryRefresh: "Refresh",
-    risuBardMemoryOpenManual: "Open manual BardWiki writing",
+    risuBardMemoryOpenManual: "Open BARDWIKI",
     risuBardAutoWiki: "Write BardWiki automatically after message generation",
     risuBardAutoWikiOn: "Automatic BardWiki writing on",
     risuBardAutoWikiOff: "Automatic BardWiki writing off",

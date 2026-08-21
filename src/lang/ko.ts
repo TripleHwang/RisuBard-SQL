@@ -2474,7 +2474,7 @@ export const languageKorean = {
   storageOptimizeWhat:
     "활성 manifest를 검증한 뒤 참조되지 않는 content-addressed 오브젝트만 제거합니다. 사용자 정본 파일은 변경하지 않습니다.",
   storageOptimizeWhen:
-    "큰 삭제나 가져오기 뒤 미참조 오브젝트가 쌓였을 때 실행합니다. manifest를 확인하는 동안 저장이 잠시 멈춥니다.",
+    "1시간이 지난 미참조 오브젝트는 백그라운드에서 자동 정리됩니다. 즉시 공간을 회수하려면 지금 정리를 실행하세요.",
   storageOptimizeConfirm: "지금 정리할까요? 서버 저장이 수 초간 멈춥니다.",
   storageOptimizeNeedsSpace: (need: number, free: number) =>
     `디스크 여유가 부족합니다. 약 ${(need / 1024 / 1024).toFixed(0)} MB 필요, 여유 ${(free / 1024 / 1024).toFixed(0)} MB.`,
@@ -2535,7 +2535,7 @@ export const languageKorean = {
   migrationDesc:
     "원본 RisuAI(또는 호환 시스템)에서 데이터를 가져오거나 리스바드 데이터를 원본 호환 형식으로 내보냅니다.",
   migrationInfoBackupMoved:
-    "서버 백업, 로컬 백업, 자동 스냅샷 관리는 [시스템 → 백업] 탭으로 이동했습니다.",
+    "전체 백업 내보내기와 설정 백업은 [시스템 → 백업] 탭으로 이동했습니다.",
   migrationGotoBackupTab: "백업 탭 열기",
   migrationLegacyAccordion: "기존 리스 방식으로 백업 (레거시)",
   migrationLegacyDesc:
@@ -2547,7 +2547,7 @@ export const languageKorean = {
 
   // 시스템 → 백업 탭
   systemBackups: "백업",
-  backupTabDesc: "스냅샷, 백업, 로컬 백업을 한곳에서 관리합니다.",
+  backupTabDesc: "전체 사용자 데이터 백업을 내보내거나 파일에서 복원합니다.",
 
   backupSnapshot: "스냅샷 (DB만)",
   backupSnapshotEmpty: "스냅샷이 없습니다.",
@@ -2621,8 +2621,8 @@ export const languageKorean = {
 
   backupLocal: "로컬 백업",
   backupLocalDesc:
-    "사용자 기기로 백업을 다운로드하거나 기기 파일에서 복원합니다.",
-  backupLocalDownload: "로컬 백업 다운로드",
+    "캐릭터, 채팅, 에셋, 설정, BardWiki와 소설가 원고를 모두 포함한 전체 백업을 다운로드하거나 파일에서 복원합니다.",
+  backupLocalDownload: "전체 백업 다운로드",
   backupLocalDownloadDesc:
     "현재 데이터로 새 백업을 만들어 사용자 기기로 즉시 다운로드합니다.",
   backupLocalRestoreDesc: "사용자 기기의 백업 파일에서 복원합니다.",
@@ -2660,7 +2660,7 @@ export const languageKorean = {
   hideRecentChats: "대화 목록 숨기기",
 
   showRequestStatus: "요청 상태 표시",
-  risuBardMemoryWiki: "리스바드 메모리",
+  risuBardMemoryWiki: "BARDWIKI - 리스바드 메모리",
   risuBardMemoryWikiDescription: "현재 메모리를 살펴보고 명시적인 작가 변경을 준비할 수 있습니다.",
   risuBardSettings: {
     common: {
@@ -2749,7 +2749,7 @@ export const languageKorean = {
   risuBardMemoryEmpty: "이 채팅에는 아직 리스바드 메모리가 없습니다.",
   risuBardMemoryLoadFailed: "이 채팅의 메모리를 불러오지 못했습니다.",
   risuBardMemoryRefresh: "새로고침",
-  risuBardMemoryOpenManual: "BardWiki 수동 작성 열기",
+  risuBardMemoryOpenManual: "BARDWIKI 열기",
   risuBardAutoWiki: "메시지 생성 후 BardWiki 자동 작성",
   risuBardAutoWikiOn: "BardWiki 자동 작성 켜짐",
   risuBardAutoWikiOff: "BardWiki 자동 작성 꺼짐",

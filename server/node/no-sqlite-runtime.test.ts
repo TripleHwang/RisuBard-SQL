@@ -96,6 +96,26 @@ describe('native SQLite removal', () => {
         expect(server).not.toMatch(/const (?:pageSize|pageCount|freelistCount|journalMode|autoVacuum) =/)
     })
 
+    it('uses physical object-store bytes and reports bytes deleted by file GC', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+
+        expect(server).toContain('objectStoreBytes')
+        expect(server).toContain('const fileStoreBytes = objectStoreBytes();')
+        expect(server).toContain('const preStoreBytes = objectStoreBytes();')
+        expect(server).toContain('const gcResult = gcChunks();')
+        expect(server).toContain('reclaimed: gcResult.bytes')
+    })
+
+    it('does not create automatic compatibility snapshots and runs grace-period object GC instead', () => {
+        const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
+
+        expect(server).not.toContain('function createBackupAndRotate')
+        expect(server).not.toContain('BACKUP_INTERVAL_MS')
+        expect(server).not.toContain('createBackupAndRotate()')
+        expect(server).toContain('function maybeCollectUnreferencedObjects')
+        expect(server).toContain('gcChunks({ minAgeMs: GC_MIN_AGE_MS, maxDeletes: GC_BATCH_SIZE, now })')
+    })
+
     it('does not retain stale SQLite runtime wording in active frontend paths', () => {
         const server = fs.readFileSync(path.join(root, 'server', 'node', 'server.cjs'), 'utf8')
         const dashboard = fs.readFileSync(
@@ -108,8 +128,8 @@ describe('native SQLite removal', () => {
         )
         const diskSpaceError = 'Insufficient disk space for file-store optimization'
 
-        expect(server).toContain(diskSpaceError)
-        expect(dashboard).toContain(diskSpaceError)
+        expect(server).not.toContain(diskSpaceError)
+        expect(dashboard).not.toContain(diskSpaceError)
         expect(dashboard).not.toContain('VACUUM')
         expect(chatDraft).not.toContain('server SQLite `kv` table')
     })
@@ -122,7 +142,7 @@ describe('native SQLite removal', () => {
         )
 
         expect(migrationBlock.match(/await flushPendingDb\(\)/g)).toHaveLength(1)
-        expect(migrationBlock.match(/createBackupAndRotate\(\)/g)).toHaveLength(1)
+        expect(migrationBlock.match(/maybeCollectUnreferencedObjects\(\)/g)).toHaveLength(1)
         expect(migrationBlock.match(/invalidateDbCache\(\)/g)).toHaveLength(1)
         expect(migrationBlock.match(/kvReplaceAllAsync\(/g)).toHaveLength(1)
     })

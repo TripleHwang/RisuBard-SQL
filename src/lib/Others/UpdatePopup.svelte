@@ -1,7 +1,7 @@
 <script lang="ts">
     import { updatePopupStore, dismissUpdatePopup, selfUpdateProgressStore, executeSelfUpdate, type UpdateInfo, type SelfUpdateProgress } from "src/ts/update";
     import { openURL } from "src/ts/globalApi.svelte";
-    import { SaveServerBackup } from "src/ts/drive/backuplocal";
+    import { SaveLocalBackup } from "src/ts/drive/backuplocal";
     import { language } from "src/lang";
     import { ArrowUpCircle, AlertTriangle, Download, Loader, CheckCircle, XCircle, SaveIcon } from "@lucide/svelte";
     import ShDialog from "src/lib/UI/GUI/ShDialog.svelte";
@@ -145,7 +145,7 @@
         <ShButton variant="outline" onclick={dismissUpdatePopup}>
             {language.updatePopupLater}
         </ShButton>
-        <ShButton variant="outline" onclick={() => SaveServerBackup()}>
+        <ShButton variant="outline" onclick={() => SaveLocalBackup()}>
             <SaveIcon size={14} />
             {language.updatePopupBackup}
         </ShButton>
