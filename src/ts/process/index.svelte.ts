@@ -73,14 +73,24 @@ import {
     compileWikiPromptGuide,
     resolveWikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
+import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
+
+function resolvedRisuBardSettings(chat?: Chat) {
+    return resolveRisuBardChatSettings(DBState.db, chat?.risuBardSettings)
+}
+
+function findRisuBardChat(chatId?: string): Chat | undefined {
+    if (!chatId) return undefined
+    return DBState.db.characters.flatMap((character) => character.chats)
+        .find((chat) => chat.id === chatId)
+}
 
 const storedResponseMemoryAnalysis = createStoredResponseMemoryAnalysis({
     requestModel: requestChatData,
     fetchImpl: fetch,
     createAuth: () => forageStorage.createAuth(),
-    getModelMode: () => DBState.db.risuBardModelMode === 'model'
-        ? 'model'
-        : 'memory',
+    getModelMode: (chatId) =>
+        resolvedRisuBardSettings(findRisuBardChat(chatId)).risuBardModelMode,
     onError(error) {
         console.warn('[RisuBard memory analysis]', error)
     },
@@ -110,6 +120,7 @@ async function confirmProjectedNarrativeTurn(input: {
         const chat = character?.chats.find(
             (item) => item.id === input.chatId
         )
+        const settings = resolvedRisuBardSettings(chat)
         const wikiPromptPreset = resolveWikiPromptPreset(
             DBState.db.risuBardWikiPromptPresets,
             DBState.db.risuBardChatWikiPromptPresetId
@@ -118,15 +129,15 @@ async function confirmProjectedNarrativeTurn(input: {
             characterId: input.characterId,
             chatId: input.chatId,
             messages: input.messages,
-            analysisTokenLimit: DBState.db.risuBardAnalysisTokenLimit,
-            additionalSearchLimit: DBState.db.risuBardAdditionalSearchLimit,
-            canonicalTargetLimit: DBState.db.risuBardCanonicalTargetLimit,
+            analysisTokenLimit: settings.risuBardAnalysisTokenLimit,
+            additionalSearchLimit: settings.risuBardAdditionalSearchLimit,
+            canonicalTargetLimit: settings.risuBardCanonicalTargetLimit,
             inquiryTokenBudget: {
-                target: DBState.db.risuBardInquiryTargetTokenBudget,
-                maximum: DBState.db.risuBardInquiryMaximumTokenBudget,
+                target: settings.risuBardInquiryTargetTokenBudget,
+                maximum: settings.risuBardInquiryMaximumTokenBudget,
             },
-            canonicalWritingStyle: DBState.db.risuBardCanonicalWritingStyle,
-            canonicalCustomStyle: DBState.db.risuBardCanonicalCustomStyle,
+            canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
+            canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
             ...(wikiPromptPreset ? {
                 wikiPromptGuide: compileWikiPromptGuide(wikiPromptPreset, {
                     characterGuide: risuChatParser(character?.risuBardWikiGuide ?? '', {
@@ -146,7 +157,7 @@ async function confirmProjectedNarrativeTurn(input: {
                 contextMessages: projectRecentMemoryMessages(
                     chat.message,
                     normalizeNarrativeWorkingMessageLimit(
-                        DBState.db.risuBardRecentMessageCount
+                        settings.risuBardRecentMessageCount
                     ),
                     input.targetMessageId
                 ),
@@ -256,6 +267,7 @@ export async function executeCurrentNarrativeWikiCommand(
     }
     const characterId = character.chaId
     const chatId = ensureNarrativeSessionChatId(chat, v4)
+    const settings = resolvedRisuBardSettings(chat)
     const createAuth = () => forageStorage.createAuth()
     const wiki = await loadNarrativeMemoryWiki({
         characterId,
@@ -278,14 +290,14 @@ export async function executeCurrentNarrativeWikiCommand(
             instruction,
             documents: wiki.documents,
             currentMessages: projected.messages,
-            maxTokens: DBState.db.risuBardAnalysisTokenLimit ?? 12_000,
+            maxTokens: settings.risuBardAnalysisTokenLimit,
             requestModel: (request) => requestChatData(
                 {
                     ...request,
                     realChatId: chatId,
                     logSource: 'wiki-admin',
                 },
-                DBState.db.risuBardModelMode === 'model' ? 'model' : 'memory'
+                settings.risuBardModelMode
             ),
             saveDocument: (document) => saveManualWikiDocument({
                 characterId,
@@ -906,8 +918,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         chatId: narrativeSessionChatId,
                         currentInput,
                         tokenBudget: {
-                            target: DBState.db.risuBardInquiryTargetTokenBudget,
-                            maximum: DBState.db.risuBardInquiryMaximumTokenBudget,
+                            target: resolvedRisuBardSettings(currentChat).risuBardInquiryTargetTokenBudget,
+                            maximum: resolvedRisuBardSettings(currentChat).risuBardInquiryMaximumTokenBudget,
                         },
                         fetchImpl: fetch,
                         createAuth: () => forageStorage.createAuth(),
@@ -1314,7 +1326,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     if(start >= end){
                         break
                     }
-                    let chats = unformated.chats.slice(start, end)
+                    const injectedEnd = Math.min(end, unformated.chats.length)
+                    let chats = unformated.chats.slice(start, injectedEnd)
 
                     if(usingPromptTemplate && DBState.db.promptSettings.sendChatAsSystem && (!card.chatAsOriginalOnSystem)){
                         chats = systemizeChat(chats)
@@ -1414,12 +1427,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     narrativeContextObservation.availableHistoryMessages = ms.length
     const narrativeWorkingMessageLimit =
         normalizeNarrativeWorkingMessageLimit(
-            DBState.db.risuBardResponseMessageCount
+            resolvedRisuBardSettings(currentChat).risuBardResponseMessageCount
         )
     ms = selectNarrativeWorkingMessages(
         ms,
         narrativeWorkingMessageLimit,
-        DBState.db.risuBardResponseExcludeUserMessages !== true
+        !resolvedRisuBardSettings(currentChat).risuBardResponseExcludeUserMessages
     )
     narrativeContextObservation.selectedHistoryMessages = ms.length
 
@@ -1903,11 +1916,15 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         break
                     }
 
-                    let chats = unformated.chats.slice(start, end)
+                    const injectedEnd = Math.min(end, unformated.chats.length)
+                    let chats = unformated.chats.slice(start, injectedEnd)
                     if(usingPromptTemplate && DBState.db.promptSettings.sendChatAsSystem && (!card.chatAsOriginalOnSystem)){
                         chats = systemizeChat(chats)
                     }
-                    pushPrompts(chats, { kind: 'chatHistory' })
+                    pushPrompts(chats, {
+                        kind: 'chatHistory',
+                        name: `${chats.length}개 (${start + 1}~${injectedEnd})`,
+                    })
 
                     if(DBState.db.automaticCachePoint && !hasCachePoint){
                         let pointer = formated.length - 1

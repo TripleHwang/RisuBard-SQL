@@ -76,7 +76,7 @@ interface MemoryAnalysisClientOptions {
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
     onError(error: unknown): void | Promise<void>
-    getModelMode?(): 'memory' | 'model'
+    getModelMode?(chatId?: string): 'memory' | 'model'
     nativeV2Analysis?: boolean
 }
 
@@ -571,7 +571,7 @@ export function createStoredResponseMemoryAnalysis(
     async function requestMemoryModel(
         request: MemoryAnalysisModelCall
     ): Promise<MemoryAnalysisModelResponse> {
-        if (options.getModelMode?.() === 'model') {
+        if (options.getModelMode?.(request.realChatId) === 'model') {
             return options.requestModel(structuredClone(request), 'model')
         }
         const response = await options.requestModel(
@@ -929,6 +929,9 @@ export function createStoredResponseMemoryAnalysis(
                             maxTokens: 4_096,
                             temperature: 0,
                             bias: {},
+                            realChatId: chatId,
+                            logSource: 'memory',
+                            logPurpose: 'bardwiki-analysis',
                         })
                         if (!lifecycle.active) throw expired()
                         if (response.type !== 'success'

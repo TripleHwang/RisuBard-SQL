@@ -353,8 +353,10 @@ export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence)
                 '| 주입 항목 | 토큰 |',
                 '| --- | ---: |',
                 ...request.injectionManifest.items.map((item) => {
-                    const label = item.name
-                        ? `${injectionLabels[item.kind]} · ${escapeTable(item.name)}`
+                    const label = item.kind === 'other' && item.name
+                        ? escapeTable(item.name)
+                        : item.name
+                            ? `${injectionLabels[item.kind]} ${escapeTable(item.name)}`
                         : injectionLabels[item.kind]
                     return `| ${label} | ${number(item.tokens)} |`
                 }),

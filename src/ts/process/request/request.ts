@@ -6,6 +6,7 @@ import { risuChatParser, risuEscape, risuUnescape } from "../../parser/parser.sv
 import { pluginProcess, pluginV2 } from "../../plugins/plugins.svelte";
 import { resolvePluginRequestStatus } from "../../plugins/providerRequestStatus";
 import { getCurrentCharacter, getCurrentChat, getDatabase, type character } from "../../storage/database.svelte";
+import { resolveRisuBardChatSettings } from '../../risubard/risuBardSettings';
 import { tokenizeNum, encodeWithTokenizer } from "../../tokenizer";
 import { v4 as uuidv4 } from "uuid";
 import { simplifySchema, sleep } from "../../util";
@@ -150,7 +151,7 @@ export type requestDataResponse = {
 
 export interface StreamResponseChunk{[key:string]:string}
 
-export async function requestChatData(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
+export async function requestChatData(arg:RequestDataArgumentExtended, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = getDatabase()
     const fallBackModels = createModelAttemptOrder(
         safeStructuredClone(db?.fallbackModels?.[model] ?? [])
@@ -642,9 +643,17 @@ function describeModelPresetError(err: unknown): Record<string, unknown> {
 // tokenizer cost — mobile-friendly), reconciled against the authoritative
 // adapter usage at completion. See .agent/notes/request-status-toast-infra.md.
 
-function statusEnabled(): boolean {
+function statusEnabled(chatId?: string): boolean {
     try {
-        return getDatabase()?.showRequestStatus !== false
+        const db = getDatabase()
+        const chat = chatId
+            ? db.characters.flatMap((character) => character.chats)
+                .find((item) => item.id === chatId)
+            : undefined
+        return resolveRisuBardChatSettings(
+            db,
+            chat?.risuBardSettings,
+        ).showRequestStatus
     } catch {
         return false
     }
@@ -750,7 +759,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // break the aux request before the try). Reporting is gated by db.showRequestStatus.
     const genId = arg.chatId ?? `aux-${uuidv4()}`
     const statusKind = toRequestKind(mode)
-    const reportStatus = statusEnabled() && !!genId
+    const reportStatus = statusEnabled(arg.realChatId) && !!genId
     const logSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
     const logPurpose = arg.logPurpose ?? defaultRequestPurpose(logSource)
 
@@ -1568,7 +1577,7 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
     const isV3Model = arg.aiModel.startsWith('pluginmodel:::')
     const responseModel = isV3Model ? arg.aiModel : 'custom'
     const model = isV3Model ? arg.aiModel.replace('pluginmodel:::', '') : db.currentPluginProvider
-    const reportStatus = statusEnabled()
+    const reportStatus = statusEnabled(arg.realChatId)
         && resolvePluginRequestStatus(pluginV2.providerOptions.get(model))
     const genId = arg.chatId ?? `aux-${uuidv4()}`
     let injectionManifest: RequestInjectionManifest | undefined

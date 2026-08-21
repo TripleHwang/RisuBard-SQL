@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { ActivityIcon, BotIcon, ChevronDownIcon, Clock3Icon, DownloadIcon, FileSearchIcon, RefreshCwIcon } from '@lucide/svelte'
+    import { ActivityIcon, BotIcon, ChevronDownIcon, Clock3Icon, DownloadIcon, FileSearchIcon } from '@lucide/svelte'
     import type { Message } from 'src/ts/storage/database.svelte'
     import {
         RISUBARD_MEMORY_ACTIVITY_EVENT,
@@ -31,7 +31,7 @@
     let { characterId, chatId, messages, onSelectPath }: Props = $props()
     let live = $state<RisuBardLiveActivity[]>([])
     let liveScope = $state('')
-    let evidenceExporting = $state<'markdown' | 'json' | ''>('')
+    let evidenceExporting = $state(false)
     let evidenceExportError = $state('')
     let evidenceLoading = $state(false)
     let evidenceLoadError = $state('')
@@ -122,15 +122,30 @@
     ) => {
         if (!manifest) return []
         const grouped = new Map<string, number>()
+        const chatItems = manifest.items.filter((item) => item.kind === 'chatHistory')
         for (const item of manifest.items) {
+            if (item.kind === 'chatHistory') continue
             const label = injectionGroup[item.kind]
             grouped.set(label, (grouped.get(label) ?? 0) + item.tokens)
         }
         return injectionGroupOrder.flatMap((label) => {
+            if (label === '채팅') {
+                return chatItems.map((item) => ({
+                    label: item.name ? `채팅 기록 ${item.name}` : '채팅 기록',
+                    tokens: item.tokens,
+                }))
+            }
             const tokens = grouped.get(label) ?? 0
             return tokens > 0 ? [{ label, tokens }] : []
         })
     }
+    const injectionItemLabel = (
+        item: NonNullable<ChatRequestEvidence['requests'][number]['injectionManifest']>['items'][number]
+    ) => item.kind === 'other' && item.name
+        ? item.name
+        : item.kind === 'other'
+            ? '요청 프롬프트 오버헤드'
+        : `${injectionLabels[item.kind]}${item.name ? ` ${item.name}` : ''}`
     const legacyEvidence = () => buildLegacyChatRequestEvidence(
         chatId,
         generationEntries.map((entry) => ({
@@ -165,9 +180,9 @@
         }
     }
 
-    async function exportRequestEvidence(format: 'markdown' | 'json') {
+    async function exportRequestEvidence() {
         if (evidenceExporting) return
-        evidenceExporting = format
+        evidenceExporting = true
         evidenceExportError = ''
         try {
             const persisted = await loadChatRequestEvidence(chatId)
@@ -184,17 +199,16 @@
                 messages,
             )
             const stamp = evidence.generatedAt.replaceAll(':', '-').replaceAll('.', '-')
-            const extension = format === 'markdown' ? 'md' : 'json'
-            const content = format === 'markdown'
-                ? formatChatRequestEvidenceMarkdown(evidence)
-                : `${JSON.stringify(evidence, null, 2)}\n`
-            await downloadFile(`risubard-chat-evidence-${stamp}.${extension}`, content)
+            await downloadFile(
+                `risubard-chat-evidence-${stamp}.md`,
+                formatChatRequestEvidenceMarkdown(evidence),
+            )
         } catch (error) {
             evidenceExportError = error instanceof Error
                 ? error.message
                 : '요청 증거 파일을 만들지 못했습니다.'
         } finally {
-            evidenceExporting = ''
+            evidenceExporting = false
         }
     }
 
@@ -233,31 +247,16 @@
 <details class="activity-console" open data-memory-activity>
     <summary class="activity-heading">
         <ActivityIcon size={15} /> 작업 로그
-        <span class="history-counts">
-            보존 요청 {requestEntries.length + entries.length}
-            <i>·</i> 이번 실행 이벤트 {live.length}
-        </span>
     </summary>
     <div class="evidence-toolbar">
-        <span>현재 챗의 보존 요청 기록 · 최신순</span>
-        <button
-            type="button"
-            data-refresh-request-evidence
-            disabled={evidenceLoading}
-            onclick={() => refreshStoredEvidence()}
-		><span class:spin={evidenceLoading}><RefreshCwIcon size={12} /></span> 새로고침</button>
         <button
             type="button"
             data-export-request-evidence="markdown"
-            disabled={!!evidenceExporting}
-            onclick={() => exportRequestEvidence('markdown')}
-        ><DownloadIcon size={12} /> Markdown</button>
-        <button
-            type="button"
-            data-export-request-evidence="json"
-            disabled={!!evidenceExporting}
-            onclick={() => exportRequestEvidence('json')}
-        ><DownloadIcon size={12} /> JSON</button>
+            aria-label="Markdown 다운로드"
+            title="Markdown 다운로드"
+            disabled={evidenceExporting}
+            onclick={exportRequestEvidence}
+        ><DownloadIcon size={14} /></button>
     </div>
     {#if evidenceLoadError}<div class="evidence-error" role="status">{evidenceLoadError}</div>{/if}
     {#if evidenceExportError}<div class="evidence-error" role="status">{evidenceExportError}</div>{/if}
@@ -287,10 +286,6 @@
             </details>
         {/if}
 
-        <div class="section-label">
-            <span>보존된 요청 기록</span>
-            <small>세부 정보는 각 카드를 펼쳐 확인</small>
-        </div>
         {#each requestEntries as request (request.id)}
             <details class="request-entry" data-request-source={request.source}>
                 <summary class="request-summary">
@@ -299,18 +294,20 @@
                         <time datetime={request.timestamp}>{formatTimestamp(request.timestamp)}</time>
                         <em class="outcome" data-outcome={request.outcome}>{outcomeLabel(request.outcome)}</em>
                     </span>
-                    <span class="summary-metrics">
-                        <b>입력 {formatNumber(request.inputTokens)}</b>
-                        <b>출력 {formatNumber(request.outputTokens)}</b>
-                        <b>소요 {formatDuration(request.durationMs)}</b>
-                    </span>
-                    {#if request.injectionManifest}
-                        <span class="summary-groups">
+                    <span class="summary-data">
+                        <span class="summary-metrics">
+                            <b>입력 {formatNumber(request.inputTokens)}</b>
+                            <b>출력 {formatNumber(request.outputTokens)}</b>
+                            <b>소요 {formatDuration(request.durationMs)}</b>
+                        </span>
+                        {#if request.injectionManifest}
+                            <span class="summary-groups">
                             {#each groupedInjectionTokens(request.injectionManifest) as group}
                                 <b>{group.label} {formatNumber(group.tokens)}</b>
                             {/each}
-                        </span>
-                    {/if}
+                            </span>
+                        {/if}
+                    </span>
                     <span class="fold-icon"><ChevronDownIcon size={15} /></span>
                 </summary>
                 <div class="request-details">
@@ -334,7 +331,7 @@
                             <div class="composition-list">
                                 {#each request.injectionManifest.items as item}
                                     <span>
-                                        <span>{injectionLabels[item.kind]}{item.name ? ` · ${item.name}` : ''}</span>
+                                        <span>{injectionItemLabel(item)}</span>
                                         <strong>{formatNumber(item.tokens)}</strong>
                                     </span>
                                 {/each}
@@ -411,16 +408,12 @@
 </details>
 
 <style>
-    .activity-console { --activity-font-step: 1px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-top: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 97%, black); }
+    .activity-console { --activity-font-step: 3px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border-top: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 97%, black); }
     .activity-heading { display: flex; align-items: center; gap: .45rem; padding: .62rem .85rem; cursor: pointer; color: var(--risu-theme-textcolor); font-size: calc(.74rem + var(--activity-font-step)); font-weight: 800; list-style: none; }
-    .history-counts { display: flex; align-items: center; gap: .32rem; margin-left: auto; color: var(--risu-theme-textcolor2); font: calc(.62rem + var(--activity-font-step)) ui-monospace, monospace; font-style: normal; }
-    .history-counts i { opacity: .45; font-style: normal; }
-    .evidence-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem; padding: 0 .75rem .55rem; color: var(--risu-theme-textcolor2); font-size: calc(.64rem + var(--activity-font-step)); }
-    .evidence-toolbar > span { margin-right: auto; }
+    .evidence-toolbar { display: flex; justify-content: flex-end; padding: 0 .75rem .55rem; color: var(--risu-theme-textcolor2); font-size: calc(.64rem + var(--activity-font-step)); }
     .evidence-toolbar button { display: inline-flex; align-items: center; gap: .25rem; padding: .25rem .42rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 26%, var(--risu-theme-darkborderc)); border-radius: .3rem; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent); font-size: calc(.62rem + var(--activity-font-step)); }
     .evidence-toolbar button:hover:not(:disabled) { background: color-mix(in srgb, var(--risu-theme-primary) 16%, transparent); }
     .evidence-toolbar button:disabled { opacity: .55; }
-    .spin { animation: spin .8s linear infinite; }
     .evidence-error { margin: 0 .75rem .55rem; padding: .42rem .55rem; border-left: 2px solid var(--risu-theme-error); color: var(--risu-theme-error); background: color-mix(in srgb, var(--risu-theme-error) 7%, transparent); font-size: calc(.64rem + var(--activity-font-step)); }
     .activity-stream { display: grid; flex: 1; align-content: start; min-height: 0; overflow: auto; gap: .46rem; padding: 0 .75rem .75rem; }
     .section-label { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; padding: .38rem .1rem .05rem; color: var(--risu-theme-textcolor); font-size: calc(.66rem + var(--activity-font-step)); font-weight: 800; letter-spacing: .02em; }
@@ -436,18 +429,16 @@
     .request-entry::before { position: absolute; inset: 0 auto 0 0; width: 2px; content: ''; background: color-mix(in srgb, var(--risu-theme-primary) 72%, transparent); }
     .request-summary { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .35rem .6rem; padding: .58rem .72rem .58rem .78rem; cursor: pointer; list-style: none; }
     .request-summary:hover { background: color-mix(in srgb, var(--risu-theme-primary) 5%, transparent); }
-    .summary-line, .summary-metrics, .summary-groups { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .42rem; min-width: 0; }
+    .summary-line, .summary-data, .summary-metrics, .summary-groups { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .42rem; min-width: 0; }
     .summary-line { grid-column: 1; }
     .summary-line time { color: var(--risu-theme-textcolor2); font-size: calc(.61rem + var(--activity-font-step)); }
     .request-kind { color: var(--risu-theme-textcolor); font-size: calc(.68rem + var(--activity-font-step)); font-weight: 850; }
-    .request-kind::before { content: '['; color: var(--risu-theme-primary); }
-    .request-kind::after { content: ']'; color: var(--risu-theme-primary); }
     .outcome { padding: .12rem .32rem; border-radius: 999px; font-size: calc(.56rem + var(--activity-font-step)); font-style: normal; font-weight: 800; }
     .outcome[data-outcome='done'] { color: var(--risu-theme-success, #62d394); background: color-mix(in srgb, var(--risu-theme-success, #62d394) 10%, transparent); }
     .outcome[data-outcome='failed'] { color: var(--risu-theme-error); background: color-mix(in srgb, var(--risu-theme-error) 10%, transparent); }
     .outcome[data-outcome='aborted'] { color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-textcolor2) 9%, transparent); }
-    .summary-metrics, .summary-groups { grid-column: 1; }
-    .summary-metrics b, .summary-groups b { padding: .16rem .34rem; border-radius: .26rem; font: 650 calc(.6rem + var(--activity-font-step)) ui-monospace, monospace; }
+    .summary-data { grid-column: 1; }
+    .summary-metrics b, .summary-groups b { padding: .16rem .34rem; border-radius: .26rem; font: 400 calc(.6rem + var(--activity-font-step)) ui-monospace, monospace; }
     .summary-metrics b { color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-textcolor2) 8%, transparent); }
     .summary-groups b { color: var(--risu-theme-textcolor2); border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); background: color-mix(in srgb, var(--risu-theme-primary) 4%, transparent); }
     .fold-icon { grid-column: 2; grid-row: 1 / -1; align-self: center; color: var(--risu-theme-textcolor2); transition: transform .16s ease, color .16s ease; }
@@ -456,13 +447,13 @@
     .metadata-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
     .metadata-grid > span { display: grid; gap: .16rem; min-width: 0; padding: .38rem .44rem; border-radius: .32rem; background: color-mix(in srgb, var(--risu-theme-textcolor2) 5%, transparent); }
     .metadata-grid small { color: var(--risu-theme-textcolor2); font-size: calc(.54rem + var(--activity-font-step)); text-transform: uppercase; letter-spacing: .06em; }
-    .metadata-grid strong, .metadata-grid code { overflow: hidden; color: var(--risu-theme-textcolor); font-size: calc(.61rem + var(--activity-font-step)); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .metadata-grid strong, .metadata-grid code { overflow: hidden; color: var(--risu-theme-textcolor); font-size: calc(.61rem + var(--activity-font-step)); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
     .composition { display: grid; gap: .35rem; }
-    .detail-title { display: flex; align-items: center; gap: .3rem; color: var(--risu-theme-textcolor2); font-size: calc(.58rem + var(--activity-font-step)); font-weight: 800; text-transform: uppercase; letter-spacing: .055em; }
+    .detail-title { display: flex; align-items: center; gap: .3rem; color: var(--risu-theme-textcolor2); font-size: calc(.58rem + var(--activity-font-step)); font-weight: 400; text-transform: uppercase; letter-spacing: .055em; }
     .composition-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .24rem .55rem; }
     .composition-list > span { display: flex; align-items: baseline; justify-content: space-between; gap: .55rem; min-width: 0; padding: .25rem .32rem; border-bottom: 1px dotted color-mix(in srgb, var(--risu-theme-textcolor2) 18%, transparent); color: var(--risu-theme-textcolor2); font-size: calc(.59rem + var(--activity-font-step)); }
     .composition-list > span > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .composition-list strong { flex: 0 0 auto; color: var(--risu-theme-textcolor); font: 650 calc(.58rem + var(--activity-font-step)) ui-monospace, monospace; }
+    .composition-list strong { flex: 0 0 auto; color: var(--risu-theme-textcolor); font: 400 calc(.58rem + var(--activity-font-step)) ui-monospace, monospace; }
     .entry-title { display: flex; align-items: center; gap: .38rem; }
     .entry-title strong { font-size: calc(.64rem + var(--activity-font-step)); }
     time, .empty, .path-list span { color: var(--risu-theme-textcolor2); font-size: calc(.61rem + var(--activity-font-step)); }
@@ -473,10 +464,7 @@
     .path-list button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: .18rem .35rem; border-radius: .25rem; color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); font: calc(.58rem + var(--activity-font-step)) ui-monospace, monospace; text-align: left; }
     .path-list button:hover { background: color-mix(in srgb, var(--risu-theme-primary) 18%, transparent); }
     .empty { padding: 1rem; border: 1px dashed color-mix(in srgb, var(--risu-theme-textcolor2) 20%, transparent); border-radius: .45rem; text-align: center; }
-    @keyframes spin { to { transform: rotate(360deg); } }
     @media (max-width: 720px) {
-        .history-counts { align-items: flex-end; flex-direction: column; gap: .05rem; }
-        .history-counts i { display: none; }
         .metadata-grid, .composition-list, .trace-grid { grid-template-columns: 1fr; }
         .summary-line time { flex-basis: 100%; }
     }

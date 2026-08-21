@@ -2250,6 +2250,7 @@ export interface Chat{
     name:string
     localLore: loreBook[]
     risuBardWikiGuide?: string
+    risuBardSettings?: import('../risubard/risuBardSettings').RisuBardChatSettings
     sdData?:string
     suggestMessages?:string[]
     isStreaming?:boolean

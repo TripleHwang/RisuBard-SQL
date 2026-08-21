@@ -69,22 +69,29 @@ afterEach(async () => {
 })
 
 describe('RisuBardMemoryActivity', () => {
-    it('uses a dedicated vertical log scroller and raises log type by one pixel', () => {
+    it('uses a dedicated vertical log scroller and raises log type by three pixels', () => {
         const source = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardMemoryActivity.svelte'
         ), 'utf8')
         const workspaceSource = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
         ), 'utf8')
+        const processSource = readFileSync(resolve(
+            process.cwd(), 'src/ts/process/index.svelte.ts'
+        ), 'utf8')
         expect(source).toMatch(/\.activity-console\s*\{[^}]*height:\s*100%/s)
         expect(source).toMatch(/\.activity-stream\s*\{[^}]*flex:\s*1/s)
         expect(source).not.toMatch(/\.activity-stream\s*\{[^}]*max-height:/s)
-        expect(source).toContain('--activity-font-step: 1px')
+        expect(source).toContain('--activity-font-step: 3px')
         expect(source).toMatch(/\.activity-heading\s*\{[^}]*font-size:\s*calc\(\.74rem \+ var\(--activity-font-step\)\)/s)
         expect(source).toMatch(/\.metadata-grid small\s*\{[^}]*font-size:\s*calc\(\.54rem \+ var\(--activity-font-step\)\)/s)
+        expect(source).not.toContain('.request-kind::before')
+        expect(source).not.toContain('.request-kind::after')
+        expect(source).toMatch(/\.summary-metrics b, \.summary-groups b\s*\{[^}]*font:\s*400/s)
         expect(workspaceSource).toContain('data-memory-activity-scroll')
         expect(workspaceSource).toMatch(/\.activity-log-scroll\s*\{[^}]*overflow-y:\s*scroll/s)
         expect(workspaceSource).toMatch(/\.activity-log-scroll\s*\{[^}]*scrollbar-gutter:\s*stable/s)
+        expect(processSource).toMatch(/name:\s*`\$\{chats\.length\}개 \(\$\{start \+ 1\}~\$\{injectedEnd\}\)`/)
     })
 
     it('shows a failure published before the log view mounts', async () => {
@@ -298,7 +305,7 @@ describe('RisuBardMemoryActivity', () => {
                         { kind: 'persona', tokens: 200 },
                         { kind: 'wiki', name: 'characters/라비안.md', tokens: 400 },
                         { kind: 'lorebook', name: 'Main', tokens: 500 },
-                        { kind: 'chatHistory', tokens: 600 },
+                        { kind: 'chatHistory', name: '3개 (8~10)', tokens: 600 },
                         { kind: 'instruction', name: 'Guidelines', tokens: 700 },
                     ],
                 },
@@ -322,10 +329,12 @@ describe('RisuBardMemoryActivity', () => {
         expect(summary).toContain('페르소나 200')
         expect(summary).toContain('BardWiki 400')
         expect(summary).toContain('로어북 500')
-        expect(summary).toContain('채팅 600')
-        expect(document.body.textContent).toContain('보존 요청 1')
-        expect(document.body.textContent).toContain('이번 실행 이벤트 0')
+        expect(summary).toContain('채팅 기록 3개 (8~10) 600')
+        expect(document.body.textContent).not.toContain('보존 요청 1')
+        expect(document.body.textContent).not.toContain('이번 실행 이벤트 0')
         expect(card.querySelector('.request-details')?.textContent).toContain('System Rule')
+        expect(card.querySelector('.request-details')?.textContent).toContain('채팅 기록 3개 (8~10)')
+        expect(document.querySelector('.request-kind')?.textContent).not.toMatch(/^\[|\]$/)
     })
 
     it('reloads retained history when a request-log row is persisted', async () => {
@@ -401,7 +410,7 @@ describe('RisuBardMemoryActivity', () => {
         })
     })
 
-    it('exports the current chat request evidence as Markdown or JSON', async () => {
+    it('offers only an icon-labelled Markdown evidence download', async () => {
         mocks.loadChatRequestEvidence.mockResolvedValue({
             schemaVersion: 1,
             generatedAt: '2026-08-12T04:00:00.000Z',
@@ -428,20 +437,10 @@ describe('RisuBardMemoryActivity', () => {
             '[data-export-request-evidence="json"]'
         )
         expect(markdown).not.toBeNull()
-        expect(json).not.toBeNull()
-
-        json?.click()
-        await vi.waitFor(() => {
-            expect(mocks.loadChatRequestEvidence).toHaveBeenCalledWith('chat-evidence')
-            expect(mocks.addRetainedAssistantSummary).toHaveBeenCalledWith(
-                expect.objectContaining({ chatId: 'chat-evidence' }),
-                [],
-            )
-            expect(mocks.downloadFile).toHaveBeenCalledWith(
-                expect.stringMatching(/^risubard-chat-evidence-.*\.json$/),
-                expect.stringContaining('"bodyTokens": 123'),
-            )
-        })
+        expect(markdown?.textContent?.trim()).toBe('')
+        expect(markdown?.getAttribute('aria-label')).toBe('Markdown 다운로드')
+        expect(json).toBeNull()
+        expect(document.querySelector('[data-refresh-request-evidence]')).toBeNull()
         markdown?.click()
         await vi.waitFor(() => expect(mocks.downloadFile).toHaveBeenCalledWith(
             expect.stringMatching(/^risubard-chat-evidence-.*\.md$/),
@@ -479,12 +478,12 @@ describe('RisuBardMemoryActivity', () => {
         })
         await tick()
         document.body.querySelector<HTMLButtonElement>(
-            '[data-export-request-evidence="json"]'
+            '[data-export-request-evidence="markdown"]'
         )?.click()
 
         await vi.waitFor(() => expect(mocks.downloadFile).toHaveBeenCalledWith(
-            expect.stringMatching(/\.json$/),
-            expect.stringContaining('"requestCount": 1'),
+            expect.stringMatching(/\.md$/),
+            expect.any(String),
         ))
         expect(document.body.textContent).not.toContain('저장된 요청 증거가 없습니다')
     })

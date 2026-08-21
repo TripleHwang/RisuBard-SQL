@@ -13,6 +13,7 @@ import {
     normalizeRisuBardCanonicalTargetLimit,
     normalizeRisuBardCanonicalWritingStyle,
     normalizeRisuBardInquiryTokenBudget,
+    resolveRisuBardChatSettings,
 } from './risuBardSettings'
 
 describe('RisuBard analysis settings', () => {
@@ -81,5 +82,25 @@ describe('RisuBard analysis settings', () => {
         expect(policy).toContain('### 작중 행적')
         expect(policy).toContain('최대 16개')
         expect(policy).toContain('[[사건 문서 제목]]')
+    })
+
+    test('resolves current-chat overrides over normalized global defaults', () => {
+        const resolved = resolveRisuBardChatSettings({
+            risuBardModelMode: 'memory',
+            risuBardRecentMessageCount: 12,
+            risuBardResponseMessageCount: 20,
+            showRequestStatus: true,
+        }, {
+            risuBardModelMode: 'model',
+            risuBardRecentMessageCount: 7,
+            risuBardResponseExcludeUserMessages: true,
+            showRequestStatus: false,
+        })
+
+        expect(resolved.risuBardModelMode).toBe('model')
+        expect(resolved.risuBardRecentMessageCount).toBe(7)
+        expect(resolved.risuBardResponseMessageCount).toBe(20)
+        expect(resolved.risuBardResponseExcludeUserMessages).toBe(true)
+        expect(resolved.showRequestStatus).toBe(false)
     })
 })

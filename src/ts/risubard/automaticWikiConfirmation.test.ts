@@ -7,14 +7,16 @@ describe('automatic BardWiki confirmation', () => {
         expect(shouldAutomaticallyConfirmNarrativeTurn()).toBe(true)
     })
 
-    test('places only the manual wiki button after the send control', () => {
+    test('places only the manual wiki toggle after the send control', () => {
         const composer = readFileSync(
             'src/lib/ChatScreens/DefaultChatScreen.svelte',
             'utf8'
         )
+        const korean = readFileSync('src/lang/ko.ts', 'utf8')
 
         expect(composer).toContain('data-risubard-wiki-button')
-        expect(composer).toContain('onclick={() => memoryWikiOpen = true}')
+        expect(composer).toContain('onclick={() => memoryWikiOpen = !memoryWikiOpen}')
+        expect(korean).toContain('risuBardMemoryOpenManual: "BARDWIKI 열기"')
         expect(composer).not.toContain('data-risubard-auto-wiki')
         expect(composer).not.toContain('DBState.db.risuBardAutoWikiEnabled')
     })

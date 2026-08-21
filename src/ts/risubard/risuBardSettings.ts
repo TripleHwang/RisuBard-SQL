@@ -12,6 +12,36 @@ export type RisuBardCanonicalWritingStyle =
     | 'ultra-concise'
     | 'custom'
 
+export interface RisuBardChatSettings {
+    risuBardModelMode?: 'memory' | 'model'
+    showRequestStatus?: boolean
+    risuBardInquiryTargetTokenBudget?: number
+    risuBardInquiryMaximumTokenBudget?: number
+    risuBardAnalysisTokenLimit?: number
+    risuBardAdditionalSearchLimit?: number
+    risuBardCanonicalTargetLimit?: number
+    risuBardRecentMessageCount?: number
+    risuBardResponseMessageCount?: number
+    risuBardResponseExcludeUserMessages?: boolean
+    risuBardCanonicalWritingStyle?: RisuBardCanonicalWritingStyle
+    risuBardCanonicalCustomStyle?: string
+}
+
+export interface ResolvedRisuBardChatSettings {
+    risuBardModelMode: 'memory' | 'model'
+    showRequestStatus: boolean
+    risuBardInquiryTargetTokenBudget: number
+    risuBardInquiryMaximumTokenBudget: number
+    risuBardAnalysisTokenLimit: number
+    risuBardAdditionalSearchLimit: number
+    risuBardCanonicalTargetLimit: number
+    risuBardRecentMessageCount: number
+    risuBardResponseMessageCount: number
+    risuBardResponseExcludeUserMessages: boolean
+    risuBardCanonicalWritingStyle: RisuBardCanonicalWritingStyle
+    risuBardCanonicalCustomStyle: string
+}
+
 function boundedInteger(
     value: unknown,
     fallback: number,
@@ -20,6 +50,47 @@ function boundedInteger(
 ): number {
     if (!Number.isFinite(value) || typeof value !== 'number') return fallback
     return Math.max(minimum, Math.min(maximum, Math.round(value)))
+}
+
+export function resolveRisuBardChatSettings(
+    global: RisuBardChatSettings,
+    chat?: RisuBardChatSettings,
+): ResolvedRisuBardChatSettings {
+    const value = <K extends keyof RisuBardChatSettings>(key: K) =>
+        chat?.[key] ?? global[key]
+    const inquiry = normalizeRisuBardInquiryTokenBudget(
+        value('risuBardInquiryTargetTokenBudget'),
+        value('risuBardInquiryMaximumTokenBudget'),
+    )
+    return {
+        risuBardModelMode: value('risuBardModelMode') === 'model' ? 'model' : 'memory',
+        showRequestStatus: value('showRequestStatus') !== false,
+        risuBardInquiryTargetTokenBudget: inquiry.target,
+        risuBardInquiryMaximumTokenBudget: inquiry.maximum,
+        risuBardAnalysisTokenLimit: normalizeRisuBardAnalysisTokenLimit(
+            value('risuBardAnalysisTokenLimit')
+        ),
+        risuBardAdditionalSearchLimit: normalizeRisuBardAdditionalSearchLimit(
+            value('risuBardAdditionalSearchLimit')
+        ),
+        risuBardCanonicalTargetLimit: normalizeRisuBardCanonicalTargetLimit(
+            value('risuBardCanonicalTargetLimit')
+        ),
+        risuBardRecentMessageCount: boundedInteger(
+            value('risuBardRecentMessageCount'), 12, 1, 100
+        ),
+        risuBardResponseMessageCount: boundedInteger(
+            value('risuBardResponseMessageCount'), 12, 1, 100
+        ),
+        risuBardResponseExcludeUserMessages:
+            value('risuBardResponseExcludeUserMessages') === true,
+        risuBardCanonicalWritingStyle: normalizeRisuBardCanonicalWritingStyle(
+            value('risuBardCanonicalWritingStyle')
+        ),
+        risuBardCanonicalCustomStyle: normalizeRisuBardCanonicalCustomStyle(
+            value('risuBardCanonicalCustomStyle')
+        ),
+    }
 }
 
 export function normalizeRisuBardAnalysisTokenLimit(value: unknown): number {

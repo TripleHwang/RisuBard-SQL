@@ -302,6 +302,31 @@ describe('input injection manifest', () => {
         expect(manifest.items.reduce((sum: number, item: { tokens: number }) => sum + item.tokens, 0)).toBe(23)
     })
 
+    it('keeps chat ranges and useful fallback names in the manifest', async () => {
+        const manifest = await buildInjectionManifest(
+            [
+                {
+                    role: 'user',
+                    content: 'history',
+                    requestStatusSources: [{
+                        kind: 'chatHistory',
+                        name: '3개 (8~10)',
+                        role: 'user',
+                        content: 'history',
+                    }],
+                },
+                { role: 'system', content: 'format exactly' },
+            ],
+            [8, 5],
+            async (source: { content: string }) => source.content.length,
+        )
+
+        expect(manifest.items).toEqual([
+            { kind: 'chatHistory', name: '3개 (8~10)', tokens: 8 },
+            { kind: 'other', name: '시스템 메시지 2', tokens: 5 },
+        ])
+    })
+
     it('reconciles the input manifest to authoritative provider prompt usage', () => {
         startStatus('g1', {
             kind: 'main',

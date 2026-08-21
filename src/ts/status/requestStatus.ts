@@ -87,7 +87,10 @@ interface InjectionMessage {
     requestStatusSources?: RequestInjectionSource[]
 }
 
-function fallbackSource(message: InjectionMessage): RequestInjectionSource {
+function fallbackSource(
+    message: InjectionMessage,
+    messageIndex: number,
+): RequestInjectionSource {
     if (message.memo === 'NewChatExample' || message.name === 'example_user' || message.name === 'example_assistant') {
         return { kind: 'exampleDialogue', role: message.role, content: message.content }
     }
@@ -97,7 +100,12 @@ function fallbackSource(message: InjectionMessage): RequestInjectionSource {
     if (message.role === 'function') {
         return { kind: 'tool', name: message.name, role: message.role, content: message.content }
     }
-    return { kind: 'other', role: message.role, content: message.content }
+    return {
+        kind: 'other',
+        name: message.memo || message.name || `${message.role === 'system' ? '시스템' : '기타'} 메시지 ${messageIndex + 1}`,
+        role: message.role,
+        content: message.content,
+    }
 }
 
 function allocateTokens(total: number, weights: number[]): number[] {
@@ -134,7 +142,7 @@ export async function buildInjectionManifest(
         totalTokens += exactTokens
         const sources = message.requestStatusSources?.length
             ? message.requestStatusSources
-            : [fallbackSource(message)]
+            : [fallbackSource(message, index)]
         const allocations = sources.length === 1
             ? [exactTokens]
             : allocateTokens(exactTokens, await Promise.all(sources.map(async (source) => {
@@ -165,9 +173,15 @@ export async function buildInjectionManifest(
         const exactTotal = Math.max(0, Math.round(totalOverride!))
         let delta = exactTotal - totalTokens
         if (delta > 0) {
-            const other = items.find((item) => item.kind === 'other' && !item.name)
+            const other = items.find((item) =>
+                item.kind === 'other' && item.name === '요청 프롬프트 오버헤드'
+            )
             if (other) other.tokens += delta
-            else items.push({ kind: 'other', tokens: delta })
+            else items.push({
+                kind: 'other',
+                name: '요청 프롬프트 오버헤드',
+                tokens: delta,
+            })
         } else if (delta < 0) {
             for (let index = items.length - 1; index >= 0 && delta < 0; index--) {
                 const reduction = Math.min(items[index].tokens, -delta)
@@ -191,7 +205,11 @@ export function reconcileInjectionManifest(
         return {
             totalTokens: exactTotal,
             estimated: false,
-            items: exactTotal > 0 ? [{ kind: 'other', tokens: exactTotal }] : [],
+            items: exactTotal > 0 ? [{
+                kind: 'other',
+                name: '요청 프롬프트 오버헤드',
+                tokens: exactTotal,
+            }] : [],
         }
     }
     const allocations = allocateTokens(
