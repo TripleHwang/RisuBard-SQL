@@ -7,6 +7,7 @@ export type CharacterVaultShortcut =
 
 export interface CharacterVaultState {
     quickAccess?: CharacterVaultShortcut[]
+    newCharacterIds?: string[]
 }
 
 export type CharacterVaultSortKey = 'name' | 'lastInteraction' | 'creationDate'
@@ -42,6 +43,14 @@ function characterIds(db: VaultDatabase): Set<string> {
     return new Set(db.characters
         .filter((character) => !character.trashTime)
         .map((character) => character.chaId))
+}
+
+function normalizeNewCharacterIds(
+    db: VaultDatabase,
+    ids: string[]
+): string[] {
+    const valid = characterIds(db)
+    return [...new Set(ids.filter((id) => valid.has(id)))]
 }
 
 function nextCloneName(name: string, reserved: Set<string>): string {
@@ -199,11 +208,45 @@ export function pinCharacterVaultQuickAccess(
     }
     const key = shortcutKey(shortcut)
     setCharacterVaultQuickAccess(db, [
-        shortcut,
         ...getCharacterVaultQuickAccess(db).filter((entry) =>
             shortcutKey(entry) !== key
         ),
+        shortcut,
     ])
+    db.characterVault = {
+        ...db.characterVault,
+        newCharacterIds: [
+            ...normalizeNewCharacterIds(
+                db,
+                db.characterVault?.newCharacterIds ?? []
+            ).filter((id) => id !== characterId),
+            characterId,
+        ],
+    }
+}
+
+export function isCharacterVaultNew(
+    db: VaultDatabase,
+    characterId: string
+): boolean {
+    return normalizeNewCharacterIds(
+        db,
+        db.characterVault?.newCharacterIds ?? []
+    ).includes(characterId)
+}
+
+export function clearCharacterVaultNew(
+    db: VaultDatabase,
+    characterId: string
+): void {
+    if (!db.characterVault?.newCharacterIds?.includes(characterId)) return
+    db.characterVault = {
+        ...db.characterVault,
+        newCharacterIds: normalizeNewCharacterIds(
+            db,
+            db.characterVault.newCharacterIds
+        ).filter((id) => id !== characterId),
+    }
 }
 
 export function toggleCharacterVaultQuickAccess(
@@ -314,6 +357,71 @@ export function moveCharactersToVaultFolder(
             return [{ ...entry, data }, ...moved]
         })
     )
+}
+
+export function reorderCharacterVaultSidebarShortcuts(
+    db: VaultDatabase,
+    shortcut: CharacterVaultShortcut,
+    targetIndex: number
+): boolean {
+    const shortcuts = getCharacterVaultQuickAccess(db)
+    const key = shortcutKey(shortcut)
+    const sourceIndex = shortcuts.findIndex((entry) => shortcutKey(entry) === key)
+    if (sourceIndex < 0) return false
+
+    const [moving] = shortcuts.splice(sourceIndex, 1)
+    let insertionIndex = Math.max(0, Math.min(targetIndex, shortcuts.length + 1))
+    if (sourceIndex < insertionIndex) insertionIndex -= 1
+    shortcuts.splice(insertionIndex, 0, moving)
+    setCharacterVaultQuickAccess(db, shortcuts)
+    return sourceIndex !== insertionIndex
+}
+
+export function moveCharacterVaultSidebarCharacter(
+    db: VaultDatabase,
+    characterId: string,
+    targetFolderId: string | null,
+    targetIndex: number
+): boolean {
+    if (!characterIds(db).has(characterId)) return false
+
+    if (targetFolderId) {
+        const targetBefore = db.characterOrder.find((entry): entry is folder =>
+            typeof entry !== 'string' && entry.id === targetFolderId
+        )
+        if (!targetBefore) return false
+        const sourceIndex = targetBefore.data.indexOf(characterId)
+
+        moveCharactersToVaultFolder(db, [characterId], targetFolderId)
+        const target = db.characterOrder.find((entry): entry is folder =>
+            typeof entry !== 'string' && entry.id === targetFolderId
+        )
+        if (!target) return false
+
+        const data = target.data.filter((id) => id !== characterId)
+        let insertionIndex = Math.max(0, Math.min(targetIndex, data.length + 1))
+        if (sourceIndex >= 0 && sourceIndex < insertionIndex) insertionIndex -= 1
+        data.splice(insertionIndex, 0, characterId)
+        target.data = data
+        setCharacterVaultQuickAccess(
+            db,
+            getCharacterVaultQuickAccess(db).filter((entry) =>
+                entry.kind !== 'character' || entry.id !== characterId
+            )
+        )
+        return true
+    }
+
+    moveCharactersToVaultFolder(db, [characterId], null)
+    const shortcuts = getCharacterVaultQuickAccess(db)
+    const key = shortcutKey({ kind: 'character', id: characterId })
+    const existingIndex = shortcuts.findIndex((entry) => shortcutKey(entry) === key)
+    if (existingIndex >= 0) shortcuts.splice(existingIndex, 1)
+    let insertionIndex = Math.max(0, Math.min(targetIndex, shortcuts.length))
+    if (existingIndex >= 0 && existingIndex < insertionIndex) insertionIndex -= 1
+    shortcuts.splice(insertionIndex, 0, { kind: 'character', id: characterId })
+    setCharacterVaultQuickAccess(db, shortcuts)
+    return true
 }
 
 export function createCharacterVaultFolder(

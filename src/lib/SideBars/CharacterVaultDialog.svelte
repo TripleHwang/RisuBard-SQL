@@ -66,6 +66,9 @@
     let cloning = $state(false)
     let draggedCharacterId = $state('')
     let dragOverFolderId = $state('')
+    let vaultTitle = $derived(
+        DBState.db.language === 'ko' ? '캐릭터 저장소' : 'Character Vault'
+    )
     const imageCache = new Map<string, Promise<string | null>>()
     const characterDragType = 'application/x-risubard-character-vault'
 
@@ -439,7 +442,7 @@
     contentStyle="max-width:min(72rem,calc(100vw - 2rem));height:min(48rem,calc(100vh - 2rem));"
 >
     {#snippet title()}
-        <span class="vault-title"><ArchiveIcon size={19} /> Character Vault</span>
+        <span class="vault-title"><ArchiveIcon size={19} /> {vaultTitle}</span>
     {/snippet}
     {#snippet description()}
         전체 캐릭터를 보관하고 정리합니다. 사이드바에는 퀵 인벤토리만 표시됩니다.
@@ -749,7 +752,7 @@
             linear-gradient(145deg, color-mix(in srgb, var(--color-darkbg) 94%, #b79255 6%), var(--color-darkbg));
     }
     :global(.character-vault-body) { min-height: 0; flex: 1; }
-    .vault-title { display: inline-flex; align-items: center; gap: .45rem; font-family: Georgia, serif; letter-spacing: .02em; }
+    .vault-title { display: inline-flex; align-items: center; gap: .45rem; font-family: var(--risu-font-family); letter-spacing: -.02em; }
     .vault-shell { display: grid; grid-template-columns: 13.5rem minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; border: 1px solid var(--color-darkborderc); border-radius: .7rem; }
     .vault-rail { display: flex; min-height: 0; flex-direction: column; gap: .25rem; padding: .65rem; border-right: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-darkbg) 87%, #b79255 13%); }
     .rail-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: .35rem; color: var(--color-textcolor2); font-size: .66rem; letter-spacing: .12em; text-transform: uppercase; }

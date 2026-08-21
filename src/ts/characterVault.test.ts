@@ -2,12 +2,16 @@ import { describe, expect, test } from 'vitest'
 import type { Database, folder } from './storage/database.svelte'
 import {
     applyCharacterVaultClones,
+    clearCharacterVaultNew,
     createCharacterVaultFolder,
     createCharacterVaultClones,
     deleteCharacterVaultFolder,
     getCharacterVaultQuickAccess,
+    isCharacterVaultNew,
+    moveCharacterVaultSidebarCharacter,
     moveCharactersToVaultFolder,
     pinCharacterVaultQuickAccess,
+    reorderCharacterVaultSidebarShortcuts,
     setCharacterVaultQuickAccess,
     sortCharacterVaultCharacters,
     trashCharacterVaultCharacters,
@@ -94,7 +98,7 @@ describe('Character Vault state', () => {
         ])
     })
 
-    test('pins a newly imported character first without duplicate shortcuts', () => {
+    test('pins a newly imported character last and marks it new until accessed', () => {
         const db = makeDb()
         setCharacterVaultQuickAccess(db, [
             { kind: 'folder', id: 'folder-1' },
@@ -102,13 +106,86 @@ describe('Character Vault state', () => {
         ])
 
         pinCharacterVaultQuickAccess(db, 'c')
-        pinCharacterVaultQuickAccess(db, 'a')
+        pinCharacterVaultQuickAccess(db, 'c')
 
         expect(db.characterVault?.quickAccess).toEqual([
+            { kind: 'folder', id: 'folder-1' },
             { kind: 'character', id: 'a' },
             { kind: 'character', id: 'c' },
-            { kind: 'folder', id: 'folder-1' },
         ])
+        expect(isCharacterVaultNew(db, 'c')).toBe(true)
+
+        clearCharacterVaultNew(db, 'c')
+        expect(isCharacterVaultNew(db, 'c')).toBe(false)
+    })
+
+    test('reorders root quick inventory shortcuts without changing vault membership', () => {
+        const db = makeDb()
+        const originalOrder = structuredClone(db.characterOrder)
+        setCharacterVaultQuickAccess(db, [
+            { kind: 'character', id: 'a' },
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'c' },
+        ])
+
+        reorderCharacterVaultSidebarShortcuts(
+            db,
+            { kind: 'character', id: 'a' },
+            3
+        )
+
+        expect(db.characterVault?.quickAccess).toEqual([
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'c' },
+            { kind: 'character', id: 'a' },
+        ])
+        expect(db.characterOrder).toEqual(originalOrder)
+    })
+
+    test('moves a pinned root character into a sidebar folder without a duplicate shortcut', () => {
+        const db = makeDb()
+        setCharacterVaultQuickAccess(db, [
+            { kind: 'character', id: 'a' },
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'c' },
+        ])
+
+        moveCharacterVaultSidebarCharacter(db, 'a', 'folder-1', 0)
+
+        expect(getFolder(db, 'folder-1').data).toEqual(['a', 'b'])
+        expect(db.characterVault?.quickAccess).toEqual([
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'c' },
+        ])
+    })
+
+    test('moves a sidebar folder character out as a pinned root shortcut', () => {
+        const db = makeDb()
+        setCharacterVaultQuickAccess(db, [
+            { kind: 'character', id: 'a' },
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'c' },
+        ])
+
+        moveCharacterVaultSidebarCharacter(db, 'b', null, 1)
+
+        expect(getFolder(db, 'folder-1').data).toEqual([])
+        expect(db.characterVault?.quickAccess).toEqual([
+            { kind: 'character', id: 'a' },
+            { kind: 'character', id: 'b' },
+            { kind: 'folder', id: 'folder-1' },
+            { kind: 'character', id: 'c' },
+        ])
+    })
+
+    test('reorders characters inside a pinned sidebar folder', () => {
+        const db = makeDb()
+        getFolder(db, 'folder-1').data = ['a', 'b', 'c']
+        db.characterOrder = [getFolder(db, 'folder-1')]
+
+        moveCharacterVaultSidebarCharacter(db, 'a', 'folder-1', 3)
+
+        expect(getFolder(db, 'folder-1').data).toEqual(['b', 'c', 'a'])
     })
 
     test('moves selected characters into one folder without duplicates', () => {

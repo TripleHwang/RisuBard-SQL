@@ -21,7 +21,7 @@
 
 
   } from "../../ts/stores.svelte";
-    import { setDatabase, type folder } from "../../ts/storage/database.svelte";
+    import { setDatabase } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import BarIcon from "./BarIcon.svelte";
     import SidebarIndicator from "./SidebarIndicator.svelte";
@@ -47,9 +47,7 @@
     import isEqual from "lodash/isEqual";
     import SidebarAvatar from "./SidebarAvatar.svelte";
     import ShSwitch from "../UI/GUI/ShSwitch.svelte";
-    import BaseRoundedButton from "../UI/BaseRoundedButton.svelte";
     import { getCharacterIndexObject, makeAgoText, selectSingleFile } from "src/ts/util";
-    import { v4 } from "uuid";
     import { checkCharOrder, getFileSrc, requestImmediateSave, saveAsset } from "src/ts/globalApi.svelte";
     import { alertInput, alertSelect } from "src/ts/alert";
     import SideChatList from "./SideChatList.svelte";
@@ -68,7 +66,12 @@
   import characterVaultIdle from 'src/assets/character-vault/books1-idle.png';
   import characterVaultHover from 'src/assets/character-vault/books1-hover.gif';
   import { tooltip } from "src/ts/gui/tooltip";
-  import { getCharacterVaultQuickAccess } from "src/ts/characterVault";
+  import {
+    getCharacterVaultQuickAccess,
+    isCharacterVaultNew,
+    moveCharacterVaultSidebarCharacter,
+    reorderCharacterVaultSidebarShortcuts,
+  } from "src/ts/characterVault";
   import { getEffectivePersona } from "src/ts/personaScopes";
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
@@ -99,7 +102,7 @@
     changeChar(index, { reseter });
   }
 
-  type sortTypeNormal = { type:'normal',img: string, index: number, name:string }
+  type sortTypeNormal = { type:'normal',id:string,img: string, index: number, name:string, isNew:boolean }
   type sortType =  sortTypeNormal|{type:'folder',folder:sortTypeNormal[],id:string, name:string, color:string, img?:string}
   let charImages: sortType[] = $state([]);
   // Recently interacted characters for the home sidebar. Character-level
@@ -140,9 +143,11 @@
           const cha = DBState.db.characters[index]
           newCharImages.push({
             img:cha.image ?? "",
+            id: cha.chaId,
             index:index,
             type: "normal",
-            name: cha.name
+            name: cha.name,
+            isNew: isCharacterVaultNew(DBState.db, cha.chaId)
           });
         }
       }
@@ -156,9 +161,11 @@
             const cha = DBState.db.characters[index]
             folderCharImages.push({
               img:cha.image ?? "",
+              id: cha.chaId,
               index:index,
               type: "normal",
-              name: cha.name
+              name: cha.name,
+              isNew: isCharacterVaultNew(DBState.db, cha.chaId)
             });
           }
         }
@@ -180,87 +187,6 @@
     }
   })
 
-
-  const inserter = (mainIndex:DragData, targetIndex:DragData) => {
-    if(mainIndex.index === targetIndex.index && mainIndex.folder === targetIndex.folder){
-      return
-    }
-    let db = DBState.db
-    let mainFolderIndex = mainIndex.folder ? getFolderIndex(mainIndex.folder) : null
-    let targetFolderIndex = targetIndex.folder ? getFolderIndex(targetIndex.folder) : null
-    let mainFolderId = mainIndex.folder ? (db.characterOrder[mainFolderIndex] as folder).id : ''
-    let movingFolder:folder|false = false
-    let mainId = ''
-    if(mainIndex.folder){
-      mainId = (db.characterOrder[mainFolderIndex] as folder).data[mainIndex.index]
-    }
-    else{
-      const da = db.characterOrder[mainIndex.index]
-      if(typeof(da) !== 'string'){
-        mainId = da.id
-        movingFolder = $state.snapshot(da)
-        if(targetIndex.folder){
-          return
-        }
-      }
-      else{
-        mainId = da
-      }
-    }
-    if(targetIndex.folder){
-        const folder = db.characterOrder[targetFolderIndex] as folder
-        folder.data.splice(targetIndex.index,0,mainId)
-        db.characterOrder[targetFolderIndex] = folder
-    }
-    else if(movingFolder){
-        db.characterOrder.splice(targetIndex.index,0,movingFolder)
-    }
-    else{
-        db.characterOrder.splice(targetIndex.index,0,mainId)
-    }
-    if(mainIndex.folder){
-      mainFolderIndex = -1
-      for(let i=0;i<db.characterOrder.length;i++){
-        const a =db.characterOrder[i]
-        if(typeof(a) !== 'string'){
-          if(a.id === mainFolderId){
-            mainFolderIndex = i
-            break
-          }
-        }
-      }
-      if(mainFolderIndex !== -1){
-        const folder:folder = db.characterOrder[mainFolderIndex] as folder
-        const ind = mainIndex.index > targetIndex.index ? folder.data.lastIndexOf(mainId) : folder.data.indexOf(mainId) 
-        if(ind !== -1){
-          folder.data.splice(ind, 1)
-        }
-        db.characterOrder[mainFolderIndex] = folder
-      }
-      else{
-        console.log('folder not found')
-      }
-    }
-    else if(movingFolder){
-      let idList:string[] = []
-      for(const ord of db.characterOrder){
-        idList.push(typeof(ord) === 'string' ? ord : ord.id)
-      }
-      const ind = mainIndex.index > targetIndex.index ? idList.lastIndexOf(mainId) : idList.indexOf(mainId) 
-      if(ind !== -1){
-        db.characterOrder.splice(ind, 1)
-      }
-    }
-    else{
-      const ind = mainIndex.index > targetIndex.index ? db.characterOrder.lastIndexOf(mainId) : db.characterOrder.indexOf(mainId) 
-      if(ind !== -1){
-        db.characterOrder.splice(ind, 1)
-      }
-    }
-
-    DBState.db.characterOrder = db.characterOrder
-    checkCharOrder()
-  }
 
   function getFolderIndex(id:string){
     for(let i=0;i<DBState.db.characterOrder.length;i++){
@@ -324,63 +250,55 @@
   })
 
 
-  const createFolder = (mainIndex:DragData, targetIndex:DragData) => {
-    if(mainIndex.index === targetIndex.index && mainIndex.folder === targetIndex.folder){
-      return
-    }
-    let db = DBState.db
-    let mainFolderIndex = mainIndex.folder ? getFolderIndex(mainIndex.folder) : null
-    let mainFolder = db.characterOrder[mainFolderIndex] as folder
-    if(targetIndex.folder){
-      return
-    }
-    const main = mainIndex.folder ? mainFolder.data[mainIndex.index] : db.characterOrder[mainIndex.index]
-    const target = db.characterOrder[targetIndex.index]
-    if(typeof(main) !== 'string'){
-      return
-    }
-    if(typeof (target) === 'string'){
-      const newFolder:folder = {
-        name: "New Folder",
-        data: [main, target],
-        color: "",
-        id: v4()
-      }
-      db.characterOrder[targetIndex.index] = newFolder
-      if(mainIndex.folder){
-        mainFolder.data.splice(mainIndex.index, 1)
-        db.characterOrder[mainFolderIndex] = mainFolder
-      }
-      else{
-        db.characterOrder.splice(mainIndex.index, 1)
-      }
-    }
-    else{
-      target.data.push(main)
-      if(mainIndex.folder){
-        mainFolder.data.splice(mainIndex.index, 1)
-        db.characterOrder[mainFolderIndex] = mainFolder
-      }
-      else{
-        db.characterOrder.splice(mainIndex.index, 1)
-      }
-    }
-
-    DBState.db.characterOrder = db.characterOrder
-    checkCharOrder()
-  }
-
   type DragEv = DragEvent & {
     currentTarget: EventTarget & HTMLDivElement;
   }
-  type DragData = {
-    index:number,
-    folder?:string
+  type DragData =
+    | { kind:'character', id:string, folder?:string }
+    | { kind:'folder', id:string }
+  type DropData = { index:number, folder?:string }
+
+  const moveSidebarItem = (source:DragData, target:DropData) => {
+    let changed = false
+    if(target.folder){
+      if(source.kind !== 'character') return false
+      changed = moveCharacterVaultSidebarCharacter(
+        DBState.db,
+        source.id,
+        target.folder,
+        target.index
+      )
+      if(changed && !openFolders.includes(target.folder)){
+        openFolders.push(target.folder)
+        openFolders = openFolders
+      }
+    }
+    else if(source.kind === 'character' && source.folder){
+      changed = moveCharacterVaultSidebarCharacter(
+        DBState.db,
+        source.id,
+        null,
+        target.index
+      )
+    }
+    else{
+      changed = reorderCharacterVaultSidebarShortcuts(
+        DBState.db,
+        { kind: source.kind, id: source.id },
+        target.index
+      )
+    }
+    if(changed){
+      checkCharOrder()
+      void requestImmediateSave()
+    }
+    return changed
   }
-  const avatarDragStart = (ind:DragData, e:DragEv) => {
+
+  const avatarDragStart = (data:DragData, e:DragEv) => {
     e.dataTransfer.setData('text/plain', '');
     e.dataTransfer.setData(RISU_SIDEBAR_DRAG_TYPE, 'true');
-    currentDrag = ind
+    currentDrag = data
     const avatar = e.currentTarget.querySelector('.avatar')
     if(avatar){
       e.dataTransfer.setDragImage(avatar, 10, 10);
@@ -421,7 +339,7 @@
     e.dataTransfer.dropEffect = 'move'
   }
 
-  const avatarDrop = (ind:DragData, e:DragEv) => {
+  const avatarDrop = (target:DropData, e:DragEv) => {
     const drag = getCurrentSidebarDrag(e)
     if(!drag){
       return
@@ -429,7 +347,7 @@
     e.preventDefault()
     e.stopPropagation()
     try {
-      createFolder(drag,ind)
+      moveSidebarItem(drag,target)
     } catch (error) {
       console.error('avatarDrop error:', error)
     } finally {
@@ -546,11 +464,19 @@
     if (spacer) {
       const idx = parseInt(spacer.dataset.spacerIndex!)
       const folder = spacer.dataset.spacerFolder || undefined
-      inserter(touchDragState.data, { index: idx, folder })
+      moveSidebarItem(touchDragState.data, { index: idx, folder })
     } else if (item && item !== touchDragState.element) {
       const idx = parseInt(item.dataset.dragIndex!)
       const folder = item.dataset.dragFolder || undefined
-      createFolder(touchDragState.data, { index: idx, folder })
+      if(item.dataset.dragKind === 'folder'){
+        moveSidebarItem(touchDragState.data, {
+          index: parseInt(item.dataset.folderLength ?? '0'),
+          folder: item.dataset.dragId,
+        })
+      }
+      else{
+        moveSidebarItem(touchDragState.data, { index: idx, folder })
+      }
     }
 
     cleanupTouchDrag()
@@ -660,7 +586,7 @@
   {#if !DBState.db.hamburgerButtonBottom}
   <button
     data-sidebar-options
-    class="risu-button-lift mt-2 flex size-10 min-h-10 min-w-10 cursor-pointer items-center justify-center rounded-md bg-textcolor2 text-white transition-colors hover:bg-primary"
+    class="risu-button-lift mt-3 flex h-10 min-h-10 w-[52px] min-w-[52px] cursor-pointer items-center justify-center rounded-md bg-primary text-white transition-colors hover:bg-primary/80"
     class:max-xs:hidden={$leftBarCollapsed}
     onclick={() => {
       menuMode = 1 - menuMode;
@@ -740,7 +666,7 @@
     class:max-xs:hidden={$leftBarCollapsed}
   >
     <button
-      class="group relative grid h-14 w-14 place-items-center overflow-hidden rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm transition-all hover:border-primary hover:text-primary"
+      class="group relative grid h-[54px] w-[54px] place-items-center overflow-hidden rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm outline outline-4 outline-offset-0 outline-white transition-all hover:border-primary hover:text-primary"
       aria-label={language.persona}
       title={language.persona}
       onclick={() => openPersonaManager.set(true)}
@@ -771,13 +697,13 @@
   </div>
   <div
     data-character-vault-button
-    class="flex w-full flex-col items-center px-2 py-2"
+    class="flex w-full flex-col items-center gap-1 px-2 py-2"
     class:max-xs:hidden={$leftBarCollapsed}
   >
     <button
       type="button"
-      class="character-toolbar-button character-toolbar-button--chat risu-button-lift group relative overflow-hidden p-0"
-      style="width: 56px; height: 56px;"
+      class="character-toolbar-button character-toolbar-button--chat risu-button-lift group relative overflow-hidden p-0 outline outline-4 outline-offset-0 outline-black"
+      style="width: 54px; height: 54px;"
       aria-label="Character Vault 열기"
       title="Character Vault · 캐릭터 저장소"
       onclick={() => characterVaultOpen.set(true)}
@@ -795,6 +721,7 @@
         class="absolute inset-0 size-full object-contain opacity-0 transition-opacity group-hover:opacity-100"
       />
     </button>
+    <span data-character-vault-label class="text-[10px] font-medium leading-none text-textcolor2">저장소</span>
   </div>
   <div data-quick-inventory class="character-list flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto pr-0" class:max-xs:hidden={$leftBarCollapsed} use:touchDragContainer>
     <div class="h-4 min-h-4 w-14" role="listitem" data-spacer-index="0" ondragover={(e) => {
@@ -812,7 +739,7 @@
       e.stopPropagation()
       e.currentTarget.classList.remove('bg-green-500')
       try {
-        inserter(drag,{index:0})
+        moveSidebarItem(drag,{index:0})
       } finally {
         clearCurrentDrag()
       }
@@ -821,17 +748,24 @@
       <div class="group relative flex items-center px-2"
         role="listitem"
         data-drag-index={ind}
-        draggable={undefined}
+        data-drag-kind={char.type === 'normal' ? 'character' : 'folder'}
+        data-drag-id={char.id}
+        data-folder-length={char.type === 'folder' ? char.folder.length : undefined}
+        draggable={!isTouchDevice ? "true" : undefined}
+        ondragstart={!isTouchDevice ? (e) => {avatarDragStart({ kind: char.type === 'normal' ? 'character' : 'folder', id: char.id }, e)} : undefined}
         ondragend={!isTouchDevice ? clearCurrentDrag : undefined}
         ondragover={!isTouchDevice ? avatarDragOver : undefined}
-        ondrop={!isTouchDevice ? (e) => {avatarDrop({index:ind}, e)} : undefined}
+        ondrop={!isTouchDevice ? (e) => {avatarDrop(char.type === 'folder'
+          ? {index:char.folder.length, folder:char.id}
+          : {index:ind}, e)} : undefined}
         ondragenter={!isTouchDevice ? preventAll : undefined}
+        ontouchstart={touchDragEnabled ? (e) => {onTouchDragStart({ kind: char.type === 'normal' ? 'character' : 'folder', id: char.id }, e)} : undefined}
       >
         <SidebarIndicator
           isActive={char.type === 'normal' && $selectedCharID === char.index && sideBarMode !== 1}
         />
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-        <div
+        <div class="relative"
             role="button" tabindex="0"
             onclick={() => {
               if(suppressNextClick) return
@@ -855,6 +789,11 @@
               name={char.name}
               chaId={DBState.db.characters[char.index]?.chaId}
             />
+            {#if char.isNew}
+              <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-white" role="img" aria-label="새 캐릭터" title="새 캐릭터">
+                <SolarBoldIcon name="star-shine" size={20} />
+              </span>
+            {/if}
           {:else if char.type === "folder"}
             {#key char.color}
             {#key char.name}
@@ -980,7 +919,7 @@
             e.currentTarget.classList.remove('bg-green-500')
             try {
               if(char.type === 'folder'){
-                inserter(drag,{index:0,folder:char.id})
+                moveSidebarItem(drag,{index:0,folder:char.id})
               }
             } finally {
               clearCurrentDrag()
@@ -991,17 +930,21 @@
               role="listitem"
               data-drag-index={ind}
               data-drag-folder={char.type === 'folder' ? char.id : undefined}
-              draggable={undefined}
+              data-drag-kind="character"
+              data-drag-id={char2.id}
+              draggable={!isTouchDevice ? "true" : undefined}
+              ondragstart={!isTouchDevice ? (e) => {avatarDragStart({ kind:'character', id:char2.id, folder:char.id }, e)} : undefined}
               ondragend={!isTouchDevice ? clearCurrentDrag : undefined}
               ondragover={!isTouchDevice ? avatarDragOver : undefined}
-              ondrop={!isTouchDevice ? (e) => {if(char.type === 'folder'){avatarDrop({index: ind, folder:char.id}, e)}} : undefined}
+              ondrop={!isTouchDevice ? (e) => {avatarDrop({index: ind, folder:char.id}, e)} : undefined}
               ondragenter={!isTouchDevice ? preventAll : undefined}
+              ontouchstart={touchDragEnabled ? (e) => {onTouchDragStart({ kind:'character', id:char2.id, folder:char.id }, e)} : undefined}
             >
               <SidebarIndicator
                 isActive={$selectedCharID === char2.index && sideBarMode !== 1}
               />
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-              <div
+              <div class="relative"
                   role="button" tabindex="0"
                   onclick={() => {
                     if(suppressNextClick) return
@@ -1024,6 +967,11 @@
                   name={char2.name}
                   chaId={DBState.db.characters[char2.index]?.chaId}
                 />
+                {#if char2.isNew}
+                  <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-white" role="img" aria-label="새 캐릭터" title="새 캐릭터">
+                    <SolarBoldIcon name="star-shine" size={20} />
+                  </span>
+                {/if}
               </div>
             </div>
             <div class="h-4 min-h-4 w-14 relative z-20" role="listitem" data-spacer-index={ind+1} data-spacer-folder={char.type === 'folder' ? char.id : undefined} ondragover={(e) => {
@@ -1042,7 +990,7 @@
               e.currentTarget.classList.remove('bg-green-500')
               try {
                 if(char.type === 'folder'){
-                  inserter(drag,{index:ind+1,folder:char.id})
+                  moveSidebarItem(drag,{index:ind+1,folder:char.id})
                 }
               } finally {
                 clearCurrentDrag()
@@ -1067,15 +1015,21 @@
         e.stopPropagation()
         e.currentTarget.classList.remove('bg-green-500')
         try {
-          inserter(drag,{index:ind+1})
+          moveSidebarItem(drag,{index:ind+1})
         } finally {
           clearCurrentDrag()
         }
       }} ondragenter={preventAll}></div>
     {/each}
     <div class="flex flex-col items-center gap-2 px-2">
-      <BaseRoundedButton
-        onClick={async () => {
+      <button
+        type="button"
+        data-sidebar-new-character
+        class="flex h-14 w-14 cursor-pointer select-none items-center justify-center rounded-md border border-textcolor2 text-gray-300 transition-colors hover:border-gray-300"
+        aria-label="새 캐릭터"
+        title="새 캐릭터"
+        use:tooltip={"새 캐릭터"}
+        onclick={async () => {
           addCharacter({reseter}) 
         }}
         ><svg viewBox="0 0 24 24" width="1.2em" height="1.2em"
@@ -1087,7 +1041,7 @@
             stroke-width="2"
             d="M12 6v6m0 0v6m0-6h6m-6 0H6"
           /></svg
-        ></BaseRoundedButton
+        ></button
       >
     </div>
   </div>
@@ -1510,5 +1464,12 @@
   }
   .character-list::-webkit-scrollbar {
     display: none;
+  }
+  :global([data-new-character-badge] svg path) {
+    fill: #fff;
+    stroke: #000;
+    stroke-width: 2px;
+    stroke-linejoin: round;
+    paint-order: stroke fill;
   }
 </style>

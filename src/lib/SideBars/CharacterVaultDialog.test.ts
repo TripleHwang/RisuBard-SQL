@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
+import { readFileSync } from 'node:fs'
 import type { Database } from 'src/ts/storage/database.svelte'
 import CharacterVaultDialog from './CharacterVaultDialog.svelte'
 
@@ -77,7 +78,7 @@ function makeDb(): Database {
     } as Database
 }
 
-async function render(expectedImages = 3) {
+async function render(expectedImages = 3, expectedTitle = 'Character Vault') {
     const target = document.body.appendChild(document.createElement('div'))
     mounted = mount(CharacterVaultDialog, {
         target,
@@ -89,7 +90,7 @@ async function render(expectedImages = 3) {
     })
     await tick()
     await vi.waitFor(() => expect(document.body.textContent)
-        .toContain('Character Vault'))
+        .toContain(expectedTitle))
     await vi.waitFor(() => expect(
         document.body.querySelectorAll('.portrait img')
     ).toHaveLength(expectedImages))
@@ -120,6 +121,17 @@ describe('CharacterVaultDialog', () => {
         if (mounted) await unmount(mounted)
         mounted = undefined
         document.body.replaceChildren()
+    })
+
+    test('localizes the heading in Korean and uses the settings heading font', async () => {
+        mocks.db.language = 'ko'
+        await render(3, '캐릭터 저장소')
+
+        expect(document.body.textContent).not.toContain('Character Vault')
+        const source = readFileSync(
+            'src/lib/SideBars/CharacterVaultDialog.svelte', 'utf8'
+        )
+        expect(source).toMatch(/\.vault-title\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
     })
 
     test('filters the full vault by character name', async () => {
