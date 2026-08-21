@@ -128,6 +128,11 @@
         ).map((character) => itemsById.get(character.chaId)!)
     })
 
+    let activeCharacterCount = $derived.by(() => {
+        revision
+        return DBState.db.characters.filter((character) => !character.trashTime).length
+    })
+
     function commit(message: string) {
         revision += 1
         notice = message
@@ -477,7 +482,7 @@
                 onclick={() => activeScope = 'all'}
             >
                 <ArchiveIcon size={15} /><span>전체 캐릭터</span>
-                <small>{DBState.db.characters.length}</small>
+                <small>{activeCharacterCount}</small>
             </button>
             <button
                 type="button"

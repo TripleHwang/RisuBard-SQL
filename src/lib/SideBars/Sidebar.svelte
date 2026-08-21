@@ -705,7 +705,8 @@
       class="character-toolbar-button character-toolbar-button--chat risu-button-lift group relative overflow-hidden p-0 outline outline-4 outline-offset-0 outline-black"
       style="width: 54px; height: 54px;"
       aria-label="Character Vault 열기"
-      title="Character Vault · 캐릭터 저장소"
+      title="캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."
+      use:tooltip={"캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."}
       onclick={() => characterVaultOpen.set(true)}
     >
       <img

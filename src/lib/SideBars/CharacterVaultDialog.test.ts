@@ -219,6 +219,8 @@ describe('CharacterVaultDialog', () => {
 
         expect(document.body.textContent).not.toContain('Alice')
         expect(document.body.textContent).toContain('Bryn')
+        expect(document.body.querySelector('.vault-rail button small')?.textContent)
+            .toBe('2')
     })
 
     test('moves a multi-selection into a folder and saves immediately', async () => {

@@ -16,11 +16,13 @@ import { doingChat } from "./process/index.svelte";
 import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
-import { clearCharacterVaultNew } from './characterVault'
+import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
 
 export function createNewCharacter() {
     let db = getDatabase()
-    db.characters.push(createBlankChar())
+    const character = createBlankChar()
+    db.characters.push(character)
+    pinCharacterVaultQuickAccess(db, character.chaId)
     checkCharOrder()
     return db.characters.length - 1
 }

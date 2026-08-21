@@ -45,6 +45,8 @@ RUN apt-get update \
 COPY package.json .
 COPY --from=deps /app/node_modules /app/node_modules
 COPY --from=builder /app/server ./server
+COPY --from=builder /app/packages/risubard-core ./packages/risubard-core
+COPY --from=builder /app/src/ts/risubard ./src/ts/risubard
 COPY --from=builder /app/dist ./dist
 
 ENV NODE_ENV=production

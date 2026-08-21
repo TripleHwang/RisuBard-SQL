@@ -30,6 +30,17 @@ describe('release artifact contract', () => {
         expect(workflow).toContain('node server/node/server.cjs')
     })
 
+    it('ships runtime source trees in the Docker image', () => {
+        const dockerfile = readFileSync(resolve('Dockerfile'), 'utf8')
+
+        expect(dockerfile).toMatch(
+            /^COPY --from=builder \/app\/packages\/risubard-core \.\/packages\/risubard-core$/m,
+        )
+        expect(dockerfile).toMatch(
+            /^COPY --from=builder \/app\/src\/ts\/risubard \.\/src\/ts\/risubard$/m,
+        )
+    })
+
     it('publishes only RisuBard artifacts and container images', () => {
         const releaseWorkflow = readFileSync(
             resolve('.github/workflows/release.yml'),

@@ -85,6 +85,13 @@ describe('Character Vault sidebar integration', () => {
         expect(sidebar).toContain('<CharacterVaultDialog')
     })
 
+    test('explains that only pinned characters appear in the sidebar', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        expect(sidebar).toContain(
+            'use:tooltip={"캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."}'
+        )
+    })
+
     test('wires desktop and touch quick-inventory drag moves through stable ids', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         expect(sidebar).toContain('moveCharacterVaultSidebarCharacter')
@@ -107,6 +114,18 @@ describe('Character Vault sidebar integration', () => {
         expect(charxImport).toContain('pinCharacterVaultQuickAccess(db, importedCharacter.chaId)')
     })
 
+    test('pins characters created from scratch at the bottom of quick access', () => {
+        const characters = source('src/ts/characters.ts')
+        const createStart = characters.indexOf('export function createNewCharacter()')
+        const createEnd = characters.indexOf('\n}', createStart)
+        const createCharacter = characters.slice(createStart, createEnd)
+
+        expect(characters).toContain(
+            "import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'"
+        )
+        expect(createCharacter).toContain('pinCharacterVaultQuickAccess(db, character.chaId)')
+    })
+
     test('shows a bordered star-shine badge for new characters', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         const icons = source('src/lib/UI/Icons/SolarBoldIcon.svelte')
@@ -124,7 +143,9 @@ describe('Character Vault sidebar integration', () => {
         const characters = source('src/ts/characters.ts')
         const changeStart = characters.indexOf('export function changeChar(')
         const changeCharacter = characters.slice(changeStart)
-        expect(characters).toContain("import { clearCharacterVaultNew } from './characterVault'")
+        expect(characters).toContain(
+            "import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'"
+        )
         expect(characters).toContain('changeChar(db.characters.length-1, { clearNewBadge: false })')
         expect(changeCharacter).toContain('if(arg.clearNewBadge !== false)')
         expect(changeCharacter).toContain('clearCharacterVaultNew(db, char.chaId)')
