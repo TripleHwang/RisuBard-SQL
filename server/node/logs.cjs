@@ -15,29 +15,120 @@ const dataRoot = resolveDataRoot();
 const logRoot = path.join(dataRoot, 'logs');
 const logFile = path.join(logRoot, 'system.jsonl');
 const stateFile = path.join(logRoot, 'state.json');
+const writeLockFile = path.join(logRoot, '.write.lock');
+const LOCK_WAIT_MS = 5;
+const LOCK_TIMEOUT_MS = 5000;
+const LOCK_OWNER_GRACE_MS = 100;
+const LOCK_STALE_MS = 30000;
+const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 fs.mkdirSync(logRoot, { recursive: true });
-let rowsCache = null;
-let logState = fs.existsSync(stateFile)
-    ? readVerifiedJson(logRoot, 'state.json')
-    : { schemaVersion: 1, nextId: 1 };
 
-function loadRows() {
-    if (rowsCache) return rowsCache;
-    if (!fs.existsSync(logFile)) return rowsCache = [];
-    return rowsCache = fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+function processIsAlive(pid) {
+    if (!Number.isInteger(pid) || pid < 1) return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return error?.code !== 'ESRCH';
+    }
 }
 
-function appendRows(rows) {
+function removeStaleWriteLock() {
+    try {
+        const stat = fs.statSync(writeLockFile);
+        const pid = Number.parseInt(fs.readFileSync(writeLockFile, 'utf8'), 10);
+        const age = Date.now() - stat.mtimeMs;
+        if (!Number.isInteger(pid) && age < LOCK_OWNER_GRACE_MS) return false;
+        if (processIsAlive(pid) && age < LOCK_STALE_MS) return false;
+        fs.unlinkSync(writeLockFile);
+        return true;
+    } catch (error) {
+        return error?.code === 'ENOENT';
+    }
+}
+
+function acquireWriteLock() {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
+        try {
+            const fd = fs.openSync(writeLockFile, 'wx', 0o600);
+            fs.writeFileSync(fd, String(process.pid), 'utf8');
+            return fd;
+        } catch (error) {
+            if (error?.code !== 'EEXIST') throw error;
+            removeStaleWriteLock();
+            Atomics.wait(lockWaitBuffer, 0, 0, LOCK_WAIT_MS);
+        }
+    }
+    throw new Error('Timed out waiting for the system log write lock');
+}
+
+function withWriteLock(action) {
+    const fd = acquireWriteLock();
+    try {
+        return action();
+    } finally {
+        try { fs.closeSync(fd); } catch {}
+        try { fs.unlinkSync(writeLockFile); } catch {}
+    }
+}
+
+function readRowsFromDisk() {
+    if (!fs.existsSync(logFile)) return [];
+    return fs.readFileSync(logFile, 'utf8').split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+}
+
+let rowsCache = [];
+let logState = { schemaVersion: 1, nextId: 1 };
+
+function reloadFromDisk() {
+    rowsCache = readRowsFromDisk();
+    logState = fs.existsSync(stateFile)
+        ? readVerifiedJson(logRoot, 'state.json')
+        : { schemaVersion: 1, nextId: 1 };
+}
+
+function repairPersistedIds() {
+    const seen = new Set();
+    const hasInvalidOrDuplicateId = rowsCache.some(row => {
+        if (!Number.isSafeInteger(row.id) || row.id < 1 || seen.has(row.id)) return true;
+        seen.add(row.id);
+        return false;
+    });
+    if (hasInvalidOrDuplicateId) {
+        rowsCache = rowsCache.map((row, index) => ({ ...row, id: index + 1 }));
+        atomicWriteFile(logRoot, 'system.jsonl', Buffer.from(rowsCache.map(row => JSON.stringify(row)).join('\n') + (rowsCache.length ? '\n' : ''), 'utf8'));
+    }
+    const maxId = rowsCache.reduce((max, row) => Math.max(max, row.id), 0);
+    if (!Number.isSafeInteger(logState.nextId) || logState.nextId <= maxId) {
+        logState = { schemaVersion: 1, nextId: maxId + 1 };
+        atomicWriteJson(logRoot, 'state.json', logState);
+    }
+}
+
+withWriteLock(() => {
+    reloadFromDisk();
+    repairPersistedIds();
+});
+
+function loadRows() {
+    return withWriteLock(() => {
+        reloadFromDisk();
+        repairPersistedIds();
+        return rowsCache;
+    });
+}
+
+function appendRowsLocked(rows) {
     if (!rows.length) return;
-    const cache = loadRows();
     const fd = fs.openSync(logFile, 'a', 0o600);
     try { fs.writeSync(fd, rows.map(row => JSON.stringify(row)).join('\n') + '\n', null, 'utf8'); fs.fsyncSync(fd); }
     finally { fs.closeSync(fd); }
-    cache.push(...rows);
+    rowsCache.push(...rows);
     atomicWriteJson(logRoot, 'state.json', logState);
 }
 
-function rewriteRows(rows) {
+function rewriteRowsLocked(rows) {
     rowsCache = rows;
     atomicWriteFile(logRoot, 'system.jsonl', Buffer.from(rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), 'utf8'));
 }
@@ -117,7 +208,11 @@ function insertEntry(entry) {
     return { id: logState.nextId++, timestamp, level, origin, message, description, source, count, platform, clientId, userAgent };
 }
 
-const insertMany = entries => appendRows(entries.map(insertEntry));
+const insertMany = entries => withWriteLock(() => {
+    reloadFromDisk();
+    repairPersistedIds();
+    appendRowsLocked(entries.map(insertEntry));
+});
 
 let insertedSinceRotate = 0;
 
@@ -142,8 +237,11 @@ function addLogBatch(entries) {
 function maybeRotate() {
     if (insertedSinceRotate < ROTATE_EVERY_N_ROWS) return;
     insertedSinceRotate = 0;
-    const rows = loadRows();
-    if (rows.length > MAX_ROWS) rewriteRows(rows.slice(-MAX_ROWS));
+    withWriteLock(() => {
+        reloadFromDisk();
+        repairPersistedIds();
+        if (rowsCache.length > MAX_ROWS) rewriteRowsLocked(rowsCache.slice(-MAX_ROWS));
+    });
 }
 
 // ─── Server-side logger ──────────────────────────────────────────────────────
@@ -284,7 +382,11 @@ function queryLogs(opts = {}) {
 }
 
 function clearLogs() {
-    rewriteRows([]);
+    withWriteLock(() => {
+        reloadFromDisk();
+        repairPersistedIds();
+        rewriteRowsLocked([]);
+    });
     insertedSinceRotate = 0;
 }
 
