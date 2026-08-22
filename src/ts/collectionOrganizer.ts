@@ -1,10 +1,10 @@
-import { v4 as uuidv4 } from 'uuid'
-
-export type OrganizableCollection = 'promptPresets' | 'modules' | 'plugins'
+export type CollectionKind = 'promptPresets' | 'modules' | 'plugins'
+export type OrganizableCollection = CollectionKind
 
 export interface CollectionFolder {
     id: string
     name: string
+    createdAt: number
 }
 
 export interface CollectionOrganizerState {
@@ -13,7 +13,7 @@ export interface CollectionOrganizerState {
     itemOrder: string[]
 }
 
-export type CollectionOrganizers = Partial<Record<OrganizableCollection, CollectionOrganizerState>>
+export type CollectionOrganizers = Record<CollectionKind, CollectionOrganizerState>
 
 type FolderFilter = string | null | undefined
 
@@ -37,6 +37,10 @@ function cloneState(state: CollectionOrganizerState): CollectionOrganizerState {
     }
 }
 
+function isValidCreatedAt(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 export function normalizeCollectionOrganizerState(
     saved: Partial<CollectionOrganizerState> | null | undefined,
     currentItemIds: readonly string[],
@@ -46,9 +50,9 @@ export function normalizeCollectionOrganizerState(
     for (const folder of Array.isArray(saved?.folders) ? saved.folders : []) {
         const id = typeof folder?.id === 'string' ? folder.id.trim() : ''
         const name = typeof folder?.name === 'string' ? folder.name.trim() : ''
-        if (!id || !name || folderIds.has(id)) continue
+        if (!id || !name || !isValidCreatedAt(folder?.createdAt) || folderIds.has(id)) continue
         folderIds.add(id)
-        folders.push({ id, name })
+        folders.push({ id, name, createdAt: folder.createdAt })
     }
 
     const currentIds = validItemIds(currentItemIds)
@@ -78,13 +82,12 @@ export function normalizeCollectionOrganizerState(
 }
 
 export function normalizeCollectionOrganizers(
-    saved: CollectionOrganizers | null | undefined,
-    itemIds: Record<OrganizableCollection, readonly string[]>,
+    saved: Partial<CollectionOrganizers> | null | undefined,
+    itemIds: Record<CollectionKind, readonly string[]>,
 ): CollectionOrganizers {
-    const organizers: CollectionOrganizers = {}
-    for (const collection of Object.keys(itemIds) as OrganizableCollection[]) {
-        const state = saved?.[collection]
-        if (state) organizers[collection] = normalizeCollectionOrganizerState(state, itemIds[collection])
+    const organizers = {} as CollectionOrganizers
+    for (const collection of ['promptPresets', 'modules', 'plugins'] as const) {
+        organizers[collection] = normalizeCollectionOrganizerState(saved?.[collection], itemIds[collection])
     }
     return organizers
 }
@@ -115,12 +118,13 @@ export function assignItemsToFolder(
 export function createCollectionFolder(
     state: CollectionOrganizerState,
     name: string,
-    suppliedId?: string,
+    id: string,
+    createdAt: number,
 ): CollectionOrganizerState {
-    const id = (suppliedId ?? uuidv4()).trim()
+    const trimmedId = id.trim()
     const trimmedName = name.trim()
-    if (!id || !trimmedName || state.folders.some((folder) => folder.id === id)) return cloneState(state)
-    return { ...cloneState(state), folders: [...state.folders, { id, name: trimmedName }] }
+    if (!trimmedId || !trimmedName || !isValidCreatedAt(createdAt) || state.folders.some((folder) => folder.id === trimmedId)) return cloneState(state)
+    return { ...cloneState(state), folders: [...state.folders, { id: trimmedId, name: trimmedName, createdAt }] }
 }
 
 export function renameCollectionFolder(
