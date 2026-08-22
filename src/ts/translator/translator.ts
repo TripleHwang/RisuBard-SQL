@@ -165,6 +165,23 @@ function resolveLLMCacheStorageIndex(candidate: LLMCacheStorageIndex) {
     return current
 }
 
+function invalidateLLMCacheStorageIndex() {
+    llmCacheStorageIndexGeneration++
+    llmCacheStorageIndex = null
+}
+
+async function refreshLLMCacheStorageIndexIfStale(key: string, candidate: LLMCacheStorageIndex) {
+    const current = llmCacheStorageIndex ?? candidate
+    for (const storageKey of current.locations.get(key) ?? []) {
+        const payload = await readLLMCachePayload(storageKey)
+        if (!payload || payload.key !== key) {
+            invalidateLLMCacheStorageIndex()
+            return await ensureLLMCacheStorageIndex()
+        }
+    }
+    return current
+}
+
 function advanceLLMCacheKeyGeneration(key: string) {
     const next = (llmCacheKeyGenerations.get(key) ?? 0) + 1
     llmCacheKeyGenerations.set(key, next)
@@ -277,11 +294,19 @@ async function setPersistentLLMCache(
             ? canonicalStorageKey
             : matchingStorageKeys.values().next().value ?? canonicalStorageKey
 
+    const indexedAuthority = matchingStorageKeys.has(storageKey)
+    const currentAuthority = await readLLMCachePayload(storageKey)
+    if ((indexedAuthority && !currentAuthority) || (currentAuthority && currentAuthority.key !== text)) {
+        invalidateLLMCacheStorageIndex()
+        throw new Error('LLM translation cache storage index is stale')
+    }
+
     const duplicateStorageKeys = [...matchingStorageKeys].filter((key) => key !== storageKey)
     const originalDuplicatePayloads = new Map<string, LLMTranslationCachePayload>()
     for (const duplicateStorageKey of duplicateStorageKeys) {
         const payload = await readLLMCachePayload(duplicateStorageKey)
         if (!payload || payload.key !== text) {
+            invalidateLLMCacheStorageIndex()
             throw new Error('LLM translation cache storage index is stale')
         }
         originalDuplicatePayloads.set(duplicateStorageKey, payload)
@@ -341,6 +366,17 @@ async function setPersistentLLMCache(
         const rollbackError = await rollbackDuplicates()
         if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
         throw cleanupError ?? unsafeCleanupError
+    }
+
+    const finalAuthority = await readLLMCachePayload(storageKey)
+    const authorityChanged = currentAuthority
+        ? !finalAuthority || finalAuthority.key !== text
+        : finalAuthority !== null && finalAuthority.key !== text
+    if (authorityChanged) {
+        const rollbackError = await rollbackDuplicates()
+        if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
+        invalidateLLMCacheStorageIndex()
+        throw new Error('LLM translation cache storage index is stale')
     }
 
     try {
@@ -926,7 +962,8 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
         return styleDecodes[parseInt(p1)] ?? ''
     }).replace(/<\/style-data>/g, '')
     try {
-        const preparedStorageIndex = await ensureLLMCacheStorageIndex()
+        let preparedStorageIndex = await ensureLLMCacheStorageIndex()
+        preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(cacheKey, preparedStorageIndex)
         llmCacheMutationGeneration++
         await runSerializedLLMCacheMutation(cacheKey, async () => {
             if (!isCurrentLLMCachePublication(cacheKey, publicationToken)) return
@@ -960,8 +997,7 @@ export async function clearLLMCache(): Promise<void> {
         try {
             await previousBarrier
             await Promise.allSettled(pendingMutations)
-            llmCacheStorageIndexGeneration++
-            llmCacheStorageIndex = null
+            invalidateLLMCacheStorageIndex()
             try {
                 await clearPersistentPrefix(llmTranslateCachePrefix)
                 llmTranslateCache.clear()
@@ -1000,7 +1036,8 @@ export async function searchLLMCache(partialKey:string):Promise<{key: string, va
 }
 
 export async function setLLMCache(key:string, value:string):Promise<void>{
-    await setLLMCacheForGeneration(key, value)
+    const entryGeneration = llmCacheGlobalGeneration
+    await setLLMCacheForGeneration(key, value, entryGeneration)
 }
 
 async function setLLMCacheForGeneration(
@@ -1009,7 +1046,18 @@ async function setLLMCacheForGeneration(
     expectedGlobalGeneration?: number,
     sharedStorageIndex?: LLMCacheStorageIndex,
 ) {
-    const preparedStorageIndex = sharedStorageIndex ?? await ensureLLMCacheStorageIndex()
+    let preparedStorageIndex = llmCacheStorageIndex
+        ?? sharedStorageIndex
+        ?? await ensureLLMCacheStorageIndex()
+    if (expectedGlobalGeneration !== undefined
+        && expectedGlobalGeneration !== llmCacheGlobalGeneration) {
+        throw new Error('LLM translation cache operation was superseded by clear')
+    }
+    preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(key, preparedStorageIndex)
+    if (expectedGlobalGeneration !== undefined
+        && expectedGlobalGeneration !== llmCacheGlobalGeneration) {
+        throw new Error('LLM translation cache operation was superseded by clear')
+    }
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         if (expectedGlobalGeneration !== undefined
@@ -1086,7 +1134,8 @@ export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promis
 }
 
 export async function updateLLMCacheValue(key: string, value: string, storageKey: string): Promise<void> {
-    const preparedStorageIndex = await ensureLLMCacheStorageIndex()
+    let preparedStorageIndex = await ensureLLMCacheStorageIndex()
+    preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(key, preparedStorageIndex)
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         await requireLLMCachePayload(key, storageKey)
@@ -1097,7 +1146,8 @@ export async function updateLLMCacheValue(key: string, value: string, storageKey
 }
 
 export async function deleteLLMCache(key: string, storageKey: string): Promise<void> {
-    const preparedStorageIndex = await ensureLLMCacheStorageIndex()
+    let preparedStorageIndex = await ensureLLMCacheStorageIndex()
+    preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(key, preparedStorageIndex)
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         await requireLLMCachePayload(key, storageKey)

@@ -242,7 +242,7 @@ describe("LLM translation cache manager", () => {
         await setLLMCache("new two", "second");
 
         expect(persistenceStats.lists).toBe(1);
-        expect(persistenceStats.reads).toBe(22);
+        expect(persistenceStats.reads).toBe(26);
     });
 
     it("reuses one persistent snapshot for every item in an import", async () => {
@@ -252,7 +252,86 @@ describe("LLM translation cache manager", () => {
             .resolves.toEqual({ count: 3, failed: 0 });
 
         expect(persistenceStats.lists).toBe(1);
-        expect(persistenceStats.reads).toBe(20);
+        expect(persistenceStats.reads).toBe(26);
+    });
+
+    it("does not publish a set that entered before clear while awaiting the index", async () => {
+        seed("index blocker", "old");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
+
+        const setting = setLLMCache("pre-clear set", "new");
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+        asyncControls.readGate = null;
+        await clearLLMCache();
+        gate.resolve();
+
+        await expect(setting).rejects.toThrow("superseded by clear");
+        expect(storage.has(`${prefix}pre-clear%20set.json`)).toBe(false);
+    });
+
+    it("does not overwrite an indexed path externally reassigned to another key", async () => {
+        const sharedStorageKey = seed("indexed A", "old A", `${prefix}shared-legacy.json`);
+        await listLLMCache();
+        storage.set(sharedStorageKey, { key: "external B", value: "external value" });
+
+        await setLLMCache("indexed A", "new A");
+
+        expect(storage.get(sharedStorageKey)).toEqual({ key: "external B", value: "external value" });
+        expect(storage.get(`${prefix}indexed%20A.json`)).toEqual({ key: "indexed A", value: "new A" });
+    });
+
+    it("revalidates authority after awaited duplicate cleanup", async () => {
+        const legacyStorageKey = seed("authority race", "old", `${prefix}legacy-authority-race.json`);
+        const canonicalStorageKey = seed("authority race", "old");
+        await listLLMCache();
+        const duplicateWriteGate = deferred<void>();
+        asyncControls.writeGates.set(canonicalStorageKey, duplicateWriteGate.promise);
+
+        const updating = updateLLMCacheValue("authority race", "new", legacyStorageKey);
+        await vi.waitFor(() => expect(asyncControls.startedWrites.has(canonicalStorageKey)).toBe(true));
+        storage.set(legacyStorageKey, { key: "external replacement", value: "preserve me" });
+        duplicateWriteGate.resolve();
+
+        await expect(updating).rejects.toThrow("storage index is stale");
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "external replacement", value: "preserve me" });
+        expect(storage.get(canonicalStorageKey)).toEqual({ key: "authority race", value: "old" });
+    });
+
+    it("rebuilds a stale duplicate index before manager update", async () => {
+        const legacyStorageKey = seed("manager stale update", "old", `${prefix}legacy-manager-update.json`);
+        const canonicalStorageKey = seed("manager stale update", "old");
+        await listLLMCache();
+        storage.set(canonicalStorageKey, { key: "external update owner", value: "preserve" });
+
+        await updateLLMCacheValue("manager stale update", "new", legacyStorageKey);
+
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "manager stale update", value: "new" });
+        expect(storage.get(canonicalStorageKey)).toEqual({ key: "external update owner", value: "preserve" });
+    });
+
+    it("rebuilds a stale duplicate index before manager delete", async () => {
+        const legacyStorageKey = seed("manager stale delete", "old", `${prefix}legacy-manager-delete.json`);
+        const canonicalStorageKey = seed("manager stale delete", "old");
+        await listLLMCache();
+        storage.set(canonicalStorageKey, { key: "external delete owner", value: "preserve" });
+
+        await deleteLLMCache("manager stale delete", legacyStorageKey);
+
+        expect(storage.has(legacyStorageKey)).toBe(false);
+        expect(storage.get(canonicalStorageKey)).toEqual({ key: "external delete owner", value: "preserve" });
+    });
+
+    it("discovers externally added legacy rows after an explicit list refresh", async () => {
+        await expect(getLLMCache("external legacy")).resolves.toBeNull();
+        const listCount = persistenceStats.lists;
+        seed("external legacy", "external value", `${prefix}new-external-legacy.json`);
+
+        await expect(getLLMCache("external legacy")).resolves.toBeNull();
+        expect(persistenceStats.lists).toBe(listCount);
+        await listLLMCache();
+        await expect(getLLMCache("external legacy")).resolves.toBe("external value");
     });
 
     it("publishes an authoritative write before surfacing duplicate cleanup failure", async () => {
@@ -309,10 +388,11 @@ describe("LLM translation cache manager", () => {
 
         const setting = setLLMCache("partial survivor", "new");
         const clearing = clearLLMCache();
+        const clearingExpectation = expect(clearing).rejects.toThrow("clear failed");
 
-        await expect(clearing).rejects.toThrow("clear failed");
-        await expect(setting).resolves.toBeUndefined();
-        expect(storage.get(legacyStorageKey)).toEqual({ key: "partial survivor", value: "new" });
+        await clearingExpectation;
+        await expect(setting).rejects.toThrow("superseded by clear");
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "partial survivor", value: "old" });
         expect(storage.has(`${prefix}partial%20survivor.json`)).toBe(false);
     });
 
@@ -329,12 +409,13 @@ describe("LLM translation cache manager", () => {
         await Promise.resolve();
         failures.clearAfter = 1;
         const clearing = clearLLMCache();
+        const clearingExpectation = expect(clearing).rejects.toThrow("clear failed");
         writeGate.resolve();
 
         await expect(firstWrite).resolves.toBeUndefined();
-        await expect(secondWrite).resolves.toBeUndefined();
-        await expect(clearing).rejects.toThrow("clear failed");
-        expect(storage.get(legacyStorageKey)).toEqual({ key: "queued survivor", value: "second" });
+        await expect(secondWrite).rejects.toThrow("superseded by clear");
+        await clearingExpectation;
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "queued survivor", value: "first" });
         expect(storage.has(`${prefix}queued%20survivor.json`)).toBe(false);
     });
 
