@@ -32,11 +32,15 @@ const llmCacheReadConcurrency = 16
 type LLMTranslationCachePayload = { key: string, value: string }
 type PersistentLLMTranslationCacheRow = LLMTranslationCachePayload & { storageKey: string }
 type LLMCachePublicationToken = { globalGeneration: number, keyGeneration: number }
+type LLMCacheStorageIndex = { generation: number, locations: Map<string, string[]> }
 
 let llmCacheGlobalGeneration = 0
 let llmCacheMutationGeneration = 0
 const llmCacheKeyGenerations = new Map<string, number>()
 const llmCacheMutationQueues = new Map<string, Promise<unknown>>()
+let llmCacheStorageIndexGeneration = 0
+let llmCacheStorageIndex: LLMCacheStorageIndex | null = null
+let llmCacheStorageIndexBuild: Promise<LLMCacheStorageIndex> | null = null
 let llmCacheClearBarrier = Promise.resolve()
 let activeLLMCacheClear: Promise<void> | null = null
 
@@ -97,6 +101,23 @@ function reconcileLLMCacheMirror(rows: PersistentLLMTranslationCacheRow[]) {
     }
 }
 
+function rebuildLLMCacheStorageIndex(rows: PersistentLLMTranslationCacheRow[]) {
+    const locations = new Map<string, string[]>()
+    for (const row of rows) {
+        const storageKeys = locations.get(row.key) ?? []
+        storageKeys.push(row.storageKey)
+        locations.set(row.key, storageKeys)
+    }
+    const index = { generation: llmCacheStorageIndexGeneration, locations }
+    llmCacheStorageIndex = index
+    return index
+}
+
+function reconcileLLMCacheState(rows: PersistentLLMTranslationCacheRow[]) {
+    reconcileLLMCacheMirror(rows)
+    return rebuildLLMCacheStorageIndex(rows)
+}
+
 async function readAndReconcilePersistentLLMCacheRows() {
     while (true) {
         const clearBarrier = llmCacheClearBarrier
@@ -109,9 +130,39 @@ async function readAndReconcilePersistentLLMCacheRows() {
         const rows = await readPersistentLLMCacheRows()
         if (globalGeneration !== llmCacheGlobalGeneration
             || mutationGeneration !== llmCacheMutationGeneration) continue
-        reconcileLLMCacheMirror(rows)
+        reconcileLLMCacheState(rows)
         return rows
     }
+}
+
+async function ensureLLMCacheStorageIndex() {
+    if (llmCacheStorageIndex) return llmCacheStorageIndex
+    const existingBuild = llmCacheStorageIndexBuild
+    if (existingBuild) return await existingBuild
+
+    let build!: Promise<LLMCacheStorageIndex>
+    build = (async () => {
+        try {
+            await readAndReconcilePersistentLLMCacheRows()
+            return llmCacheStorageIndex ?? {
+                generation: llmCacheStorageIndexGeneration,
+                locations: new Map<string, string[]>(),
+            }
+        } finally {
+            if (llmCacheStorageIndexBuild === build) llmCacheStorageIndexBuild = null
+        }
+    })()
+    llmCacheStorageIndexBuild = build
+    return await build
+}
+
+function resolveLLMCacheStorageIndex(candidate: LLMCacheStorageIndex) {
+    if (llmCacheStorageIndex) return llmCacheStorageIndex
+    const current = candidate.generation === llmCacheStorageIndexGeneration
+        ? candidate
+        : { generation: llmCacheStorageIndexGeneration, locations: new Map<string, string[]>() }
+    llmCacheStorageIndex = current
+    return current
 }
 
 function advanceLLMCacheKeyGeneration(key: string) {
@@ -185,36 +236,125 @@ async function getPersistentLLMCache(text: string): Promise<string | null> {
             return payload.value
         }
 
-        await readAndReconcilePersistentLLMCacheRows()
-        return llmTranslateCache.get(text) ?? null
+        const storageIndex = await ensureLLMCacheStorageIndex()
+        if (globalGeneration !== llmCacheGlobalGeneration
+            || keyGeneration !== (llmCacheKeyGenerations.get(text) ?? 0)
+            || mutationGeneration !== llmCacheMutationGeneration) continue
+        const cachedValue = llmTranslateCache.get(text)
+        if (cachedValue !== undefined) return cachedValue
+
+        const indexedStorageKeys = storageIndex.locations.get(text) ?? []
+        if (indexedStorageKeys.length === 0) return null
+        for (const candidateStorageKey of indexedStorageKeys) {
+            const indexedPayload = await readLLMCachePayload(candidateStorageKey)
+            if (globalGeneration !== llmCacheGlobalGeneration
+                || keyGeneration !== (llmCacheKeyGenerations.get(text) ?? 0)
+                || mutationGeneration !== llmCacheMutationGeneration) break
+            if (!indexedPayload || indexedPayload.key !== text) continue
+            llmTranslateCache.set(text, indexedPayload.value)
+            return indexedPayload.value
+        }
+        if (globalGeneration !== llmCacheGlobalGeneration
+            || keyGeneration !== (llmCacheKeyGenerations.get(text) ?? 0)
+            || mutationGeneration !== llmCacheMutationGeneration) continue
+        storageIndex.locations.delete(text)
+        return null
     }
 }
 
-async function setPersistentLLMCache(text: string, value: string, preferredStorageKey?: string) {
+async function setPersistentLLMCache(
+    text: string,
+    value: string,
+    storageIndex: Map<string, string[]>,
+    preferredStorageKey?: string,
+) {
     const canonicalStorageKey = await makeHashedStorageKey(llmTranslateCachePrefix, text)
-    const matchingRows = (await readPersistentLLMCacheRows()).filter((row) => row.key === text)
-    const matchingStorageKeys = new Set(matchingRows.map((row) => row.storageKey))
-    const storageKey = preferredStorageKey && matchingStorageKeys.has(preferredStorageKey)
+    const matchingStorageKeys = new Set(storageIndex.get(text) ?? [])
+    if (preferredStorageKey) matchingStorageKeys.add(preferredStorageKey)
+    const storageKey = preferredStorageKey
         ? preferredStorageKey
         : matchingStorageKeys.has(canonicalStorageKey)
             ? canonicalStorageKey
-            : matchingRows[0]?.storageKey ?? canonicalStorageKey
+            : matchingStorageKeys.values().next().value ?? canonicalStorageKey
 
-    await writePersistentJson(storageKey, { key: text, value })
+    const duplicateStorageKeys = [...matchingStorageKeys].filter((key) => key !== storageKey)
+    const originalDuplicatePayloads = new Map<string, LLMTranslationCachePayload>()
+    for (const duplicateStorageKey of duplicateStorageKeys) {
+        const payload = await readLLMCachePayload(duplicateStorageKey)
+        if (!payload || payload.key !== text) {
+            throw new Error('LLM translation cache storage index is stale')
+        }
+        originalDuplicatePayloads.set(duplicateStorageKey, payload)
+    }
+    const rollbackDuplicates = async () => {
+        let rollbackError: unknown = null
+        for (const [duplicateStorageKey, payload] of originalDuplicatePayloads) {
+            try {
+                await writePersistentJson(duplicateStorageKey, payload)
+            } catch (error) {
+                rollbackError ??= error
+            }
+        }
+        if (rollbackError) {
+            const actualRows: PersistentLLMTranslationCacheRow[] = []
+            for (const candidateStorageKey of matchingStorageKeys) {
+                const payload = await readLLMCachePayload(candidateStorageKey)
+                if (payload?.key === text) {
+                    actualRows.push({ ...payload, storageKey: candidateStorageKey })
+                }
+            }
+            const canonicalRowIndex = actualRows.findIndex((row) => row.storageKey === canonicalStorageKey)
+            if (canonicalRowIndex > 0) {
+                actualRows.unshift(actualRows.splice(canonicalRowIndex, 1)[0])
+            }
+            if (actualRows.length > 0) {
+                storageIndex.set(text, actualRows.map((row) => row.storageKey))
+                llmTranslateCache.set(text, actualRows[0].value)
+            } else {
+                storageIndex.delete(text)
+                llmTranslateCache.delete(text)
+            }
+        }
+        return rollbackError
+    }
+    const remainingStorageKeys = new Set(matchingStorageKeys)
+    remainingStorageKeys.add(storageKey)
     let cleanupError: unknown = null
-    for (const duplicateStorageKey of matchingStorageKeys) {
-        if (duplicateStorageKey === storageKey) continue
+    let unsafeCleanupError: unknown = null
+    for (const duplicateStorageKey of duplicateStorageKeys) {
+        let duplicateUpdated = false
         try {
             await writePersistentJson(duplicateStorageKey, { key: text, value })
+            duplicateUpdated = true
         } catch (error) {
             cleanupError ??= error
         }
         try {
             await removePersistentKey(duplicateStorageKey)
+            remainingStorageKeys.delete(duplicateStorageKey)
         } catch (error) {
             cleanupError ??= error
+            if (!duplicateUpdated) unsafeCleanupError ??= error
         }
     }
+    if (unsafeCleanupError) {
+        const rollbackError = await rollbackDuplicates()
+        if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
+        throw cleanupError ?? unsafeCleanupError
+    }
+
+    try {
+        await writePersistentJson(storageKey, { key: text, value })
+    } catch (error) {
+        const rollbackError = await rollbackDuplicates()
+        if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
+        throw error
+    }
+    llmTranslateCache.set(text, value)
+    storageIndex.set(text, [
+        storageKey,
+        ...[...remainingStorageKeys].filter((key) => key !== storageKey),
+    ])
     if (cleanupError) throw cleanupError
     return storageKey
 }
@@ -786,10 +926,12 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
         return styleDecodes[parseInt(p1)] ?? ''
     }).replace(/<\/style-data>/g, '')
     try {
+        const preparedStorageIndex = await ensureLLMCacheStorageIndex()
         llmCacheMutationGeneration++
         await runSerializedLLMCacheMutation(cacheKey, async () => {
             if (!isCurrentLLMCachePublication(cacheKey, publicationToken)) return
-            await setPersistentLLMCache(cacheKey, result)
+            const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
+            await setPersistentLLMCache(cacheKey, result, storageIndex.locations)
             if (isCurrentLLMCachePublication(cacheKey, publicationToken)) {
                 llmTranslateCache.set(cacheKey, result)
             }
@@ -818,14 +960,17 @@ export async function clearLLMCache(): Promise<void> {
         try {
             await previousBarrier
             await Promise.allSettled(pendingMutations)
+            llmCacheStorageIndexGeneration++
+            llmCacheStorageIndex = null
             try {
                 await clearPersistentPrefix(llmTranslateCachePrefix)
                 llmTranslateCache.clear()
             } catch (error) {
                 try {
-                    reconcileLLMCacheMirror(await readPersistentLLMCacheRows())
+                    reconcileLLMCacheState(await readPersistentLLMCacheRows())
                 } catch {
                     llmTranslateCache.clear()
+                    llmCacheStorageIndex = null
                 }
                 throw error
             }
@@ -858,14 +1003,21 @@ export async function setLLMCache(key:string, value:string):Promise<void>{
     await setLLMCacheForGeneration(key, value)
 }
 
-async function setLLMCacheForGeneration(key: string, value: string, expectedGlobalGeneration?: number) {
+async function setLLMCacheForGeneration(
+    key: string,
+    value: string,
+    expectedGlobalGeneration?: number,
+    sharedStorageIndex?: LLMCacheStorageIndex,
+) {
+    const preparedStorageIndex = sharedStorageIndex ?? await ensureLLMCacheStorageIndex()
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         if (expectedGlobalGeneration !== undefined
             && expectedGlobalGeneration !== llmCacheGlobalGeneration) {
             throw new Error('LLM translation cache operation was superseded by clear')
         }
-        await setPersistentLLMCache(key, value)
+        const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
+        await setPersistentLLMCache(key, value, storageIndex.locations)
         llmTranslateCache.set(key, value)
     })
 }
@@ -934,20 +1086,23 @@ export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promis
 }
 
 export async function updateLLMCacheValue(key: string, value: string, storageKey: string): Promise<void> {
+    const preparedStorageIndex = await ensureLLMCacheStorageIndex()
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         await requireLLMCachePayload(key, storageKey)
-        await setPersistentLLMCache(key, value, storageKey)
+        const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
+        await setPersistentLLMCache(key, value, storageIndex.locations, storageKey)
         llmTranslateCache.set(key, value)
     })
 }
 
 export async function deleteLLMCache(key: string, storageKey: string): Promise<void> {
+    const preparedStorageIndex = await ensureLLMCacheStorageIndex()
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         await requireLLMCachePayload(key, storageKey)
-        const matchingRows = (await readPersistentLLMCacheRows()).filter((row) => row.key === key)
-        const storageKeys = new Set([storageKey, ...matchingRows.map((row) => row.storageKey)])
+        const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
+        const storageKeys = new Set([storageKey, ...(storageIndex.locations.get(key) ?? [])])
         let removeError: unknown = null
         for (const matchingStorageKey of storageKeys) {
             try {
@@ -957,9 +1112,10 @@ export async function deleteLLMCache(key: string, storageKey: string): Promise<v
             }
         }
         if (removeError) {
-            reconcileLLMCacheMirror(await readPersistentLLMCacheRows())
+            reconcileLLMCacheState(await readPersistentLLMCacheRows())
             throw removeError
         }
+        storageIndex.locations.delete(key)
         llmTranslateCache.delete(key)
     })
 }
@@ -978,6 +1134,12 @@ export async function importLLMCacheFromJSON(data:Record<string, string>):Promis
     let failed = 0
     const entries = Object.entries(data)
     const importGeneration = llmCacheGlobalGeneration
+    let storageIndex: LLMCacheStorageIndex
+    try {
+        storageIndex = await ensureLLMCacheStorageIndex()
+    } catch {
+        return { count, failed: entries.length }
+    }
     for(let index = 0; index < entries.length; index++){
         if (importGeneration !== llmCacheGlobalGeneration) {
             failed += entries.length - index
@@ -985,7 +1147,7 @@ export async function importLLMCacheFromJSON(data:Record<string, string>):Promis
         }
         const [key, value] = entries[index]
         try {
-            await setLLMCacheForGeneration(key, value, importGeneration)
+            await setLLMCacheForGeneration(key, value, importGeneration, storageIndex)
             count++
         } catch {
             failed++

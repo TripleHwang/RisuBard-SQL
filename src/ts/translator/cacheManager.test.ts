@@ -8,6 +8,7 @@ const failures = vi.hoisted(() => ({
     clearAfter: null as number | null,
 }));
 const readStats = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
+const persistenceStats = vi.hoisted(() => ({ lists: 0, reads: 0 }));
 const asyncControls = vi.hoisted(() => ({
     readGate: null as Promise<void> | null,
     gatedReadsRemaining: 0,
@@ -32,13 +33,15 @@ vi.mock("../storage/persistentKv", () => ({
             }
         }
     }),
-    listPersistentKeys: vi.fn(async (prefix = "") =>
-        [...storage.keys()].filter((key) => key.startsWith(prefix)),
-    ),
+    listPersistentKeys: vi.fn(async (prefix = "") => {
+        persistenceStats.lists++;
+        return [...storage.keys()].filter((key) => key.startsWith(prefix));
+    }),
     makeHashedStorageKey: vi.fn(async (prefix: string, key: string) =>
         `${prefix}${encodeURIComponent(key)}.json`,
     ),
     readPersistentJson: vi.fn(async (key: string) => {
+        persistenceStats.reads++;
         readStats.active++;
         readStats.maxActive = Math.max(readStats.maxActive, readStats.active);
         const value = storage.get(key);
@@ -132,6 +135,8 @@ describe("LLM translation cache manager", () => {
         failures.clearAfter = null;
         readStats.active = 0;
         readStats.maxActive = 0;
+        persistenceStats.lists = 0;
+        persistenceStats.reads = 0;
         asyncControls.readGate = null;
         asyncControls.gatedReadsRemaining = 0;
         asyncControls.writeGates.clear();
@@ -226,6 +231,118 @@ describe("LLM translation cache manager", () => {
             { key: "conflict", value: "canonical" },
         ]);
         await expect(exportLLMCacheAsJSON()).resolves.toMatchObject({ conflict: "canonical" });
+    });
+
+    it("indexes persistent rows once across repeated misses and writes", async () => {
+        for (let index = 0; index < 20; index++) seed(`existing ${index}`, `value ${index}`);
+
+        await expect(getLLMCache("missing one")).resolves.toBeNull();
+        await expect(getLLMCache("missing two")).resolves.toBeNull();
+        await setLLMCache("new one", "first");
+        await setLLMCache("new two", "second");
+
+        expect(persistenceStats.lists).toBe(1);
+        expect(persistenceStats.reads).toBe(22);
+    });
+
+    it("reuses one persistent snapshot for every item in an import", async () => {
+        for (let index = 0; index < 20; index++) seed(`existing ${index}`, `value ${index}`);
+
+        await expect(importLLMCacheFromJSON({ first: "one", second: "two", third: "three" }))
+            .resolves.toEqual({ count: 3, failed: 0 });
+
+        expect(persistenceStats.lists).toBe(1);
+        expect(persistenceStats.reads).toBe(20);
+    });
+
+    it("publishes an authoritative write before surfacing duplicate cleanup failure", async () => {
+        const legacyStorageKey = seed("cleanup failure", "old", `${prefix}legacy-cleanup.json`);
+        const canonicalStorageKey = seed("cleanup failure", "old");
+        await listLLMCache();
+        failures.removeKeys.add(legacyStorageKey);
+
+        await expect(updateLLMCacheValue("cleanup failure", "new", canonicalStorageKey))
+            .rejects.toThrow("delete failed");
+
+        expect(storage.get(canonicalStorageKey)).toEqual({ key: "cleanup failure", value: "new" });
+        expect(await getLLMCache("cleanup failure")).toBe("new");
+    });
+
+    it("does not commit an authoritative edit when a stale duplicate cannot be updated or removed", async () => {
+        const legacyStorageKey = seed("unsafe cleanup", "old", `${prefix}legacy-unsafe.json`);
+        const canonicalStorageKey = seed("unsafe cleanup", "old");
+        await listLLMCache();
+        persistenceStats.lists = 0;
+        failures.writeKeys.add(canonicalStorageKey);
+        failures.removeKeys.add(canonicalStorageKey);
+
+        await expect(updateLLMCacheValue("unsafe cleanup", "new", legacyStorageKey))
+            .rejects.toThrow("write failed");
+
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "unsafe cleanup", value: "old" });
+        expect(storage.get(canonicalStorageKey)).toEqual({ key: "unsafe cleanup", value: "old" });
+        expect(await getLLMCache("unsafe cleanup")).toBe("old");
+        expect(persistenceStats.lists).toBe(0);
+        await expect(exportLLMCacheAsJSON()).resolves.toMatchObject({ "unsafe cleanup": "old" });
+    });
+
+    it("rolls back synchronized duplicates when the authoritative write fails", async () => {
+        const legacyStorageKey = seed("authority failure", "old", `${prefix}legacy-authority.json`);
+        const canonicalStorageKey = seed("authority failure", "old");
+        await listLLMCache();
+        failures.writeKeys.add(legacyStorageKey);
+        failures.removeKeys.add(canonicalStorageKey);
+
+        await expect(updateLLMCacheValue("authority failure", "new", legacyStorageKey))
+            .rejects.toThrow("write failed");
+
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "authority failure", value: "old" });
+        expect(storage.get(canonicalStorageKey)).toEqual({ key: "authority failure", value: "old" });
+        expect(await getLLMCache("authority failure")).toBe("old");
+    });
+
+    it("uses the rebuilt index when a mutation registers behind a partial clear", async () => {
+        seed("delete first", "gone");
+        const legacyStorageKey = seed("partial survivor", "old", `${prefix}legacy-survivor.json`);
+        await listLLMCache();
+        failures.clearAfter = 1;
+
+        const setting = setLLMCache("partial survivor", "new");
+        const clearing = clearLLMCache();
+
+        await expect(clearing).rejects.toThrow("clear failed");
+        await expect(setting).resolves.toBeUndefined();
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "partial survivor", value: "new" });
+        expect(storage.has(`${prefix}partial%20survivor.json`)).toBe(false);
+    });
+
+    it("keeps the current index for mutations already queued before a partial clear", async () => {
+        seed("delete first", "gone");
+        const legacyStorageKey = seed("queued survivor", "old", `${prefix}legacy-queued-survivor.json`);
+        await listLLMCache();
+        const writeGate = deferred<void>();
+        asyncControls.writeGates.set(legacyStorageKey, writeGate.promise);
+
+        const firstWrite = setLLMCache("queued survivor", "first");
+        await vi.waitFor(() => expect(asyncControls.startedWrites.has(legacyStorageKey)).toBe(true));
+        const secondWrite = setLLMCache("queued survivor", "second");
+        await Promise.resolve();
+        failures.clearAfter = 1;
+        const clearing = clearLLMCache();
+        writeGate.resolve();
+
+        await expect(firstWrite).resolves.toBeUndefined();
+        await expect(secondWrite).resolves.toBeUndefined();
+        await expect(clearing).rejects.toThrow("clear failed");
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "queued survivor", value: "second" });
+        expect(storage.has(`${prefix}queued%20survivor.json`)).toBe(false);
+    });
+
+    it("reads a valid legacy row when the canonical row is malformed", async () => {
+        storage.set(`${prefix}legacy%20fallback.json`, { broken: true });
+        seed("legacy fallback", "legacy value", `${prefix}valid-legacy-fallback.json`);
+
+        await expect(getLLMCache("legacy fallback")).resolves.toBe("legacy value");
     });
 
     it("deletes one entry from memory and persistent storage", async () => {
