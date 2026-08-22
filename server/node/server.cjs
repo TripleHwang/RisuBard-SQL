@@ -996,7 +996,6 @@ function stopTunnel() {
 const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false';
 const GITHUB_REPO = 'rpaddict/RisuBard';
 const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL || `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
-const PUBLIC_STATS_URL = process.env.RISU_PUBLIC_STATS_URL || 'https://risu-update-worker.nodridan.workers.dev/api/public-stats';
 
 // Re-read on each call so non-portable updates (docker/git pull) without a
 // process restart don't keep reporting the old version to the update worker.
@@ -5858,18 +5857,6 @@ app.post('/api/inlays/compress', sessionAuthMiddleware, async (req, res) => {
     }
 
     res.end();
-});
-
-// ── Public stats proxy ───────────────────────────────────────────────────────
-app.get('/api/public-stats', async (req, res) => {
-    try {
-        const r = await fetch(PUBLIC_STATS_URL);
-        if (!r.ok) { res.status(r.status).json({ error: 'upstream error' }); return; }
-        const data = await r.json();
-        res.json(data);
-    } catch {
-        res.status(502).json({ error: 'fetch failed' });
-    }
 });
 
 // ── Update check endpoint ────────────────────────────────────────────────────

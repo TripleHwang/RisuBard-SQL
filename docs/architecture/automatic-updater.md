@@ -69,13 +69,10 @@ GitHub가 `404`를 반환하는 경우는 공개 릴리즈가 없는 상태로 �
 | --- | --- |
 | `RISU_UPDATE_CHECK=false` | 릴리즈 확인 기능을 비활성화한다. |
 | `RISU_UPDATE_URL` | 기본 GitHub 최신 릴리즈 API 대신 사용할 주소를 지정한다. 응답은 GitHub Release JSON 형식이어야 한다. |
-| `RISU_PUBLIC_STATS_URL` | 공개 통계 프록시의 원격 주소를 지정한다. 업데이트 API와 독립적으로 설정된다. |
-
-`RISU_PUBLIC_STATS_URL`을 별도로 둔 이유는 GitHub 릴리즈 API로 업데이트 확인 주소를 변경해도 기존 공개 통계 기능은 계속 업데이트 워커의 `/api/public-stats`를 사용해야 하기 때문이다.
 
 ## 변경 파일
 
-- `server/node/server.cjs`: GitHub 최신 릴리즈 직접 조회, 대상 저장소 변경, 공개 통계 주소 분리
+- `server/node/server.cjs`: GitHub 최신 릴리즈 직접 조회, 대상 저장소 변경
 - `server/node/release-update.cjs`: 릴리즈 태그 정규화와 버전 비교
 - `scripts/updater.cjs`: 독립 업데이터 대상 저장소 변경
 - `update.sh`: 소스 빌드용 업데이터의 대상 저장소와 압축 해제 디렉터리 규칙 변경
