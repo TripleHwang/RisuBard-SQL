@@ -13,6 +13,18 @@ export interface CollectionOrganizerState {
     itemOrder: string[]
 }
 
+export interface CollectionOrganizerItem {
+    id: string
+    title: string
+    detail?: string
+}
+
+export interface CollectionFolderCounts {
+    all: number
+    uncategorized: number
+    byFolderId: Record<string, number>
+}
+
 export type CollectionOrganizers = Record<CollectionKind, CollectionOrganizerState>
 
 type FolderFilter = string | null | undefined
@@ -151,9 +163,47 @@ export function deleteCollectionFolder(state: CollectionOrganizerState, folderId
 
 export function filterCollectionItems(state: CollectionOrganizerState, folderId: FolderFilter): string[] {
     if (folderId === undefined) return [...state.itemOrder]
+    const folderIds = new Set(state.folders.map((folder) => folder.id))
     return state.itemOrder.filter((itemId) => folderId === null
-        ? state.folderByItemId[itemId] === undefined
+        ? !folderIds.has(state.folderByItemId[itemId])
         : state.folderByItemId[itemId] === folderId)
+}
+
+export function getVisibleCollectionItems(
+    state: CollectionOrganizerState,
+    items: readonly CollectionOrganizerItem[],
+    folderId: FolderFilter,
+    search: string,
+): CollectionOrganizerItem[] {
+    const itemById = new Map(items.map((item) => [item.id, item]))
+    const query = search.trim().toLocaleLowerCase()
+    return filterCollectionItems(state, folderId)
+        .map((itemId) => itemById.get(itemId))
+        .filter((item): item is CollectionOrganizerItem => Boolean(item))
+        .filter((item) => !query || `${item.title}\n${item.detail ?? ''}`.toLocaleLowerCase().includes(query))
+}
+
+export function getCollectionFolderCounts(state: CollectionOrganizerState): CollectionFolderCounts {
+    const byFolderId = Object.fromEntries(state.folders.map((folder) => [folder.id, 0]))
+    const folderIds = new Set(state.folders.map((folder) => folder.id))
+    let uncategorized = 0
+    for (const itemId of state.itemOrder) {
+        const folderId = state.folderByItemId[itemId]
+        if (folderIds.has(folderId)) {
+            byFolderId[folderId]++
+        } else {
+            uncategorized++
+        }
+    }
+    return { all: state.itemOrder.length, uncategorized, byFolderId }
+}
+
+export function retainVisibleCollectionSelection(
+    selectedItemIds: readonly string[],
+    visibleItemIds: readonly string[],
+): string[] {
+    const visible = new Set(visibleItemIds)
+    return selectedItemIds.filter((itemId) => visible.has(itemId))
 }
 
 export function reorderVisibleCollectionItems(

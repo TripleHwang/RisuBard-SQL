@@ -7,15 +7,20 @@
     import { get } from 'svelte/store';
     import { openSettings, SettingsRoute } from 'src/ts/routing';
     import ShButton from '../UI/GUI/ShButton.svelte';
-    import { CopyIcon, Share2Icon, PencilIcon, HardDriveUploadIcon, PlusIcon, TrashIcon, XIcon, GitCompare } from "@lucide/svelte";
+    import { CopyIcon, Share2Icon, PencilIcon, HardDriveUploadIcon, PlusIcon, TrashIcon, XIcon, GitCompare, FolderOpenIcon } from "@lucide/svelte";
     import TextInput from "../UI/GUI/TextInput.svelte";
     import { prebuiltPresets } from "src/ts/process/templates/templates";
     import PromptDiffModal from "../Others/PromptDiffModal.svelte";
     import { RISU_PRESET_DRAG_TYPE } from "src/ts/dragTypes";
+    import CollectionOrganizerDialog from "../UI/CollectionOrganizerDialog.svelte";
 
     let editMode = $state(false)
     let isDragging = $state(false)
     let dragOverIndex = $state(-1)
+    let organizerOpen = $state(false)
+    const organizerPresetItems = $derived(DBState.db.botPresets.flatMap((preset) => typeof preset.id === 'string'
+        ? [{ id: preset.id, title: preset.name || preset.id, detail: preset.aiModel || preset.apiType }]
+        : []))
 
     interface Props {
         close?: any;
@@ -121,6 +126,10 @@
                 <span class="ml-1">{language.presetEdit}</span>
             </ShButton>
         {/if}
+        <ShButton variant="outline" size="default" className="w-full mb-4" onclick={() => { organizerOpen = true }}>
+            <FolderOpenIcon size={16}/>
+            <span class="ml-1">{language.collectionOrganizer.open}</span>
+        </ShButton>
         {#each DBState.db.botPresets as preset, i}
             <div class="w-full transition-all duration-200"
                 class:h-0.5={!isDragging || dragOverIndex !== i}
@@ -362,6 +371,13 @@
     onClose={closeDiff}
   />
 {/if}
+
+<CollectionOrganizerDialog
+    bind:open={organizerOpen}
+    kind="promptPresets"
+    items={organizerPresetItems}
+    collectionLabel={language.promptPresets}
+/>
 
 <style>
     .break-any{

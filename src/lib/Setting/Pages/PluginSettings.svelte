@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon } from "@lucide/svelte";
+    import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon, FolderOpenIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
     import { alertConfirm, alertMd, alertSelect, notifySuccess } from "src/ts/alert";
@@ -16,14 +16,25 @@
     import CheckInput from "src/lib/UI/GUI/CheckInput.svelte";
     import TextAreaInput from "src/lib/UI/GUI/TextAreaInput.svelte";
     import { hotReloadPluginFiles } from "src/ts/plugins/apiV3/developMode";
+    import CollectionOrganizerDialog from "src/lib/UI/CollectionOrganizerDialog.svelte";
+    import ShButton from "src/lib/UI/GUI/ShButton.svelte";
 
     let showParams = $state([])
+    let organizerOpen = $state(false)
+    const organizerPluginItems = $derived((DBState.db.plugins ?? []).map((plugin) => ({
+        id: plugin.name,
+        title: plugin.displayName ?? plugin.name,
+        detail: plugin.versionOfPlugin ?? (plugin.version ? String(plugin.version) : ''),
+    })))
 </script>
 
 <SettingPage title={language.plugin}>
 <span class="text-draculared text-xs mb-4">{language.pluginWarn}</span>
 
-<div class="text-textcolor2 mb-2 flex gap-2 justify-end">
+<div class="text-textcolor2 mb-2 flex flex-wrap gap-2 justify-end">
+    <ShButton variant="outline" size="sm" onclick={() => { organizerOpen = true }}>
+        <FolderOpenIcon size={16}/>{language.collectionOrganizer.open}
+    </ShButton>
     <button
         onclick={() => {
             importPlugin()
@@ -306,3 +317,10 @@
     {/each}
 </div>
 </SettingPage>
+
+<CollectionOrganizerDialog
+    bind:open={organizerOpen}
+    kind="plugins"
+    items={organizerPluginItems}
+    collectionLabel={language.plugin}
+/>

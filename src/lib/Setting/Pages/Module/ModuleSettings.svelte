@@ -6,7 +6,7 @@
     import Button from "src/lib/UI/GUI/Button.svelte";
     import ModuleMenu from "src/lib/Setting/Pages/Module/ModuleMenu.svelte";
     import { exportModule, importModule, refreshModules, type RisuModule } from "src/ts/process/modules";
-    import { SquarePen, TrashIcon, Globe, Share2Icon, PlusIcon, HardDriveUpload, Waypoints } from "@lucide/svelte";
+    import { SquarePen, TrashIcon, Globe, Share2Icon, PlusIcon, HardDriveUpload, Waypoints, FolderOpenIcon } from "@lucide/svelte";
     import { v4 } from "uuid";
     import { tooltip } from "src/ts/gui/tooltip";
     import { alertConfirm, notifySuccess } from "src/ts/alert";
@@ -15,6 +15,7 @@
     import { importMCPModule } from "src/ts/process/mcp/mcp";
     import { convertModuleToCharacter } from "src/ts/interchangeability";
     import { checkCharOrder } from "src/ts/globalApi.svelte";
+    import CollectionOrganizerDialog from "src/lib/UI/CollectionOrganizerDialog.svelte";
     let tempModule:RisuModule = $state({
         name: '',
         description: '',
@@ -23,6 +24,12 @@
     let mode = $state(0)
     let editModuleIndex = $state(-1)
     let moduleSearch = $state('')
+    let organizerOpen = $state(false)
+    const organizerModuleItems = $derived(DBState.db.modules.map((module) => ({
+        id: module.id,
+        title: module.name,
+        detail: module.description,
+    })))
 
     function sortModules(modules:RisuModule[], search:string){
         return modules.filter((v) => {
@@ -42,8 +49,11 @@
 {#if mode === 0}
     <SettingPage title={language.modules}>
 
-    <div class="mt-4 flex gap-2 items-center">
+    <div class="mt-4 flex flex-wrap gap-2 items-center">
         <TextInput className="grow" placeholder={language.search} bind:value={moduleSearch} />
+        <Button size="sm" onclick={() => { organizerOpen = true }}>
+            <FolderOpenIcon size={16}/>{language.collectionOrganizer.open}
+        </Button>
         <button class="text-textcolor2 hover:text-primary cursor-pointer" onclick={async () => {
             tempModule = {
                 name: '',
@@ -176,3 +186,10 @@
     {/if}
     </SettingPage>
 {/if}
+
+<CollectionOrganizerDialog
+    bind:open={organizerOpen}
+    kind="modules"
+    items={organizerModuleItems}
+    collectionLabel={language.modules}
+/>

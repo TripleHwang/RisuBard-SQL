@@ -5,9 +5,12 @@ import {
     createCollectionFolder,
     deleteCollectionFolder,
     filterCollectionItems,
+    getCollectionFolderCounts,
+    getVisibleCollectionItems,
     normalizeCollectionOrganizers,
     normalizeCollectionOrganizerState,
     renameCollectionFolder,
+    retainVisibleCollectionSelection,
     reorderVisibleCollectionItems,
 } from './collectionOrganizer'
 
@@ -137,5 +140,56 @@ describe('collection organizer state', () => {
             folderByItemId: {},
             itemOrder: [],
         })
+    })
+
+    it('searches item names and details case-insensitively in organizer order', () => {
+        const state = normalizeCollectionOrganizerState({ itemOrder: ['b', 'a', 'c'] }, ['a', 'b', 'c'])
+        const items = [
+            { id: 'a', title: 'Creative Writing', detail: 'Long-form prose' },
+            { id: 'b', title: 'Developer', detail: 'TYPESCRIPT helper' },
+            { id: 'c', title: 'Chat', detail: 'Conversation' },
+        ]
+
+        expect(getVisibleCollectionItems(state, items, undefined, 'script')).toEqual([items[1]])
+        expect(getVisibleCollectionItems(state, items, undefined, 'creative')).toEqual([items[0]])
+    })
+
+    it('reports all, uncategorized, and per-folder counts', () => {
+        const state = normalizeCollectionOrganizerState({
+            folders: [
+                { id: 'work', name: 'Work', createdAt: 10 },
+                { id: 'play', name: 'Play', createdAt: 20 },
+            ],
+            folderByItemId: { a: 'work', b: 'work', c: 'play' },
+            itemOrder: ['a', 'b', 'c', 'd'],
+        }, ['a', 'b', 'c', 'd'])
+
+        expect(getCollectionFolderCounts(state)).toEqual({
+            all: 4,
+            uncategorized: 1,
+            byFolderId: { work: 2, play: 1 },
+        })
+    })
+
+    it('treats assignments to missing folders as uncategorized', () => {
+        const state = {
+            folders: [{ id: 'work', name: 'Work', createdAt: 10 }],
+            folderByItemId: { a: 'work', b: 'missing' },
+            itemOrder: ['a', 'b', 'c'],
+        }
+
+        expect(filterCollectionItems(state, null)).toEqual(['b', 'c'])
+        expect(getCollectionFolderCounts(state).uncategorized).toBe(2)
+    })
+
+    it('cleans selection after a filtered bulk move', () => {
+        const state = normalizeCollectionOrganizerState({
+            folders: [{ id: 'work', name: 'Work', createdAt: 10 }],
+            itemOrder: ['a', 'b', 'c'],
+        }, ['a', 'b', 'c'])
+        const moved = assignItemsToFolder(state, ['a', 'b'], 'work')
+        const visibleAfterMove = filterCollectionItems(moved, null)
+
+        expect(retainVisibleCollectionSelection(['a', 'b', 'c'], visibleAfterMove)).toEqual(['c'])
     })
 })
