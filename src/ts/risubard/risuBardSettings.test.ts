@@ -85,6 +85,9 @@ describe('RisuBard analysis settings', () => {
         expect(policy).toContain('원문에 없는 행동 대상이나 장소를 보충하지 않는다')
         expect(policy).toContain('시간적 선후를 인과로 바꾸지 않는다')
         expect(policy).toContain('사건 당시 인물별 지식 경계를 유지한다')
+        expect(policy).toContain('퍼즐')
+        expect(policy).toContain('배치')
+        expect(policy).toContain('확정 관찰과 추론')
     })
 
     test('resolves current-chat overrides over normalized global defaults', () => {

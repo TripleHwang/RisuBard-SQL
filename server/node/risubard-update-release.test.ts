@@ -39,7 +39,7 @@ describe('RisuBard release updater target', () => {
         expect(sourceUpdater).toContain('REPO="rpaddict/RisuBard"')
     })
 
-    test('does not expose inherited PocketRisu public statistics', () => {
+    test('does not expose inherited upstream public statistics', () => {
         const server = readFileSync(serverSource, 'utf8')
         const mainMenu = readFileSync(mainMenuSource, 'utf8')
         const bootstrap = readFileSync(bootstrapSource, 'utf8')

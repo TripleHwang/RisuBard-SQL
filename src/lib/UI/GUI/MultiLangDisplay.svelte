@@ -7,9 +7,10 @@
     interface Props {
         value: string;
         markdown?: boolean;
+        linkify?: boolean;
     }
 
-    let { value, markdown = false }: Props = $props();
+    let { value, markdown = false, linkify = false }: Props = $props();
     let valueObject: {[code:string]:string} = $derived(parseMultilangString(value))
 
     let userLang = $derived(DBState.db.language)
@@ -60,7 +61,7 @@
     </div>
     {#if markdown}
         <div class="ml-2 max-w-full wrap-break-word text chat chattext prose" class:prose-invert={$ColorSchemeTypeStore === 'dark'}>
-            {#await ParseMarkdown(valueObject[selectedLang]) then md} 
+            {#await ParseMarkdown(valueObject[selectedLang], null, 'normal', -1, {}, { linkify }) then md}
                 {@html md}
             {/await}
         </div>

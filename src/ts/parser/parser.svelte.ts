@@ -40,9 +40,20 @@ const mdHighlight = markdownit({
     },
     ...markdownItOptions
 })
+const mdHighlightLinkify = markdownit({
+    highlight: function (str, lang) {
+        if(lang){
+            return `<pre-hljs-placeholder lang="${lang}">`+ str +'</pre-hljs-placeholder>';
+        }
+        return ''
+    },
+    ...markdownItOptions,
+    linkify: true,
+})
 
 md.disable(['code'])
 mdHighlight.disable(['code'])
+mdHighlightLinkify.disable(['code'])
 
 DOMPurify.addHook("uponSanitizeElement", (node: HTMLElement, data) => {
     if (data.tagName === "iframe") {
@@ -204,8 +215,8 @@ function renderMarkdown(md:markdownit, data:string){
     return text
 }
 
-async function renderHighlightableMarkdown(data:string) {
-    let rendered = renderMarkdown(mdHighlight, data)
+async function renderHighlightableMarkdown(data:string, linkify = false) {
+    let rendered = renderMarkdown(linkify ? mdHighlightLinkify : mdHighlight, data)
     const highlightPlaceholders = rendered.match(/<pre-hljs-placeholder lang="(.+?)">(.+?)<\/pre-hljs-placeholder>/gms)
     if (!highlightPlaceholders){
         return rendered
@@ -907,7 +918,8 @@ export async function ParseMarkdown(
     charArg:(character|simpleCharacterArgument | string) = null,
     mode:'normal'|'back'|'pretranslate'|'notrim' = 'normal',
     chatID=-1,
-    cbsConditions:CbsConditions = {}
+    cbsConditions:CbsConditions = {},
+    renderOptions: { linkify?: boolean } = {},
 ) {
     let firstParsed = ''
     const additionalAssetMode = (mode === 'back') ? 'back' : 'normal'
@@ -936,7 +948,7 @@ export async function ParseMarkdown(
 
     data = encodeStyle(data)
     if(mode === 'normal' || mode === 'notrim'){
-        data = await renderHighlightableMarkdown(data)
+        data = await renderHighlightableMarkdown(data, renderOptions.linkify)
 
         if(mode === 'notrim'){
             return data

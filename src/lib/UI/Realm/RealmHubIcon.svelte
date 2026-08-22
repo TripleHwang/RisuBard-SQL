@@ -1,61 +1,78 @@
 <script lang="ts">
-    import { BookIcon, ImageIcon, SmileIcon } from "@lucide/svelte";
-    import { notifyInfo } from "src/ts/alert";
-    import { hubURL, type hubType } from "src/ts/characterCards";
-    import { DBState } from "src/ts/stores.svelte";
-    import { parseMultilangString } from "src/ts/util";
+    import { BookIcon, DownloadIcon, ImageIcon, SmileIcon } from '@lucide/svelte';
+    import { hubURL, type hubType } from 'src/ts/characterCards';
+    import { DBState } from 'src/ts/stores.svelte';
+    import { parseMultilangString } from 'src/ts/util';
 
     interface Props {
-        onClick?: any;
+        onClick?: () => void;
         chara: hubType;
     }
 
     let { onClick = () => {}, chara }: Props = $props();
-
+    let isKorean = $derived(DBState.db.language === 'ko');
+    let ui = $derived(isKorean ? {
+        by: '제작자',
+        downloads: '다운로드',
+        emotions: '감정 이미지 포함',
+        assets: '추가 에셋 포함',
+        lorebook: '로어북 포함',
+    } : {
+        by: 'by',
+        downloads: 'Downloads',
+        emotions: 'Emotion images',
+        assets: 'Additional assets',
+        lorebook: 'Lorebook',
+    });
+    let localizedDescription = $derived.by(() => {
+        const descriptions = parseMultilangString(chara.desc);
+        return descriptions[DBState.db.language] ?? descriptions.en ?? descriptions.xx ?? '';
+    });
 </script>
 
+<button
+    type="button"
+    class="group relative flex w-full min-w-0 overflow-hidden rounded-2xl border border-darkborderc bg-darkbg p-3 text-left shadow-sm transition-all duration-200 hover:-translate-y-1 hover:border-borderc hover:bg-selected/35 hover:shadow-lg hover:shadow-black/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-borderc/50"
+    onclick={onClick}
+>
+    <div class="relative h-28 w-24 shrink-0 overflow-hidden rounded-xl border border-darkborderc bg-darkbutton sm:h-32 sm:w-28">
+        {#if DBState.db.hideAllImages}
+            <div class="flex size-full items-center justify-center text-3xl text-textcolor2">?</div>
+        {:else}
+            <img class="size-full object-cover object-top transition-transform duration-300 group-hover:scale-105" alt={chara.name} src={`${hubURL}/resource/` + chara.img} />
+        {/if}
+    </div>
 
-<button class="bg-darkbg rounded-lg p-4 flex flex-col hover:bg-selected transition-colors relative lg:w-96 w-full items-start" onclick={onClick}>
-    <div class="flex gap-2 w-full">
-    {#if DBState.db.hideAllImages}
-        <div class="w-20 min-w-20 h-20 sm:h-28 sm:w-28 rounded-md bg-darkbutton flex items-center justify-center text-textcolor2">
-            <span class="text-4xl">?</span>
-        </div>
-    {:else}
-        <img class="w-20 min-w-20 h-20 sm:h-28 sm:w-28 rounded-md object-top object-cover" alt={chara.name} src={`${hubURL}/resource/` + chara.img}>
-    {/if}
-    <div class="flex flex-col grow min-w-0">
-        <span class="text-textcolor text-lg min-w-0 max-w-full text-ellipsis whitespace-nowrap overflow-hidden text-start">{chara.name}</span>
-        <span class="text-textcolor2 text-xs min-w-0 max-w-full text-ellipsis wrap-break-word max-h-8 whitespace-nowrap overflow-hidden text-start">{parseMultilangString(chara.desc)[DBState.db.language] ?? parseMultilangString(chara.desc).en ?? parseMultilangString(chara.desc).xx}</span>
-        <div class="flex flex-wrap">
-            {#each chara.tags as tag, i}
-                {#if i < 4}
-                    <div class="text-xs p-1 text-blue-400">{tag}</div>
-                {:else if i === 4}
-                    <div class="text-xs p-1 text-blue-400">...</div>
+    <div class="flex min-w-0 grow flex-col px-3 py-1">
+        <div class="flex min-w-0 items-start justify-between gap-2">
+            <div class="min-w-0">
+                <h2 class="truncate text-base font-semibold tracking-tight text-textcolor sm:text-lg">{chara.name}</h2>
+                {#if chara.authorname}
+                    <p class="mt-0.5 truncate text-xs text-textcolor2">{ui.by} {chara.authorname}</p>
                 {/if}
-            {/each}
+            </div>
+            <div class="flex shrink-0 items-center gap-1 text-xs text-textcolor2" title={ui.downloads}>
+                <DownloadIcon size={14} />
+                <span>{chara.download}</span>
+            </div>
         </div>
-        <div class="grow"></div>
-        <div class="flex flex-wrap w-full flex-row-reverse gap-1">
-            {#if chara.hasEmotion}
-                <div class="text-textcolor2 hover:text-primary transition-colors" role="button" tabindex="0" onclick={((e) => {
-                    e.stopPropagation()
-                    notifyInfo("This character includes emotion images")
-                })} onkeydown={(e) => {}}><SmileIcon /></div>
-            {/if}
-            {#if chara.hasAsset}
-                <div class="text-textcolor2 hover:text-primary transition-colors" role="button" tabindex="0" onclick={((e) => {
-                    e.stopPropagation()
-                    notifyInfo("This character includes additional assets")
-                })} onkeydown={(e) => {}}><ImageIcon /></div>
-            {/if}
-            {#if chara.hasLore}
-                <div class="text-textcolor2 hover:text-primary transition-colors" role="button" tabindex="0" onclick={((e) => {
-                    e.stopPropagation()
-                    notifyInfo("This character includes lorebook")
-                })} onkeydown={(e) => {}}><BookIcon /></div>
-            {/if}
+
+        <p class="mt-2 line-clamp-2 text-sm leading-relaxed text-textcolor2">{localizedDescription}</p>
+
+        <div class="mt-auto flex items-end justify-between gap-2 pt-3">
+            <div class="flex min-w-0 flex-wrap gap-1">
+                {#each chara.tags.slice(0, 3) as tag}
+                    <span class="max-w-28 truncate rounded-full border border-darkborderc bg-selected/40 px-2 py-0.5 text-xs text-borderc">#{tag}</span>
+                {/each}
+                {#if chara.tags.length > 3}
+                    <span class="rounded-full border border-darkborderc px-2 py-0.5 text-xs text-textcolor2">+{chara.tags.length - 3}</span>
+                {/if}
+            </div>
+            <div class="flex shrink-0 items-center gap-1.5 text-textcolor2">
+                {#if chara.hasEmotion}<span title={ui.emotions}><SmileIcon size={15} /></span>{/if}
+                {#if chara.hasAsset}<span title={ui.assets}><ImageIcon size={15} /></span>{/if}
+                {#if chara.hasLore}<span title={ui.lorebook}><BookIcon size={15} /></span>{/if}
+            </div>
         </div>
     </div>
-</div></button>
+</button>

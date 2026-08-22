@@ -8,6 +8,8 @@
     class:text-xl={size === 'xl'}
     class:text-xs={size === 'xs' || (size === 'default' && $textAreaTextSize === 0)}
     class:w-full={fullwidth}
+    class:resize-y={resizable}
+    class:overflow-auto={resizable}
     class:h-20={height === '20' || (height === 'default' && $textAreaSize === -5)}
     class:h-24={height === '24' || (height === 'default' && $textAreaSize === -4)}
     class:h-28={height === '28' || (height === 'default' && $textAreaSize === -3)}
@@ -45,6 +47,7 @@
             {autocomplete}
             {placeholder}
             id={id}
+            readonly={readonly}
             bind:value={value}
             oninput={(e) => {
                 if(optimaizedInput){
@@ -110,8 +113,16 @@
     <div
         class="w-full h-full bg-transparent focus-within:outline-hidden resize-none absolute top-0 left-0 z-50 overflow-y-auto px-4 py-2 wrap-break-word whitespace-pre-wrap"
         contenteditable="true"
+        aria-readonly={readonly}
+        onbeforeinput={(e) => {
+            if (readonly) e.preventDefault()
+        }}
         bind:textContent={value}
         onkeydown={async (e) => {
+            if (readonly) {
+                e.preventDefault()
+                return
+            }
             if(
                 (e.ctrlKey || e.shiftKey || e.altKey)
                 && hotkeyMatches(DBState.db.hotkeys.find(hk => hk.action === 'popupEditor'), e)
@@ -217,6 +228,8 @@
         onchange?: () => void;
         popupLanguage?: string;
         actionBar?: boolean;
+        readonly?: boolean;
+        resizable?: boolean;
     }
 
     let {
@@ -235,7 +248,9 @@
         highlight = false,
         onchange = () => {},
         popupLanguage = 'markdown',
-        actionBar = undefined
+        actionBar = undefined,
+        readonly = false,
+        resizable = false
     }: Props = $props();
     // `actionBar` prop overrides per-field; otherwise follow the accessibility toggle.
     const showActionBar = $derived(actionBar ?? DBState.db.showInputActionBar ?? true)

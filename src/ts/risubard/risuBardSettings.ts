@@ -190,6 +190,7 @@ export function buildRisuBardEventWritingPolicy(
         '사건 이야기 요약과 정본 Markdown 본문은 한국어로 작성한다.',
         resolveRisuBardWritingStyleInstruction(style, customStyle),
         '압축할 때도 원문에 없는 행동 대상이나 장소를 보충하지 않는다. 시간적 선후를 인과로 바꾸지 않는다. 사건 당시 인물별 지식 경계를 유지한다.',
+        '퍼즐, 암호, 의식, 조합 장치나 규칙 기반 단서는 관찰된 요소, 순서, 공간 배치, 짝, 빈칸, 장치 위치와 시도 결과를 보존한다. 확정 관찰과 추론한 규칙·정답을 분리하고 미해결 부분은 연속성으로 남긴다.',
         '이 문체 정책은 표현 형식에만 적용하며 사실 선택, 근거, 구조 및 안전 규칙을 변경하지 않는다.',
     ].join('\n')
 }

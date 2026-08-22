@@ -12,6 +12,14 @@ const blockPath = resolve(
     process.cwd(),
     'src/lib/Setting/Pages/RisuBardWikiPromptBlock.svelte'
 )
+const referencePath = resolve(
+    process.cwd(),
+    'src/lib/Setting/Pages/RisuBardWikiPromptReferenceSheet.svelte'
+)
+const textAreaPath = resolve(
+    process.cwd(),
+    'src/lib/UI/GUI/TextAreaInput.svelte'
+)
 const settingsPath = resolve(process.cwd(), 'src/lib/Setting/Settings.svelte')
 const searchIndexPath = resolve(process.cwd(), 'src/ts/setting/searchIndex.ts')
 
@@ -56,5 +64,26 @@ describe('RisuBard Wiki Prompt settings', () => {
         expect(block).toContain('onRemove')
         expect(block).toContain("block.id !== 'main-wiki-guide'")
         expect(block).toContain('language.risuBardWikiPrompt.blockPlaceholder')
+        expect(block).toContain('readonly={block.readonly}')
+        expect(block).toContain('resizable')
+        expect(block).toContain('language.risuBardWikiPrompt.promptingHelp')
+        expect(readFileSync(textAreaPath, 'utf8')).toContain('class:resize-y={resizable}')
+    })
+
+    test('separates writing and response blocks and opens a field reference sheet', () => {
+        const page = readFileSync(pagePath, 'utf8')
+        const reference = readFileSync(referencePath, 'utf8')
+
+        expect(page).toContain('language.risuBardWikiPrompt.writingSection')
+        expect(page).toContain('language.risuBardWikiPrompt.responseSection')
+        expect(page).toContain("addBlock('response')")
+        expect(page).toContain('<RisuBardWikiPromptReferenceSheet')
+        expect(reference).toContain('<ShDialog')
+        expect(reference).toContain('establishedEvents')
+        expect(reference).toContain('stateChanges')
+        expect(reference).toContain('persistentFacts')
+        expect(reference).toContain('canonicalUpdateCandidates')
+        expect(reference).toContain('schemaVersion / title')
+        expect(reference).toContain('helpProgramOwnedFields')
     })
 })

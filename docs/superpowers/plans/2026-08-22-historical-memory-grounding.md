@@ -238,8 +238,8 @@ git commit -m "fix: preserve relations in canonical compression"
 ### Task 4: Align the Written Contract and Verify the Accuracy Boundary
 
 **Files:**
-- Modify: `E:/Risuwork/JellyBard/project_wiki/inquiry_context_compiler.md`
-- Modify: `E:/Risuwork/JellyBard/project_wiki/markdown_narrative_wiki.md`
+- Modify: `<workspace>/project_wiki/inquiry_context_compiler.md`
+- Modify: `<workspace>/project_wiki/markdown_narrative_wiki.md`
 - Modify: `src/ts/risubard/README.md`
 
 - [x] **Step 1: Update the canonical inquiry contract**

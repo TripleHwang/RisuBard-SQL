@@ -363,6 +363,25 @@ describe('actual narrative inquiry prompt', () => {
         expect(prompt).toContain('character knowledge boundary')
     })
 
+    it('injects preset-bound response guidance only beside retrieved Wiki sources', () => {
+        const source = {
+            id: 'narrative-memory:wiki:events/stone-door.md',
+            kind: 'memory' as const,
+            role: 'system' as const,
+            content: '문 왼쪽에는 태양·불·아기, 오른쪽에는 달·물·빈칸이 있다.',
+            tokens: 30,
+            priority: 120,
+        }
+        const responseGuide = '대칭 배열과 빈칸의 관계를 먼저 추론하라.'
+
+        expect(createNarrativeSourcesPrompt(
+            [source], '', 12_000, responseGuide
+        )).toContain(`Wiki preset response guidance:\n${responseGuide}`)
+        expect(createNarrativeSourcesPrompt(
+            [], '현재 장면', 12_000, responseGuide
+        )).not.toContain(responseGuide)
+    })
+
     it('keeps a source identity when its content is truncated by the prompt budget', () => {
         const source = {
             id: 'narrative-memory:wiki:places/bridge.md',

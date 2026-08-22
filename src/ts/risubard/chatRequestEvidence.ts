@@ -356,7 +356,7 @@ export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence)
                     const label = item.kind === 'other' && item.name
                         ? escapeTable(item.name)
                         : item.name
-                            ? `${injectionLabels[item.kind]} ${escapeTable(item.name)}`
+                            ? `${injectionLabels[item.kind]} · ${escapeTable(item.name)}`
                         : injectionLabels[item.kind]
                     return `| ${label} | ${number(item.tokens)} |`
                 }),

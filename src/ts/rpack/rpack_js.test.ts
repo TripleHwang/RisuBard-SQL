@@ -4,7 +4,7 @@ class FakeWorker {
     onmessage: ((event: MessageEvent) => void) | null = null
     onerror: ((event: ErrorEvent) => void) | null = null
     posted = 0
-    pending: Array<{ id: number }> = []
+    pending: Array<{ id: number; data: ArrayBuffer }> = []
 
     postMessage(message: { id: number; data: ArrayBuffer }, transfer: Transferable[]) {
         this.posted += 1
@@ -76,7 +76,7 @@ describe('RPackDecoderPool', () => {
         const view = parent.subarray(2, 4)
 
         const resultPromise = pool.decodeAll([view])
-        const transferredBytes = (workers[0].pending[0] as { data: ArrayBuffer }).data.byteLength
+        const transferredBytes = workers[0].pending[0].data.byteLength
         workers[0].complete(20)
         await resultPromise
 

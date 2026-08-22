@@ -27,9 +27,11 @@
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import TextInput from 'src/lib/UI/GUI/TextInput.svelte'
     import RisuBardWikiPromptBlock from './RisuBardWikiPromptBlock.svelte'
+    import RisuBardWikiPromptReferenceSheet from './RisuBardWikiPromptReferenceSheet.svelte'
 
     let activeTab = $state(0)
     let choosingPreset = $state(false)
+    let promptingHelpOpen = $state(false)
 
     let activePresetId = $derived(DBState.db.risuBardChatWikiPromptPresetId)
     let activePreset = $derived(resolveWikiPromptPreset(
@@ -46,13 +48,13 @@
         preset.revision = Math.min(2_147_483_647, preset.revision + 1)
     }
 
-    function addBlock() {
+    function addBlock(target: 'both' | 'response' = 'both') {
         if (!activePreset) return
         const block: WikiPromptBlock = {
             id: uuidv4(),
             type: 'text',
             name: language.risuBardWikiPrompt.newBlock,
-            target: 'both',
+            target,
             enabled: true,
             readonly: false,
             content: '',
@@ -66,15 +68,19 @@
         touchPreset(activePreset)
     }
 
-    function editableIndices(): number[] {
+    function editableIndices(response: boolean): number[] {
         return activePreset?.blocks.flatMap((block, index) =>
-            block.type === 'text' ? [index] : []
+            block.type === 'text' && (block.target === 'response') === response
+                ? [index]
+                : []
         ) ?? []
     }
 
     function moveEditableBlock(index: number, direction: -1 | 1) {
         if (!activePreset) return
-        const positions = editableIndices()
+        const positions = editableIndices(
+            activePreset.blocks[index]?.target === 'response'
+        )
         const current = positions.indexOf(index)
         const destination = positions[current + direction]
         if (current < 0 || destination === undefined) return
@@ -189,21 +195,55 @@
     />
 
     {#if activePreset && activeTab === 0}
-        <div class="block-list">
-            {#each activePreset.blocks as block, index (block.id)}
-                <RisuBardWikiPromptBlock
-                    bind:block={activePreset.blocks[index]}
-                    displayName={blockDisplayName(block)}
-                    moveUp={() => moveEditableBlock(index, -1)}
-                    moveDown={() => moveEditableBlock(index, 1)}
-                    onRemove={() => removeBlock(index)}
-                />
-            {/each}
-        </div>
-        <ShButton variant="outline" className="mt-3 w-full" onclick={addBlock}>
-            <PlusIcon size={16} />
-            {language.risuBardWikiPrompt.addBlock}
-        </ShButton>
+        <section class="prompt-section">
+            <div class="section-heading">
+                <h3>{language.risuBardWikiPrompt.writingSection}</h3>
+                <p>{language.risuBardWikiPrompt.writingSectionDescription}</p>
+            </div>
+            <div class="block-list">
+                {#each activePreset.blocks as block, index (block.id)}
+                    {#if block.target !== 'response'}
+                        <RisuBardWikiPromptBlock
+                            bind:block={activePreset.blocks[index]}
+                            displayName={blockDisplayName(block)}
+                            moveUp={() => moveEditableBlock(index, -1)}
+                            moveDown={() => moveEditableBlock(index, 1)}
+                            onRemove={() => removeBlock(index)}
+                            onHelp={() => { promptingHelpOpen = true }}
+                        />
+                    {/if}
+                {/each}
+            </div>
+            <ShButton variant="outline" className="w-full" onclick={() => addBlock('both')}>
+                <PlusIcon size={16} />
+                {language.risuBardWikiPrompt.addBlock}
+            </ShButton>
+        </section>
+
+        <section class="prompt-section">
+            <div class="section-heading">
+                <h3>{language.risuBardWikiPrompt.responseSection}</h3>
+                <p>{language.risuBardWikiPrompt.responseSectionDescription}</p>
+            </div>
+            <div class="block-list response-list">
+                {#each activePreset.blocks as block, index (block.id)}
+                    {#if block.target === 'response'}
+                        <RisuBardWikiPromptBlock
+                            bind:block={activePreset.blocks[index]}
+                            displayName={blockDisplayName(block)}
+                            moveUp={() => moveEditableBlock(index, -1)}
+                            moveDown={() => moveEditableBlock(index, 1)}
+                            onRemove={() => removeBlock(index)}
+                            onHelp={() => { promptingHelpOpen = true }}
+                        />
+                    {/if}
+                {/each}
+            </div>
+            <ShButton variant="outline" className="w-full" onclick={() => addBlock('response')}>
+                <PlusIcon size={16} />
+                {language.risuBardWikiPrompt.addResponseBlock}
+            </ShButton>
+        </section>
     {:else if activePreset}
         <div class="basic-panel">
             <label>
@@ -226,6 +266,8 @@
             </div>
         </div>
     {/if}
+
+    <RisuBardWikiPromptReferenceSheet bind:open={promptingHelpOpen} />
 </SettingPage>
 
 <style>
@@ -263,6 +305,38 @@
 
     .block-list {
         margin-top: 1rem;
+    }
+
+    .prompt-section {
+        display: grid;
+        gap: .75rem;
+        margin-top: 1.2rem;
+    }
+
+    .section-heading {
+        display: grid;
+        gap: .25rem;
+        padding: 0 .15rem;
+    }
+
+    .section-heading h3,
+    .section-heading p {
+        margin: 0;
+    }
+
+    .section-heading h3 {
+        font-size: .95rem;
+        font-weight: 700;
+    }
+
+    .section-heading p {
+        color: var(--risu-theme-textcolor2);
+        font-size: .78rem;
+        line-height: 1.5;
+    }
+
+    .prompt-section .block-list {
+        margin: 0;
     }
 
     .basic-panel {

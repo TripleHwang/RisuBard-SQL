@@ -47,7 +47,7 @@ describe('RisuBard mode settings', () => {
         expect(chatPage).toContain("bindKey: 'risuBardResponseMessageCount'")
         expect(chatPage).toContain("bindKey: 'risuBardResponseExcludeUserMessages'")
         expect(processSource).toContain(
-            'DBState.db.risuBardResponseExcludeUserMessages !== true'
+            '!resolvedRisuBardSettings(currentChat).risuBardResponseExcludeUserMessages'
         )
         expect(chatPage).toContain('min: 1')
         expect(chatPage).toContain('max: 100')

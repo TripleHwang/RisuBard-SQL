@@ -22,6 +22,15 @@ const QUERY_STOPWORDS = new Set([
     'this', 'that', 'these', 'those', 'about', 'please',
 ])
 
+const KOREAN_QUERY_SUFFIXES = [
+    '하려다가', '하려고', '하려다', '했다가', '되었던', '이었다',
+    '들에게', '들에서', '들로', '들을', '들은', '들이',
+    '했던', '하던', '했다', '한다', '하는', '하며', '하고',
+    '에서', '에게', '까지', '부터', '처럼', '보다', '으로',
+    '거나', '면서', '지만', '는데', '던', '고',
+    '은', '는', '이', '가', '을', '를', '와', '과', '의', '에', '로',
+] as const
+
 let inquiryTokenizer: Tiktoken | undefined
 
 function countInquiryTokens(value: string): number {
@@ -92,15 +101,31 @@ function normalized(value: string): string {
     return value.normalize('NFKC').toLocaleLowerCase().trim()
 }
 
+function normalizedQueryTerm(value: string): string {
+    if (!/^[가-힣]+$/u.test(value)) return value
+    for (const suffix of KOREAN_QUERY_SUFFIXES) {
+        if (!value.endsWith(suffix)) continue
+        const stem = value.slice(0, -suffix.length)
+        if (stem.length >= 2) return stem
+    }
+    return value
+}
+
 function queryTerms(value: string): string[] {
     return [...new Set(normalized(value).split(/[^\p{L}\p{N}_]+/u)
+        .filter((term) => term.length > 1 && !QUERY_STOPWORDS.has(term))
+        .map(normalizedQueryTerm)
         .filter((term) => term.length > 1 && !QUERY_STOPWORDS.has(term)))]
         .slice(0, 32)
 }
 
-function hasHistoricalEvidenceIntent(value: string): boolean {
-    const past = /(?:과거|예전|이전|당시|처음|초반|원래|회상|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時)/i
+function hasPastIntent(value: string): boolean {
+    return /(?:과거|예전|이전|당시|전날|어제|지난|그때|앞서|전에|처음|초반|원래|회상|떠올리|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時)/i
         .test(value)
+}
+
+function hasHistoricalEvidenceIntent(value: string): boolean {
+    const past = hasPastIntent(value)
     const causalOrDetail = /(?:왜|원인|이유|계기|인과|영향|분석|세부|근거|why|cause|reason|trigger|analysis|detail|evidence)/i
         .test(value)
     return past || causalOrDetail
@@ -185,7 +210,8 @@ function isEligible(
 function lexicalScore(
     document: MarkdownWikiDocument,
     normalizedQuery: string,
-    terms: readonly string[]
+    terms: readonly string[],
+    characterAnchorTerms: ReadonlySet<string>
 ): number {
     const { title, content, links } = normalizedDocument(document)
     let score = title === normalizedQuery ? 12 : 0
@@ -195,6 +221,10 @@ function lexicalScore(
     if (normalizedQuery.length > 1 && content.includes(normalizedQuery)) score += 2
     if (normalizedQuery.length > 1 && links.includes(normalizedQuery)) score += 4
     for (const term of terms) {
+        if (characterAnchorTerms.has(term)) {
+            if (title === term) score += 4
+            continue
+        }
         if (title.includes(term) || (title.length > 1 && term.includes(title))) {
             score += 4
         }
@@ -266,7 +296,8 @@ function centeredExcerpt(
 function relevantExcerpt(
     content: string,
     normalizedQuery: string,
-    terms: readonly string[]
+    terms: readonly string[],
+    characterAnchorTerms: ReadonlySet<string>
 ): string {
     if (content.length <= MAX_SOURCE_CHARACTERS) return content
     const heading = firstHeading(content)
@@ -282,7 +313,7 @@ function relevantExcerpt(
             id: '', type: 'other', status: 'active', title: match[0],
             relativePath: '', sourceMessageIds: [], updated: '',
             content: section, links: [], contextMode: 'auto', contentHash: '',
-        }, normalizedQuery, terms)
+        }, normalizedQuery, terms, characterAnchorTerms)
         return { section, score, start }
     }).sort((left, right) =>
         right.score - left.score || left.start - right.start)
@@ -303,6 +334,11 @@ export function inquireMarkdownDocuments(
     const terms = queryTerms(input.currentInput.slice(0, 4_096))
     const eligibleDocuments = input.documents.filter((document) =>
         isEligible(document, input))
+    const characterTitles = new Set(eligibleDocuments
+        .filter((document) => document.type === 'character')
+        .map((document) => normalized(document.title)))
+    const characterAnchorTerms = new Set(terms.filter((term) =>
+        characterTitles.has(term)))
     const requiredDocuments = eligibleDocuments.filter((document) =>
         document.contextMode === 'always'
             || document.type === 'scene')
@@ -316,7 +352,12 @@ export function inquireMarkdownDocuments(
 
     const direct = eligibleDocuments.map((document) => ({
         document,
-        directScore: lexicalScore(document, normalizedQuery, terms),
+        directScore: lexicalScore(
+            document,
+            normalizedQuery,
+            terms,
+            characterAnchorTerms
+        ),
     })).filter(({ directScore }) => directScore > 0)
         .sort((left, right) =>
             right.directScore - left.directScore
@@ -326,7 +367,12 @@ export function inquireMarkdownDocuments(
     for (const document of requiredDocuments) {
         candidates.set(document.id, {
             document,
-            directScore: lexicalScore(document, normalizedQuery, terms),
+            directScore: lexicalScore(
+                document,
+                normalizedQuery,
+                terms,
+                characterAnchorTerms
+            ),
             hop: 0,
             linkScore: 0,
         })
@@ -357,15 +403,29 @@ export function inquireMarkdownDocuments(
             for (const neighborId of neighbors) {
                 if (inspectedEdgeCount >= MAX_INSPECTED_EDGES) break
                 inspectedEdgeCount += 1
-                if (candidates.has(neighborId)
-                    || candidates.size >= MAX_CANDIDATES) continue
+                const linkScore = hop === 0 ? 8 : 4
+                const existing = candidates.get(neighborId)
+                if (existing) {
+                    existing.hop = Math.min(existing.hop, hop + 1)
+                    existing.linkScore = Math.max(
+                        existing.linkScore,
+                        linkScore
+                    )
+                    continue
+                }
+                if (candidates.size >= MAX_CANDIDATES) continue
                 const neighbor = byId.get(neighborId)
                 if (!neighbor) continue
                 candidates.set(neighborId, {
                     document: neighbor,
-                    directScore: lexicalScore(neighbor, normalizedQuery, terms),
+                    directScore: lexicalScore(
+                        neighbor,
+                        normalizedQuery,
+                        terms,
+                        characterAnchorTerms
+                    ),
                     hop: hop + 1,
-                    linkScore: hop === 0 ? 8 : 4,
+                    linkScore,
                 })
             }
             if (inspectedEdgeCount >= MAX_INSPECTED_EDGES) break
@@ -373,8 +433,7 @@ export function inquireMarkdownDocuments(
         if (inspectedEdgeCount >= MAX_INSPECTED_EDGES) break
     }
 
-    const pastIntent = /(?:과거|예전|이전|당시|처음|초반|원래|회상|기억|past|previous|before|earlier|formerly|used to|昔|以前|当時)/i
-        .test(input.currentInput)
+    const pastIntent = hasPastIntent(input.currentInput)
     const currentIntent = /(?:현재|지금|최신|상태|current|now|latest|status|現在|今)/i
         .test(input.currentInput)
     const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline)/i
@@ -411,20 +470,19 @@ export function inquireMarkdownDocuments(
             right.score - left.score
             || right.document.updated.localeCompare(left.document.updated)
             || left.document.id.localeCompare(right.document.id))
-    const availableSlots = MAX_SELECTED_DOCUMENTS - requiredDocuments.length
-    const selectedAutomatic = automatic.slice(0, availableSlots)
     const prepared = [
         ...requiredDocuments.map((document) => ({
             document,
             score: 100,
             hop: candidates.get(document.id)?.hop ?? 0,
         })),
-        ...selectedAutomatic,
+        ...automatic,
     ].map((candidate) => {
         const content = relevantExcerpt(
             candidate.document.content,
             normalizedQuery,
-            terms
+            terms,
+            characterAnchorTerms
         )
         return {
             ...candidate,
@@ -454,6 +512,7 @@ export function inquireMarkdownDocuments(
     }
     const addOptionalIfFits = (candidate: (typeof prepared)[number]) => {
         if (selectedIds.has(candidate.document.id)
+            || selected.length >= MAX_SELECTED_DOCUMENTS
             || selectedTokens + candidate.tokens > selectedTokenBudget) {
             return false
         }

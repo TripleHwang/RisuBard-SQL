@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { ChevronDownIcon, ChevronUpIcon, LockKeyholeIcon, Trash2Icon } from '@lucide/svelte'
+    import { BookOpenIcon, ChevronDownIcon, ChevronUpIcon, LockKeyholeIcon, Trash2Icon } from '@lucide/svelte'
     import CheckInput from 'src/lib/UI/GUI/CheckInput.svelte'
     import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
     import SelectInput from 'src/lib/UI/GUI/SelectInput.svelte'
@@ -15,12 +15,14 @@
         moveUp,
         moveDown,
         displayName,
+        onHelp,
     }: {
         block: WikiPromptBlock
         onRemove: () => void
         moveUp: () => void
         moveDown: () => void
         displayName: string
+        onHelp: () => void
     } = $props()
 
     $effect(() => {
@@ -67,14 +69,30 @@
                 ? language.risuBardWikiPrompt.lockedInjectionDescription
                 : language.risuBardWikiPrompt.lockedCoreDescription}
         </p>
+        <TextAreaInput
+            bind:value={block.content}
+            fullwidth
+            height="24"
+            autocomplete="off"
+            readonly={block.readonly}
+            resizable
+            actionBar={false}
+        />
     {:else}
         <div class="block-options">
             <CheckInput bind:check={block.enabled} name={language.risuBardWikiPrompt.enabled} />
-            <SelectInput bind:value={block.target} size="sm">
-                <OptionInput value="both">{language.risuBardWikiPrompt.stageBoth}</OptionInput>
-                <OptionInput value="analysis">{language.risuBardWikiPrompt.stageAnalysis}</OptionInput>
-                <OptionInput value="canonical-rewrite">{language.risuBardWikiPrompt.stageCanonicalRewrite}</OptionInput>
-            </SelectInput>
+            <div class="target-controls">
+                <ShButton variant="outline" size="sm" onclick={onHelp}>
+                    <BookOpenIcon size={15} />
+                    {language.risuBardWikiPrompt.promptingHelp}
+                </ShButton>
+                <SelectInput bind:value={block.target} size="sm">
+                    <OptionInput value="both">{language.risuBardWikiPrompt.stageBoth}</OptionInput>
+                    <OptionInput value="analysis">{language.risuBardWikiPrompt.stageAnalysis}</OptionInput>
+                    <OptionInput value="canonical-rewrite">{language.risuBardWikiPrompt.stageCanonicalRewrite}</OptionInput>
+                    <OptionInput value="response">{language.risuBardWikiPrompt.stageResponse}</OptionInput>
+                </SelectInput>
+            </div>
         </div>
         <TextAreaInput
             bind:value={block.content}
@@ -82,6 +100,8 @@
             height="32"
             autocomplete="off"
             placeholder={language.risuBardWikiPrompt.blockPlaceholder}
+            readonly={block.readonly}
+            resizable
         />
     {/if}
 </article>
@@ -107,6 +127,13 @@
     .block-options {
         display: flex;
         align-items: center;
+    }
+
+    .target-controls {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: .5rem;
     }
 
     header {
@@ -140,5 +167,22 @@
         color: var(--risu-theme-textcolor2);
         font-size: .75rem;
         line-height: 1.45;
+    }
+
+    .locked-copy + :global(div) {
+        margin-top: .65rem;
+    }
+
+    @media (max-width: 620px) {
+        .block-options {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .target-controls {
+            width: 100%;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+        }
     }
 </style>

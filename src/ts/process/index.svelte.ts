@@ -125,6 +125,16 @@ async function confirmProjectedNarrativeTurn(input: {
             DBState.db.risuBardWikiPromptPresets,
             DBState.db.risuBardChatWikiPromptPresetId
         )
+        const compiledWikiPromptGuide = wikiPromptPreset
+            ? compileWikiPromptGuide(wikiPromptPreset, {
+                characterGuide: risuChatParser(character?.risuBardWikiGuide ?? '', {
+                    chara: character,
+                }),
+                chatGuide: risuChatParser(chat?.risuBardWikiGuide ?? '', {
+                    chara: character,
+                }),
+            })
+            : undefined
         const receipt = await storedResponseMemoryAnalysis.confirm({
             characterId: input.characterId,
             chatId: input.chatId,
@@ -138,15 +148,11 @@ async function confirmProjectedNarrativeTurn(input: {
             },
             canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
             canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
-            ...(wikiPromptPreset ? {
-                wikiPromptGuide: compileWikiPromptGuide(wikiPromptPreset, {
-                    characterGuide: risuChatParser(character?.risuBardWikiGuide ?? '', {
-                        chara: character,
-                    }),
-                    chatGuide: risuChatParser(chat?.risuBardWikiGuide ?? '', {
-                        chara: character,
-                    }),
-                }),
+            ...(compiledWikiPromptGuide ? {
+                wikiPromptGuide: {
+                    analysis: compiledWikiPromptGuide.analysis,
+                    canonicalRewrite: compiledWikiPromptGuide.canonicalRewrite,
+                },
             } : {}),
             ...(input.additionalAnalysis ? { additionalAnalysis: true } : {}),
             ...(input.excludeCanonicalDocumentIds ? {
@@ -959,12 +965,20 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         performance.now() - inquiryStartedAt
                 }
             }
+            const responseWikiPromptPreset = resolveWikiPromptPreset(
+                DBState.db.risuBardWikiPromptPresets,
+                DBState.db.risuBardChatWikiPromptPresetId
+            )
+            const responseWikiPromptGuide = responseWikiPromptPreset
+                ? compileWikiPromptGuide(responseWikiPromptPreset).response
+                : ''
             const currentPrompt = narrativeContext.sourceChanged
                 ? null
                 : createNarrativeSourcesPrompt(
                     sources,
                     narrativeContext.baseline ?? '',
-                    12_000
+                    12_000,
+                    responseWikiPromptGuide
                 )
             if (currentPrompt) {
                 narrativeContextObservation.mode = 'current'
@@ -980,6 +994,15 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         name: currentChar.name,
                         role: 'system',
                         content: baseline,
+                    })
+                }
+                if (responseWikiPromptGuide
+                    && currentPrompt.includes(responseWikiPromptGuide)) {
+                    requestStatusSources.push({
+                        kind: 'wiki',
+                        name: language.risuBardWikiPrompt.responseGuideInjection,
+                        role: 'system',
+                        content: responseWikiPromptGuide,
                     })
                 }
                 for (const source of selectPromptedNarrativeSources(

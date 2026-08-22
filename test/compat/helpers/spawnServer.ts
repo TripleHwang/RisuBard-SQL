@@ -85,7 +85,13 @@ export async function spawnServer(opts: SpawnServerOptions = {}): Promise<Server
     [SERVER_SCRIPT],
     {
       cwd: tempDir,
-      env: { ...process.env, PORT: String(port), NODE_ENV: 'test', ...opts.env },
+      env: {
+        ...process.env,
+        PORT: String(port),
+        NODE_ENV: 'test',
+        RISUBARD_DATA_ROOT: path.join(tempDir, 'save'),
+        ...opts.env,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   )

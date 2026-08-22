@@ -227,6 +227,73 @@ describe('progressive Markdown inquiry', () => {
         expect(result.metrics.auxiliaryModelCalls).toBe(0)
     })
 
+    test('retrieves an indirectly recalled old puzzle beside a newer item', () => {
+        const puzzleTitle = '석문의 수수께끼와 퍼즐 출구 발견'
+        const sphereTitle = '결박 탈출과 해골 문양 구체 발견'
+        const distractors = Array.from({ length: 12 }, (_, index) => ({
+            title: `리리아의 최근 무관한 사건 ${index}`,
+            document: document({
+                id: `recent-unrelated-${index}`,
+                type: 'event',
+                title: `리리아의 최근 무관한 사건 ${index}`,
+                relativePath: `events/recent-unrelated-${index}.md`,
+                updated: `2026-08-22T08:${String(index).padStart(2, '0')}:00.000Z`,
+                content: `# 리리아의 최근 무관한 사건 ${index}\n\n리리아는 기숙사에 있던 사람과 무관한 일을 겪었다.`,
+                links: ['리리아'],
+            }),
+        }))
+        const result = inquireMarkdownDocuments({
+            currentInput: '리리아는 전날 탈출하려다 발견했던 숨겨진 문과, 그 주변에 있던 문양들을 떠올리고, 구체를 들고 그리로 향한다.',
+            documents: [
+                document({
+                    id: 'lelia', type: 'character', title: '리리아',
+                    relativePath: 'characters/lelia.md',
+                    updated: '2026-08-22T08:42:00.000Z',
+                    content: '# 리리아\n\n빼앗긴 완드를 되찾아 탈출하고자 한다.',
+                    links: [
+                        puzzleTitle,
+                        sphereTitle,
+                        ...distractors.map(({ title }) => title),
+                    ],
+                }),
+                document({
+                    id: 'stone-door-puzzle',
+                    type: 'event',
+                    title: puzzleTitle,
+                    relativePath: 'events/stone-door-puzzle.md',
+                    updated: '2026-08-21T20:57:37.572Z',
+                    content: [
+                        '# 석문의 수수께끼와 퍼즐 출구 발견',
+                        '',
+                        '리리아는 고풍스러운 회랑 막다른 길에서 거대한 고대 석문을 발견했다.',
+                        "석문 좌측에는 '태양, 불, 아기'가, 우측에는 '달, 물, ───'이라는 문구와 함께 둥그런 구멍이 파여 있었다.",
+                    ].join('\n'),
+                    links: ['리리아'],
+                }),
+                document({
+                    id: 'skull-sphere',
+                    type: 'event',
+                    title: sphereTitle,
+                    relativePath: 'events/skull-sphere.md',
+                    updated: '2026-08-22T08:42:19.737Z',
+                    content: '# 결박 탈출과 해골 문양 구체 발견\n\n리리아는 탈출하려다 문간 탁자에서 해골 문양의 검은 구체를 발견했다.',
+                    links: ['리리아'],
+                }),
+                ...distractors.map(({ document: item }) => item),
+            ],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual(
+            expect.arrayContaining([
+                'narrative-memory:wiki:events/stone-door-puzzle.md',
+                'narrative-memory:wiki:events/skull-sphere.md',
+            ])
+        )
+        expect(result.sources.length).toBeLessThanOrEqual(12)
+        expect(result.metrics.selectedTokens).toBeLessThanOrEqual(2_000)
+        expect(result.metrics.auxiliaryModelCalls).toBe(0)
+    })
+
     test('does not spend forward-scene budget on linked-only characters', () => {
         const result = inquireMarkdownDocuments({
             currentInput: '리리아는 소리가 나지 않는 길을 선택한다.',

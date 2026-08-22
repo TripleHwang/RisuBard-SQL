@@ -286,11 +286,15 @@ export async function loadNarrativeInquiry(input: {
 export function createNarrativeSourcesPrompt(
     sources: readonly ContextSource[],
     baseline = '',
-    characterBudget = 12_000
+    characterBudget = 12_000,
+    responseGuide = ''
 ): string | null {
     const selectedSources = sources.slice(0, 16)
     const sections = [
         selectedSources.length > 0 ? NARRATIVE_EVIDENCE_RULES : '',
+        selectedSources.length > 0 && responseGuide.trim().length > 0
+            ? `Wiki preset response guidance:\n${responseGuide.trim()}`
+            : '',
         baseline.trim().length > 0
             ? `Current narrative baseline:\n${baseline.trim()}`
             : '',

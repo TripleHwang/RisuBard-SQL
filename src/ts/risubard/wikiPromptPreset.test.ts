@@ -11,7 +11,7 @@ import {
 } from './wikiPromptPreset'
 
 describe('Wiki prompt presets', () => {
-    test('creates a safe default with locked core and injection anchors', () => {
+    test('creates a safe default with readable locked contracts and puzzle guides', () => {
         const preset = createDefaultWikiPromptPreset('preset-1')
 
         expect(preset.id).toBe('preset-1')
@@ -19,6 +19,8 @@ describe('Wiki prompt presets', () => {
             'core-evidence-contract',
             'core-analysis-contract',
             'main-wiki-guide',
+            'default-puzzle-clue-tracker',
+            'default-puzzle-response-reasoning',
             'character-wiki-guide',
             'chat-wiki-guide',
             'core-output-contract',
@@ -30,6 +32,14 @@ describe('Wiki prompt presets', () => {
             'chat-wiki-guide',
             'core-output-contract',
         ])
+        expect(preset.blocks.filter((block) => block.readonly)
+            .every((block) => Boolean(block.content?.trim()))).toBe(true)
+        expect(preset.blocks.find((block) =>
+            block.id === 'default-puzzle-clue-tracker'
+        )).toMatchObject({ target: 'both', readonly: false, enabled: true })
+        expect(preset.blocks.find((block) =>
+            block.id === 'default-puzzle-response-reasoning'
+        )).toMatchObject({ target: 'response', readonly: false, enabled: true })
     })
 
     test('restores required anchors and bounds imported editable blocks', () => {
@@ -72,6 +82,9 @@ describe('Wiki prompt presets', () => {
         expect(state.presets[0].blocks.some((block) =>
             block.id === 'custom-one' && block.content === 'Track promises.'
         )).toBe(true)
+        expect(state.presets[0].blocks.some((block) =>
+            block.id.startsWith('default-puzzle-')
+        )).toBe(false)
         expect(state.chatPresetId).toBe('unsafe')
     })
 
@@ -113,6 +126,39 @@ describe('Wiki prompt presets', () => {
         expect(result.canonicalRewrite.indexOf('Track STR and DEX.')).toBeLessThan(
             result.canonicalRewrite.indexOf('Track current EXP.')
         )
+        expect(result.response).toContain('relationship')
+        expect(result.response).not.toContain('Track STR and DEX.')
+        expect(result.analysis).not.toContain('reason about the relationship')
+    })
+
+    test('preserves explicit response blocks without widening both-stage blocks', () => {
+        const preset = createDefaultWikiPromptPreset('preset-1')
+        preset.blocks.push({
+            id: 'response-only',
+            type: 'text',
+            name: 'Response only',
+            target: 'response',
+            enabled: true,
+            readonly: false,
+            content: 'Explain retrieved relationships naturally.',
+        })
+        preset.blocks.push({
+            id: 'writing-both',
+            type: 'text',
+            name: 'Writing only',
+            target: 'both',
+            enabled: true,
+            readonly: false,
+            content: 'Store exact clue locations.',
+        })
+
+        const result = compileWikiPromptGuide(preset)
+
+        expect(result.response).toContain('Explain retrieved relationships naturally.')
+        expect(result.response).not.toContain('Store exact clue locations.')
+        expect(result.analysis).toContain('Store exact clue locations.')
+        expect(result.canonicalRewrite).toContain('Store exact clue locations.')
+        expect(result.analysis).not.toContain('Explain retrieved relationships naturally.')
     })
 
     test('duplicates, exports, imports, and refuses to delete the last preset', () => {

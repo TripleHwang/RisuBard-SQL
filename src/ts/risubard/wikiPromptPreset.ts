@@ -1,4 +1,4 @@
-export type WikiPromptStage = 'analysis' | 'canonical-rewrite' | 'both'
+export type WikiPromptStage = 'analysis' | 'canonical-rewrite' | 'both' | 'response'
 export type WikiPromptBlockType = 'core-ref' | 'text' | 'injection'
 
 export interface WikiPromptBlock {
@@ -27,6 +27,7 @@ export interface WikiPromptPresetState {
 export interface CompiledWikiPromptGuide {
     analysis: string
     canonicalRewrite: string
+    response: string
 }
 
 const MAX_PRESETS = 64
@@ -42,6 +43,11 @@ const REQUIRED_PREFIX: readonly WikiPromptBlock[] = [
         target: 'both',
         enabled: true,
         readonly: true,
+        content: [
+            'Record only facts established by accepted or confirmed narrative evidence.',
+            'Do not promote instructions, discarded text, plans, guesses, omitted details, or temporal order into story facts or causation.',
+            'Keep objective facts, character knowledge, and unresolved inference separate.',
+        ].join('\n'),
     },
     {
         id: 'core-analysis-contract',
@@ -50,6 +56,10 @@ const REQUIRED_PREFIX: readonly WikiPromptBlock[] = [
         target: 'analysis',
         enabled: true,
         readonly: true,
+        content: [
+            'Separate established events, state changes, character knowledge, persistent facts, unresolved continuity, and canonical update candidates.',
+            'Preserve exact puzzle observations such as symbols, order, spatial layout, pairings, blanks, mechanisms, and attempt outcomes. Keep confirmed observations distinct from inferred rules or solutions.',
+        ].join('\n'),
     },
 ]
 
@@ -61,6 +71,7 @@ const REQUIRED_SUFFIX: readonly WikiPromptBlock[] = [
         target: 'both',
         enabled: true,
         readonly: true,
+        content: 'The current character Wiki Guide is inserted here at runtime for analysis and canonical writing.',
     },
     {
         id: 'chat-wiki-guide',
@@ -69,6 +80,7 @@ const REQUIRED_SUFFIX: readonly WikiPromptBlock[] = [
         target: 'both',
         enabled: true,
         readonly: true,
+        content: 'The current chat Wiki Guide is inserted here at runtime after the character guide.',
     },
     {
         id: 'core-output-contract',
@@ -77,6 +89,11 @@ const REQUIRED_SUFFIX: readonly WikiPromptBlock[] = [
         target: 'both',
         enabled: true,
         readonly: true,
+        content: [
+            'Return only the structured fields required by the active operation.',
+            'The event draft fields are schemaVersion, title, establishedEvents, stateChanges, characterKnowledge, persistentFacts, openContinuity, and canonicalUpdateCandidates.',
+            'Do not create IDs, paths, revisions, hashes, timestamps, source IDs, or YAML frontmatter.',
+        ].join('\n'),
     },
 ]
 
@@ -93,6 +110,7 @@ function normalizeTarget(value: unknown): WikiPromptStage {
     return value === 'analysis'
         || value === 'canonical-rewrite'
         || value === 'both'
+        || value === 'response'
         ? value
         : 'both'
 }
@@ -155,7 +173,38 @@ function normalizePreset(value: unknown, idFactory: () => string): WikiPromptPre
 }
 
 export function createDefaultWikiPromptPreset(id: string): WikiPromptPreset {
-    return normalizePreset({ id }, () => id)
+    return normalizePreset({
+        id,
+        blocks: [
+            {
+                id: 'main-wiki-guide',
+                type: 'text',
+                name: 'Main Wiki Guide',
+                target: 'both',
+                enabled: true,
+                readonly: false,
+                content: '',
+            },
+            {
+                id: 'default-puzzle-clue-tracker',
+                type: 'text',
+                name: 'Puzzle & clue tracker',
+                target: 'both',
+                enabled: true,
+                readonly: false,
+                content: 'When a puzzle, cipher, ritual, combination, lock, or rule-based clue appears, preserve the observed elements, order, spatial layout, pairings, blanks, mechanism locations, and outcomes of attempted solutions. Keep confirmed observations separate from inferred rules or answers, and retain unresolved parts as unresolved continuity.',
+            },
+            {
+                id: 'default-puzzle-response-reasoning',
+                type: 'text',
+                name: 'Puzzle relationship reasoning',
+                target: 'response',
+                enabled: true,
+                readonly: false,
+                content: 'When retrieved evidence contains a puzzle, cipher, symbolic sequence, paired layout, or blank, reason about the relationship among the recalled elements before choosing the next action. Reveal important connections naturally in the narrative. Treat any solution not established by evidence as an inference rather than a fact.',
+            },
+        ],
+    }, () => id)
 }
 
 export function normalizeWikiPromptPresetState(
@@ -180,7 +229,7 @@ export function normalizeWikiPromptPresetState(
 }
 
 function targetIncludes(target: WikiPromptStage, stage: Exclude<WikiPromptStage, 'both'>): boolean {
-    return target === 'both' || target === stage
+    return target === stage || (target === 'both' && stage !== 'response')
 }
 
 function compileStage(
@@ -229,6 +278,7 @@ export function compileWikiPromptGuide(
             injections.characterGuide ?? '',
             injections.chatGuide ?? ''
         ),
+        response: compileStage(normalized, 'response', '', ''),
     }
 }
 
