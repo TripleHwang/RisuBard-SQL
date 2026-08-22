@@ -7,6 +7,7 @@
         PencilIcon,
         TrashIcon,
     } from '@lucide/svelte'
+    import { v4 as uuidv4 } from 'uuid'
     import { language } from 'src/lang'
     import { alertConfirm, alertInput } from 'src/ts/alert'
     import {
@@ -14,6 +15,7 @@
         createCollectionFolder,
         deleteCollectionFolder,
         getCollectionFolderCounts,
+        getCollectionItemDragState,
         getVisibleCollectionItems,
         normalizeCollectionOrganizerState,
         renameCollectionFolder,
@@ -51,6 +53,7 @@
     let selectedItemIds = $state<string[]>([])
     let moveTarget = $state<string>('')
     let draggedItemIds = $state<string[]>([])
+    let primaryDraggedItemId = $state<string | null>(null)
     let draggedFolderId = $state<string | null>(null)
 
     const itemIds = $derived(items.map((item) => item.id))
@@ -96,6 +99,7 @@
         if (!next) {
             selectedItemIds = []
             draggedItemIds = []
+            primaryDraggedItemId = null
             draggedFolderId = null
         }
         onOpenChange?.(next)
@@ -108,7 +112,7 @@
 
     function createFolder() {
         if (!newFolderName.trim()) return
-        saveState(createCollectionFolder(currentState(), newFolderName, crypto.randomUUID(), Date.now()))
+        saveState(createCollectionFolder(currentState(), newFolderName, uuidv4(), Date.now()))
         newFolderName = ''
     }
 
@@ -179,7 +183,9 @@
     }
 
     function startItemDrag(event: DragEvent, itemId: string) {
-        draggedItemIds = selectedItemIds.includes(itemId) ? [...selectedItemIds] : [itemId]
+        const dragState = getCollectionItemDragState(itemId, selectedItemIds)
+        primaryDraggedItemId = dragState.primaryItemId
+        draggedItemIds = dragState.itemIds
         if (!event.dataTransfer) return
         event.dataTransfer.effectAllowed = 'move'
         event.dataTransfer.setData('application/x-risubard-collection-items', JSON.stringify(draggedItemIds))
@@ -190,11 +196,12 @@
         if (!draggedItemIds.length) return
         moveItems(draggedItemIds, folderId)
         draggedItemIds = []
+        primaryDraggedItemId = null
     }
 
     function dropItemForReorder(event: DragEvent, targetItemId: string) {
         event.preventDefault()
-        const sourceItemId = draggedItemIds[0]
+        const sourceItemId = primaryDraggedItemId
         if (!sourceItemId || sourceItemId === targetItemId) return
         const visibleIds = visibleItems.map((item) => item.id)
         const fromIndex = visibleIds.indexOf(sourceItemId)
@@ -205,6 +212,7 @@
         reordered.splice(toIndex, 0, moved)
         saveState(reorderVisibleCollectionItems(currentState(), reordered))
         draggedItemIds = []
+        primaryDraggedItemId = null
     }
 </script>
 
@@ -323,7 +331,10 @@
                             role="listitem"
                             draggable="true"
                             ondragstart={(event) => startItemDrag(event, item.id)}
-                            ondragend={() => { draggedItemIds = [] }}
+                            ondragend={() => {
+                                draggedItemIds = []
+                                primaryDraggedItemId = null
+                            }}
                             ondragover={(event) => { if (draggedItemIds.length) event.preventDefault() }}
                             ondrop={(event) => dropItemForReorder(event, item.id)}
                         >

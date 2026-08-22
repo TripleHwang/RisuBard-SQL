@@ -206,6 +206,16 @@ export function retainVisibleCollectionSelection(
     return selectedItemIds.filter((itemId) => visible.has(itemId))
 }
 
+export function getCollectionItemDragState(
+    grabbedItemId: string,
+    selectedItemIds: readonly string[],
+): { primaryItemId: string, itemIds: string[] } {
+    return {
+        primaryItemId: grabbedItemId,
+        itemIds: selectedItemIds.includes(grabbedItemId) ? validItemIds(selectedItemIds) : [grabbedItemId],
+    }
+}
+
 export function reorderVisibleCollectionItems(
     state: CollectionOrganizerState,
     visibleItemIds: readonly string[],

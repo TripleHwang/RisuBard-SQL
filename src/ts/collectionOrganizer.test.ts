@@ -6,6 +6,7 @@ import {
     deleteCollectionFolder,
     filterCollectionItems,
     getCollectionFolderCounts,
+    getCollectionItemDragState,
     getVisibleCollectionItems,
     normalizeCollectionOrganizers,
     normalizeCollectionOrganizerState,
@@ -191,5 +192,12 @@ describe('collection organizer state', () => {
         const visibleAfterMove = filterCollectionItems(moved, null)
 
         expect(retainVisibleCollectionSelection(['a', 'b', 'c'], visibleAfterMove)).toEqual(['c'])
+    })
+
+    it('keeps the grabbed item primary while dragging a multi-selection', () => {
+        expect(getCollectionItemDragState('b', ['a', 'b'])).toEqual({
+            primaryItemId: 'b',
+            itemIds: ['a', 'b'],
+        })
     })
 })
