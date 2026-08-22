@@ -37,7 +37,7 @@ import {
 import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
 import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
 import { pumpPresetStream } from "./presetStreamPump";
-import { makeJobFetch } from "./jobFetch";
+import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
 import { resolveChatModelBinding, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
@@ -74,10 +74,11 @@ interface requestDataArgument{
     useEmotion?:boolean
     continue?:boolean
     chatId?:string
-    // The REAL chat id (chat.id) of the chat being generated. Distinct from
+    // The REAL chat id (chat.id) associated with this request. Distinct from
     // `chatId` above, which is the per-request generationId (historical name;
-    // see generation-state-keying.md §1-bis). Absent for aux requests
-    // (translate/memory/emotion) — only main chat sends supply it.
+    // see generation-state-keying.md §1-bis). Internal requests may supply it
+    // for body-free log association; logSource decides whether job recovery
+    // may insert the result into chat history.
     realChatId?:string
     noMultiGen?:boolean
     schema?:string
@@ -808,9 +809,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // aux/main requests (input translate → memory summarization → main →
     // translate/emotion), and any link dying kills the send, so all links get
     // the reconnectable job transport:
-    //   - main (realChatId present): keyed by chat.id, per-chat guard,
+    //   - main (realChatId present + logSource='main'): keyed by chat.id, per-chat guard,
     //     journal recovered at boot as a chat message.
-    //   - aux (no realChatId — design §4 rule 4): relay-only 'aux' job keyed
+    //   - aux (including internal requests linked to a chat for logging):
+    //     relay-only 'aux' job keyed
     //     by its unique genId (guard is a no-op); NEVER recovered — its
     //     journal is not a chat message. It rides only for the in-flight
     //     stream reattach, so a network blip mid-pipeline resumes in place.
@@ -823,11 +825,14 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         && !tools && !arg.previewBody
     const transportFetch = useServerJob
         ? makeJobFetch({
-            realChatId: arg.realChatId ?? genId,
+            ...resolveModelJobRoute({
+                realChatId: arg.realChatId,
+                generationId: genId,
+                logSource,
+            }),
             generationId: genId,
             adapterKind: kind,
             model: preset.profileSnapshot.modelId,
-            jobKind: arg.realChatId ? 'main' : 'aux',
             streaming: resolvePresetStreaming(preset, arg),
             timeoutMs: (getDatabase().localNetworkTimeoutSec ?? 600) * 1000,
             fallbackFetch: proxiedFetch,

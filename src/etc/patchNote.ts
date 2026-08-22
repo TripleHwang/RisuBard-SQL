@@ -1,9 +1,9 @@
 export const patchNote = {
-    version: "0.8.5",
+    version: "0.8.6",
     content: 
 `
-# RisuBard 0.8.5
-- Ollama Cloud의 GLM 등 보조 모델을 사용할 때 BardWiki 구조화 분석의 필수 항목이 누락되어 위키 갱신이 실패하던 문제를 수정했습니다.
+# RisuBard 0.8.6
+- 서버측 요청 기능을 사용할 때 BardWiki 내부 분석 결과 JSON이 다음 턴의 채팅 메시지로 노출될 수 있던 문제를 수정했습니다.
 `
 }
 

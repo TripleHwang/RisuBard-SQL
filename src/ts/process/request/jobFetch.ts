@@ -1,5 +1,6 @@
 import { forageStorage } from 'src/ts/globalApi.svelte'
 import { language } from 'src/lang'
+import type { RequestLogSource } from 'src/ts/requestLog'
 
 // Server-side model-preset requests — job-based fetchImpl (Stage 3 of
 // .agent/notes/model-preset-server-side-requests.md).
@@ -67,6 +68,23 @@ export interface JobFetchOptions {
      *  5xx — older or misbehaving server): the request transparently falls
      *  back to the direct proxied path. NOT used after the job exists. */
     fallbackFetch: typeof fetch
+}
+
+interface ModelJobRouteInput {
+    realChatId?: string
+    generationId: string
+    logSource: RequestLogSource
+}
+
+/** Only visible chat responses are recoverable into chat history. Internal
+ *  requests may still carry realChatId so their body-free logs are associated
+ *  with the current session, but their journal must remain relay-only. */
+export function resolveModelJobRoute(input: ModelJobRouteInput): Pick<JobFetchOptions, 'realChatId' | 'jobKind'> {
+    const recoverAsChatMessage = !!input.realChatId && input.logSource === 'main'
+    return {
+        realChatId: recoverAsChatMessage ? input.realChatId! : input.generationId,
+        jobKind: recoverAsChatMessage ? 'main' : 'aux',
+    }
 }
 
 // Reattach policy. Attempts are per reconnect cycle (reset once a stream is

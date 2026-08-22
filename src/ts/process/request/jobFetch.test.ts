@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import * as jobFetchModule from './jobFetch'
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError, type JobFetchOptions } from './jobFetch'
 
 vi.mock('src/ts/globalApi.svelte', () => ({
@@ -122,6 +125,46 @@ afterEach(() => {
 })
 
 // --- tests ------------------------------------------------------------------
+
+describe('resolveModelJobRoute', () => {
+    test('keeps BardWiki memory work auxiliary even when logging is linked to a real chat', () => {
+        const resolveRoute = (jobFetchModule as any).resolveModelJobRoute
+        expect(resolveRoute).toBeTypeOf('function')
+        if (!resolveRoute) return
+
+        expect(resolveRoute({
+            realChatId: 'chat-1',
+            generationId: 'aux-analysis-1',
+            logSource: 'memory',
+        })).toEqual({
+            realChatId: 'aux-analysis-1',
+            jobKind: 'aux',
+        })
+    })
+
+    test('keeps a visible chat response recoverable under its real chat id', () => {
+        const resolveRoute = (jobFetchModule as any).resolveModelJobRoute
+        expect(resolveRoute).toBeTypeOf('function')
+        if (!resolveRoute) return
+
+        expect(resolveRoute({
+            realChatId: 'chat-1',
+            generationId: 'gen-1',
+            logSource: 'main',
+        })).toEqual({
+            realChatId: 'chat-1',
+            jobKind: 'main',
+        })
+    })
+
+    test('request routing uses the recovery-safe route resolver', () => {
+        const source = readFileSync(
+            resolve(process.cwd(), 'src/ts/process/request/request.ts'),
+            'utf8'
+        )
+        expect(source).toContain('resolveModelJobRoute({')
+    })
+})
 
 describe('makeJobFetch', () => {
     test('streams journal bytes through and claims after a clean done', async () => {
