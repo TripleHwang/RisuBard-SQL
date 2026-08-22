@@ -93,7 +93,9 @@ export async function listPersistentKeys(prefix = ""): Promise<string[]> {
 
 export async function clearPersistentPrefix(prefix: string): Promise<void> {
     const keys = await listPersistentKeys(prefix);
-    await Promise.all(keys.map((key) => removePersistentKey(key)));
+    const results = await Promise.allSettled(keys.map((key) => removePersistentKey(key)));
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failure) throw failure.reason;
 }
 
 export async function makeHashedStorageKey(prefix: string, rawKey: string): Promise<string> {

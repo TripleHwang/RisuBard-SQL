@@ -12,6 +12,7 @@ const failures = vi.hoisted(() => ({
 }));
 const readStats = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
 const persistenceStats = vi.hoisted(() => ({ lists: 0, reads: 0 }));
+const clearStats = vi.hoisted(() => ({ removes: 0 }));
 const asyncControls = vi.hoisted(() => ({
     readGate: null as Promise<void> | null,
     gatedReadsRemaining: 0,
@@ -19,6 +20,22 @@ const asyncControls = vi.hoisted(() => ({
     startedWrites: new Set<string>(),
     removeGates: new Map<string, Promise<void>>(),
     startedRemoves: new Set<string>(),
+    clearRemoveGates: new Map<string, Promise<void>>(),
+    startedClearRemoves: new Set<string>(),
+}));
+const forageStorageMock = vi.hoisted(() => ({
+    Init: vi.fn(async () => {}),
+    keys: vi.fn(async (prefix = "") =>
+        [...storage.keys()].filter((key) => key.startsWith(prefix)),
+    ),
+    removeItem: vi.fn(async (key: string) => {
+        const removeNumber = ++clearStats.removes;
+        asyncControls.startedClearRemoves.add(key);
+        if (failures.clearAfter === removeNumber) throw new Error("clear failed");
+        const gate = asyncControls.clearRemoveGates.get(key);
+        if (gate) await gate;
+        storage.delete(key);
+    }),
 }));
 const requestChatDataMock = vi.hoisted(() => vi.fn());
 const databaseMock = vi.hoisted(() => ({
@@ -26,18 +43,10 @@ const databaseMock = vi.hoisted(() => ({
     characters: [],
 }));
 
-vi.mock("../storage/persistentKv", () => ({
-    clearPersistentPrefix: vi.fn(async (prefix: string) => {
-        let removed = 0;
-        for (const key of [...storage.keys()]) {
-            if (!key.startsWith(prefix)) continue;
-            storage.delete(key);
-            removed++;
-            if (failures.clearAfter !== null && removed >= failures.clearAfter) {
-                throw new Error("clear failed");
-            }
-        }
-    }),
+vi.mock("../storage/persistentKv", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../storage/persistentKv")>();
+    return {
+    clearPersistentPrefix: actual.clearPersistentPrefix,
     listPersistentKeys: vi.fn(async (prefix = "") => {
         persistenceStats.lists++;
         return [...storage.keys()].filter((key) => key.startsWith(prefix));
@@ -126,7 +135,8 @@ vi.mock("../storage/persistentKv", () => ({
         removedKeys.push(key);
         storage.delete(key);
     }),
-}));
+    };
+});
 
 vi.mock("svelte/store", () => ({ get: vi.fn(() => 0) }));
 vi.mock("../parser/chatML", () => ({ parseChatML: vi.fn() }));
@@ -135,7 +145,10 @@ vi.mock("./presets", () => ({
     defaultTranslatorPrompt: "",
     getCurrentTranslatorPresetFromState: vi.fn(() => ({ prompt: "", maxResponse: 100 })),
 }));
-vi.mock("../globalApi.svelte", () => ({ globalFetch: vi.fn() }));
+vi.mock("../globalApi.svelte", () => ({
+    forageStorage: forageStorageMock,
+    globalFetch: vi.fn(),
+}));
 vi.mock("../alert", () => ({ notifyError: vi.fn() }));
 vi.mock("../process/request/request", () => ({ requestChatData: requestChatDataMock }));
 vi.mock("../process/index.svelte", () => ({ doingChat: {} }));
@@ -193,12 +206,15 @@ describe("LLM translation cache manager", () => {
         readStats.maxActive = 0;
         persistenceStats.lists = 0;
         persistenceStats.reads = 0;
+        clearStats.removes = 0;
         asyncControls.readGate = null;
         asyncControls.gatedReadsRemaining = 0;
         asyncControls.writeGates.clear();
         asyncControls.startedWrites.clear();
         asyncControls.removeGates.clear();
         asyncControls.startedRemoves.clear();
+        asyncControls.clearRemoveGates.clear();
+        asyncControls.startedClearRemoves.clear();
         requestChatDataMock.mockReset();
         await clearLLMCache();
     });
@@ -482,7 +498,7 @@ describe("LLM translation cache manager", () => {
         seed("delete first", "gone");
         const legacyStorageKey = seed("partial survivor", "old", `${prefix}legacy-survivor.json`);
         await listLLMCache();
-        failures.clearAfter = 1;
+        failures.clearAfter = 2;
 
         const setting = setLLMCache("partial survivor", "new");
         const clearing = clearLLMCache();
@@ -505,7 +521,7 @@ describe("LLM translation cache manager", () => {
         await vi.waitFor(() => expect(asyncControls.startedWrites.has(legacyStorageKey)).toBe(true));
         const secondWrite = setLLMCache("queued survivor", "second");
         await Promise.resolve();
-        failures.clearAfter = 1;
+        failures.clearAfter = 2;
         const clearing = clearLLMCache();
         const clearingExpectation = expect(clearing).rejects.toThrow("clear failed");
         writeGate.resolve();
@@ -680,13 +696,42 @@ describe("LLM translation cache manager", () => {
         const deletedStorageKey = seed("deleted first", "gone");
         seed("survivor", "kept");
         await listLLMCache();
-        failures.clearAfter = 1;
+        failures.clearAfter = 2;
 
         await expect(clearLLMCache()).rejects.toThrow("clear failed");
 
         expect(storage.has(deletedStorageKey)).toBe(false);
         expect(await getLLMCache("deleted first")).toBeNull();
         expect(await getLLMCache("survivor")).toBe("kept");
+    });
+
+    it("waits for delayed removals before recovering from a clear failure", async () => {
+        const failedStorageKey = seed("failed clear row", "keep");
+        const delayedStorageKey = seed("delayed clear row", "remove");
+        await listLLMCache();
+        failures.clearAfter = 1;
+        const delayedRemoval = deferred<void>();
+        asyncControls.clearRemoveGates.set(delayedStorageKey, delayedRemoval.promise);
+
+        let settled = false;
+        const clearing = clearLLMCache();
+        void clearing.finally(() => { settled = true; }).catch(() => {});
+        await vi.waitFor(() => {
+            expect(asyncControls.startedClearRemoves.has(failedStorageKey)).toBe(true);
+            expect(asyncControls.startedClearRemoves.has(delayedStorageKey)).toBe(true);
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(settled).toBe(false);
+        delayedRemoval.resolve();
+        await expect(clearing).rejects.toThrow("clear failed");
+
+        expect([...storage.entries()]).toEqual([
+            [failedStorageKey, { key: "failed clear row", value: "keep" }],
+        ]);
+        expect(await getLLMCache("failed clear row")).toBe("keep");
+        expect(await getLLMCache("delayed clear row")).toBeNull();
     });
 
     it("retries a listing that was reading while clear completed", async () => {
