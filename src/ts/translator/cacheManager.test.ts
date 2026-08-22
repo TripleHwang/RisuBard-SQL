@@ -5,12 +5,30 @@ const removedKeys = vi.hoisted(() => [] as string[]);
 const failures = vi.hoisted(() => ({
     writeKeys: new Set<string>(),
     removeKeys: new Set<string>(),
+    clearAfter: null as number | null,
+}));
+const readStats = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
+const asyncControls = vi.hoisted(() => ({
+    readGate: null as Promise<void> | null,
+    writeGates: new Map<string, Promise<void>>(),
+    startedWrites: new Set<string>(),
+}));
+const requestChatDataMock = vi.hoisted(() => vi.fn());
+const databaseMock = vi.hoisted(() => ({
+    translatorType: "llm",
+    characters: [],
 }));
 
 vi.mock("../storage/persistentKv", () => ({
     clearPersistentPrefix: vi.fn(async (prefix: string) => {
+        let removed = 0;
         for (const key of [...storage.keys()]) {
-            if (key.startsWith(prefix)) storage.delete(key);
+            if (!key.startsWith(prefix)) continue;
+            storage.delete(key);
+            removed++;
+            if (failures.clearAfter !== null && removed >= failures.clearAfter) {
+                throw new Error("clear failed");
+            }
         }
     }),
     listPersistentKeys: vi.fn(async (prefix = "") =>
@@ -20,9 +38,17 @@ vi.mock("../storage/persistentKv", () => ({
         `${prefix}${encodeURIComponent(key)}.json`,
     ),
     readPersistentJson: vi.fn(async (key: string) => {
+        readStats.active++;
+        readStats.maxActive = Math.max(readStats.maxActive, readStats.active);
         const value = storage.get(key);
-        if (value instanceof Error) throw value;
-        return value ?? null;
+        await Promise.resolve();
+        if (asyncControls.readGate) await asyncControls.readGate;
+        try {
+            if (value instanceof Error) throw value;
+            return value ?? null;
+        } finally {
+            readStats.active--;
+        }
     }),
     removePersistentKey: vi.fn(async (key: string) => {
         if (failures.removeKeys.has(key)) throw new Error("delete failed");
@@ -31,20 +57,23 @@ vi.mock("../storage/persistentKv", () => ({
     }),
     writePersistentJson: vi.fn(async (key: string, value: unknown) => {
         if (failures.writeKeys.has(key)) throw new Error("write failed");
+        asyncControls.startedWrites.add(key);
+        const gate = asyncControls.writeGates.get(key);
+        if (gate) await gate;
         storage.set(key, value);
     }),
 }));
 
-vi.mock("svelte/store", () => ({ get: vi.fn() }));
+vi.mock("svelte/store", () => ({ get: vi.fn(() => 0) }));
 vi.mock("../parser/chatML", () => ({ parseChatML: vi.fn() }));
-vi.mock("../storage/database.svelte", () => ({ getDatabase: vi.fn() }));
+vi.mock("../storage/database.svelte", () => ({ getDatabase: vi.fn(() => databaseMock) }));
 vi.mock("./presets", () => ({
     defaultTranslatorPrompt: "",
-    getCurrentTranslatorPresetFromState: vi.fn(),
+    getCurrentTranslatorPresetFromState: vi.fn(() => ({ prompt: "", maxResponse: 100 })),
 }));
 vi.mock("../globalApi.svelte", () => ({ globalFetch: vi.fn() }));
 vi.mock("../alert", () => ({ notifyError: vi.fn() }));
-vi.mock("../process/request/request", () => ({ requestChatData: vi.fn() }));
+vi.mock("../process/request/request", () => ({ requestChatData: requestChatDataMock }));
 vi.mock("../process/index.svelte", () => ({ doingChat: {} }));
 vi.mock("../parser/parser.svelte", () => ({ applyMarkdownToNode: vi.fn() }));
 vi.mock("../stores.svelte", () => ({ selectedCharID: {} }));
@@ -58,7 +87,9 @@ import {
     deleteLLMCache,
     exportLLMCacheAsJSON,
     getLLMCache,
+    importLLMCacheFromJSON,
     listLLMCache,
+    runTranslator,
     searchLLMCache,
     setLLMCache,
     updateLLMCacheValue,
@@ -71,12 +102,35 @@ function seed(key: string, value: string, storageKey = `${prefix}${encodeURIComp
     return storageKey;
 }
 
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((next) => {
+        resolve = next;
+    });
+    return { promise, resolve };
+}
+
+async function startDelayedTranslation(key: string) {
+    const response = deferred<{ type: string, result: string }>();
+    requestChatDataMock.mockImplementationOnce(() => response.promise);
+    const result = runTranslator(key, false, "ko", "en");
+    await vi.waitFor(() => expect(requestChatDataMock).toHaveBeenCalled());
+    return { result, response };
+}
+
 describe("LLM translation cache manager", () => {
     beforeEach(async () => {
         storage.clear();
         removedKeys.length = 0;
         failures.writeKeys.clear();
         failures.removeKeys.clear();
+        failures.clearAfter = null;
+        readStats.active = 0;
+        readStats.maxActive = 0;
+        asyncControls.readGate = null;
+        asyncControls.writeGates.clear();
+        asyncControls.startedWrites.clear();
+        requestChatDataMock.mockReset();
         await clearLLMCache();
     });
 
@@ -218,6 +272,15 @@ describe("LLM translation cache manager", () => {
         expect(await getLLMCache("stale")).toBe("fresh persistent");
     });
 
+    it("reads large persistent listings concurrently within a bounded limit", async () => {
+        for (let index = 0; index < 40; index++) seed(`concurrent-${index}`, `value-${index}`);
+
+        await listLLMCache();
+
+        expect(readStats.maxActive).toBeGreaterThan(1);
+        expect(readStats.maxActive).toBeLessThanOrEqual(16);
+    });
+
     it("caps oversized pages at 100 rows", async () => {
         for (let index = 0; index < 101; index++) {
             seed(`key-${String(index).padStart(3, "0")}`, `value-${index}`);
@@ -249,6 +312,151 @@ describe("LLM translation cache manager", () => {
         storage.set(`${prefix}unreadable.json`, new Error("broken JSON"));
 
         await expect(exportLLMCacheAsJSON()).resolves.toEqual({ valid: "works" });
+    });
+
+    it("exports only validated persistent values and supports prototype-like keys", async () => {
+        await setLLMCache("stale", "memory value");
+        storage.set(`${prefix}stale.json`, { key: "stale", value: "persistent value" });
+        await setLLMCache("memory-only", "ghost");
+        storage.delete(`${prefix}memory-only.json`);
+        seed("constructor", "ctor");
+        seed("toString", "stringer");
+        seed("__proto__", "proto");
+
+        const result = await exportLLMCacheAsJSON();
+
+        expect(Object.getPrototypeOf(result)).toBeNull();
+        expect(Object.keys(result).sort()).toEqual(["__proto__", "constructor", "stale", "toString"].sort());
+        expect(result.stale).toBe("persistent value");
+        expect(result.__proto__).toBe("proto");
+    });
+
+    it("reconciles memory after a partially failed persistent clear", async () => {
+        const deletedStorageKey = seed("deleted first", "gone");
+        seed("survivor", "kept");
+        await listLLMCache();
+        failures.clearAfter = 1;
+
+        await expect(clearLLMCache()).rejects.toThrow("clear failed");
+
+        expect(storage.has(deletedStorageKey)).toBe(false);
+        expect(await getLLMCache("deleted first")).toBeNull();
+        expect(await getLLMCache("survivor")).toBe("kept");
+    });
+
+    it("retries a listing that was reading while clear completed", async () => {
+        seed("read race", "old value");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        const listing = listLLMCache();
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+
+        await clearLLMCache();
+        asyncControls.readGate = null;
+        gate.resolve();
+
+        await expect(listing).resolves.toMatchObject({ rows: [], total: 0 });
+        expect(await getLLMCache("read race")).toBeNull();
+    });
+
+    it("retries a persistent snapshot when a key changes during the read", async () => {
+        await setLLMCache("edit read race", "old value");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        const listing = listLLMCache();
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+
+        await setLLMCache("edit read race", "new value");
+        asyncControls.readGate = null;
+        gate.resolve();
+
+        await expect(listing).resolves.toMatchObject({
+            rows: [{ key: "edit read race", value: "new value" }],
+        });
+        expect(await getLLMCache("edit read race")).toBe("new value");
+    });
+
+    it("does not let an older listing snapshot overwrite a completed translation", async () => {
+        const pending = await startDelayedTranslation("translation read race");
+        seed("translation read race", "old persistent");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        const listing = listLLMCache();
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+
+        pending.response.resolve({ type: "success", result: "new translation" });
+        await pending.result;
+        asyncControls.readGate = null;
+        gate.resolve();
+
+        await expect(listing).resolves.toMatchObject({
+            rows: [{ key: "translation read race", value: "new translation" }],
+        });
+        expect(await getLLMCache("translation read race")).toBe("new translation");
+    });
+
+    it("prevents an import started before clear from repopulating afterward", async () => {
+        const firstStorageKey = `${prefix}first.json`;
+        const gate = deferred<void>();
+        asyncControls.writeGates.set(firstStorageKey, gate.promise);
+        const importing = importLLMCacheFromJSON({ first: "one", second: "two" });
+        await vi.waitFor(() => expect(asyncControls.startedWrites.has(firstStorageKey)).toBe(true));
+
+        const clearing = clearLLMCache();
+        gate.resolve();
+        const [imported] = await Promise.all([importing, clearing]);
+
+        expect(imported).toEqual({ count: 1, failed: 1 });
+        expect(storage.size).toBe(0);
+        expect((await listLLMCache()).total).toBe(0);
+    });
+
+    it("ignores an older translation result that completes after a manual edit", async () => {
+        const pending = await startDelayedTranslation("late edit");
+        await setLLMCache("late edit", "manual value");
+
+        pending.response.resolve({ type: "success", result: "late result" });
+        await pending.result;
+
+        expect(await getLLMCache("late edit")).toBe("manual value");
+        expect(storage.get(`${prefix}late%20edit.json`)).toEqual({ key: "late edit", value: "manual value" });
+    });
+
+    it("does not resurrect a key when an older translation completes after delete", async () => {
+        const pending = await startDelayedTranslation("late delete");
+        const storageKey = `${prefix}late%20delete.json`;
+        await setLLMCache("late delete", "temporary");
+        await deleteLLMCache("late delete", storageKey);
+
+        pending.response.resolve({ type: "success", result: "late result" });
+        await pending.result;
+
+        expect(storage.has(storageKey)).toBe(false);
+        expect(await getLLMCache("late delete")).toBeNull();
+    });
+
+    it("does not repopulate cache when an older translation completes after clear", async () => {
+        const pending = await startDelayedTranslation("late clear");
+        await clearLLMCache();
+
+        pending.response.resolve({ type: "success", result: "late result" });
+        await pending.result;
+
+        expect(storage.size).toBe(0);
+        expect(await getLLMCache("late clear")).toBeNull();
+    });
+
+    it("awaits and publishes a current translation result", async () => {
+        const pending = await startDelayedTranslation("current result");
+
+        pending.response.resolve({ type: "success", result: "current value" });
+        await expect(pending.result).resolves.toBe("current value");
+
+        expect(storage.get(`${prefix}current%20result.json`)).toEqual({
+            key: "current result",
+            value: "current value",
+        });
+        expect(await getLLMCache("current result")).toBe("current value");
     });
 
     it("keeps direct reads and searches safe around damaged entries", async () => {

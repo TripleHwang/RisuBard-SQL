@@ -27,8 +27,18 @@ let bergamotTranslate: (text: string, from: string, to: string, html?: boolean) 
 
 const llmTranslateCache = new Map<string, string>()
 const llmTranslateCachePrefix = 'cache/llm-translate/'
+const llmCacheReadConcurrency = 16
 
 type LLMTranslationCachePayload = { key: string, value: string }
+type PersistentLLMTranslationCacheRow = LLMTranslationCachePayload & { storageKey: string }
+type LLMCachePublicationToken = { globalGeneration: number, keyGeneration: number }
+
+let llmCacheGlobalGeneration = 0
+let llmCacheMutationGeneration = 0
+const llmCacheKeyGenerations = new Map<string, number>()
+const llmCacheMutationQueues = new Map<string, Promise<unknown>>()
+let llmCacheClearBarrier = Promise.resolve()
+let activeLLMCacheClear: Promise<void> | null = null
 
 async function readLLMCachePayload(storageKey: string): Promise<LLMTranslationCachePayload | null> {
     try {
@@ -40,6 +50,98 @@ async function readLLMCachePayload(storageKey: string): Promise<LLMTranslationCa
     } catch {
         return null
     }
+}
+
+async function readPersistentLLMCacheRows(): Promise<PersistentLLMTranslationCacheRow[]> {
+    const storageKeys = (await listPersistentKeys(llmTranslateCachePrefix)).sort()
+    const rows: PersistentLLMTranslationCacheRow[] = []
+    for (let start = 0; start < storageKeys.length; start += llmCacheReadConcurrency) {
+        const batch = await Promise.all(
+            storageKeys.slice(start, start + llmCacheReadConcurrency).map(async (storageKey) => {
+                const payload = await readLLMCachePayload(storageKey)
+                return payload ? { ...payload, storageKey } : null
+            }),
+        )
+        for (const row of batch) {
+            if (row) rows.push(row)
+        }
+    }
+    return rows
+}
+
+function reconcileLLMCacheMirror(rows: PersistentLLMTranslationCacheRow[]) {
+    llmTranslateCache.clear()
+    const seen = new Set<string>()
+    for (const row of rows) {
+        if (seen.has(row.key)) continue
+        seen.add(row.key)
+        llmTranslateCache.set(row.key, row.value)
+    }
+}
+
+async function readAndReconcilePersistentLLMCacheRows() {
+    while (true) {
+        const clearBarrier = llmCacheClearBarrier
+        await clearBarrier
+        const globalGeneration = llmCacheGlobalGeneration
+        const mutationGeneration = llmCacheMutationGeneration
+        await Promise.allSettled([...llmCacheMutationQueues.values()])
+        if (globalGeneration !== llmCacheGlobalGeneration
+            || mutationGeneration !== llmCacheMutationGeneration) continue
+        const rows = await readPersistentLLMCacheRows()
+        if (globalGeneration !== llmCacheGlobalGeneration
+            || mutationGeneration !== llmCacheMutationGeneration) continue
+        reconcileLLMCacheMirror(rows)
+        return rows
+    }
+}
+
+function advanceLLMCacheKeyGeneration(key: string) {
+    const next = (llmCacheKeyGenerations.get(key) ?? 0) + 1
+    llmCacheKeyGenerations.set(key, next)
+    llmCacheMutationGeneration++
+    return next
+}
+
+function beginLLMCachePublication(key: string): LLMCachePublicationToken {
+    return {
+        globalGeneration: llmCacheGlobalGeneration,
+        keyGeneration: advanceLLMCacheKeyGeneration(key),
+    }
+}
+
+function invalidateLLMCacheKey(key: string) {
+    advanceLLMCacheKeyGeneration(key)
+}
+
+function isCurrentLLMCachePublication(key: string, token: LLMCachePublicationToken) {
+    return token.globalGeneration === llmCacheGlobalGeneration
+        && token.keyGeneration === (llmCacheKeyGenerations.get(key) ?? 0)
+}
+
+async function runSerializedLLMCacheMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = llmCacheMutationQueues.get(key)
+    const clearBarrier = llmCacheClearBarrier
+    let task!: Promise<T>
+    task = (async () => {
+        await clearBarrier
+        if (previous) {
+            try {
+                await previous
+            } catch {
+                // A rejected earlier mutation must not block later reconciliation.
+            }
+        }
+        try {
+            return await operation()
+        } finally {
+            if (llmCacheMutationQueues.get(key) === task) {
+                llmCacheMutationQueues.delete(key)
+            }
+        }
+    })()
+    llmCacheMutationQueues.set(key, task)
+    return await task
 }
 
 async function getPersistentLLMCache(text: string): Promise<string | null> {
@@ -564,6 +666,7 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
     // the mutated string made every <style>-bearing message a permanent cache miss
     // that re-billed the LLM and piled up orphan entries.
     const cacheKey = text
+    const publicationToken = beginLLMCachePublication(cacheKey)
     const styleDecodeRegex = /\<risu-style\>(.+?)\<\/risu-style\>/gms
     let styleDecodes:string[] = []
     text = text.replace(styleDecodeRegex, (match, p1) => {
@@ -625,15 +728,57 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
     const result = rq.result.replace(/<style-data style-index="(\d+)" ?\/?>/g, (match, p1) => {
         return styleDecodes[parseInt(p1)] ?? ''
     }).replace(/<\/style-data>/g, '')
-    llmTranslateCache.set(cacheKey, result)
-    void setPersistentLLMCache(cacheKey, result)
+    try {
+        llmCacheMutationGeneration++
+        await runSerializedLLMCacheMutation(cacheKey, async () => {
+            if (!isCurrentLLMCachePublication(cacheKey, publicationToken)) return
+            await setPersistentLLMCache(cacheKey, result)
+            if (isCurrentLLMCachePublication(cacheKey, publicationToken)) {
+                llmTranslateCache.set(cacheKey, result)
+            }
+        })
+    } catch (error) {
+        notifyError(error instanceof Error ? error.message : String(error))
+    }
     arg.onCacheState?.(false)
     return result
 }
 
 export async function clearLLMCache(): Promise<void> {
-    await clearPersistentPrefix(llmTranslateCachePrefix)
-    llmTranslateCache.clear()
+    if (activeLLMCacheClear) return await activeLLMCacheClear
+
+    llmCacheGlobalGeneration++
+    const previousBarrier = llmCacheClearBarrier
+    const pendingMutations = [...llmCacheMutationQueues.values()]
+    let releaseBarrier!: () => void
+    const ownBarrier = new Promise<void>((resolve) => {
+        releaseBarrier = resolve
+    })
+    llmCacheClearBarrier = previousBarrier.then(() => ownBarrier)
+
+    let clearTask!: Promise<void>
+    clearTask = (async () => {
+        try {
+            await previousBarrier
+            await Promise.allSettled(pendingMutations)
+            try {
+                await clearPersistentPrefix(llmTranslateCachePrefix)
+                llmTranslateCache.clear()
+            } catch (error) {
+                try {
+                    reconcileLLMCacheMirror(await readPersistentLLMCacheRows())
+                } catch {
+                    llmTranslateCache.clear()
+                }
+                throw error
+            }
+        } finally {
+            releaseBarrier()
+            if (activeLLMCacheClear === clearTask) activeLLMCacheClear = null
+        }
+    })()
+    activeLLMCacheClear = clearTask
+    return await clearTask
 }
 
 export async function getLLMCache(text:string):Promise<string | null>{
@@ -663,8 +808,19 @@ export async function searchLLMCache(partialKey:string):Promise<{key: string, va
 }
 
 export async function setLLMCache(key:string, value:string):Promise<void>{
-    await setPersistentLLMCache(key, value)
-    llmTranslateCache.set(key, value)
+    await setLLMCacheForGeneration(key, value)
+}
+
+async function setLLMCacheForGeneration(key: string, value: string, expectedGlobalGeneration?: number) {
+    invalidateLLMCacheKey(key)
+    await runSerializedLLMCacheMutation(key, async () => {
+        if (expectedGlobalGeneration !== undefined
+            && expectedGlobalGeneration !== llmCacheGlobalGeneration) {
+            throw new Error('LLM translation cache operation was superseded by clear')
+        }
+        await setPersistentLLMCache(key, value)
+        llmTranslateCache.set(key, value)
+    })
 }
 
 export type LLMTranslationCacheRow = {
@@ -699,17 +855,9 @@ function compareCacheRows(left: LLMTranslationCacheRow, right: LLMTranslationCac
 
 export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promise<LLMTranslationCachePage> {
     const rowsByKey = new Map<string, LLMTranslationCacheRow>()
-    const persistentKeys = new Set<string>()
-    const storageKeys = (await listPersistentKeys(llmTranslateCachePrefix)).sort()
-    for (const storageKey of storageKeys) {
-        const payload = await readLLMCachePayload(storageKey)
-        if (!payload) continue
-        persistentKeys.add(payload.key)
-        llmTranslateCache.set(payload.key, payload.value)
-        rowsByKey.set(payload.key, { key: payload.key, value: payload.value, storageKey })
-    }
-    for (const key of llmTranslateCache.keys()) {
-        if (!persistentKeys.has(key)) llmTranslateCache.delete(key)
+    const persistentRows = await readAndReconcilePersistentLLMCacheRows()
+    for (const row of persistentRows) {
+        if (!rowsByKey.has(row.key)) rowsByKey.set(row.key, row)
     }
 
     const search = (query.search ?? '').trim().toLowerCase()
@@ -739,28 +887,28 @@ export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promis
 }
 
 export async function updateLLMCacheValue(key: string, value: string, storageKey: string): Promise<void> {
-    await requireLLMCachePayload(key, storageKey)
-    await writePersistentJson(storageKey, { key, value })
-    llmTranslateCache.set(key, value)
+    invalidateLLMCacheKey(key)
+    await runSerializedLLMCacheMutation(key, async () => {
+        await requireLLMCachePayload(key, storageKey)
+        await writePersistentJson(storageKey, { key, value })
+        llmTranslateCache.set(key, value)
+    })
 }
 
 export async function deleteLLMCache(key: string, storageKey: string): Promise<void> {
-    await requireLLMCachePayload(key, storageKey)
-    await removePersistentKey(storageKey)
-    llmTranslateCache.delete(key)
+    invalidateLLMCacheKey(key)
+    await runSerializedLLMCacheMutation(key, async () => {
+        await requireLLMCachePayload(key, storageKey)
+        await removePersistentKey(storageKey)
+        llmTranslateCache.delete(key)
+    })
 }
 
 export async function exportLLMCacheAsJSON():Promise<Record<string, string>>{
-    const result:Record<string, string> = {}
-    for(const [key, value] of llmTranslateCache){
-        result[key] = value
-    }
-    const storageKeys = await listPersistentKeys(llmTranslateCachePrefix)
-    for (const storageKey of storageKeys) {
-        const payload = await readLLMCachePayload(storageKey)
-        if (payload && !(payload.key in result)) {
-            result[payload.key] = payload.value
-        }
+    const rows = await readAndReconcilePersistentLLMCacheRows()
+    const result = Object.create(null) as Record<string, string>
+    for (const row of rows) {
+        if (!Object.hasOwn(result, row.key)) result[row.key] = row.value
     }
     return result
 }
@@ -768,10 +916,16 @@ export async function exportLLMCacheAsJSON():Promise<Record<string, string>>{
 export async function importLLMCacheFromJSON(data:Record<string, string>):Promise<{count: number, failed: number}>{
     let count = 0
     let failed = 0
-    for(const [key, value] of Object.entries(data)){
+    const entries = Object.entries(data)
+    const importGeneration = llmCacheGlobalGeneration
+    for(let index = 0; index < entries.length; index++){
+        if (importGeneration !== llmCacheGlobalGeneration) {
+            failed += entries.length - index
+            break
+        }
+        const [key, value] = entries[index]
         try {
-            await setPersistentLLMCache(key, value)
-            llmTranslateCache.set(key, value)
+            await setLLMCacheForGeneration(key, value, importGeneration)
             count++
         } catch {
             failed++

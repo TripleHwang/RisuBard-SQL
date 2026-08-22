@@ -48,7 +48,19 @@
     let editingStorageKey = $state<string | null>(null)
     let editValue = $state('')
     let saving = $state(false)
+    let mutating = $state(false)
     let loadToken = 0
+    let mutationToken = 0
+
+    function beginMutation() {
+        if (mutating) return null
+        mutating = true
+        return ++mutationToken
+    }
+
+    function finishMutation(token: number) {
+        if (token === mutationToken) mutating = false
+    }
 
     async function load(page = result.page) {
         const token = ++loadToken
@@ -86,17 +98,23 @@
 
     async function saveEdit() {
         if (editingKey === null || editingStorageKey === null) return
+        const token = beginMutation()
+        if (token === null) return
+        const key = editingKey
+        const storageKey = editingStorageKey
+        const value = editValue
         saving = true
         errorMessage = ''
         try {
-            await updateLLMCacheValue(editingKey, editValue, editingStorageKey)
-            cancelEdit()
+            await updateLLMCacheValue(key, value, storageKey)
+            if (editingKey === key && editingStorageKey === storageKey) cancelEdit()
             await load()
             statusMessage = language.editTranslationSave
         } catch (error) {
             errorMessage = error instanceof Error ? error.message : String(error)
         } finally {
-            saving = false
+            if (token === mutationToken) saving = false
+            finishMutation(token)
         }
     }
 
@@ -110,10 +128,12 @@
     }
 
     async function removeEntry(key: string, storageKey: string) {
+        const token = beginMutation()
+        if (token === null) return
         const label = key.length > 80 ? `${key.slice(0, 77)}...` : key
-        if (!await alertConfirm(language.translationCacheDeleteConfirm.replace('{0}', label))) return
-        errorMessage = ''
         try {
+            if (!await alertConfirm(language.translationCacheDeleteConfirm.replace('{0}', label))) return
+            errorMessage = ''
             await deleteLLMCache(key, storageKey)
             totalCount = Math.max(0, totalCount - 1)
             if (editingKey === key) cancelEdit()
@@ -121,14 +141,18 @@
             statusMessage = language.translationCacheDeleted
         } catch (error) {
             errorMessage = error instanceof Error ? error.message : String(error)
+        } finally {
+            finishMutation(token)
         }
     }
 
     async function clearAll() {
-        if (!await alertConfirm(language.clearTranslationCacheConfirm)) return
-        loading = true
-        errorMessage = ''
+        const token = beginMutation()
+        if (token === null) return
         try {
+            if (!await alertConfirm(language.clearTranslationCacheConfirm)) return
+            loading = true
+            errorMessage = ''
             await clearLLMCache()
             totalCount = 0
             cancelEdit()
@@ -137,7 +161,8 @@
         } catch (error) {
             errorMessage = error instanceof Error ? error.message : String(error)
         } finally {
-            loading = false
+            if (token === mutationToken) loading = false
+            finishMutation(token)
         }
     }
 
@@ -160,6 +185,11 @@
     }
 
     async function importCache() {
+        const token = beginMutation()
+        if (token === null) return
+        let importStarted = false
+        let finalError = ''
+        let finalStatus = ''
         errorMessage = ''
         try {
             const files = await selectFileByDom(['json'])
@@ -171,20 +201,29 @@
             }
             if (!await alertConfirm(language.importTranslationCacheConfirm)) return
             loading = true
+            importStarted = true
             const imported = await importLLMCacheFromJSON(data as Record<string, string>)
             if (imported.failed > 0) {
-                throw new Error(language.importTranslationCacheFailed
+                finalError = language.importTranslationCacheFailed
                     .replace('{0}', String(imported.count))
-                    .replace('{1}', String(imported.failed)))
+                    .replace('{1}', String(imported.failed))
+            } else {
+                finalStatus = language.importTranslationCacheSuccess.replace('{0}', String(imported.count))
             }
-            search = ''
-            searchDraft = ''
-            await load(1)
-            statusMessage = language.importTranslationCacheSuccess.replace('{0}', String(imported.count))
         } catch (error) {
-            errorMessage = error instanceof Error ? error.message : String(error)
+            finalError = error instanceof Error ? error.message : String(error)
         } finally {
-            loading = false
+            if (importStarted) {
+                search = ''
+                searchDraft = ''
+                await load(1)
+                if (finalError) errorMessage = finalError
+                if (finalStatus) statusMessage = finalStatus
+            } else if (finalError) {
+                errorMessage = finalError
+            }
+            if (token === mutationToken) loading = false
+            finishMutation(token)
         }
     }
 
@@ -209,30 +248,31 @@
             <ShInput
                 id="translation-cache-search"
                 bind:value={searchDraft}
+                disabled={loading || mutating}
                 placeholder={language.translationCacheSearchPlaceholder}
                 className="flex-1"
             />
-            <ShButton type="submit" variant="outline" disabled={loading}>
+            <ShButton type="submit" variant="outline" disabled={loading || mutating}>
                 <SearchIcon size={15} />
                 {language.translationCacheSearch}
             </ShButton>
         </form>
 
         <div class="my-3 flex flex-wrap items-center gap-2">
-            <ShButton variant="ghost" size="sm" onclick={() => void load()} disabled={loading}>
+            <ShButton variant="ghost" size="sm" onclick={() => void load()} disabled={loading || mutating}>
                 <RefreshCwIcon size={14} class={loading ? 'animate-spin' : ''} />
                 {language.translationCacheRefresh}
             </ShButton>
-            <ShButton variant="ghost" size="sm" onclick={() => void importCache()} disabled={loading}>
+            <ShButton variant="ghost" size="sm" onclick={() => void importCache()} disabled={loading || mutating}>
                 <UploadIcon size={14} />
                 {language.importTranslationCache}
             </ShButton>
-            <ShButton variant="ghost" size="sm" onclick={() => void exportCache()} disabled={loading || totalCount === 0}>
+            <ShButton variant="ghost" size="sm" onclick={() => void exportCache()} disabled={loading || mutating || totalCount === 0}>
                 <DownloadIcon size={14} />
                 {language.exportTranslationCache}
             </ShButton>
             <span class="flex-1"></span>
-            <ShButton variant="destructive" size="sm" onclick={() => void clearAll()} disabled={loading || totalCount === 0}>
+            <ShButton variant="destructive" size="sm" onclick={() => void clearAll()} disabled={loading || mutating || totalCount === 0}>
                 <Trash2Icon size={14} />
                 {language.clearTranslationCache}
             </ShButton>
@@ -272,6 +312,7 @@
                                     <textarea
                                         id="translation-cache-edit"
                                         bind:value={editValue}
+                                        disabled={mutating}
                                         class="min-h-24 w-full resize-y rounded-md border border-darkborderc bg-transparent p-2 text-base text-textcolor outline-none focus-visible:border-borderc focus-visible:ring-2 focus-visible:ring-borderc/50"
                                     ></textarea>
                                 {:else}
@@ -280,10 +321,10 @@
                             </div>
                             <div class="flex flex-wrap gap-1 lg:max-w-24 lg:justify-end">
                                 {#if editingKey === row.key}
-                                    <ShButton variant="primary" size="icon-xs" title={language.editTranslationSave} aria-label={language.editTranslationSave} onclick={() => void saveEdit()} disabled={saving}>
+                                    <ShButton variant="primary" size="icon-xs" title={language.editTranslationSave} aria-label={language.editTranslationSave} onclick={() => void saveEdit()} disabled={saving || mutating}>
                                         <SaveIcon size={14} />
                                     </ShButton>
-                                    <ShButton variant="ghost" size="icon-xs" title={language.cancel} aria-label={language.cancel} onclick={cancelEdit} disabled={saving}>
+                                    <ShButton variant="ghost" size="icon-xs" title={language.cancel} aria-label={language.cancel} onclick={cancelEdit} disabled={saving || mutating}>
                                         <XIcon size={14} />
                                     </ShButton>
                                 {:else}
@@ -293,10 +334,10 @@
                                     <ShButton variant="ghost" size="icon-xs" title={language.translationCacheCopyValue} aria-label={language.translationCacheCopyValue} onclick={() => void copyText(row.value)}>
                                         <ClipboardIcon size={14} />
                                     </ShButton>
-                                    <ShButton variant="ghost" size="icon-xs" title={language.editTranslation} aria-label={language.editTranslation} onclick={() => beginEdit(row.key, row.value, row.storageKey)}>
+                                    <ShButton variant="ghost" size="icon-xs" title={language.editTranslation} aria-label={language.editTranslation} onclick={() => beginEdit(row.key, row.value, row.storageKey)} disabled={mutating}>
                                         <PencilIcon size={14} />
                                     </ShButton>
-                                    <ShButton variant="destructive" size="icon-xs" title={language.remove} aria-label={language.remove} onclick={() => void removeEntry(row.key, row.storageKey)}>
+                                    <ShButton variant="destructive" size="icon-xs" title={language.remove} aria-label={language.remove} onclick={() => void removeEntry(row.key, row.storageKey)} disabled={mutating}>
                                         <Trash2Icon size={14} />
                                     </ShButton>
                                 {/if}
@@ -308,13 +349,13 @@
         </div>
 
         <div class="mt-3 flex items-center justify-center gap-3 text-sm text-textcolor2">
-            <ShButton variant="outline" size="icon-sm" aria-label={language.translationCachePreviousPage} onclick={() => void load(result.page - 1)} disabled={loading || result.page <= 1}>
+            <ShButton variant="outline" size="icon-sm" aria-label={language.translationCachePreviousPage} onclick={() => void load(result.page - 1)} disabled={loading || mutating || result.page <= 1}>
                 <ChevronLeftIcon size={16} />
             </ShButton>
             <span class="min-w-24 text-center tabular-nums">
                 {language.translationCachePage.replace('{0}', String(result.page)).replace('{1}', String(result.pageCount))}
             </span>
-            <ShButton variant="outline" size="icon-sm" aria-label={language.translationCacheNextPage} onclick={() => void load(result.page + 1)} disabled={loading || result.page >= result.pageCount}>
+            <ShButton variant="outline" size="icon-sm" aria-label={language.translationCacheNextPage} onclick={() => void load(result.page + 1)} disabled={loading || mutating || result.page >= result.pageCount}>
                 <ChevronRightIcon size={16} />
             </ShButton>
         </div>

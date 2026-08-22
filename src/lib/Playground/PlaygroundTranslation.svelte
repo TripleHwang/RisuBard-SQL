@@ -9,6 +9,7 @@
     import OptionInput from "../UI/GUI/OptionInput.svelte";
     import CheckInput from "../UI/GUI/CheckInput.svelte";
     import { tokenize } from "src/ts/tokenizer";
+    import { notifyError } from "src/ts/alert";
 
 
     const userPreferedLang = navigator.language.split('-')[0]
@@ -152,8 +153,12 @@
         Translate
     {/if}
 </Button>
-<Button className="mt-4" onclick={() => {
-    clearLLMCache()
+<Button className="mt-4" onclick={async () => {
+    try {
+        await clearLLMCache()
+    } catch (error) {
+        notifyError(error instanceof Error ? error.message : String(error))
+    }
 }}>
     Clear Cache
 </Button>
