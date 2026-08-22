@@ -12,7 +12,16 @@ import { requestChatData } from "../process/request/request"
 import { doingChat, type OpenAIChat } from "../process/index.svelte"
 import { applyMarkdownToNode, type simpleCharacterArgument } from "../parser/parser.svelte"
 import { selectedCharID } from "../stores.svelte"
-import { clearPersistentPrefix, listPersistentKeys, makeHashedStorageKey, readPersistentJson, removePersistentKey, writePersistentJson } from "../storage/persistentKv"
+import {
+    clearPersistentPrefix,
+    listPersistentKeys,
+    makeHashedStorageKey,
+    readPersistentJson,
+    readPersistentJsonWithVersion,
+    removePersistentKeyConditional,
+    writePersistentJson,
+    writePersistentJsonConditional,
+} from "../storage/persistentKv"
 import { getModuleRegexScripts } from "../process/modules"
 import { getNodetextToSentence, sleep } from "../util"
 import { processScriptFull } from "../process/scripts"
@@ -30,6 +39,7 @@ const llmTranslateCachePrefix = 'cache/llm-translate/'
 const llmCacheReadConcurrency = 16
 
 type LLMTranslationCachePayload = { key: string, value: string }
+type VersionedLLMTranslationCachePayload = LLMTranslationCachePayload & { etag: string }
 type PersistentLLMTranslationCacheRow = LLMTranslationCachePayload & { storageKey: string }
 type LLMCachePublicationToken = { globalGeneration: number, keyGeneration: number }
 type LLMCacheStorageIndex = { generation: number, locations: Map<string, string[]> }
@@ -51,6 +61,23 @@ async function readLLMCachePayload(storageKey: string): Promise<LLMTranslationCa
             return null
         }
         return { key: payload.key, value: payload.value }
+    } catch {
+        return null
+    }
+}
+
+async function readVersionedLLMCachePayload(
+    storageKey: string,
+): Promise<VersionedLLMTranslationCachePayload | null> {
+    try {
+        const { value: payload, etag } = await readPersistentJsonWithVersion<{
+            key?: unknown,
+            value?: unknown,
+        }>(storageKey)
+        if (!payload || typeof payload.key !== 'string' || typeof payload.value !== 'string' || !etag) {
+            return null
+        }
+        return { key: payload.key, value: payload.value, etag }
     } catch {
         return null
     }
@@ -295,27 +322,34 @@ async function setPersistentLLMCache(
             : matchingStorageKeys.values().next().value ?? canonicalStorageKey
 
     const indexedAuthority = matchingStorageKeys.has(storageKey)
-    const currentAuthority = await readLLMCachePayload(storageKey)
+    const currentAuthority = await readVersionedLLMCachePayload(storageKey)
     if ((indexedAuthority && !currentAuthority) || (currentAuthority && currentAuthority.key !== text)) {
         invalidateLLMCacheStorageIndex()
         throw new Error('LLM translation cache storage index is stale')
     }
 
     const duplicateStorageKeys = [...matchingStorageKeys].filter((key) => key !== storageKey)
-    const originalDuplicatePayloads = new Map<string, LLMTranslationCachePayload>()
+    const originalDuplicatePayloads = new Map<string, VersionedLLMTranslationCachePayload>()
     for (const duplicateStorageKey of duplicateStorageKeys) {
-        const payload = await readLLMCachePayload(duplicateStorageKey)
+        const payload = await readVersionedLLMCachePayload(duplicateStorageKey)
         if (!payload || payload.key !== text) {
             invalidateLLMCacheStorageIndex()
             throw new Error('LLM translation cache storage index is stale')
         }
         originalDuplicatePayloads.set(duplicateStorageKey, payload)
     }
+    const updatedDuplicateEtags = new Map<string, string>()
     const rollbackDuplicates = async () => {
         let rollbackError: unknown = null
-        for (const [duplicateStorageKey, payload] of originalDuplicatePayloads) {
+        for (const [duplicateStorageKey, currentEtag] of updatedDuplicateEtags) {
+            const payload = originalDuplicatePayloads.get(duplicateStorageKey)
+            if (!payload) continue
             try {
-                await writePersistentJson(duplicateStorageKey, payload)
+                await writePersistentJsonConditional(
+                    duplicateStorageKey,
+                    { key: payload.key, value: payload.value },
+                    currentEtag,
+                )
             } catch (error) {
                 rollbackError ??= error
             }
@@ -342,56 +376,58 @@ async function setPersistentLLMCache(
         }
         return rollbackError
     }
-    const remainingStorageKeys = new Set(matchingStorageKeys)
-    remainingStorageKeys.add(storageKey)
-    let cleanupError: unknown = null
-    let unsafeCleanupError: unknown = null
-    for (const duplicateStorageKey of duplicateStorageKeys) {
-        let duplicateUpdated = false
-        try {
-            await writePersistentJson(duplicateStorageKey, { key: text, value })
-            duplicateUpdated = true
-        } catch (error) {
-            cleanupError ??= error
-        }
-        try {
-            await removePersistentKey(duplicateStorageKey)
-            remainingStorageKeys.delete(duplicateStorageKey)
-        } catch (error) {
-            cleanupError ??= error
-            if (!duplicateUpdated) unsafeCleanupError ??= error
-        }
-    }
-    if (unsafeCleanupError) {
-        const rollbackError = await rollbackDuplicates()
-        if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
-        throw cleanupError ?? unsafeCleanupError
-    }
 
-    const finalAuthority = await readLLMCachePayload(storageKey)
-    const authorityChanged = currentAuthority
-        ? !finalAuthority || finalAuthority.key !== text
-        : finalAuthority !== null && finalAuthority.key !== text
-    if (authorityChanged) {
-        const rollbackError = await rollbackDuplicates()
-        if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
+    try {
+        for (const duplicateStorageKey of duplicateStorageKeys) {
+            const original = originalDuplicatePayloads.get(duplicateStorageKey)!
+            const nextEtag = await writePersistentJsonConditional(
+                duplicateStorageKey,
+                { key: text, value },
+                original.etag,
+            )
+            if (!nextEtag) throw new Error('Persistent storage did not return an ETag')
+            updatedDuplicateEtags.set(duplicateStorageKey, nextEtag)
+        }
+    } catch (error) {
+        await rollbackDuplicates()
         invalidateLLMCacheStorageIndex()
-        throw new Error('LLM translation cache storage index is stale')
+        throw error
     }
 
     try {
-        await writePersistentJson(storageKey, { key: text, value })
+        if (currentAuthority) {
+            await writePersistentJsonConditional(storageKey, { key: text, value }, currentAuthority.etag)
+        } else {
+            await writePersistentJson(storageKey, { key: text, value })
+        }
     } catch (error) {
-        const rollbackError = await rollbackDuplicates()
-        if (!rollbackError) storageIndex.set(text, [...matchingStorageKeys])
+        await rollbackDuplicates()
+        invalidateLLMCacheStorageIndex()
         throw error
     }
+
     llmTranslateCache.set(text, value)
+    const remainingStorageKeys = new Set([storageKey, ...duplicateStorageKeys])
+    let cleanupError: unknown = null
+    for (const duplicateStorageKey of duplicateStorageKeys) {
+        try {
+            await removePersistentKeyConditional(
+                duplicateStorageKey,
+                updatedDuplicateEtags.get(duplicateStorageKey)!,
+            )
+            remainingStorageKeys.delete(duplicateStorageKey)
+        } catch (error) {
+            cleanupError ??= error
+        }
+    }
     storageIndex.set(text, [
         storageKey,
         ...[...remainingStorageKeys].filter((key) => key !== storageKey),
     ])
-    if (cleanupError) throw cleanupError
+    if (cleanupError) {
+        invalidateLLMCacheStorageIndex()
+        throw cleanupError
+    }
     return storageKey
 }
 
@@ -399,7 +435,7 @@ async function requireLLMCachePayload(key: string, storageKey: string) {
     if (!storageKey || !storageKey.startsWith(llmTranslateCachePrefix)) {
         throw new Error('Invalid LLM translation cache storage key')
     }
-    const payload = await readLLMCachePayload(storageKey)
+    const payload = await readVersionedLLMCachePayload(storageKey)
     if (!payload || payload.key !== key) {
         throw new Error('LLM translation cache storage key does not match entry')
     }
@@ -1150,20 +1186,28 @@ export async function deleteLLMCache(key: string, storageKey: string): Promise<v
     preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(key, preparedStorageIndex)
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
-        await requireLLMCachePayload(key, storageKey)
+        const selectedPayload = await requireLLMCachePayload(key, storageKey)
         const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
         const storageKeys = new Set([storageKey, ...(storageIndex.locations.get(key) ?? [])])
-        let removeError: unknown = null
+        const payloads = new Map<string, VersionedLLMTranslationCachePayload>()
         for (const matchingStorageKey of storageKeys) {
-            try {
-                await removePersistentKey(matchingStorageKey)
-            } catch (error) {
-                removeError ??= error
+            const payload = matchingStorageKey === storageKey
+                ? selectedPayload
+                : await readVersionedLLMCachePayload(matchingStorageKey)
+            if (!payload || payload.key !== key) {
+                invalidateLLMCacheStorageIndex()
+                throw new Error('LLM translation cache storage index is stale')
             }
+            payloads.set(matchingStorageKey, payload)
         }
-        if (removeError) {
-            reconcileLLMCacheState(await readPersistentLLMCacheRows())
-            throw removeError
+        for (const [matchingStorageKey, payload] of payloads) {
+            try {
+                await removePersistentKeyConditional(matchingStorageKey, payload.etag)
+            } catch (error) {
+                invalidateLLMCacheStorageIndex()
+                reconcileLLMCacheState(await readPersistentLLMCacheRows())
+                throw error
+            }
         }
         storageIndex.locations.delete(key)
         llmTranslateCache.delete(key)

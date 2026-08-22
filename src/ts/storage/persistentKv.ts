@@ -38,14 +38,52 @@ export async function readPersistentJson<T>(storageKey: string): Promise<T | nul
     return JSON.parse(decoder.decode(data)) as T;
 }
 
+export type VersionedPersistentJson<T> = {
+    value: T | null;
+    etag: string | null;
+};
+
+export async function readPersistentJsonWithVersion<T>(storageKey: string): Promise<VersionedPersistentJson<T>> {
+    await ensureStorageReady();
+    const { value: data, etag } = await forageStorage.getItemWithEtag(storageKey);
+    if (!data) {
+        return { value: null, etag: null };
+    }
+    return {
+        value: JSON.parse(decoder.decode(data)) as T,
+        etag,
+    };
+}
+
 export async function writePersistentJson<T>(storageKey: string, value: T): Promise<void> {
     await ensureStorageReady();
     await forageStorage.setItem(storageKey, encoder.encode(JSON.stringify(value)));
 }
 
+export async function writePersistentJsonConditional<T>(
+    storageKey: string,
+    value: T,
+    expectedEtag: string,
+): Promise<string | null> {
+    await ensureStorageReady();
+    return await forageStorage.setItemConditional(
+        storageKey,
+        encoder.encode(JSON.stringify(value)),
+        expectedEtag,
+    );
+}
+
 export async function removePersistentKey(storageKey: string): Promise<void> {
     await ensureStorageReady();
     await forageStorage.removeItem(storageKey);
+}
+
+export async function removePersistentKeyConditional(
+    storageKey: string,
+    expectedEtag: string,
+): Promise<void> {
+    await ensureStorageReady();
+    await forageStorage.removeItem(storageKey, expectedEtag);
 }
 
 export async function listPersistentKeys(prefix = ""): Promise<string[]> {

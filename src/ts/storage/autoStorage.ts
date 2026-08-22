@@ -9,15 +9,23 @@ export class AutoStorage{
         await this.realStorage.setItem(key, value, etag)
         return null
     }
+    async setItemConditional(key: string, value: Uint8Array, etag: string): Promise<string | null> {
+        await this.Init()
+        return await this.realStorage.setItemConditional(key, value, etag)
+    }
     async getItem(key:string):Promise<Buffer> {
         return await this.realStorage.getItem(key)
+    }
+    async getItemWithEtag(key:string) {
+        await this.Init()
+        return await this.realStorage.getItemWithEtag(key)
     }
     async keys(prefix: string = ''):Promise<string[]>{
         await this.Init()
         return await this.realStorage.keys(prefix)
     }
-    async removeItem(key:string){
-        return await this.realStorage.removeItem(key)
+    async removeItem(key:string, etag?: string){
+        return await this.realStorage.removeItem(key, etag)
     }
 
     async checkAccountSync(){

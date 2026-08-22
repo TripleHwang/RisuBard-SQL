@@ -35,8 +35,8 @@ function isUserActive(): boolean {
 
 // Custom error class for database conflict detection
 export class ConflictError extends Error {
-    currentEtag: string
-    constructor(message: string, currentEtag: string) {
+    currentEtag: string | null
+    constructor(message: string, currentEtag: string | null) {
         super(message)
         this.name = 'ConflictError'
         this.currentEtag = currentEtag
@@ -241,7 +241,7 @@ export class NodeStorage{
         return response
     }
 
-    async setItem(key:string, value:Uint8Array, etag?:string) {
+    async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
         const headers: Record<string, string> = {
             'content-type': 'application/octet-stream',
             'file-path': Buffer.from(key, 'utf-8').toString('hex')
@@ -256,7 +256,7 @@ export class NodeStorage{
         })
         if(da.status === 409){
             const data = await da.json()
-            throw new ConflictError(data.error, data.currentEtag)
+            throw new ConflictError(data.error, data.currentEtag ?? null)
         }
         if(da.status < 200 || da.status >= 300){
             throw "setItem Error"
@@ -269,8 +269,12 @@ export class NodeStorage{
         if (key === 'database/database.bin' && nextEtag) {
             this._lastDbEtag = nextEtag
         }
+        return nextEtag ?? null
     }
-    async getItem(key:string):Promise<Buffer> {
+    async setItemConditional(key: string, value: Uint8Array, etag: string): Promise<string | null> {
+        return await this.setItem(key, value, etag)
+    }
+    async getItemWithEtag(key:string):Promise<{ value: Buffer | null, etag: string | null }> {
         const headers: Record<string, string> = {
             'file-path': Buffer.from(key, 'utf-8').toString('hex')
         }
@@ -281,17 +285,21 @@ export class NodeStorage{
         }
 
         // Capture ETag for database.bin
-        const etag = da.headers.get('x-db-etag')
-        if (etag) {
-            this._lastDbEtag = etag
+        const dbEtag = da.headers.get('x-db-etag')
+        const itemEtag = da.headers.get('x-item-etag') ?? dbEtag
+        if (dbEtag) {
+            this._lastDbEtag = dbEtag
         }
 
         const data = Buffer.from(await da.arrayBuffer())
         if (data.length === 0){
-            return null
+            return { value: null, etag: null }
         }
 
-        return data
+        return { value: data, etag: itemEtag }
+    }
+    async getItem(key:string):Promise<Buffer> {
+        return (await this.getItemWithEtag(key)).value as Buffer
     }
     async keys(prefix: string = ''):Promise<string[]>{
         const headers: Record<string, string> = {
@@ -312,13 +320,21 @@ export class NodeStorage{
         }
         return data.content
     }
-    async removeItem(key:string){
+    async removeItem(key:string, etag?: string){
+        const headers: Record<string, string> = {
+            'file-path': Buffer.from(key, 'utf-8').toString('hex')
+        }
+        if (etag) {
+            headers['x-if-match'] = etag
+        }
         const da = await this.authFetch('/api/remove', {
             method: "GET",
-            headers: {
-                'file-path': Buffer.from(key, 'utf-8').toString('hex')
-            }
+            headers
         })
+        if(da.status === 409){
+            const data = await da.json()
+            throw new ConflictError(data.error, data.currentEtag ?? null)
+        }
         if(da.status < 200 || da.status >= 300){
             throw "removeItem Error"
         }

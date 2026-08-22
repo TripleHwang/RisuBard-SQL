@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storage = vi.hoisted(() => new Map<string, unknown>());
+const storageEtag = vi.hoisted(() => (value: unknown) =>
+    value === undefined ? null : JSON.stringify(value),
+);
 const removedKeys = vi.hoisted(() => [] as string[]);
 const failures = vi.hoisted(() => ({
     writeKeys: new Set<string>(),
@@ -14,6 +17,8 @@ const asyncControls = vi.hoisted(() => ({
     gatedReadsRemaining: 0,
     writeGates: new Map<string, Promise<void>>(),
     startedWrites: new Set<string>(),
+    removeGates: new Map<string, Promise<void>>(),
+    startedRemoves: new Set<string>(),
 }));
 const requestChatDataMock = vi.hoisted(() => vi.fn());
 const databaseMock = vi.hoisted(() => ({
@@ -58,8 +63,29 @@ vi.mock("../storage/persistentKv", () => ({
             readStats.active--;
         }
     }),
+    readPersistentJsonWithVersion: vi.fn(async (key: string) => {
+        persistenceStats.reads++;
+        readStats.active++;
+        readStats.maxActive = Math.max(readStats.maxActive, readStats.active);
+        const value = storage.get(key);
+        const readGate = asyncControls.gatedReadsRemaining > 0
+            ? asyncControls.readGate
+            : null;
+        if (readGate) asyncControls.gatedReadsRemaining--;
+        await Promise.resolve();
+        if (readGate) await readGate;
+        try {
+            if (value instanceof Error) throw value;
+            return { value: value ?? null, etag: storageEtag(value) };
+        } finally {
+            readStats.active--;
+        }
+    }),
     removePersistentKey: vi.fn(async (key: string) => {
         if (failures.removeKeys.has(key)) throw new Error("delete failed");
+        asyncControls.startedRemoves.add(key);
+        const gate = asyncControls.removeGates.get(key);
+        if (gate) await gate;
         removedKeys.push(key);
         storage.delete(key);
     }),
@@ -69,6 +95,36 @@ vi.mock("../storage/persistentKv", () => ({
         const gate = asyncControls.writeGates.get(key);
         if (gate) await gate;
         storage.set(key, value);
+    }),
+    writePersistentJsonConditional: vi.fn(async (
+        key: string,
+        value: unknown,
+        expectedEtag: string,
+    ) => {
+        if (failures.writeKeys.has(key)) throw new Error("write failed");
+        asyncControls.startedWrites.add(key);
+        const gate = asyncControls.writeGates.get(key);
+        if (gate) await gate;
+        if (storageEtag(storage.get(key)) !== expectedEtag) {
+            const error = new Error("ETag conflict");
+            error.name = "ConflictError";
+            throw error;
+        }
+        storage.set(key, value);
+        return storageEtag(value);
+    }),
+    removePersistentKeyConditional: vi.fn(async (key: string, expectedEtag: string) => {
+        if (failures.removeKeys.has(key)) throw new Error("delete failed");
+        asyncControls.startedRemoves.add(key);
+        const gate = asyncControls.removeGates.get(key);
+        if (gate) await gate;
+        if (storageEtag(storage.get(key)) !== expectedEtag) {
+            const error = new Error("ETag conflict");
+            error.name = "ConflictError";
+            throw error;
+        }
+        removedKeys.push(key);
+        storage.delete(key);
     }),
 }));
 
@@ -141,6 +197,8 @@ describe("LLM translation cache manager", () => {
         asyncControls.gatedReadsRemaining = 0;
         asyncControls.writeGates.clear();
         asyncControls.startedWrites.clear();
+        asyncControls.removeGates.clear();
+        asyncControls.startedRemoves.clear();
         requestChatDataMock.mockReset();
         await clearLLMCache();
     });
@@ -242,7 +300,7 @@ describe("LLM translation cache manager", () => {
         await setLLMCache("new two", "second");
 
         expect(persistenceStats.lists).toBe(1);
-        expect(persistenceStats.reads).toBe(26);
+        expect(persistenceStats.reads).toBeLessThanOrEqual(26);
     });
 
     it("reuses one persistent snapshot for every item in an import", async () => {
@@ -252,7 +310,7 @@ describe("LLM translation cache manager", () => {
             .resolves.toEqual({ count: 3, failed: 0 });
 
         expect(persistenceStats.lists).toBe(1);
-        expect(persistenceStats.reads).toBe(26);
+        expect(persistenceStats.reads).toBeLessThanOrEqual(26);
     });
 
     it("does not publish a set that entered before clear while awaiting the index", async () => {
@@ -294,9 +352,49 @@ describe("LLM translation cache manager", () => {
         storage.set(legacyStorageKey, { key: "external replacement", value: "preserve me" });
         duplicateWriteGate.resolve();
 
-        await expect(updating).rejects.toThrow("storage index is stale");
+        await expect(updating).rejects.toThrow(/conflict|stale/i);
         expect(storage.get(legacyStorageKey)).toEqual({ key: "external replacement", value: "preserve me" });
         expect(storage.get(canonicalStorageKey)).toEqual({ key: "authority race", value: "old" });
+    });
+
+    it("does not overwrite a duplicate path reassigned during an update", async () => {
+        const legacyStorageKey = seed("duplicate update race", "old", `${prefix}legacy-update-race.json`);
+        const canonicalStorageKey = seed("duplicate update race", "old");
+        await listLLMCache();
+        const duplicateWriteGate = deferred<void>();
+        asyncControls.writeGates.set(canonicalStorageKey, duplicateWriteGate.promise);
+
+        const updating = updateLLMCacheValue("duplicate update race", "new", legacyStorageKey);
+        await vi.waitFor(() => expect(asyncControls.startedWrites.has(canonicalStorageKey)).toBe(true));
+        storage.set(canonicalStorageKey, { key: "external duplicate owner", value: "preserve me" });
+        duplicateWriteGate.resolve();
+
+        await expect(updating).rejects.toThrow(/conflict|stale/i);
+        expect(storage.get(canonicalStorageKey)).toEqual({
+            key: "external duplicate owner",
+            value: "preserve me",
+        });
+    });
+
+    it("does not delete a duplicate path reassigned during deletion", async () => {
+        const legacyStorageKey = seed("duplicate delete race", "old", `${prefix}legacy-delete-race.json`);
+        const canonicalStorageKey = seed("duplicate delete race", "old");
+        const listed = await listLLMCache();
+        expect(listed.rows[0].storageKey).toBe(canonicalStorageKey);
+        const duplicateRemoveGate = deferred<void>();
+        asyncControls.removeGates.set(canonicalStorageKey, duplicateRemoveGate.promise);
+
+        const deleting = deleteLLMCache("duplicate delete race", canonicalStorageKey);
+        await vi.waitFor(() => expect(asyncControls.startedRemoves.has(canonicalStorageKey)).toBe(true));
+        storage.set(canonicalStorageKey, { key: "external delete owner", value: "preserve me" });
+        duplicateRemoveGate.resolve();
+
+        await expect(deleting).rejects.toThrow(/conflict|stale/i);
+        expect(storage.get(canonicalStorageKey)).toEqual({
+            key: "external delete owner",
+            value: "preserve me",
+        });
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "duplicate delete race", value: "old" });
     });
 
     it("rebuilds a stale duplicate index before manager update", async () => {

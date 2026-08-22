@@ -3339,6 +3339,23 @@ app.post('/api/set_password', async (req, res) => {
     }
 })
 
+async function readStorageItemPayload(key) {
+    let value = null;
+    if (key.startsWith('inlay/')) {
+        value = await readInlayAssetPayload(key.slice('inlay/'.length));
+    } else if (key.startsWith('inlay_info/')) {
+        value = await readInlayInfoPayload(key.slice('inlay_info/'.length));
+    }
+    return value === null ? kvGet(key) : value;
+}
+
+function sendStorageEtagConflict(res, currentEtag) {
+    res.status(409).send({
+        error: 'ETag mismatch - concurrent modification detected',
+        currentEtag
+    });
+}
+
 app.get('/api/read', async (req, res, next) => {
     if(!await checkAuth(req, res)){
         return;
@@ -3359,15 +3376,7 @@ app.get('/api/read', async (req, res, next) => {
         if (key === 'database/database.bin') {
             await flushPendingDb();
         }
-        let value = null;
-        if (key.startsWith('inlay/')) {
-            value = await readInlayAssetPayload(key.slice('inlay/'.length));
-        } else if (key.startsWith('inlay_info/')) {
-            value = await readInlayInfoPayload(key.slice('inlay_info/'.length));
-        }
-        if (value === null) {
-            value = kvGet(key);
-        }
+        let value = await readStorageItemPayload(key);
         if(value === null){
             res.send();
         } else {
@@ -3394,6 +3403,9 @@ app.get('/api/read', async (req, res, next) => {
                 }
                 res.setHeader('x-db-etag', dbEtag);
             }
+            if (value.length > 0) {
+                res.setHeader('x-item-etag', computeBufferEtag(Buffer.from(value)));
+            }
             res.setHeader('Content-Type', 'application/octet-stream');
             res.send(value);
         }
@@ -3416,20 +3428,42 @@ app.get('/api/remove', async (req, res, next) => {
         return;
     }
     try {
-        const key = Buffer.from(filePath, 'hex').toString('utf-8');
-        if (key.startsWith('inlay/')) {
-            const id = key.slice('inlay/'.length)
-            await deleteInlayFile(id)
+        await queueStorageOperation(async () => {
+            const key = Buffer.from(filePath, 'hex').toString('utf-8');
+            const ifMatch = req.headers['x-if-match'];
+            if (ifMatch) {
+                let currentEtag = null;
+                if (key === 'database/database.bin') {
+                    currentEtag = dbEtag;
+                    if (!currentEtag) {
+                        currentEtag = ifMatch;
+                    }
+                } else {
+                    const currentValue = await readStorageItemPayload(key);
+                    if (currentValue && currentValue.length > 0) {
+                        currentEtag = computeBufferEtag(Buffer.from(currentValue));
+                    }
+                }
+                if (ifMatch !== currentEtag) {
+                    sendStorageEtagConflict(res, currentEtag);
+                    return;
+                }
+            }
+            if (key.startsWith('inlay/')) {
+                const id = key.slice('inlay/'.length)
+                await deleteInlayFile(id)
+                kvDel(key);
+                kvDel(`inlay_thumb/${id}`);
+                kvDel(`inlay_info/${id}`);
+                res.send({ success: true });
+                return;
+            }
+            if (key.startsWith('inlay_info/')) {
+                await fs.unlink(getInlaySidecarPath(key.slice('inlay_info/'.length))).catch(() => {});
+            }
             kvDel(key);
-            kvDel(`inlay_thumb/${id}`);
-            kvDel(`inlay_info/${id}`);
-            return res.send({ success: true });
-        }
-        if (key.startsWith('inlay_info/')) {
-            await fs.unlink(getInlaySidecarPath(key.slice('inlay_info/'.length))).catch(() => {});
-        }
-        kvDel(key);
-        res.send({ success: true });
+            res.send({ success: true });
+        });
     } catch (error) {
         next(error);
     }
@@ -3557,14 +3591,22 @@ app.post('/api/write', async (req, res, next) => {
         await queueStorageOperation(async () => {
             const key = Buffer.from(filePath, 'hex').toString('utf-8');
 
-            // ETag conflict detection for database.bin
-            if (key === 'database/database.bin') {
-                const ifMatch = req.headers['x-if-match'];
-                if (ifMatch && dbEtag && ifMatch !== dbEtag) {
-                    res.status(409).send({
-                        error: 'ETag mismatch - concurrent modification detected',
-                        currentEtag: dbEtag
-                    });
+            const ifMatch = req.headers['x-if-match'];
+            if (ifMatch) {
+                let currentEtag = null;
+                if (key === 'database/database.bin') {
+                    currentEtag = dbEtag;
+                    if (!currentEtag) {
+                        currentEtag = ifMatch;
+                    }
+                } else {
+                    const currentValue = await readStorageItemPayload(key);
+                    if (currentValue && currentValue.length > 0) {
+                        currentEtag = computeBufferEtag(Buffer.from(currentValue));
+                    }
+                }
+                if (ifMatch !== currentEtag) {
+                    sendStorageEtagConflict(res, currentEtag);
                     return;
                 }
             }
@@ -3650,10 +3692,14 @@ app.post('/api/write', async (req, res, next) => {
                 maybeCollectUnreferencedObjects();
             }
 
-            res.send({
-                success: true,
-                etag: key === 'database/database.bin' ? dbEtag : undefined
-            });
+            let nextEtag = dbEtag;
+            if (key !== 'database/database.bin') {
+                const storedValue = await readStorageItemPayload(key);
+                nextEtag = storedValue && storedValue.length > 0
+                    ? computeBufferEtag(Buffer.from(storedValue))
+                    : null;
+            }
+            res.send({ success: true, etag: nextEtag ?? undefined });
         });
     } catch (error) {
         next(error);
