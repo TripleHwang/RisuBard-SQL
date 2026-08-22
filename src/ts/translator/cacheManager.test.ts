@@ -10,6 +10,7 @@ const failures = vi.hoisted(() => ({
 const readStats = vi.hoisted(() => ({ active: 0, maxActive: 0 }));
 const asyncControls = vi.hoisted(() => ({
     readGate: null as Promise<void> | null,
+    gatedReadsRemaining: 0,
     writeGates: new Map<string, Promise<void>>(),
     startedWrites: new Set<string>(),
 }));
@@ -41,8 +42,12 @@ vi.mock("../storage/persistentKv", () => ({
         readStats.active++;
         readStats.maxActive = Math.max(readStats.maxActive, readStats.active);
         const value = storage.get(key);
+        const readGate = asyncControls.gatedReadsRemaining > 0
+            ? asyncControls.readGate
+            : null;
+        if (readGate) asyncControls.gatedReadsRemaining--;
         await Promise.resolve();
-        if (asyncControls.readGate) await asyncControls.readGate;
+        if (readGate) await readGate;
         try {
             if (value instanceof Error) throw value;
             return value ?? null;
@@ -128,6 +133,7 @@ describe("LLM translation cache manager", () => {
         readStats.active = 0;
         readStats.maxActive = 0;
         asyncControls.readGate = null;
+        asyncControls.gatedReadsRemaining = 0;
         asyncControls.writeGates.clear();
         asyncControls.startedWrites.clear();
         requestChatDataMock.mockReset();
@@ -177,6 +183,49 @@ describe("LLM translation cache manager", () => {
         await deleteLLMCache("legacy key", storageKey);
         expect(storage.has(storageKey)).toBe(false);
         expect(removedKeys).toContain(storageKey);
+    });
+
+    it("updates an existing legacy storage location without creating a canonical duplicate", async () => {
+        const legacyStorageKey = seed("legacy direct", "old", `${prefix}legacy-direct.json`);
+
+        await setLLMCache("legacy direct", "new");
+
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "legacy direct", value: "new" });
+        expect(storage.has(`${prefix}legacy%20direct.json`)).toBe(false);
+    });
+
+    it("imports over an existing legacy storage location without duplicating it", async () => {
+        const legacyStorageKey = seed("legacy import", "old", `${prefix}legacy-import.json`);
+
+        await expect(importLLMCacheFromJSON({ "legacy import": "new" })).resolves.toEqual({ count: 1, failed: 0 });
+
+        expect(storage.get(legacyStorageKey)).toEqual({ key: "legacy import", value: "new" });
+        expect(storage.has(`${prefix}legacy%20import.json`)).toBe(false);
+    });
+
+    it("deletes every duplicate physical row so the logical key cannot reappear", async () => {
+        seed("duplicate", "legacy", `${prefix}legacy-duplicate.json`);
+        seed("duplicate", "canonical", `${prefix}duplicate.json`);
+        const listed = await listLLMCache();
+
+        await deleteLLMCache("duplicate", listed.rows[0].storageKey);
+
+        expect([...storage.values()].filter((value: any) => value?.key === "duplicate")).toEqual([]);
+        expect((await listLLMCache()).rows).toEqual([]);
+    });
+
+    it("consistently prefers a canonical row over conflicting legacy duplicates", async () => {
+        seed("conflict", "legacy", `${prefix}legacy-conflict.json`);
+        const canonicalStorageKey = seed("conflict", "canonical");
+
+        await expect(getLLMCache("conflict")).resolves.toBe("canonical");
+        await expect(listLLMCache()).resolves.toMatchObject({
+            rows: [{ key: "conflict", value: "canonical", storageKey: canonicalStorageKey }],
+        });
+        await expect(searchLLMCache("conflict")).resolves.toEqual([
+            { key: "conflict", value: "canonical" },
+        ]);
+        await expect(exportLLMCacheAsJSON()).resolves.toMatchObject({ conflict: "canonical" });
     });
 
     it("deletes one entry from memory and persistent storage", async () => {
@@ -348,6 +397,7 @@ describe("LLM translation cache manager", () => {
         seed("read race", "old value");
         const gate = deferred<void>();
         asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
         const listing = listLLMCache();
         await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
 
@@ -363,6 +413,7 @@ describe("LLM translation cache manager", () => {
         await setLLMCache("edit read race", "old value");
         const gate = deferred<void>();
         asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
         const listing = listLLMCache();
         await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
 
@@ -381,6 +432,7 @@ describe("LLM translation cache manager", () => {
         seed("translation read race", "old persistent");
         const gate = deferred<void>();
         asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
         const listing = listLLMCache();
         await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
 
@@ -469,5 +521,69 @@ describe("LLM translation cache manager", () => {
         await expect(searchLLMCache("valid")).resolves.toEqual([
             { key: "valid", value: "works" },
         ]);
+    });
+
+    it("does not let a delayed direct get repopulate memory after clear", async () => {
+        seed("get clear race", "old");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
+        const reading = getLLMCache("get clear race");
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+        asyncControls.readGate = null;
+
+        await clearLLMCache();
+        gate.resolve();
+
+        await expect(reading).resolves.toBeNull();
+        expect(await getLLMCache("get clear race")).toBeNull();
+    });
+
+    it("does not let a delayed direct get overwrite a manual edit", async () => {
+        seed("get edit race", "old");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
+        const reading = getLLMCache("get edit race");
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+        asyncControls.readGate = null;
+
+        await setLLMCache("get edit race", "new");
+        gate.resolve();
+
+        await expect(reading).resolves.toBe("new");
+        expect(await getLLMCache("get edit race")).toBe("new");
+    });
+
+    it("does not let a delayed search repopulate memory after clear", async () => {
+        seed("search clear race", "old");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
+        const searching = searchLLMCache("search clear");
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+        asyncControls.readGate = null;
+
+        await clearLLMCache();
+        gate.resolve();
+
+        await expect(searching).resolves.toEqual([]);
+        expect(await getLLMCache("search clear race")).toBeNull();
+    });
+
+    it("does not let a delayed search overwrite a manual edit", async () => {
+        seed("search edit race", "old");
+        const gate = deferred<void>();
+        asyncControls.readGate = gate.promise;
+        asyncControls.gatedReadsRemaining = 1;
+        const searching = searchLLMCache("search edit");
+        await vi.waitFor(() => expect(readStats.active).toBeGreaterThan(0));
+        asyncControls.readGate = null;
+
+        await setLLMCache("search edit race", "new");
+        gate.resolve();
+
+        await expect(searching).resolves.toEqual([{ key: "search edit race", value: "new" }]);
+        expect(await getLLMCache("search edit race")).toBe("new");
     });
 });
