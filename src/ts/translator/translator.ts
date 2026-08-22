@@ -12,7 +12,7 @@ import { requestChatData } from "../process/request/request"
 import { doingChat, type OpenAIChat } from "../process/index.svelte"
 import { applyMarkdownToNode, type simpleCharacterArgument } from "../parser/parser.svelte"
 import { selectedCharID } from "../stores.svelte"
-import { clearPersistentPrefix, listPersistentKeys, makeHashedStorageKey, readPersistentJson, writePersistentJson } from "../storage/persistentKv"
+import { clearPersistentPrefix, listPersistentKeys, makeHashedStorageKey, readPersistentJson, removePersistentKey, writePersistentJson } from "../storage/persistentKv"
 import { getModuleRegexScripts } from "../process/modules"
 import { getNodetextToSentence, sleep } from "../util"
 import { processScriptFull } from "../process/scripts"
@@ -28,9 +28,23 @@ let bergamotTranslate: (text: string, from: string, to: string, html?: boolean) 
 const llmTranslateCache = new Map<string, string>()
 const llmTranslateCachePrefix = 'cache/llm-translate/'
 
+type LLMTranslationCachePayload = { key: string, value: string }
+
+async function readLLMCachePayload(storageKey: string): Promise<LLMTranslationCachePayload | null> {
+    try {
+        const payload = await readPersistentJson<{ key?: unknown, value?: unknown }>(storageKey)
+        if (!payload || typeof payload.key !== 'string' || typeof payload.value !== 'string') {
+            return null
+        }
+        return { key: payload.key, value: payload.value }
+    } catch {
+        return null
+    }
+}
+
 async function getPersistentLLMCache(text: string): Promise<string | null> {
     const storageKey = await makeHashedStorageKey(llmTranslateCachePrefix, text)
-    const payload = await readPersistentJson<{ key: string, value: string }>(storageKey)
+    const payload = await readLLMCachePayload(storageKey)
     if (!payload || payload.key !== text) {
         return null
     }
@@ -38,9 +52,19 @@ async function getPersistentLLMCache(text: string): Promise<string | null> {
     return payload.value
 }
 
-async function setPersistentLLMCache(text: string, value: string) {
-    const storageKey = await makeHashedStorageKey(llmTranslateCachePrefix, text)
-    await writePersistentJson(storageKey, {
+async function getLLMCacheStorageKey(text: string, storageKey?: string) {
+    if (storageKey !== undefined) {
+        if (!storageKey.startsWith(llmTranslateCachePrefix)) {
+            throw new Error('Invalid LLM translation cache storage key')
+        }
+        return storageKey
+    }
+    return await makeHashedStorageKey(llmTranslateCachePrefix, text)
+}
+
+async function setPersistentLLMCache(text: string, value: string, storageKey?: string) {
+    const resolvedStorageKey = await getLLMCacheStorageKey(text, storageKey)
+    await writePersistentJson(resolvedStorageKey, {
         key: text,
         value
     })
@@ -607,8 +631,8 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
 }
 
 export async function clearLLMCache(): Promise<void> {
-    llmTranslateCache.clear()
     await clearPersistentPrefix(llmTranslateCachePrefix)
+    llmTranslateCache.clear()
 }
 
 export async function getLLMCache(text:string):Promise<string | null>{
@@ -624,7 +648,7 @@ export async function searchLLMCache(partialKey:string):Promise<{key: string, va
     }
     const storageKeys = await listPersistentKeys(llmTranslateCachePrefix)
     for (const storageKey of storageKeys) {
-        const payload = await readPersistentJson<{ key: string, value: string }>(storageKey)
+        const payload = await readLLMCachePayload(storageKey)
         if (!payload || !payload.key.includes(partialKey)) {
             continue
         }
@@ -638,8 +662,95 @@ export async function searchLLMCache(partialKey:string):Promise<{key: string, va
 }
 
 export async function setLLMCache(key:string, value:string):Promise<void>{
-    llmTranslateCache.set(key, value)
     await setPersistentLLMCache(key, value)
+    llmTranslateCache.set(key, value)
+}
+
+export type LLMTranslationCacheRow = {
+    key: string
+    value: string
+    storageKey: string
+}
+
+export type LLMTranslationCachePage = {
+    rows: LLMTranslationCacheRow[]
+    total: number
+    page: number
+    pageSize: number
+    pageCount: number
+}
+
+export type LLMTranslationCacheQuery = {
+    search?: string
+    page?: number
+    pageSize?: number
+}
+
+function compareCacheRows(left: LLMTranslationCacheRow, right: LLMTranslationCacheRow) {
+    const leftFolded = left.key.toLowerCase()
+    const rightFolded = right.key.toLowerCase()
+    if (leftFolded < rightFolded) return -1
+    if (leftFolded > rightFolded) return 1
+    if (left.key < right.key) return -1
+    if (left.key > right.key) return 1
+    return 0
+}
+
+export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promise<LLMTranslationCachePage> {
+    const rowsByKey = new Map<string, LLMTranslationCacheRow>()
+    const storageKeys = await listPersistentKeys(llmTranslateCachePrefix)
+    for (const storageKey of storageKeys) {
+        const payload = await readLLMCachePayload(storageKey)
+        if (!payload) continue
+        const value = llmTranslateCache.get(payload.key) ?? payload.value
+        llmTranslateCache.set(payload.key, value)
+        rowsByKey.set(payload.key, { key: payload.key, value, storageKey })
+    }
+    for (const [key, value] of llmTranslateCache) {
+        if (!rowsByKey.has(key)) {
+            rowsByKey.set(key, {
+                key,
+                value,
+                storageKey: await makeHashedStorageKey(llmTranslateCachePrefix, key),
+            })
+        }
+    }
+
+    const search = (query.search ?? '').trim().toLowerCase()
+    const rows = [...rowsByKey.values()]
+        .filter((row) => !search
+            || row.key.toLowerCase().includes(search)
+            || row.value.toLowerCase().includes(search))
+        .sort(compareCacheRows)
+    const requestedPageSize = Math.floor(query.pageSize ?? 100)
+    const pageSize = Number.isFinite(requestedPageSize) && requestedPageSize > 0
+        ? Math.min(requestedPageSize, 100)
+        : 100
+    const pageCount = Math.max(1, Math.ceil(rows.length / pageSize))
+    const requestedPage = Math.floor(query.page ?? 1)
+    const page = Math.min(
+        pageCount,
+        Math.max(1, Number.isFinite(requestedPage) ? requestedPage : 1),
+    )
+    const start = (page - 1) * pageSize
+    return {
+        rows: rows.slice(start, start + pageSize),
+        total: rows.length,
+        page,
+        pageSize,
+        pageCount,
+    }
+}
+
+export async function updateLLMCacheValue(key: string, value: string, storageKey?: string): Promise<void> {
+    await setPersistentLLMCache(key, value, storageKey)
+    llmTranslateCache.set(key, value)
+}
+
+export async function deleteLLMCache(key: string, storageKey?: string): Promise<void> {
+    const resolvedStorageKey = await getLLMCacheStorageKey(key, storageKey)
+    await removePersistentKey(resolvedStorageKey)
+    llmTranslateCache.delete(key)
 }
 
 export async function exportLLMCacheAsJSON():Promise<Record<string, string>>{
@@ -649,7 +760,7 @@ export async function exportLLMCacheAsJSON():Promise<Record<string, string>>{
     }
     const storageKeys = await listPersistentKeys(llmTranslateCachePrefix)
     for (const storageKey of storageKeys) {
-        const payload = await readPersistentJson<{ key: string, value: string }>(storageKey)
+        const payload = await readLLMCachePayload(storageKey)
         if (payload && !(payload.key in result)) {
             result[payload.key] = payload.value
         }
