@@ -140,6 +140,33 @@ describe('sendChatRequest (non-stream)', () => {
         expect(wire.slice(1)).toEqual(userMessages)
     })
 
+    test('grounds structured Ollama Cloud requests with JSON mode and the response schema', async () => {
+        const { fetchImpl, calls } = captureFetch(
+            jsonResponse({ choices: [{ message: { content: '{"value":"ok"}' } }] }),
+        )
+        const responseSchema = {
+            type: 'object',
+            additionalProperties: false,
+            required: ['value'],
+            properties: { value: { type: 'string' } },
+        }
+
+        await sendChatRequest(
+            makePreset({
+                profileSnapshot: makeSnapshot({ providerBaseId: 'ollama-cloud' }),
+            }),
+            { messages: userMessages, responseSchema, fetchImpl },
+            { apiKey: 'sk' },
+        )
+
+        expect(calls[0].body.response_format).toEqual({ type: 'json_object' })
+        const wire = calls[0].body.messages as Array<Record<string, unknown>>
+        expect(wire[0]).toMatchObject({ role: 'system' })
+        expect(wire[0].content).toContain('Return exactly one JSON object')
+        expect(wire[0].content).toContain(JSON.stringify(responseSchema))
+        expect(wire.slice(1)).toEqual(userMessages)
+    })
+
     test('does not add DeepSeek JSON hints to ordinary or other-provider requests', async () => {
         const { fetchImpl, calls } = captureFetch(() =>
             jsonResponse({ choices: [{ message: { content: 'ok' } }] }),

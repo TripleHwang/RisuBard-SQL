@@ -46,18 +46,19 @@ interface WireMessage {
     tool_calls?: WireToolCall[]
 }
 
-const MAX_DEEPSEEK_RESPONSE_SCHEMA_CHARACTERS = 32_000
+const MAX_PROMPT_RESPONSE_SCHEMA_CHARACTERS = 32_000
 
-function deepSeekStructuredOutputMessage(
+function promptedStructuredOutputMessage(
     preset: ModelPreset,
     responseSchema: Record<string, unknown> | undefined,
 ): AdapterChatMessage | undefined {
-    if (preset.profileSnapshot.providerBaseId !== 'deepseek'
+    const provider = preset.profileSnapshot.providerBaseId
+    if ((provider !== 'deepseek' && provider !== 'ollama-cloud')
         || !responseSchema) {
         return undefined
     }
     const serializedSchema = JSON.stringify(responseSchema)
-    if (serializedSchema.length > MAX_DEEPSEEK_RESPONSE_SCHEMA_CHARACTERS) {
+    if (serializedSchema.length > MAX_PROMPT_RESPONSE_SCHEMA_CHARACTERS) {
         return undefined
     }
     return {
@@ -183,7 +184,7 @@ async function prepareOpenAiBody(
     // values / schema (not the customBody-merged body), then overwrite the
     // body fields after the shared merge so customBody collisions lose.
     const modelId = resolveWireModelId(preset, { vendorName: 'OpenAI-compatible' })
-    const structuredOutputMessage = deepSeekStructuredOutputMessage(
+    const structuredOutputMessage = promptedStructuredOutputMessage(
         preset,
         options.responseSchema,
     )
