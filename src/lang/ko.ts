@@ -1321,6 +1321,12 @@ export const languageKorean = {
   download: "다운로드",
   edit: "수정",
   enableGlobal: "글로벌 활성화",
+  managePersonaModules: "페르소나에 할당",
+  personaModuleAssignments: "페르소나 모듈 할당",
+  personaModuleAssignmentsDescription: "선택한 페르소나가 활성화될 때 이 모듈을 활성화합니다.",
+  searchPersonas: "페르소나 검색",
+  noPersonasFound: "페르소나를 찾을 수 없습니다.",
+  globalPersonaScope: "글로벌 페르소나",
   chatModulesInfo:
     "모듈을 이 채팅 한정으로 활성화/비활성화합니다. 우클릭 또는 길게 눌러 캐릭터 한정으로 활성화/비활성화할 수 있습니다.",
   sideMenuRerollButton: "사이드 메뉴 리롤 버튼",

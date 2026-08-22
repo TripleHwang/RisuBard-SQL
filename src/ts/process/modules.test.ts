@@ -67,7 +67,7 @@ vi.mock('../characterCards', () => ({
 }))
 vi.mock('../parser/parser.svelte', () => ({ hasher: mocks.hasher }))
 
-import { readModule } from './modules'
+import { readModule, resolveModuleIds } from './modules'
 
 function uint32le(value: number) {
     const bytes = Buffer.alloc(4)
@@ -137,5 +137,39 @@ describe('readModule asset persistence', () => {
 
         expect(mocks.setItems).not.toHaveBeenCalled()
         expect(mocks.saveAsset).not.toHaveBeenCalled()
+    })
+})
+
+describe('resolveModuleIds', () => {
+    it('combines module scopes in order without duplicates', () => {
+        expect(resolveModuleIds({
+            globalIds: ['global', 'shared'],
+            activePersonaId: 'active-persona',
+            personaEnabledModules: {
+                'active-persona': ['persona', 'shared'],
+                'other-persona': ['inactive'],
+            },
+            chatIds: ['chat', 'persona'],
+            characterIds: ['character', 'chat'],
+            embeddedPersonaModuleId: 'embedded',
+            integrationIds: ['integration', 'global'],
+        })).toEqual([
+            'global',
+            'shared',
+            'persona',
+            'chat',
+            'character',
+            'embedded',
+            'integration',
+        ])
+    })
+
+    it('does not activate assignments for a different persona', () => {
+        expect(resolveModuleIds({
+            activePersonaId: 'active-persona',
+            personaEnabledModules: {
+                'other-persona': ['inactive'],
+            },
+        })).toEqual([])
     })
 })

@@ -6,7 +6,7 @@
     import Button from "src/lib/UI/GUI/Button.svelte";
     import ModuleMenu from "src/lib/Setting/Pages/Module/ModuleMenu.svelte";
     import { exportModule, importModule, refreshModules, type RisuModule } from "src/ts/process/modules";
-    import { SquarePen, TrashIcon, Globe, Share2Icon, PlusIcon, HardDriveUpload, Waypoints, FolderOpenIcon } from "@lucide/svelte";
+    import { SquarePen, TrashIcon, Globe, Share2Icon, PlusIcon, HardDriveUpload, Waypoints, FolderOpenIcon, UsersRoundIcon } from "@lucide/svelte";
     import { v4 } from "uuid";
     import { tooltip } from "src/ts/gui/tooltip";
     import { alertConfirm, notifySuccess } from "src/ts/alert";
@@ -16,6 +16,8 @@
     import { convertModuleToCharacter } from "src/ts/interchangeability";
     import { checkCharOrder } from "src/ts/globalApi.svelte";
     import CollectionOrganizerDialog from "src/lib/UI/CollectionOrganizerDialog.svelte";
+    import ShDialog from "src/lib/UI/GUI/ShDialog.svelte";
+    import { normalizePersonaEnabledModules } from "src/ts/storage/database.svelte";
     let tempModule:RisuModule = $state({
         name: '',
         description: '',
@@ -25,6 +27,9 @@
     let editModuleIndex = $state(-1)
     let moduleSearch = $state('')
     let organizerOpen = $state(false)
+    let personaAssignmentOpen = $state(false)
+    let personaAssignmentModuleId = $state('')
+    let personaSearch = $state('')
     const organizerModuleItems = $derived(DBState.db.modules.map((module) => ({
         id: module.id,
         title: module.name,
@@ -40,6 +45,78 @@
             let score = a.name.toLowerCase().localeCompare(b.name.toLowerCase())
             return score
         })
+    }
+
+    function personaOptions(){
+        const options:{ id:string, name:string, scope:string }[] = []
+        const seen = new Set<string>()
+        for(const persona of DBState.db.personas){
+            if(!persona.id || seen.has(persona.id)) continue
+            seen.add(persona.id)
+            options.push({ id: persona.id, name: persona.name, scope: language.globalPersonaScope })
+        }
+        for(const character of DBState.db.characters){
+            for(const persona of character.personas ?? []){
+                if(!persona.id || seen.has(persona.id)) continue
+                seen.add(persona.id)
+                options.push({ id: persona.id, name: persona.name, scope: `${language.character}: ${character.name}` })
+            }
+        }
+        return options
+    }
+
+    function normalizeAssignments(){
+        DBState.db.personaEnabledModules = normalizePersonaEnabledModules(
+            DBState.db.personaEnabledModules,
+            [
+                ...DBState.db.personas,
+                ...DBState.db.characters.flatMap((character) => character.personas ?? []),
+            ],
+            DBState.db.modules.map((module) => module.id),
+        )
+    }
+
+    function openPersonaAssignments(moduleId:string){
+        normalizeAssignments()
+        personaAssignmentModuleId = moduleId
+        personaSearch = ''
+        personaAssignmentOpen = true
+    }
+
+    function personaAssignmentCount(moduleId:string){
+        const validPersonaIds = new Set(personaOptions().map((persona) => persona.id))
+        return Object.entries(DBState.db.personaEnabledModules ?? {})
+            .filter(([personaId, moduleIds]) => validPersonaIds.has(personaId) && moduleIds.includes(moduleId))
+            .length
+    }
+
+    function isAssignedToPersona(personaId:string){
+        return DBState.db.personaEnabledModules?.[personaId]?.includes(personaAssignmentModuleId) ?? false
+    }
+
+    function togglePersonaAssignment(personaId:string){
+        const assignments = { ...(DBState.db.personaEnabledModules ?? {}) }
+        const moduleIds = [...(assignments[personaId] ?? [])]
+        const index = moduleIds.indexOf(personaAssignmentModuleId)
+        if(index >= 0) moduleIds.splice(index, 1)
+        else moduleIds.push(personaAssignmentModuleId)
+        if(moduleIds.length > 0) assignments[personaId] = moduleIds
+        else delete assignments[personaId]
+        DBState.db.personaEnabledModules = assignments
+        normalizeAssignments()
+    }
+
+    function filteredPersonaOptions(){
+        const search = personaSearch.trim().toLocaleLowerCase()
+        if(!search) return personaOptions()
+        return personaOptions().filter((persona) =>
+            persona.name.toLocaleLowerCase().includes(search)
+            || persona.scope.toLocaleLowerCase().includes(search)
+        )
+    }
+
+    function assignmentModuleName(){
+        return DBState.db.modules.find((module) => module.id === personaAssignmentModuleId)?.name ?? ''
     }
 
     onDestroy(() => {
@@ -109,6 +186,20 @@
                         }}>
                             <Globe size={18}/>
                         </button>
+                        <button
+                            class="text-textcolor2 hover:text-primary mr-2 cursor-pointer inline-flex items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-borderc/50"
+                            aria-label={language.managePersonaModules}
+                            use:tooltip={language.managePersonaModules}
+                            onclick={(e) => {
+                                e.stopPropagation()
+                                openPersonaAssignments(rmodule.id)
+                            }}
+                        >
+                            <UsersRoundIcon size={18}/>
+                            <span class="min-w-4 rounded-full bg-selected px-1 text-center text-xs text-textcolor">
+                                {personaAssignmentCount(rmodule.id)}
+                            </span>
+                        </button>
                         {#if !rmodule.mcp}
                             <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer" use:tooltip={language.download} onclick={async (e) => {
                                 e.stopPropagation()
@@ -144,6 +235,7 @@
                                 const index = DBState.db.modules.findIndex((v) => v.id === rmodule.id)
                                 DBState.db.modules.splice(index, 1)
                                 DBState.db.modules = DBState.db.modules
+                                normalizeAssignments()
                                 notifySuccess(language.moduleDeleted)
                             }
                         }}>
@@ -193,3 +285,43 @@
     items={organizerModuleItems}
     collectionLabel={language.modules}
 />
+
+<ShDialog
+    bind:open={personaAssignmentOpen}
+    size="lg"
+    tier="base"
+    closeOnEscape={true}
+    closeOnOutsideClick={true}
+    ariaLabel={language.personaModuleAssignments}
+>
+    {#snippet title()}{language.personaModuleAssignments}: {assignmentModuleName()}{/snippet}
+    {#snippet description()}{language.personaModuleAssignmentsDescription}{/snippet}
+
+    <div class="flex flex-col gap-3">
+        <TextInput
+            fullwidth={true}
+            placeholder={language.searchPersonas}
+            bind:value={personaSearch}
+        />
+        {#if filteredPersonaOptions().length === 0}
+            <p class="py-4 text-center text-sm text-textcolor2">{language.noPersonasFound}</p>
+        {:else}
+            <div class="max-h-[55vh] overflow-y-auto rounded-md border border-darkborderc divide-y divide-darkborderc">
+                {#each filteredPersonaOptions() as persona (persona.id)}
+                    <label class="flex min-h-12 cursor-pointer items-center gap-3 px-3 py-2 hover:bg-selected/30 focus-within:bg-selected/30">
+                        <input
+                            type="checkbox"
+                            class="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-borderc/50"
+                            checked={isAssignedToPersona(persona.id)}
+                            onchange={() => togglePersonaAssignment(persona.id)}
+                        />
+                        <span class="min-w-0 grow">
+                            <span class="block truncate text-sm font-medium text-textcolor">{persona.name}</span>
+                            <span class="block truncate text-xs text-textcolor2">{persona.scope}</span>
+                        </span>
+                    </label>
+                {/each}
+            </div>
+        {/if}
+    </div>
+</ShDialog>

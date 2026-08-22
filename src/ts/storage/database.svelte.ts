@@ -472,6 +472,13 @@ export function setDatabase(data:Database){
         note: data.userNote,
         largePortrait: false
     }]
+    const allPersonas = [
+        ...data.personas,
+        ...data.characters.flatMap((character) => Array.isArray(character.personas) ? character.personas : []),
+    ]
+    for(const persona of allPersonas){
+        if(!persona.id) persona.id = uuidv4()
+    }
     data.classicMaxWidth ??= false
     data.ooba ??= safeStructuredClone(defaultOoba)
     data.ainconfig ??= safeStructuredClone(defaultAIN)
@@ -550,6 +557,11 @@ export function setDatabase(data:Database){
     data.memoryLimitThickness ??= 1
     data.modules ??= []
     data.enabledModules ??= []
+    data.personaEnabledModules = normalizePersonaEnabledModules(
+        data.personaEnabledModules,
+        allPersonas,
+        data.modules.map((module) => module.id),
+    )
     data.collectionOrganizers = normalizeCollectionOrganizers(data.collectionOrganizers, {
         promptPresets: (Array.isArray(data.botPresets) ? data.botPresets : [])
             .map((preset) => preset?.id)
@@ -1110,6 +1122,30 @@ export interface RisuPersona {
     embeddedModule?:RisuModule
 }
 
+export function normalizePersonaEnabledModules(
+    value: unknown,
+    personas: readonly RisuPersona[],
+    moduleIds: readonly string[],
+): Record<string, string[]> {
+    if(!value || typeof value !== 'object' || Array.isArray(value)) return {}
+
+    const source = value as Record<string, unknown>
+    const orderedModuleIds = Array.from(new Set(moduleIds.filter((id) => typeof id === 'string' && id.length > 0)))
+    const normalized:Record<string, string[]> = {}
+    const seenPersonas = new Set<string>()
+    for(const persona of personas){
+        const personaId = persona.id
+        if(!personaId || seenPersonas.has(personaId)) continue
+        seenPersonas.add(personaId)
+        const assigned = source[personaId]
+        if(!Array.isArray(assigned)) continue
+        const assignedIds = new Set(assigned.filter((id): id is string => typeof id === 'string'))
+        const validIds = orderedModuleIds.filter((id) => assignedIds.has(id))
+        if(validIds.length > 0) normalized[personaId] = validIds
+    }
+    return normalized
+}
+
 export interface PersonaBuilderPromptPreset {
     id: string
     kind: 'task' | 'style'
@@ -1366,6 +1402,7 @@ export interface Database{
     memoryLimitThickness?:number
     modules: RisuModule[]
     enabledModules: string[]
+    personaEnabledModules: Record<string, string[]>
     sideMenuRerollButton?:boolean
     requestInfoInsideChat?:boolean
     additionalParams:[string, string][]

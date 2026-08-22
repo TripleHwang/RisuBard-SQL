@@ -461,32 +461,66 @@ function deduplicateModuleById(modules:RisuModule[]){
 
 let lastModules = ''
 let lastModuleData:RisuModule[] = []
+
+export interface ModuleIdScopes {
+    globalIds?: readonly string[]
+    activePersonaId?: string | null
+    personaEnabledModules?: Record<string, string[]> | null
+    chatIds?: readonly string[]
+    characterIds?: readonly string[]
+    embeddedPersonaModuleId?: string | null
+    integrationIds?: readonly string[]
+}
+
+export function resolveModuleIds(scopes:ModuleIdScopes):string[] {
+    const personaIds = scopes.activePersonaId
+        ? scopes.personaEnabledModules?.[scopes.activePersonaId] ?? []
+        : []
+    const orderedScopes = [
+        scopes.globalIds,
+        personaIds,
+        scopes.chatIds,
+        scopes.characterIds,
+        scopes.embeddedPersonaModuleId ? [scopes.embeddedPersonaModuleId] : [],
+        scopes.integrationIds,
+    ]
+    const seen = new Set<string>()
+    const resolved:string[] = []
+    for(const ids of orderedScopes){
+        for(const id of ids ?? []){
+            if(typeof id !== 'string' || id.length === 0 || seen.has(id)) continue
+            seen.add(id)
+            resolved.push(id)
+        }
+    }
+    return resolved
+}
+
 export function getModules(){
     const currentChat = getCurrentChat()
     const character = getCurrentCharacter()
-    const persona = checkPersonaBinded()
     const db = getDatabase()
-    let ids = db.enabledModules ?? []
-    if (currentChat){
-        ids = ids.concat(currentChat.modules ?? [])
-    }
-    if(character && character.modules){
-        ids = ids.concat(character.modules)
-    }
-    if(persona && persona.embeddedModule){
-        ids = ids.concat([persona.embeddedModule?.id])
-    }
-    if(db.moduleIntergration){
-        const intList = db.moduleIntergration.split(',').map((s) => s.trim())
-        ids = ids.concat(intList)
-    }
-    const idsJoined = ids.join('-')
-    if(lastModules === idsJoined){
+    const persona = checkPersonaBinded() ?? db.personas?.[db.selectedPersona ?? 0] ?? null
+    const ids = resolveModuleIds({
+        globalIds: db.enabledModules,
+        activePersonaId: persona?.id,
+        personaEnabledModules: db.personaEnabledModules,
+        chatIds: currentChat?.modules,
+        characterIds: character?.modules,
+        embeddedPersonaModuleId: persona?.embeddedModule?.id,
+        integrationIds: db.moduleIntergration?.split(',').map((s) => s.trim()).filter(Boolean),
+    })
+    const activePersonaAssignments = persona?.id ? db.personaEnabledModules?.[persona.id] ?? [] : []
+    const cacheKey = JSON.stringify([persona?.id ?? null, activePersonaAssignments, ids])
+    if(lastModules === cacheKey){
         return lastModuleData
     }
 
     let modules:RisuModule[] = getModuleByIds(ids)
-    lastModules = idsJoined
+    if(persona?.embeddedModule && !modules.some((module) => module.id === persona.embeddedModule?.id)){
+        modules.push(persona.embeddedModule)
+    }
+    lastModules = cacheKey
     lastModuleData = modules
     return modules
 
