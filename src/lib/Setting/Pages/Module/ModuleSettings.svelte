@@ -298,7 +298,9 @@
     {#snippet description()}{language.personaModuleAssignmentsDescription}{/snippet}
 
     <div class="flex flex-col gap-3">
+        <label for="persona-module-search" class="sr-only">{language.searchPersonas}</label>
         <TextInput
+            id="persona-module-search"
             fullwidth={true}
             placeholder={language.searchPersonas}
             bind:value={personaSearch}

@@ -461,6 +461,8 @@ function deduplicateModuleById(modules:RisuModule[]){
 
 let lastModules = ''
 let lastModuleData:RisuModule[] = []
+let lastModuleDatabase:ReturnType<typeof getDatabase> | null = null
+let lastModuleSourceRefs:RisuModule[] = []
 
 export interface ModuleIdScopes {
     globalIds?: readonly string[]
@@ -512,7 +514,14 @@ export function getModules(){
     })
     const activePersonaAssignments = persona?.id ? db.personaEnabledModules?.[persona.id] ?? [] : []
     const cacheKey = JSON.stringify([persona?.id ?? null, activePersonaAssignments, ids])
-    if(lastModules === cacheKey){
+    const moduleSourceRefs = [
+        ...(db.modules ?? []),
+        ...(persona?.embeddedModule ? [persona.embeddedModule] : []),
+    ]
+    const sourceRefsUnchanged = lastModuleDatabase === db
+        && lastModuleSourceRefs.length === moduleSourceRefs.length
+        && lastModuleSourceRefs.every((module, index) => module === moduleSourceRefs[index])
+    if(lastModules === cacheKey && sourceRefsUnchanged){
         return lastModuleData
     }
 
@@ -521,6 +530,8 @@ export function getModules(){
         modules.push(persona.embeddedModule)
     }
     lastModules = cacheKey
+    lastModuleDatabase = db
+    lastModuleSourceRefs = moduleSourceRefs
     lastModuleData = modules
     return modules
 
@@ -691,5 +702,7 @@ export function moduleUpdate(){
 
 export function refreshModules(){
     lastModules = ''
+    lastModuleDatabase = null
+    lastModuleSourceRefs = []
     lastModuleData = []
 }

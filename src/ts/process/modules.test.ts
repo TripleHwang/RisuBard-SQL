@@ -7,6 +7,15 @@ const mocks = vi.hoisted(() => ({
     hasher: vi.fn(async (data: Uint8Array) => `hash-${data[0]}`),
     saveAsset: vi.fn<(data: Uint8Array) => Promise<string>>(async () => 'single-write'),
     setItems: vi.fn<(entries: Array<{ key: string; value: Uint8Array }>) => Promise<void>>(async () => undefined),
+    database: {
+        current: {
+            modules: [] as Array<{ id: string, name: string, description: string }>,
+            enabledModules: [] as string[],
+            personaEnabledModules: {} as Record<string, string[]>,
+            personas: [] as Array<{ id?: string }>,
+            selectedPersona: 0,
+        },
+    },
 }))
 
 vi.mock('src/lang', () => ({
@@ -25,7 +34,7 @@ vi.mock('../alert', () => ({
 vi.mock('../storage/database.svelte', () => ({
     getCurrentCharacter: vi.fn(),
     getCurrentChat: vi.fn(),
-    getDatabase: vi.fn(() => ({ modules: [] })),
+    getDatabase: vi.fn(() => mocks.database.current),
     setCurrentCharacter: vi.fn(),
     setDatabase: vi.fn(),
 }))
@@ -67,7 +76,7 @@ vi.mock('../characterCards', () => ({
 }))
 vi.mock('../parser/parser.svelte', () => ({ hasher: mocks.hasher }))
 
-import { readModule, resolveModuleIds } from './modules'
+import { getModules, readModule, refreshModules, resolveModuleIds } from './modules'
 
 function uint32le(value: number) {
     const bytes = Buffer.alloc(4)
@@ -171,5 +180,30 @@ describe('resolveModuleIds', () => {
                 'other-persona': ['inactive'],
             },
         })).toEqual([])
+    })
+})
+
+describe('getModules cache invalidation', () => {
+    beforeEach(() => {
+        mocks.database.current.modules = []
+        mocks.database.current.enabledModules = []
+        mocks.database.current.personaEnabledModules = {}
+        mocks.database.current.personas = []
+        mocks.database.current.selectedPersona = 0
+        refreshModules()
+    })
+
+    it('returns a replacement module object when its ID is unchanged', () => {
+        const original = { id: 'same-id', name: 'Original', description: 'old content' }
+        const replacement = { id: 'same-id', name: 'Replacement', description: 'new content' }
+        mocks.database.current.modules = [original]
+        mocks.database.current.enabledModules = ['same-id']
+
+        expect(getModules()[0]).toBe(original)
+
+        mocks.database.current.modules[0] = replacement
+
+        expect(getModules()[0]).toBe(replacement)
+        expect(getModules()[0].description).toBe('new content')
     })
 })

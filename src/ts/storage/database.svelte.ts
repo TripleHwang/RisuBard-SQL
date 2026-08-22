@@ -472,13 +472,16 @@ export function setDatabase(data:Database){
         note: data.userNote,
         largePortrait: false
     }]
+    data.personas = ensurePersonaIds(data.personas, uuidv4)
+    for(const character of data.characters){
+        if(character && Array.isArray(character.personas)){
+            character.personas = ensurePersonaIds(character.personas, uuidv4)
+        }
+    }
     const allPersonas = [
         ...data.personas,
-        ...data.characters.flatMap((character) => Array.isArray(character.personas) ? character.personas : []),
+        ...data.characters.flatMap((character) => character?.personas ?? []),
     ]
-    for(const persona of allPersonas){
-        if(!persona.id) persona.id = uuidv4()
-    }
     data.classicMaxWidth ??= false
     data.ooba ??= safeStructuredClone(defaultOoba)
     data.ainconfig ??= safeStructuredClone(defaultAIN)
@@ -555,7 +558,7 @@ export function setDatabase(data:Database){
     data.openrouterFallback ??= true
     data.openrouterMiddleOut ??= false
     data.memoryLimitThickness ??= 1
-    data.modules ??= []
+    data.modules = normalizeModuleEntries(data.modules)
     data.enabledModules ??= []
     data.personaEnabledModules = normalizePersonaEnabledModules(
         data.personaEnabledModules,
@@ -1122,19 +1125,43 @@ export interface RisuPersona {
     embeddedModule?:RisuModule
 }
 
+export function ensurePersonaIds(
+    values: readonly unknown[],
+    createId: () => string,
+): RisuPersona[] {
+    const personas:RisuPersona[] = []
+    for(const value of values){
+        if(!value || typeof value !== 'object' || Array.isArray(value)) continue
+        const persona = value as RisuPersona
+        if(!persona.id) persona.id = createId()
+        personas.push(persona)
+    }
+    return personas
+}
+
+export function normalizeModuleEntries(value: unknown):RisuModule[] {
+    if(!Array.isArray(value)) return []
+    return value.filter((module): module is RisuModule =>
+        Boolean(module) && typeof module === 'object' && !Array.isArray(module)
+    )
+}
+
 export function normalizePersonaEnabledModules(
     value: unknown,
-    personas: readonly RisuPersona[],
-    moduleIds: readonly string[],
+    personas: readonly unknown[],
+    moduleIds: readonly unknown[],
 ): Record<string, string[]> {
     if(!value || typeof value !== 'object' || Array.isArray(value)) return {}
 
     const source = value as Record<string, unknown>
-    const orderedModuleIds = Array.from(new Set(moduleIds.filter((id) => typeof id === 'string' && id.length > 0)))
+    const orderedModuleIds = Array.from(new Set(
+        moduleIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+    ))
     const normalized:Record<string, string[]> = {}
     const seenPersonas = new Set<string>()
-    for(const persona of personas){
-        const personaId = persona.id
+    for(const value of personas){
+        if(!value || typeof value !== 'object' || Array.isArray(value)) continue
+        const personaId = (value as RisuPersona).id
         if(!personaId || seenPersonas.has(personaId)) continue
         seenPersonas.add(personaId)
         const assigned = source[personaId]
