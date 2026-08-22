@@ -52,22 +52,23 @@ async function getPersistentLLMCache(text: string): Promise<string | null> {
     return payload.value
 }
 
-async function getLLMCacheStorageKey(text: string, storageKey?: string) {
-    if (storageKey !== undefined) {
-        if (!storageKey.startsWith(llmTranslateCachePrefix)) {
-            throw new Error('Invalid LLM translation cache storage key')
-        }
-        return storageKey
-    }
-    return await makeHashedStorageKey(llmTranslateCachePrefix, text)
-}
-
-async function setPersistentLLMCache(text: string, value: string, storageKey?: string) {
-    const resolvedStorageKey = await getLLMCacheStorageKey(text, storageKey)
-    await writePersistentJson(resolvedStorageKey, {
+async function setPersistentLLMCache(text: string, value: string) {
+    const storageKey = await makeHashedStorageKey(llmTranslateCachePrefix, text)
+    await writePersistentJson(storageKey, {
         key: text,
         value
     })
+}
+
+async function requireLLMCachePayload(key: string, storageKey: string) {
+    if (!storageKey || !storageKey.startsWith(llmTranslateCachePrefix)) {
+        throw new Error('Invalid LLM translation cache storage key')
+    }
+    const payload = await readLLMCachePayload(storageKey)
+    if (!payload || payload.key !== key) {
+        throw new Error('LLM translation cache storage key does not match entry')
+    }
+    return payload
 }
 
 let waitTrans = 0
@@ -698,22 +699,17 @@ function compareCacheRows(left: LLMTranslationCacheRow, right: LLMTranslationCac
 
 export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promise<LLMTranslationCachePage> {
     const rowsByKey = new Map<string, LLMTranslationCacheRow>()
-    const storageKeys = await listPersistentKeys(llmTranslateCachePrefix)
+    const persistentKeys = new Set<string>()
+    const storageKeys = (await listPersistentKeys(llmTranslateCachePrefix)).sort()
     for (const storageKey of storageKeys) {
         const payload = await readLLMCachePayload(storageKey)
         if (!payload) continue
-        const value = llmTranslateCache.get(payload.key) ?? payload.value
-        llmTranslateCache.set(payload.key, value)
-        rowsByKey.set(payload.key, { key: payload.key, value, storageKey })
+        persistentKeys.add(payload.key)
+        llmTranslateCache.set(payload.key, payload.value)
+        rowsByKey.set(payload.key, { key: payload.key, value: payload.value, storageKey })
     }
-    for (const [key, value] of llmTranslateCache) {
-        if (!rowsByKey.has(key)) {
-            rowsByKey.set(key, {
-                key,
-                value,
-                storageKey: await makeHashedStorageKey(llmTranslateCachePrefix, key),
-            })
-        }
+    for (const key of llmTranslateCache.keys()) {
+        if (!persistentKeys.has(key)) llmTranslateCache.delete(key)
     }
 
     const search = (query.search ?? '').trim().toLowerCase()
@@ -742,14 +738,15 @@ export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promis
     }
 }
 
-export async function updateLLMCacheValue(key: string, value: string, storageKey?: string): Promise<void> {
-    await setPersistentLLMCache(key, value, storageKey)
+export async function updateLLMCacheValue(key: string, value: string, storageKey: string): Promise<void> {
+    await requireLLMCachePayload(key, storageKey)
+    await writePersistentJson(storageKey, { key, value })
     llmTranslateCache.set(key, value)
 }
 
-export async function deleteLLMCache(key: string, storageKey?: string): Promise<void> {
-    const resolvedStorageKey = await getLLMCacheStorageKey(key, storageKey)
-    await removePersistentKey(resolvedStorageKey)
+export async function deleteLLMCache(key: string, storageKey: string): Promise<void> {
+    await requireLLMCachePayload(key, storageKey)
+    await removePersistentKey(storageKey)
     llmTranslateCache.delete(key)
 }
 

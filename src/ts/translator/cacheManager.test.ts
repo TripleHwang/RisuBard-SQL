@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storage = vi.hoisted(() => new Map<string, unknown>());
 const removedKeys = vi.hoisted(() => [] as string[]);
+const failures = vi.hoisted(() => ({
+    writeKeys: new Set<string>(),
+    removeKeys: new Set<string>(),
+}));
 
 vi.mock("../storage/persistentKv", () => ({
     clearPersistentPrefix: vi.fn(async (prefix: string) => {
@@ -21,10 +25,12 @@ vi.mock("../storage/persistentKv", () => ({
         return value ?? null;
     }),
     removePersistentKey: vi.fn(async (key: string) => {
+        if (failures.removeKeys.has(key)) throw new Error("delete failed");
         removedKeys.push(key);
         storage.delete(key);
     }),
     writePersistentJson: vi.fn(async (key: string, value: unknown) => {
+        if (failures.writeKeys.has(key)) throw new Error("write failed");
         storage.set(key, value);
     }),
 }));
@@ -69,6 +75,8 @@ describe("LLM translation cache manager", () => {
     beforeEach(async () => {
         storage.clear();
         removedKeys.length = 0;
+        failures.writeKeys.clear();
+        failures.removeKeys.clear();
         await clearLLMCache();
     });
 
@@ -98,7 +106,7 @@ describe("LLM translation cache manager", () => {
     it("updates the value while retaining the exact key and storage key", async () => {
         const storageKey = seed("Key With Spaces", "old");
 
-        await updateLLMCacheValue("Key With Spaces", "new");
+        await updateLLMCacheValue("Key With Spaces", "new", storageKey);
 
         expect(storage.get(storageKey)).toEqual({ key: "Key With Spaces", value: "new" });
         expect(await getLLMCache("Key With Spaces")).toBe("new");
@@ -121,11 +129,45 @@ describe("LLM translation cache manager", () => {
         const storageKey = seed("remove me", "value");
         await setLLMCache("remove me", "value");
 
-        await deleteLLMCache("remove me");
+        await deleteLLMCache("remove me", storageKey);
 
         expect(storage.has(storageKey)).toBe(false);
         expect(removedKeys).toContain(storageKey);
         expect(await getLLMCache("remove me")).toBeNull();
+    });
+
+    it("requires the exact listed storage key and validates its payload", async () => {
+        const storageKey = seed("managed", "old", `${prefix}legacy-managed.json`);
+        seed("different", "value", `${prefix}different.json`);
+
+        await expect(
+            (updateLLMCacheValue as unknown as (key: string, value: string) => Promise<void>)("managed", "new"),
+        ).rejects.toThrow("storage key");
+        await expect(deleteLLMCache("managed", `${prefix}different.json`)).rejects.toThrow("does not match");
+
+        expect(storage.get(storageKey)).toEqual({ key: "managed", value: "old" });
+    });
+
+    it("surfaces persistent write failure without changing the memory mirror", async () => {
+        const storageKey = seed("write failure", "old");
+        await listLLMCache();
+        failures.writeKeys.add(storageKey);
+
+        await expect(updateLLMCacheValue("write failure", "new", storageKey)).rejects.toThrow("write failed");
+
+        expect(storage.get(storageKey)).toEqual({ key: "write failure", value: "old" });
+        expect(await getLLMCache("write failure")).toBe("old");
+    });
+
+    it("surfaces persistent delete failure without removing the memory mirror", async () => {
+        const storageKey = seed("delete failure", "value");
+        await listLLMCache();
+        failures.removeKeys.add(storageKey);
+
+        await expect(deleteLLMCache("delete failure", storageKey)).rejects.toThrow("delete failed");
+
+        expect(storage.has(storageKey)).toBe(true);
+        expect(await getLLMCache("delete failure")).toBe("value");
     });
 
     it("clears all entries from memory and persistent storage", async () => {
@@ -154,6 +196,26 @@ describe("LLM translation cache manager", () => {
         const result = await listLLMCache({ page: 99, pageSize: 2 });
         expect(result.page).toBe(2);
         expect(result.rows.map((row) => row.key)).toEqual(["gamma"]);
+    });
+
+    it("omits memory-only entries and evicts their stale mirrors", async () => {
+        const storageKey = `${prefix}memory-only.json`;
+        await setLLMCache("memory-only", "ghost");
+        storage.delete(storageKey);
+
+        expect((await listLLMCache()).rows).toEqual([]);
+        expect(await getLLMCache("memory-only")).toBeNull();
+    });
+
+    it("uses persistent values and reconciles stale memory mirrors", async () => {
+        const storageKey = `${prefix}stale.json`;
+        await setLLMCache("stale", "old memory");
+        storage.set(storageKey, { key: "stale", value: "fresh persistent" });
+
+        expect((await listLLMCache()).rows).toEqual([
+            { key: "stale", value: "fresh persistent", storageKey },
+        ]);
+        expect(await getLLMCache("stale")).toBe("fresh persistent");
     });
 
     it("caps oversized pages at 100 rows", async () => {

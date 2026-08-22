@@ -85,11 +85,11 @@
     }
 
     async function saveEdit() {
-        if (editingKey === null) return
+        if (editingKey === null || editingStorageKey === null) return
         saving = true
         errorMessage = ''
         try {
-            await updateLLMCacheValue(editingKey, editValue, editingStorageKey ?? undefined)
+            await updateLLMCacheValue(editingKey, editValue, editingStorageKey)
             cancelEdit()
             await load()
             statusMessage = language.editTranslationSave
