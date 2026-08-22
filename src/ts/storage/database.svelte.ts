@@ -3,6 +3,7 @@ import { checkNullish, decryptBuffer, encryptBuffer, selectSingleFile } from '..
 import { changeLanguage, language } from '../../lang';
 import { DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES, DEFAULT_CHAT_LOAD_INITIAL_PAGES, normalizeChatLoadPages } from '../chatLoadPages';
 import { normalizeChatPageSize } from '../chatPagination';
+import { normalizeCollectionOrganizers, type CollectionOrganizers } from '../collectionOrganizer';
 import type { RisuPlugin } from '../plugins/plugins.svelte';
 import type {triggerscript as triggerscriptMain} from '../process/triggers';
 import { downloadFile, saveAsset as saveImageGlobal } from '../globalApi.svelte';
@@ -549,6 +550,17 @@ export function setDatabase(data:Database){
     data.memoryLimitThickness ??= 1
     data.modules ??= []
     data.enabledModules ??= []
+    data.collectionOrganizers = normalizeCollectionOrganizers(data.collectionOrganizers, {
+        promptPresets: (Array.isArray(data.botPresets) ? data.botPresets : [])
+            .map((preset) => preset?.id)
+            .filter((id): id is string => typeof id === 'string'),
+        modules: (Array.isArray(data.modules) ? data.modules : [])
+            .map((module) => module?.id)
+            .filter((id): id is string => typeof id === 'string'),
+        plugins: (Array.isArray(data.plugins) ? data.plugins : [])
+            .map((plugin) => plugin?.name)
+            .filter((name): name is string => typeof name === 'string'),
+    })
     data.additionalParams ??= []
     data.heightMode ??= 'normal'
     data.antiClaudeOverload ??= false
@@ -1173,6 +1185,7 @@ export interface Database{
     waifuWidth:number
     waifuWidth2:number
     botPresets:botPreset[]
+    collectionOrganizers?: CollectionOrganizers
     /**
      * @deprecated New code: use getActiveBotPreset() / setActiveBotPresetById() helpers.
      * Kept as the physical store for upstream RisuAI .bin backup compatibility.
