@@ -8,6 +8,22 @@ function checksum(data) {
     return crypto.createHash('sha256').update(data).digest('hex');
 }
 
+function checksumFile(filePath) {
+    const hash = crypto.createHash('sha256');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const fd = fs.openSync(filePath, 'r');
+    try {
+        let bytesRead;
+        do {
+            bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+            if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+        } while (bytesRead > 0);
+    } finally {
+        fs.closeSync(fd);
+    }
+    return hash.digest('hex');
+}
+
 function resolveInside(root, relativePath) {
     if (typeof relativePath !== 'string' || !relativePath || path.isAbsolute(relativePath)) {
         throw new Error('Canonical file path must be a non-empty relative path');
@@ -44,6 +60,12 @@ function writeSynced(filePath, data) {
     }
 }
 
+function copySynced(source, destination) {
+    fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+    const fd = fs.openSync(destination, 'r+');
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
+
 function replaceAtomic(target, data) {
     const directory = path.dirname(target);
     fs.mkdirSync(directory, { recursive: true });
@@ -60,8 +82,11 @@ function replaceAtomic(target, data) {
 
 function preserveBackup(target) {
     if (!fs.existsSync(target)) return;
-    const bytes = fs.readFileSync(target);
-    replaceAtomic(`${target}.bak`, bytes);
+    const backup = `${target}.bak`;
+    const temp = `${backup}.${crypto.randomUUID()}.tmp`;
+    copySynced(target, temp);
+    fs.renameSync(temp, backup);
+    fsyncDirectory(path.dirname(backup));
 }
 
 function atomicWriteFile(root, relativePath, value, options = {}) {
@@ -127,7 +152,7 @@ function publishTransaction(root, journal, options = {}) {
     let published = 0;
     for (const entry of journal.entries) {
         const target = resolveInside(root, entry.path);
-        if (fs.existsSync(target) && checksum(fs.readFileSync(target)) === entry.checksum) continue;
+        if (fs.existsSync(target) && checksumFile(target) === entry.checksum) continue;
         if (!fs.existsSync(entry.staged)) {
             throw new Error(`Transaction stage is missing for ${entry.path}`);
         }
@@ -156,14 +181,24 @@ function commitTransaction(root, operations, options = {}) {
     fs.mkdirSync(stageDir, { recursive: true });
     const entries = operations.map((operation, index) => {
         resolveInside(root, operation.path);
-        const data = Buffer.isBuffer(operation.data) ? operation.data : Buffer.from(operation.data);
-        if (operation.validate && operation.validate(data) !== true) {
-            throw new Error(`Transaction validation failed: ${operation.path}`);
-        }
         const staged = path.join(stageDir, `${index}.data`);
-        writeSynced(staged, data);
-        const digest = checksum(data);
-        if (checksum(fs.readFileSync(staged)) !== digest) throw new Error(`Transaction checksum failed: ${operation.path}`);
+        let digest;
+        if (operation.sourcePath) {
+            const sourcePath = resolveInside(root, path.relative(root, operation.sourcePath));
+            if (operation.validate) {
+                throw new Error(`Transaction file validation is unsupported: ${operation.path}`);
+            }
+            digest = checksumFile(sourcePath);
+            copySynced(sourcePath, staged);
+        } else {
+            const data = Buffer.isBuffer(operation.data) ? operation.data : Buffer.from(operation.data);
+            if (operation.validate && operation.validate(data) !== true) {
+                throw new Error(`Transaction validation failed: ${operation.path}`);
+            }
+            writeSynced(staged, data);
+            digest = checksum(data);
+        }
+        if (checksumFile(staged) !== digest) throw new Error(`Transaction checksum failed: ${operation.path}`);
         return { path: operation.path, staged, checksum: digest };
     });
     fsyncDirectory(stageDir);

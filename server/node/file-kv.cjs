@@ -5,6 +5,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const { pipeline } = require('stream/promises');
 const { atomicWriteJson, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
 
 const MANIFEST_PATH = 'kv/manifest.json';
@@ -16,6 +17,12 @@ function digest(data) {
 
 async function digestAsync(data) {
     return Buffer.from(await crypto.webcrypto.subtle.digest('SHA-256', data)).toString('hex');
+}
+
+async function digestFileAsync(filePath) {
+    const hash = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+    return hash.digest('hex');
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -88,6 +95,44 @@ async function writeObjectAsync(dataRoot, hash, data) {
     }
 }
 
+async function writeObjectFromFileAsync(dataRoot, sourcePath) {
+    const directory = path.join(dataRoot, 'kv', 'objects');
+    await fsp.mkdir(directory, { recursive: true });
+    const temp = path.join(directory, `.${crypto.randomUUID()}.import`);
+    const hash = crypto.createHash('sha256');
+    let size = 0;
+    const input = fs.createReadStream(sourcePath);
+    input.on('data', chunk => {
+        hash.update(chunk);
+        size += chunk.length;
+    });
+    try {
+        await pipeline(input, fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
+        const handle = await fsp.open(temp, 'r+');
+        try { await handle.sync(); } finally { await handle.close(); }
+        const digestValue = hash.digest('hex');
+        if (await digestFileAsync(temp) !== digestValue) {
+            throw new Error(`Content object checksum verification failed: ${digestValue}`);
+        }
+        const target = path.join(directory, digestValue);
+        try {
+            await fsp.rename(temp, target);
+        } catch (error) {
+            try {
+                await fsp.access(target);
+                await fsp.unlink(temp);
+            } catch {
+                throw error;
+            }
+        }
+        await fsp.unlink(sourcePath).catch(() => {});
+        return { hash: digestValue, size };
+    } catch (error) {
+        await fsp.rm(temp, { force: true }).catch(() => {});
+        throw error;
+    }
+}
+
 function createFileKv(options = {}) {
     const dataRoot = path.resolve(options.dataRoot || path.join(process.cwd(), 'save'));
     fs.mkdirSync(dataRoot, { recursive: true });
@@ -145,6 +190,13 @@ function createFileKv(options = {}) {
         });
     }
 
+    async function prepareFileEntriesAsync(entries) {
+        return mapWithConcurrency(entries, objectWriteConcurrency, async ({ key, sourcePath }) => {
+            const prepared = await writeObjectFromFileAsync(dataRoot, sourcePath);
+            return [key, { object: prepared.hash, size: prepared.size, updatedAt: Date.now() }];
+        });
+    }
+
     function kvSetMany(entries) {
         for (const [key, entry] of prepareEntries(entries)) manifest.entries[key] = entry;
         if (entries.length) saveManifest();
@@ -167,6 +219,17 @@ function createFileKv(options = {}) {
 
     async function kvReplacePrefixesAsync(entries, prefixes) {
         const prepared = await prepareEntriesAsync(entries);
+        const next = { ...manifest.entries };
+        for (const key of Object.keys(next)) {
+            if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
+        }
+        for (const [key, entry] of prepared) next[key] = entry;
+        manifest.entries = next;
+        saveManifest();
+    }
+
+    async function kvReplacePrefixesFromFilesAsync(entries, prefixes) {
+        const prepared = await prepareFileEntriesAsync(entries);
         const next = { ...manifest.entries };
         for (const key of Object.keys(next)) {
             if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
@@ -307,6 +370,7 @@ function createFileKv(options = {}) {
         kvSetMany,
         kvReplacePrefixes,
         kvReplacePrefixesAsync,
+        kvReplacePrefixesFromFilesAsync,
         kvReplaceAll,
         kvReplaceAllAsync,
         kvDel,

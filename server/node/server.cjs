@@ -23,7 +23,7 @@ const getVips = () => {
     }
     return _vipsPromise
 }
-const { kvGet, kvSet, kvSetMany, kvReplacePrefixesAsync, kvReplaceAllAsync, kvDel, kvList,
+const { kvGet, kvSet, kvSetMany, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvDel, kvList,
         kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
         gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
@@ -37,6 +37,7 @@ const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
 const { openServerBrowser } = require('./open-server-browser.cjs');
 const { releaseToUpdateInfo } = require('./release-update.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
+const { stageBackupEntries } = require('./backup-entry-stream.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -2178,45 +2179,12 @@ function resolveBackupStorageKey(name) {
     return `assets/${name}`;
 }
 
-function parseBackupChunk(buffer, onEntry) {
-    let offset = 0;
-    while (offset + 4 <= buffer.length) {
-        const nameLength = buffer.readUInt32LE(offset);
-        if (offset + 4 + nameLength > buffer.length) {
-            break;
-        }
-        const nameStart = offset + 4;
-        const nameEnd = nameStart + nameLength;
-        const name = buffer.subarray(nameStart, nameEnd).toString('utf-8');
-        if (nameEnd + 4 > buffer.length) {
-            break;
-        }
-        const dataLength = buffer.readUInt32LE(nameEnd);
-        const dataStart = nameEnd + 4;
-        const dataEnd = dataStart + dataLength;
-        if (dataEnd > buffer.length) {
-            break;
-        }
-        onEntry(name, buffer.subarray(dataStart, dataEnd));
-        offset = dataEnd;
-    }
-    return buffer.subarray(offset);
-}
-
 // ─── Shared backup import logic ─────────────────────────────────────────────
 // Accepts any async iterable of Buffer chunks (HTTP request body, file stream, etc.)
 async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0, onProgress = null } = {}) {
-    const BATCH_SIZE = 5000;
-    // Defer Buffer.concat until enough bytes for the next entry are buffered.
-    // Concatenating on every chunk arrival is O(n²) when a single entry (e.g.
-    // database.risudat) far exceeds chunk size.
-    let pendingChunks = [];
-    let pendingTotal = 0;
-    let nextEntryThreshold = 8;
     let hasDatabase = false;
     let assetsRestored = 0;
     let bytesReceived = 0;
-    let batchCount = 0;
     const stagedKvEntries = [];
     const seenEntryNames = new Set();
     const importedInlayIds = new Set();
@@ -2227,11 +2195,14 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     const stagingDir = path.join(savePath, 'inlays_import_staging');
     const backupInlayDir = path.join(savePath, 'inlays_import_backup');
     const canonicalStagingDir = path.join(savePath, '.canonical_import_staging');
+    const entryStagingDir = path.join(savePath, '.backup_entry_staging');
     await fs.rm(stagingDir, { recursive: true, force: true });
     await fs.rm(backupInlayDir, { recursive: true, force: true });
     await fs.rm(canonicalStagingDir, { recursive: true, force: true });
+    await fs.rm(entryStagingDir, { recursive: true, force: true });
     await fs.mkdir(stagingDir, { recursive: true });
     await fs.mkdir(canonicalStagingDir, { recursive: true });
+    await fs.mkdir(entryStagingDir, { recursive: true });
     let canonicalEntriesRestored = 0;
 
     function stagingInlayFilePath(id, ext) {
@@ -2252,6 +2223,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         };
         writeFileSync(stagingSidecarPath(id), JSON.stringify(sidecar));
     }
+    async function moveStagingInlayFile(id, ext, sourcePath, info) {
+        const normalizedExt = normalizeInlayExt(ext);
+        await fs.rename(sourcePath, stagingInlayFilePath(id, normalizedExt));
+        writeStagingSidecarSync(id, { ...info, ext: normalizedExt });
+    }
     function writeStagingSidecarSync(id, info) {
         const sidecar = {
             ext: normalizeInlayExt(info?.ext),
@@ -2267,24 +2243,13 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     maybeCollectUnreferencedObjects();
 
     try {
-        for await (const chunk of dataSource) {
-            bytesReceived += chunk.length;
-            if (maxBytes > 0 && bytesReceived > maxBytes) {
-                throw new Error(`Backup exceeds max allowed size (${maxBytes} bytes)`);
-            }
-            if (onProgress) onProgress(bytesReceived, totalBytes);
-
-            pendingChunks.push(Buffer.from(chunk));
-            pendingTotal += chunk.length;
-            if (pendingTotal < nextEntryThreshold) continue;
-
-            const buffer = pendingChunks.length === 1
-                ? pendingChunks[0]
-                : Buffer.concat(pendingChunks, pendingTotal);
-            pendingChunks = [];
-            pendingTotal = 0;
-
-            const remaining = parseBackupChunk(buffer, (name, data) => {
+        const staged = await stageBackupEntries(dataSource, {
+            stagingDir: entryStagingDir,
+            maxBytes,
+            totalBytes,
+            maxNameBytes: BACKUP_ENTRY_NAME_MAX_BYTES,
+            onProgress,
+            onEntry: async ({ name, sourcePath }) => {
                 if (seenEntryNames.has(name)) {
                     throw new Error(`Duplicate backup entry: ${name}`);
                 }
@@ -2304,33 +2269,37 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     if (relative === '..' || relative.startsWith(`..${path.sep}`)) {
                         throw new Error(`Canonical backup entry escapes staging: ${name}`);
                     }
-                    mkdirSync(path.dirname(target), { recursive: true });
-                    writeFileSync(target, data);
+                    await fs.mkdir(path.dirname(target), { recursive: true });
+                    await fs.rename(sourcePath, target);
                     canonicalEntriesRestored += 1;
                 } else if (inlayRaw) {
                     importedInlayIds.add(inlayRaw.id);
                     if (inlayRaw.ext) {
-                        writeStagingInlayFileSync(inlayRaw.id, inlayRaw.ext, data, legacyInlayInfoMap.get(inlayRaw.id) || { ext: inlayRaw.ext, name: inlayRaw.id, type: 'image' });
-                    } else if (data.length > 0 && data[0] === 0x7b) {
-                        const parsed = JSON.parse(data.toString('utf-8'));
-                        const type = typeof parsed?.type === 'string' ? parsed.type : 'image';
-                        const ext = normalizeInlayExt(parsed?.ext);
-                        const buffer = type === 'signature'
-                            ? Buffer.from(typeof parsed?.data === 'string' ? parsed.data : '', 'utf-8')
-                            : decodeDataUri(parsed?.data).buffer;
-                        writeStagingInlayFileSync(inlayRaw.id, ext, buffer, legacyInlayInfoMap.get(inlayRaw.id) || {
-                            ext,
-                            name: typeof parsed?.name === 'string' ? parsed.name : inlayRaw.id,
-                            type,
-                            height: typeof parsed?.height === 'number' ? parsed.height : undefined,
-                            width: typeof parsed?.width === 'number' ? parsed.width : undefined,
-                        });
+                        await moveStagingInlayFile(inlayRaw.id, inlayRaw.ext, sourcePath, legacyInlayInfoMap.get(inlayRaw.id) || { ext: inlayRaw.ext, name: inlayRaw.id, type: 'image' });
                     } else {
-                        writeStagingInlayFileSync(inlayRaw.id, 'bin', data, legacyInlayInfoMap.get(inlayRaw.id) || {
-                            ext: 'bin',
-                            name: inlayRaw.id,
-                            type: 'image',
-                        });
+                        const data = await fs.readFile(sourcePath);
+                        await fs.rm(sourcePath, { force: true });
+                        if (data.length > 0 && data[0] === 0x7b) {
+                            const parsed = JSON.parse(data.toString('utf-8'));
+                            const type = typeof parsed?.type === 'string' ? parsed.type : 'image';
+                            const ext = normalizeInlayExt(parsed?.ext);
+                            const buffer = type === 'signature'
+                                ? Buffer.from(typeof parsed?.data === 'string' ? parsed.data : '', 'utf-8')
+                                : decodeDataUri(parsed?.data).buffer;
+                            writeStagingInlayFileSync(inlayRaw.id, ext, buffer, legacyInlayInfoMap.get(inlayRaw.id) || {
+                                ext,
+                                name: typeof parsed?.name === 'string' ? parsed.name : inlayRaw.id,
+                                type,
+                                height: typeof parsed?.height === 'number' ? parsed.height : undefined,
+                                width: typeof parsed?.width === 'number' ? parsed.width : undefined,
+                            });
+                        } else {
+                            writeStagingInlayFileSync(inlayRaw.id, 'bin', data, legacyInlayInfoMap.get(inlayRaw.id) || {
+                                ext: 'bin',
+                                name: inlayRaw.id,
+                                type: 'image',
+                            });
+                        }
                     }
                     if (explicitSidecarMap.has(inlayRaw.id)) {
                         writeStagingSidecarSync(inlayRaw.id, explicitSidecarMap.get(inlayRaw.id));
@@ -2342,6 +2311,8 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     }
                     assetsRestored += 1;
                 } else if (inlaySidecar) {
+                    const data = await fs.readFile(sourcePath);
+                    await fs.rm(sourcePath, { force: true });
                     const parsed = JSON.parse(data.toString('utf-8'));
                     explicitSidecarMap.set(inlaySidecar.id, parsed);
                     writeStagingSidecarSync(inlaySidecar.id, parsed);
@@ -2351,6 +2322,8 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     if (!isSafeInlayId(id)) {
                         throw new Error(`Invalid legacy inlay info entry name: ${name}`);
                     }
+                    const data = await fs.readFile(sourcePath);
+                    await fs.rm(sourcePath, { force: true });
                     const parsed = JSON.parse(data.toString('utf-8'));
                     legacyInlayInfoMap.set(id, {
                         ext: normalizeInlayExt(parsed?.ext),
@@ -2364,14 +2337,17 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     }
                 } else if (name.startsWith('inlay_thumb/')) {
                     // Skip deprecated thumbnail entries from legacy backups
+                    await fs.rm(sourcePath, { force: true });
                 } else {
                     const storageKey = resolveBackupStorageKey(name);
-                    const storageValue = storageKey.startsWith('coldstorage/')
-                        ? encodeColdStorageCanonicalBuffer(
+                    if (storageKey.startsWith('coldstorage/')) {
+                        const data = await fs.readFile(sourcePath);
+                        const storageValue = encodeColdStorageCanonicalBuffer(
                             parseColdStorageJsonBuffer(data, name, { allowPlainJson: true }).coldData
-                        )
-                        : data;
-                    stagedKvEntries.push({ key: storageKey, value: Buffer.from(storageValue) });
+                        );
+                        await fs.writeFile(sourcePath, storageValue);
+                    }
+                    stagedKvEntries.push({ key: storageKey, sourcePath });
                     if (storageKey === 'database/database.bin') {
                         hasDatabase = true;
                     } else {
@@ -2379,32 +2355,9 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     }
                 }
 
-                batchCount++;
-            });
-
-            if (remaining.length === 0) {
-                nextEntryThreshold = 8;
-            } else {
-                pendingChunks.push(remaining);
-                pendingTotal = remaining.length;
-                if (remaining.length < 4) {
-                    nextEntryThreshold = 8;
-                } else {
-                    const nameLen = remaining.readUInt32LE(0);
-                    const headerEnd = 4 + nameLen + 4;
-                    if (remaining.length < headerEnd) {
-                        nextEntryThreshold = headerEnd;
-                    } else {
-                        const dataLen = remaining.readUInt32LE(4 + nameLen);
-                        nextEntryThreshold = headerEnd + dataLen;
-                    }
-                }
-            }
-        }
-
-        if (pendingTotal > 0) {
-            throw new Error('Backup stream ended with incomplete entry');
-        }
+            },
+        });
+        bytesReceived = staged.bytesReceived;
         if (!hasDatabase) {
             throw new Error('Backup does not contain database.risudat');
         }
@@ -2413,7 +2366,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 writeStagingSidecarSync(id, info);
             }
         }
-        await kvReplacePrefixesAsync(stagedKvEntries, [
+        await kvReplacePrefixesFromFilesAsync(stagedKvEntries, [
             'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
             'coldstorage/', 'drafts/', 'remotes/', REMOTE_MIGRATION_MARKER_KEY,
         ]);
@@ -2426,7 +2379,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     if (entry.isDirectory()) await collect(relativePath);
                     else if (entry.isFile()) operations.push({
                         path: relativePath,
-                        data: await fs.readFile(path.join(canonicalStagingDir, relativePath)),
+                        sourcePath: path.join(canonicalStagingDir, relativePath),
                     });
                 }
             }
@@ -2442,9 +2395,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
         await fs.rm(backupInlayDir, { recursive: true, force: true }).catch(() => {});
         await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(entryStagingDir, { recursive: true, force: true }).catch(() => {});
         throw error;
     }
     await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
+    await fs.rm(entryStagingDir, { recursive: true, force: true }).catch(() => {});
 
     await ensureInlayDir();
     try {

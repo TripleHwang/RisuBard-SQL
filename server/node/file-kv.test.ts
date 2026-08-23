@@ -14,6 +14,23 @@ function root() {
 afterEach(() => roots.splice(0).forEach(value => fs.rmSync(value, { recursive: true, force: true })))
 
 describe('file-native KV compatibility projection', () => {
+    it('publishes replacement values from staged files without loading them into entry buffers', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'large.bin')
+        fs.writeFileSync(sourcePath, Buffer.alloc(2 * 1024 * 1024, 0x6b))
+        const store = createFileKv({ dataRoot })
+        store.kvSet('assets/old', Buffer.from('old'))
+
+        await store.kvReplacePrefixesFromFilesAsync([
+            { key: 'assets/large', sourcePath },
+        ], ['assets/'])
+
+        expect(store.kvList('assets/')).toEqual(['assets/large'])
+        expect(store.kvSize('assets/large')).toBe(2 * 1024 * 1024)
+        expect(store.kvGet('assets/large')).toEqual(Buffer.alloc(2 * 1024 * 1024, 0x6b))
+    })
+
     it('prepares replacement objects asynchronously before publishing one manifest', async () => {
         const dataRoot = root()
         const store = createFileKv({ dataRoot })

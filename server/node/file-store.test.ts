@@ -66,6 +66,20 @@ describe('crash-safe canonical writes', () => {
 })
 
 describe('journal recovery and trash', () => {
+    it('commits staged source files without requiring in-memory operation data', () => {
+        const root = tempRoot()
+        const source = path.join(root, '.import-staging', 'settings.json')
+        fs.mkdirSync(path.dirname(source), { recursive: true })
+        fs.writeFileSync(source, Buffer.from('{"streamed":true}'))
+
+        commitTransaction(root, [
+            { path: 'settings/app.json', sourcePath: source },
+        ])
+
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'settings/app.json'), 'utf8')))
+            .toEqual({ streamed: true })
+    })
+
     it('finishes a prepared multi-file transaction after a simulated crash', () => {
         const root = tempRoot()
         expect(() => commitTransaction(root, [

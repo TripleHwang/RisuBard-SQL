@@ -1,0 +1,78 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+const roots: string[] = []
+
+function tempRoot() {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'risubard-backup-stream-'))
+    roots.push(root)
+    return root
+}
+
+function encodeEntry(name: string, data: Buffer) {
+    const nameBytes = Buffer.from(name, 'utf8')
+    const header = Buffer.alloc(8 + nameBytes.length)
+    header.writeUInt32LE(nameBytes.length, 0)
+    nameBytes.copy(header, 4)
+    header.writeUInt32LE(data.length, 4 + nameBytes.length)
+    return Buffer.concat([header, data])
+}
+
+async function* chunks(data: Buffer, sizes: number[]) {
+    let offset = 0
+    let index = 0
+    while (offset < data.length) {
+        const end = Math.min(data.length, offset + sizes[index++ % sizes.length])
+        yield data.subarray(offset, end)
+        offset = end
+    }
+}
+
+afterEach(() => {
+    for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+})
+
+describe('disk-backed backup entry streaming', () => {
+    it('stages fragmented entry bodies as files instead of returning body buffers', async () => {
+        const { stageBackupEntries } = require('./backup-entry-stream.cjs')
+        const stagingDir = tempRoot()
+        const large = Buffer.alloc(3 * 1024 * 1024, 0x5a)
+        const encoded = Buffer.concat([
+            encodeEntry('database.risudat', Buffer.from('db')),
+            encodeEntry('large-asset.bin', large),
+        ])
+        const entries: Array<{ name: string; sourcePath: string; size: number }> = []
+
+        const result = await stageBackupEntries(chunks(encoded, [1, 2, 7, 65537]), {
+            stagingDir,
+            maxNameBytes: 1024,
+            onEntry: async (entry: { name: string; sourcePath: string; size: number }) => {
+                entries.push(entry)
+            },
+        })
+
+        expect(result.bytesReceived).toBe(encoded.length)
+        expect(entries.map(entry => ({ name: entry.name, size: entry.size }))).toEqual([
+            { name: 'database.risudat', size: 2 },
+            { name: 'large-asset.bin', size: large.length },
+        ])
+        expect(fs.readFileSync(entries[1].sourcePath)).toEqual(large)
+        expect(entries[1]).not.toHaveProperty('data')
+    })
+
+    it('rejects truncated bodies without publishing a complete entry', async () => {
+        const { stageBackupEntries } = require('./backup-entry-stream.cjs')
+        const stagingDir = tempRoot()
+        const encoded = encodeEntry('asset.bin', Buffer.from('complete-body'))
+        const entries: unknown[] = []
+
+        await expect(stageBackupEntries(chunks(encoded.subarray(0, -1), [3]), {
+            stagingDir,
+            maxNameBytes: 1024,
+            onEntry: async (entry: unknown) => entries.push(entry),
+        })).rejects.toThrow(/incomplete entry/i)
+        expect(entries).toEqual([])
+    })
+})
