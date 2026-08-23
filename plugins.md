@@ -3,6 +3,8 @@
 -->
 
 > For migrating plugins from API v2.0 to v3.0, see the [Migration Guide](./src/ts/plugins/migrationGuide.md). For Reference documentation and type definitions, see the [DTS file](./src/ts/plugins/apiV3/Risuai.d.ts).
+>
+> RisuBard provider plugins that render their own generation-information UI should follow the [provider UI compatibility reference](./docs/ko/plugin-provider-compatibility.md).
 
 # Risuai Plugin Development Guide
 

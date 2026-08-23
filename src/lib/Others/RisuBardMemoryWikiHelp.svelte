@@ -20,7 +20,7 @@
 <ShDialog
     bind:open
     size="xl"
-    tier="base"
+    tier="top"
     closeOnEscape
     contentClass="memory-wiki-help-dialog"
     bodyClass="memory-wiki-help-body"

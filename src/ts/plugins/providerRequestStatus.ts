@@ -40,6 +40,15 @@ export function bindPluginRequestStatusStorage(
 
 export function resolvePluginRequestStatus(options: PluginV2ProviderOptions | undefined): boolean {
     try {
+        const override = options?.overrideRequestStatus
+        if (typeof override === 'function'
+            ? override() === true
+            : override === true) return false
+    } catch {
+        return true
+    }
+
+    try {
         const preference = options?.hostRequestStatus
         return typeof preference === 'function'
             ? preference() === true

@@ -1180,7 +1180,9 @@ interface ProviderOptions {
     tokenizer?: string;
     /** Custom tokenizer function */
     tokenizerFunc?: (content: string) => number[] | Promise<number[]>;
-    /** RisuBard's host-rendered request status card is on by default; set false to opt out. */
+    /** RisuBard keeps its host status UI by default; set true only when the plugin replaces the host request status UI. */
+    overrideRequestStatus?: boolean | (() => boolean);
+    /** Legacy inverse switch. Prefer `overrideRequestStatus: true` for plugin-owned status UI. */
     hostRequestStatus?: boolean | (() => boolean);
     /** Plugin storage key whose `risubard` value opts in dynamically. */
     hostRequestStatusStorageKey?: string;

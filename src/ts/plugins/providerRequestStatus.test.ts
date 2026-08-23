@@ -2,9 +2,12 @@ import { describe, expect, test } from 'vitest'
 import { bindPluginRequestStatusStorage, resolvePluginRequestStatus } from './providerRequestStatus'
 
 describe('resolvePluginRequestStatus', () => {
-    test('uses host request status by default and allows an explicit opt-out', () => {
+    test('uses host request status unless the plugin explicitly overrides it', () => {
         expect(resolvePluginRequestStatus(undefined)).toBe(true)
         expect(resolvePluginRequestStatus({})).toBe(true)
+        expect(resolvePluginRequestStatus({ overrideRequestStatus: false })).toBe(true)
+        expect(resolvePluginRequestStatus({ overrideRequestStatus: true })).toBe(false)
+        expect(resolvePluginRequestStatus({ overrideRequestStatus: () => true })).toBe(false)
         expect(resolvePluginRequestStatus({ hostRequestStatus: true })).toBe(true)
         expect(resolvePluginRequestStatus({ hostRequestStatus: false })).toBe(false)
     })
@@ -22,6 +25,9 @@ describe('resolvePluginRequestStatus', () => {
         expect(resolvePluginRequestStatus({
             hostRequestStatus: () => { throw new Error('broken option') },
         })).toBe(false)
+        expect(resolvePluginRequestStatus({
+            overrideRequestStatus: () => { throw new Error('broken override') },
+        })).toBe(true)
     })
 
     test('binds a serializable plugin storage key to a live host selector', () => {
