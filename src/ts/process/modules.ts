@@ -440,7 +440,7 @@ function getModuleById(id:string){
 function getModuleByIds(ids:string[]){
     const db = getDatabase()
     const idSet = new Set(ids)
-    const modules = db.modules.filter(m => 
+    const modules = (db.modules ?? []).filter(m =>
         idSet.has(m.id) || (m.namespace && idSet.has(m.namespace))
     )
     return deduplicateModuleById(modules)

@@ -4490,6 +4490,12 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
     }
     importInProgress = true;
 
+    const prevRequestTimeout = req.socket.server?.requestTimeout;
+    req.socket.setTimeout(0);
+    req.socket.setKeepAlive(true);
+    if (req.socket.server) req.socket.server.requestTimeout = 0;
+    let heartbeatTimer = null;
+
     try {
         const filename = req.body?.filename;
         if (!filename || !BACKUP_FILENAME_REGEX.test(filename)) {
@@ -4516,7 +4522,13 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
         }
 
         res.setHeader('content-type', 'application/x-ndjson');
+        res.setHeader('cache-control', 'no-cache, no-transform');
+        res.setHeader('x-accel-buffering', 'no');
         res.flushHeaders();
+
+        heartbeatTimer = setInterval(() => {
+            if (!res.writableEnded) res.write('{"type":"heartbeat"}\n');
+        }, BACKUP_NDJSON_HEARTBEAT_MS);
 
         let lastProgressWrite = 0;
         const { createReadStream } = require('fs');
@@ -4545,7 +4557,11 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
             res.end();
         }
     } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         importInProgress = false;
+        if (req.socket.server && prevRequestTimeout !== undefined) {
+            req.socket.server.requestTimeout = prevRequestTimeout;
+        }
     }
 });
 

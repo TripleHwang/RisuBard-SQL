@@ -22,6 +22,8 @@
   <a href="https://github.com/rpaddict/RisuBard/issues">Issues</a>
 </p>
 
+> **Project lineage:** RisuBard is developed as a fork of [PocketRisu](https://github.com/PocketRisu/PocketRisu).
+
 RisuBard is built for character conversations that outgrow a model's context window. It preserves the original chat as evidence, maintains reusable narrative state in Obsidian-compatible Markdown, and compiles only the relevant memory into each bounded model request.
 
 You keep the existing RisuAI ecosystem—characters, CHARX cards, lorebooks, modules, prompt presets, provider adapters, and plugin integration paths—while gaining a file-native storage architecture and a long-term memory system designed for persistent stories.

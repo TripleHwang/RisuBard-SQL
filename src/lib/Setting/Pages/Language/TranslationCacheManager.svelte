@@ -46,6 +46,7 @@
     let statusMessage = $state('')
     let editingKey = $state<string | null>(null)
     let editingStorageKey = $state<string | null>(null)
+    let editingEtag = $state<string | null>(null)
     let editValue = $state('')
     let saving = $state(false)
     let mutating = $state(false)
@@ -84,34 +85,39 @@
         void load(1)
     }
 
-    function beginEdit(key: string, value: string, storageKey: string) {
+    function beginEdit(key: string, value: string, storageKey: string, etag: string) {
         editingKey = key
         editingStorageKey = storageKey
+        editingEtag = etag
         editValue = value
     }
 
     function cancelEdit() {
         editingKey = null
         editingStorageKey = null
+        editingEtag = null
         editValue = ''
     }
 
     async function saveEdit() {
-        if (editingKey === null || editingStorageKey === null) return
+        if (editingKey === null || editingStorageKey === null || editingEtag === null) return
         const token = beginMutation()
         if (token === null) return
         const key = editingKey
         const storageKey = editingStorageKey
+        const etag = editingEtag
         const value = editValue
         saving = true
         errorMessage = ''
         try {
-            await updateLLMCacheValue(key, value, storageKey)
+            await updateLLMCacheValue(key, value, storageKey, etag)
             if (editingKey === key && editingStorageKey === storageKey) cancelEdit()
             await load()
             statusMessage = language.editTranslationSave
         } catch (error) {
-            errorMessage = error instanceof Error ? error.message : String(error)
+            const message = error instanceof Error ? error.message : String(error)
+            await load()
+            errorMessage = message
         } finally {
             if (token === mutationToken) saving = false
             finishMutation(token)
@@ -127,20 +133,22 @@
         }
     }
 
-    async function removeEntry(key: string, storageKey: string) {
+    async function removeEntry(key: string, storageKey: string, etag: string) {
         const token = beginMutation()
         if (token === null) return
         const label = key.length > 80 ? `${key.slice(0, 77)}...` : key
         try {
             if (!await alertConfirm(language.translationCacheDeleteConfirm.replace('{0}', label))) return
             errorMessage = ''
-            await deleteLLMCache(key, storageKey)
+            await deleteLLMCache(key, storageKey, etag)
             totalCount = Math.max(0, totalCount - 1)
             if (editingKey === key) cancelEdit()
             await load(result.page)
             statusMessage = language.translationCacheDeleted
         } catch (error) {
-            errorMessage = error instanceof Error ? error.message : String(error)
+            const message = error instanceof Error ? error.message : String(error)
+            await load()
+            errorMessage = message
         } finally {
             finishMutation(token)
         }
@@ -334,10 +342,10 @@
                                     <ShButton variant="ghost" size="icon-xs" title={language.translationCacheCopyValue} aria-label={language.translationCacheCopyValue} onclick={() => void copyText(row.value)}>
                                         <ClipboardIcon size={14} />
                                     </ShButton>
-                                    <ShButton variant="ghost" size="icon-xs" title={language.editTranslation} aria-label={language.editTranslation} onclick={() => beginEdit(row.key, row.value, row.storageKey)} disabled={mutating}>
+                                    <ShButton variant="ghost" size="icon-xs" title={language.editTranslation} aria-label={language.editTranslation} onclick={() => beginEdit(row.key, row.value, row.storageKey, row.etag)} disabled={mutating}>
                                         <PencilIcon size={14} />
                                     </ShButton>
-                                    <ShButton variant="destructive" size="icon-xs" title={language.remove} aria-label={language.remove} onclick={() => void removeEntry(row.key, row.storageKey)} disabled={mutating}>
+                                    <ShButton variant="destructive" size="icon-xs" title={language.remove} aria-label={language.remove} onclick={() => void removeEntry(row.key, row.storageKey, row.etag)} disabled={mutating}>
                                         <Trash2Icon size={14} />
                                     </ShButton>
                                 {/if}

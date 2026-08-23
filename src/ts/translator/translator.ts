@@ -40,7 +40,7 @@ const llmCacheReadConcurrency = 16
 
 type LLMTranslationCachePayload = { key: string, value: string }
 type VersionedLLMTranslationCachePayload = LLMTranslationCachePayload & { etag: string }
-type PersistentLLMTranslationCacheRow = LLMTranslationCachePayload & { storageKey: string }
+type PersistentLLMTranslationCacheRow = VersionedLLMTranslationCachePayload & { storageKey: string }
 type LLMCachePublicationToken = { globalGeneration: number, keyGeneration: number }
 type LLMCacheStorageIndex = { generation: number, locations: Map<string, string[]> }
 
@@ -89,7 +89,7 @@ async function readPersistentLLMCacheRows(): Promise<PersistentLLMTranslationCac
     for (let start = 0; start < storageKeys.length; start += llmCacheReadConcurrency) {
         const batch = await Promise.all(
             storageKeys.slice(start, start + llmCacheReadConcurrency).map(async (storageKey) => {
-                const payload = await readLLMCachePayload(storageKey)
+                const payload = await readVersionedLLMCachePayload(storageKey)
                 return payload ? { ...payload, storageKey } : null
             }),
         )
@@ -311,6 +311,7 @@ async function setPersistentLLMCache(
     value: string,
     storageIndex: Map<string, string[]>,
     preferredStorageKey?: string,
+    expectedAuthorityEtag?: string,
 ) {
     const canonicalStorageKey = await makeHashedStorageKey(llmTranslateCachePrefix, text)
     const matchingStorageKeys = new Set(storageIndex.get(text) ?? [])
@@ -326,6 +327,9 @@ async function setPersistentLLMCache(
     if ((indexedAuthority && !currentAuthority) || (currentAuthority && currentAuthority.key !== text)) {
         invalidateLLMCacheStorageIndex()
         throw new Error('LLM translation cache storage index is stale')
+    }
+    if (expectedAuthorityEtag !== undefined && currentAuthority?.etag !== expectedAuthorityEtag) {
+        throw new Error('LLM translation cache entry changed in another window')
     }
 
     const duplicateStorageKeys = [...matchingStorageKeys].filter((key) => key !== storageKey)
@@ -357,7 +361,7 @@ async function setPersistentLLMCache(
         if (rollbackError) {
             const actualRows: PersistentLLMTranslationCacheRow[] = []
             for (const candidateStorageKey of matchingStorageKeys) {
-                const payload = await readLLMCachePayload(candidateStorageKey)
+                const payload = await readVersionedLLMCachePayload(candidateStorageKey)
                 if (payload?.key === text) {
                     actualRows.push({ ...payload, storageKey: candidateStorageKey })
                 }
@@ -1110,6 +1114,7 @@ export type LLMTranslationCacheRow = {
     key: string
     value: string
     storageKey: string
+    etag: string
 }
 
 export type LLMTranslationCachePage = {
@@ -1169,24 +1174,33 @@ export async function listLLMCache(query: LLMTranslationCacheQuery = {}): Promis
     }
 }
 
-export async function updateLLMCacheValue(key: string, value: string, storageKey: string): Promise<void> {
+export async function updateLLMCacheValue(
+    key: string,
+    value: string,
+    storageKey: string,
+    expectedEtag: string,
+): Promise<void> {
+    if (!expectedEtag) throw new Error('LLM translation cache entry version is required')
     let preparedStorageIndex = await ensureLLMCacheStorageIndex()
     preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(key, preparedStorageIndex)
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
-        await requireLLMCachePayload(key, storageKey)
         const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
-        await setPersistentLLMCache(key, value, storageIndex.locations, storageKey)
+        await setPersistentLLMCache(key, value, storageIndex.locations, storageKey, expectedEtag)
         llmTranslateCache.set(key, value)
     })
 }
 
-export async function deleteLLMCache(key: string, storageKey: string): Promise<void> {
+export async function deleteLLMCache(key: string, storageKey: string, expectedEtag: string): Promise<void> {
+    if (!expectedEtag) throw new Error('LLM translation cache entry version is required')
     let preparedStorageIndex = await ensureLLMCacheStorageIndex()
     preparedStorageIndex = await refreshLLMCacheStorageIndexIfStale(key, preparedStorageIndex)
     invalidateLLMCacheKey(key)
     await runSerializedLLMCacheMutation(key, async () => {
         const selectedPayload = await requireLLMCachePayload(key, storageKey)
+        if (selectedPayload.etag !== expectedEtag) {
+            throw new Error('LLM translation cache entry changed in another window')
+        }
         const storageIndex = resolveLLMCacheStorageIndex(preparedStorageIndex)
         const storageKeys = new Set([storageKey, ...(storageIndex.locations.get(key) ?? [])])
         const payloads = new Map<string, VersionedLLMTranslationCachePayload>()

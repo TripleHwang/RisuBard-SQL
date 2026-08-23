@@ -179,6 +179,12 @@ function seed(key: string, value: string, storageKey = `${prefix}${encodeURIComp
     return storageKey;
 }
 
+function currentEtag(storageKey: string) {
+    const etag = storageEtag(storage.get(storageKey));
+    if (!etag) throw new Error(`Missing test ETag for ${storageKey}`);
+    return etag;
+}
+
 function deferred<T>() {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>((next) => {
@@ -228,8 +234,8 @@ describe("LLM translation cache manager", () => {
         const firstPage = await listLLMCache({ page: 1, pageSize: 2 });
         expect(firstPage).toEqual({
             rows: [
-                { key: "alpha", value: "FIRST", storageKey: `${prefix}alpha.json` },
-                { key: "Bravo", value: "Second result", storageKey: bravoStorageKey },
+                { key: "alpha", value: "FIRST", storageKey: `${prefix}alpha.json`, etag: currentEtag(`${prefix}alpha.json`) },
+                { key: "Bravo", value: "Second result", storageKey: bravoStorageKey, etag: currentEtag(bravoStorageKey) },
             ],
             total: 4,
             page: 1,
@@ -245,21 +251,51 @@ describe("LLM translation cache manager", () => {
     it("updates the value while retaining the exact key and storage key", async () => {
         const storageKey = seed("Key With Spaces", "old");
 
-        await updateLLMCacheValue("Key With Spaces", "new", storageKey);
+        await updateLLMCacheValue("Key With Spaces", "new", storageKey, currentEtag(storageKey));
 
         expect(storage.get(storageKey)).toEqual({ key: "Key With Spaces", value: "new" });
         expect(await getLLMCache("Key With Spaces")).toBe("new");
         expect((await listLLMCache()).rows[0].storageKey).toBe(storageKey);
     });
 
+    it("rejects an edit from a stale manager row instead of overwriting a newer value", async () => {
+        const storageKey = seed("cross-window edit", "original");
+        const [listed] = (await listLLMCache()).rows;
+        expect(listed.etag).toBe(storageEtag(storage.get(storageKey)));
+        storage.set(storageKey, { key: "cross-window edit", value: "newer value" });
+
+        await expect(updateLLMCacheValue(
+            listed.key,
+            "stale edit",
+            listed.storageKey,
+            listed.etag,
+        )).rejects.toThrow(/conflict|changed/i);
+
+        expect(storage.get(storageKey)).toEqual({ key: "cross-window edit", value: "newer value" });
+    });
+
+    it("rejects a delete from a stale manager row instead of deleting a newer value", async () => {
+        const storageKey = seed("cross-window delete", "original");
+        const [listed] = (await listLLMCache()).rows;
+        storage.set(storageKey, { key: "cross-window delete", value: "newer value" });
+
+        await expect(deleteLLMCache(
+            listed.key,
+            listed.storageKey,
+            listed.etag,
+        )).rejects.toThrow(/conflict|changed/i);
+
+        expect(storage.get(storageKey)).toEqual({ key: "cross-window delete", value: "newer value" });
+    });
+
     it("updates and deletes through the exact listed persistent storage key", async () => {
         const storageKey = seed("legacy key", "old", `${prefix}legacy-storage.json`);
 
-        await updateLLMCacheValue("legacy key", "new", storageKey);
+        await updateLLMCacheValue("legacy key", "new", storageKey, currentEtag(storageKey));
         expect(storage.get(storageKey)).toEqual({ key: "legacy key", value: "new" });
         expect(storage.has(`${prefix}legacy%20key.json`)).toBe(false);
 
-        await deleteLLMCache("legacy key", storageKey);
+        await deleteLLMCache("legacy key", storageKey, currentEtag(storageKey));
         expect(storage.has(storageKey)).toBe(false);
         expect(removedKeys).toContain(storageKey);
     });
@@ -287,7 +323,7 @@ describe("LLM translation cache manager", () => {
         seed("duplicate", "canonical", `${prefix}duplicate.json`);
         const listed = await listLLMCache();
 
-        await deleteLLMCache("duplicate", listed.rows[0].storageKey);
+        await deleteLLMCache("duplicate", listed.rows[0].storageKey, listed.rows[0].etag);
 
         expect([...storage.values()].filter((value: any) => value?.key === "duplicate")).toEqual([]);
         expect((await listLLMCache()).rows).toEqual([]);
@@ -363,7 +399,7 @@ describe("LLM translation cache manager", () => {
         const duplicateWriteGate = deferred<void>();
         asyncControls.writeGates.set(canonicalStorageKey, duplicateWriteGate.promise);
 
-        const updating = updateLLMCacheValue("authority race", "new", legacyStorageKey);
+        const updating = updateLLMCacheValue("authority race", "new", legacyStorageKey, currentEtag(legacyStorageKey));
         await vi.waitFor(() => expect(asyncControls.startedWrites.has(canonicalStorageKey)).toBe(true));
         storage.set(legacyStorageKey, { key: "external replacement", value: "preserve me" });
         duplicateWriteGate.resolve();
@@ -380,7 +416,7 @@ describe("LLM translation cache manager", () => {
         const duplicateWriteGate = deferred<void>();
         asyncControls.writeGates.set(canonicalStorageKey, duplicateWriteGate.promise);
 
-        const updating = updateLLMCacheValue("duplicate update race", "new", legacyStorageKey);
+        const updating = updateLLMCacheValue("duplicate update race", "new", legacyStorageKey, currentEtag(legacyStorageKey));
         await vi.waitFor(() => expect(asyncControls.startedWrites.has(canonicalStorageKey)).toBe(true));
         storage.set(canonicalStorageKey, { key: "external duplicate owner", value: "preserve me" });
         duplicateWriteGate.resolve();
@@ -400,7 +436,7 @@ describe("LLM translation cache manager", () => {
         const duplicateRemoveGate = deferred<void>();
         asyncControls.removeGates.set(canonicalStorageKey, duplicateRemoveGate.promise);
 
-        const deleting = deleteLLMCache("duplicate delete race", canonicalStorageKey);
+        const deleting = deleteLLMCache("duplicate delete race", canonicalStorageKey, currentEtag(canonicalStorageKey));
         await vi.waitFor(() => expect(asyncControls.startedRemoves.has(canonicalStorageKey)).toBe(true));
         storage.set(canonicalStorageKey, { key: "external delete owner", value: "preserve me" });
         duplicateRemoveGate.resolve();
@@ -419,7 +455,7 @@ describe("LLM translation cache manager", () => {
         await listLLMCache();
         storage.set(canonicalStorageKey, { key: "external update owner", value: "preserve" });
 
-        await updateLLMCacheValue("manager stale update", "new", legacyStorageKey);
+        await updateLLMCacheValue("manager stale update", "new", legacyStorageKey, currentEtag(legacyStorageKey));
 
         expect(storage.get(legacyStorageKey)).toEqual({ key: "manager stale update", value: "new" });
         expect(storage.get(canonicalStorageKey)).toEqual({ key: "external update owner", value: "preserve" });
@@ -431,7 +467,7 @@ describe("LLM translation cache manager", () => {
         await listLLMCache();
         storage.set(canonicalStorageKey, { key: "external delete owner", value: "preserve" });
 
-        await deleteLLMCache("manager stale delete", legacyStorageKey);
+        await deleteLLMCache("manager stale delete", legacyStorageKey, currentEtag(legacyStorageKey));
 
         expect(storage.has(legacyStorageKey)).toBe(false);
         expect(storage.get(canonicalStorageKey)).toEqual({ key: "external delete owner", value: "preserve" });
@@ -454,7 +490,7 @@ describe("LLM translation cache manager", () => {
         await listLLMCache();
         failures.removeKeys.add(legacyStorageKey);
 
-        await expect(updateLLMCacheValue("cleanup failure", "new", canonicalStorageKey))
+        await expect(updateLLMCacheValue("cleanup failure", "new", canonicalStorageKey, currentEtag(canonicalStorageKey)))
             .rejects.toThrow("delete failed");
 
         expect(storage.get(canonicalStorageKey)).toEqual({ key: "cleanup failure", value: "new" });
@@ -469,7 +505,7 @@ describe("LLM translation cache manager", () => {
         failures.writeKeys.add(canonicalStorageKey);
         failures.removeKeys.add(canonicalStorageKey);
 
-        await expect(updateLLMCacheValue("unsafe cleanup", "new", legacyStorageKey))
+        await expect(updateLLMCacheValue("unsafe cleanup", "new", legacyStorageKey, currentEtag(legacyStorageKey)))
             .rejects.toThrow("write failed");
 
         expect(storage.get(legacyStorageKey)).toEqual({ key: "unsafe cleanup", value: "old" });
@@ -486,7 +522,7 @@ describe("LLM translation cache manager", () => {
         failures.writeKeys.add(legacyStorageKey);
         failures.removeKeys.add(canonicalStorageKey);
 
-        await expect(updateLLMCacheValue("authority failure", "new", legacyStorageKey))
+        await expect(updateLLMCacheValue("authority failure", "new", legacyStorageKey, currentEtag(legacyStorageKey)))
             .rejects.toThrow("write failed");
 
         expect(storage.get(legacyStorageKey)).toEqual({ key: "authority failure", value: "old" });
@@ -544,7 +580,7 @@ describe("LLM translation cache manager", () => {
         const storageKey = seed("remove me", "value");
         await setLLMCache("remove me", "value");
 
-        await deleteLLMCache("remove me", storageKey);
+        await deleteLLMCache("remove me", storageKey, currentEtag(storageKey));
 
         expect(storage.has(storageKey)).toBe(false);
         expect(removedKeys).toContain(storageKey);
@@ -557,8 +593,8 @@ describe("LLM translation cache manager", () => {
 
         await expect(
             (updateLLMCacheValue as unknown as (key: string, value: string) => Promise<void>)("managed", "new"),
-        ).rejects.toThrow("storage key");
-        await expect(deleteLLMCache("managed", `${prefix}different.json`)).rejects.toThrow("does not match");
+        ).rejects.toThrow("version");
+        await expect(deleteLLMCache("managed", `${prefix}different.json`, currentEtag(`${prefix}different.json`))).rejects.toThrow("does not match");
 
         expect(storage.get(storageKey)).toEqual({ key: "managed", value: "old" });
     });
@@ -568,7 +604,7 @@ describe("LLM translation cache manager", () => {
         await listLLMCache();
         failures.writeKeys.add(storageKey);
 
-        await expect(updateLLMCacheValue("write failure", "new", storageKey)).rejects.toThrow("write failed");
+        await expect(updateLLMCacheValue("write failure", "new", storageKey, currentEtag(storageKey))).rejects.toThrow("write failed");
 
         expect(storage.get(storageKey)).toEqual({ key: "write failure", value: "old" });
         expect(await getLLMCache("write failure")).toBe("old");
@@ -579,7 +615,7 @@ describe("LLM translation cache manager", () => {
         await listLLMCache();
         failures.removeKeys.add(storageKey);
 
-        await expect(deleteLLMCache("delete failure", storageKey)).rejects.toThrow("delete failed");
+        await expect(deleteLLMCache("delete failure", storageKey, currentEtag(storageKey))).rejects.toThrow("delete failed");
 
         expect(storage.has(storageKey)).toBe(true);
         expect(await getLLMCache("delete failure")).toBe("value");
@@ -628,7 +664,7 @@ describe("LLM translation cache manager", () => {
         storage.set(storageKey, { key: "stale", value: "fresh persistent" });
 
         expect((await listLLMCache()).rows).toEqual([
-            { key: "stale", value: "fresh persistent", storageKey },
+            { key: "stale", value: "fresh persistent", storageKey, etag: currentEtag(storageKey) },
         ]);
         expect(await getLLMCache("stale")).toBe("fresh persistent");
     });
@@ -662,7 +698,7 @@ describe("LLM translation cache manager", () => {
         const result = await listLLMCache();
 
         expect(result.rows).toEqual([
-            { key: "valid", value: "works", storageKey: `${prefix}valid.json` },
+            { key: "valid", value: "works", storageKey: `${prefix}valid.json`, etag: currentEtag(`${prefix}valid.json`) },
         ]);
         expect(result.total).toBe(1);
     });
@@ -819,7 +855,7 @@ describe("LLM translation cache manager", () => {
         const pending = await startDelayedTranslation("late delete");
         const storageKey = `${prefix}late%20delete.json`;
         await setLLMCache("late delete", "temporary");
-        await deleteLLMCache("late delete", storageKey);
+        await deleteLLMCache("late delete", storageKey, currentEtag(storageKey));
 
         pending.response.resolve({ type: "success", result: "late result" });
         await pending.result;

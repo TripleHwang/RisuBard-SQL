@@ -206,4 +206,10 @@ describe('getModules cache invalidation', () => {
         expect(getModules()[0]).toBe(replacement)
         expect(getModules()[0].description).toBe('new content')
     })
+
+    it('returns an empty list while the module collection is not initialized', () => {
+        mocks.database.current.modules = undefined as unknown as typeof mocks.database.current.modules
+
+        expect(getModules()).toEqual([])
+    })
 })

@@ -72,7 +72,9 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
 
         if(updateCache.has(plugin.name)){
             const cached = updateCache.get(plugin.name)
-            if(compareVersions(cached.version, plugin.versionOfPlugin || '0.0.0') === 1){
+            if(cached
+                && cached.updateURL === plugin.updateURL
+                && compareVersions(cached.version, plugin.versionOfPlugin || '0.0.0') === 1){
                 return cached
             }
         }
@@ -419,12 +421,17 @@ export async function importPlugin(code:string|null = null, argu:{
 
         console.log(`Imported plugin: ${pluginData.name} (API v${apiVersion})`)
         setDatabaseLite(db)
-        void requestImmediateSave()
+        if (isUpdate) {
+            await requestImmediateSave({ rejectOnFailure: true })
+        } else {
+            void requestImmediateSave()
+        }
 
-        loadPlugins()
+        await loadPlugins()
         
     } catch (error) {
         console.error(error)
+        if (argu.isUpdate) throw error
         alertError(language.errors.noData)
     }
 }

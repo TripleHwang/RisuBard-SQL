@@ -12,7 +12,10 @@ const legacyTokens = [
     },
     {
         value: ['pocket', 'risu'].join(''),
-        contentExceptions: new Set<string>(),
+        contentExceptions: new Set([
+            'README.en.md',
+            'README.md',
+        ]),
     },
 ]
 const excludedPrefixes = ['public/token/']

@@ -35,6 +35,21 @@ afterEach(() => {
 })
 
 describe('disk-backed backup entry streaming', () => {
+    it('keeps server-side restores alive throughout post-stream publication work', () => {
+        const source = fs.readFileSync('server/node/server.cjs', 'utf8')
+        const start = source.indexOf("app.post('/api/backup/server/restore'")
+        const end = source.indexOf('// Delete a server backup file', start)
+        const route = source.slice(start, end)
+
+        expect(start).toBeGreaterThan(-1)
+        expect(end).toBeGreaterThan(start)
+        expect(route).toContain("res.setHeader('cache-control', 'no-cache, no-transform')")
+        expect(route).toContain("res.setHeader('x-accel-buffering', 'no')")
+        expect(route).toContain('setInterval(() =>')
+        expect(route).toContain('BACKUP_NDJSON_HEARTBEAT_MS')
+        expect(route).toContain('clearInterval(heartbeatTimer)')
+    })
+
     it('stages fragmented entry bodies as files instead of returning body buffers', async () => {
         const { stageBackupEntries } = require('./backup-entry-stream.cjs')
         const stagingDir = tempRoot()

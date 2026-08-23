@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
+import fs from 'node:fs'
 
 import { runPluginUpdate, type PluginUpdateTarget } from './pluginUpdate'
 
@@ -19,6 +20,12 @@ function plugin(): PluginUpdateTarget & { script: string } {
 }
 
 describe('plugin updater', () => {
+    test('waits for a durable database save before an update can report success', () => {
+        const importerSource = fs.readFileSync('src/ts/plugins/plugins.svelte.ts', 'utf8')
+        expect(importerSource).toContain('await requestImmediateSave({ rejectOnFailure: true })')
+        expect(importerSource).toMatch(/catch \(error\) \{[\s\S]*?if \(argu\.isUpdate\) throw error/)
+    })
+
     test('bypasses browser cache, awaits import, and verifies installed source', async () => {
         let installed = plugin()
         let finishImport: (() => void) | undefined

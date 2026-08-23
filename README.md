@@ -22,6 +22,8 @@
   <a href="https://github.com/rpaddict/RisuBard/issues">이슈</a>
 </p>
 
+> **프로젝트 계보:** RisuBard는 [PocketRisu](https://github.com/PocketRisu/PocketRisu)를 포크하여 개발한 프로젝트입니다.
+
 RisuBard는 모델의 컨텍스트 창보다 오래 이어지는 캐릭터 채팅을 위해 만들어졌습니다. 원본 대화는 근거로 보존하고, 장기 서사 상태는 Obsidian 호환 Markdown에 기록하며, 매 요청에는 관련된 기억만 명시적인 예산 안에서 선별해 넣습니다.
 
 기존 RisuAI 생태계의 캐릭터, CHARX 카드, 로어북, 모듈, 프롬프트 프리셋, 모델 제공자와 플러그인 연결 경로를 유지하면서 파일 정본 저장 구조와 지속적인 이야기를 위한 장기 메모리를 제공합니다.
