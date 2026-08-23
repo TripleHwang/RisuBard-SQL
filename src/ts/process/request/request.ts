@@ -1005,7 +1005,6 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache,
             temperature: arg.schema ? arg.temperature : undefined,
             maxOutputTokens: arg.schema ? arg.maxTokens : undefined,
-            reasoningEffort: arg.schema ? 'minimal' : undefined,
             responseSchema: arg.schema
                 ? convertInterfaceToSchema(arg.schema)
                 : undefined,

@@ -101,4 +101,16 @@ describe('structured output compatibility fallback', () => {
         expect(source).toContain('sendWithStructuredOutputFallback(')
         expect(source).toContain('createStructuredOutputFallbackMessage(')
     })
+
+    test('keeps bound model preset reasoning settings for structured internal requests', () => {
+        const source = readFileSync(
+            resolve(process.cwd(), 'src/ts/process/request/request.ts'),
+            'utf8'
+        )
+
+        expect(source).toContain('responseSchema: arg.schema')
+        expect(source).not.toContain(
+            "reasoningEffort: arg.schema ? 'minimal' : undefined"
+        )
+    })
 })
