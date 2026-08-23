@@ -1506,6 +1506,7 @@ export const languageKorean = {
     moveSelected: "선택 항목 이동",
     noItems: "일치하는 항목이 없습니다",
     selectItem: "{} 선택",
+    dragItem: "항목 끌어서 이동",
     moveItemUp: "항목 위로 이동",
     moveItemDown: "항목 아래로 이동",
     open: "폴더로 정리",
@@ -2067,6 +2068,8 @@ export const languageKorean = {
   loadMore: "더 보기",
   pluginUpdateFoundInstallIt:
     "플러그인 업데이트가 발견되었습니다. 업데이트를 설치하시겠습니까?",
+  pluginUpdateSuccess: "플러그인을 업데이트했습니다.",
+  pluginUpdateFailed: "플러그인 업데이트에 실패했습니다. 업데이트 주소나 플러그인 소스를 확인해 주세요.",
   branchedText: "이 채팅은 {}에서 분기되었습니다.",
   disableMessage: "메시지 비활성화",
   disableFirstMessageConfirm: "퍼스널 메세지를 비활성화할까요? 컨텍스트에서 제외됩니다.",

@@ -11,6 +11,7 @@ import { checkCodeSafety } from "./pluginSafety";
 import { SafeDocument, SafeIdbFactory, SafeLocalStorage } from "./pluginSafeClass";
 import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
+import { runPluginUpdate } from "./pluginUpdate";
 
 export const customProviderStore = writable([] as string[])
 
@@ -78,6 +79,7 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
 
         const response = (await fetch(plugin.updateURL, {
             method: 'GET',
+            cache: 'no-store',
             headers: {
                 'Range': 'bytes=0-512'
             }
@@ -107,23 +109,20 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
 }
 
 export async function updatePlugin(plugin: RisuPlugin) {
-    try {
-        if(!plugin.updateURL){
-            return false
-        }
-        const response = await fetch(plugin.updateURL)
-        if(response.status >= 200 && response.status < 300){
-            const jsFile = await response.text()
-            await importPlugin(jsFile, {
+    const updated = await runPluginUpdate(plugin, {
+        fetcher: fetch,
+        importer: async (source) => {
+            await importPlugin(source, {
                 isUpdate: true,
                 originalPluginName: plugin.name
             })
-            return true
-        }
-    } catch (error) {
-        console.error('Failed to update plugin:', error)
+        },
+        readInstalled: (name) => getDatabase().plugins?.find((candidate) => candidate.name === name),
+    })
+    if (updated) {
+        updateCache.delete(plugin.name)
     }
-    return false
+    return updated
 }
 
 export async function importPlugin(code:string|null = null, argu:{

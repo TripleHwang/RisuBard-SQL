@@ -6,7 +6,7 @@
     import Button from "src/lib/UI/GUI/Button.svelte";
     import ModuleMenu from "src/lib/Setting/Pages/Module/ModuleMenu.svelte";
     import { exportModule, importModule, refreshModules, type RisuModule } from "src/ts/process/modules";
-    import { SquarePen, TrashIcon, Globe, Share2Icon, PlusIcon, HardDriveUpload, Waypoints, FolderOpenIcon, UsersRoundIcon } from "@lucide/svelte";
+    import { SquarePen, TrashIcon, Globe, Share2Icon, PlusIcon, HardDriveUpload, Waypoints, UsersRoundIcon } from "@lucide/svelte";
     import { v4 } from "uuid";
     import { tooltip } from "src/ts/gui/tooltip";
     import { alertConfirm, notifySuccess } from "src/ts/alert";
@@ -14,10 +14,12 @@
     import { onDestroy } from "svelte";
     import { importMCPModule } from "src/ts/process/mcp/mcp";
     import { convertModuleToCharacter } from "src/ts/interchangeability";
-    import { checkCharOrder } from "src/ts/globalApi.svelte";
-    import CollectionOrganizerDialog from "src/lib/UI/CollectionOrganizerDialog.svelte";
+    import { checkCharOrder, requestImmediateSave } from "src/ts/globalApi.svelte";
+    import CollectionOrganizerList from "src/lib/UI/CollectionOrganizerList.svelte";
+    import ShButton from "src/lib/UI/GUI/ShButton.svelte";
     import ShDialog from "src/lib/UI/GUI/ShDialog.svelte";
     import { normalizePersonaEnabledModules } from "src/ts/storage/database.svelte";
+    import { assignCollectionItem, normalizeCollectionOrganizerState } from "src/ts/collectionOrganizer";
     let tempModule:RisuModule = $state({
         name: '',
         description: '',
@@ -25,8 +27,7 @@
     })
     let mode = $state(0)
     let editModuleIndex = $state(-1)
-    let moduleSearch = $state('')
-    let organizerOpen = $state(false)
+    let selectedModuleFolder = $state<string | null | undefined>(undefined)
     let personaAssignmentOpen = $state(false)
     let personaAssignmentModuleId = $state('')
     let personaSearch = $state('')
@@ -35,17 +36,6 @@
         title: module.name,
         detail: module.description,
     })))
-
-    function sortModules(modules:RisuModule[], search:string){
-        return modules.filter((v) => {
-            if(search === '') return true
-            return v.name.toLowerCase().includes(search.toLowerCase())
-        
-        }).sort((a, b) => {
-            let score = a.name.toLowerCase().localeCompare(b.name.toLowerCase())
-            return score
-        })
-    }
 
     function personaOptions(){
         const options:{ id:string, name:string, scope:string }[] = []
@@ -119,6 +109,25 @@
         return DBState.db.modules.find((module) => module.id === personaAssignmentModuleId)?.name ?? ''
     }
 
+    function assignModuleToFolder(moduleId:string, folderId:string | null | undefined){
+        if(typeof folderId !== 'string' || !DBState.db.collectionOrganizers) return
+        const moduleIds = DBState.db.modules.map((module) => module.id)
+        const current = normalizeCollectionOrganizerState(DBState.db.collectionOrganizers.modules, moduleIds)
+        DBState.db.collectionOrganizers = {
+            ...DBState.db.collectionOrganizers,
+            modules: assignCollectionItem(current, moduleId, folderId),
+        }
+        void requestImmediateSave()
+    }
+
+    async function importModulesToSelectedFolder(importer:() => Promise<unknown>){
+        const previousIds = new Set(DBState.db.modules.map((module) => module.id))
+        await importer()
+        for(const module of DBState.db.modules){
+            if(!previousIds.has(module.id)) assignModuleToFolder(module.id, selectedModuleFolder)
+        }
+    }
+
     onDestroy(() => {
         refreshModules()
     })
@@ -126,42 +135,27 @@
 {#if mode === 0}
     <SettingPage title={language.modules}>
 
-    <div class="mt-4 flex flex-wrap gap-2 items-center">
-        <TextInput className="grow" placeholder={language.search} bind:value={moduleSearch} />
-        <Button size="sm" onclick={() => { organizerOpen = true }}>
-            <FolderOpenIcon size={16}/>{language.collectionOrganizer.open}
-        </Button>
-        <button class="text-textcolor2 hover:text-primary cursor-pointer" onclick={async () => {
-            tempModule = {
-                name: '',
-                description: '',
-                id: v4(),
-            }
-            mode = 1
-        }}>
-            <PlusIcon />
-        </button>
-        <button class="text-textcolor2 hover:text-primary cursor-pointer" onclick={async () => {
-            importMCPModule()
-        }}>
-            <Waypoints />
-        </button>
-        <button class="text-textcolor2 hover:text-primary cursor-pointer" onclick={async () => {
-            importModule()
-        }}>
-            <HardDriveUpload  />
-        </button>
-    </div>
+    <CollectionOrganizerList
+        kind="modules"
+        items={organizerModuleItems}
+        collectionLabel={language.modules}
+        bind:selectedFolderId={selectedModuleFolder}
+    >
+        {#snippet toolbar(_selectedFolderId)}
+            <div class="flex items-center gap-1">
+                <ShButton variant="ghost" size="icon-sm" aria-label={language.createModule} onclick={() => {
+                    tempModule = { name: '', description: '', id: v4() }
+                    mode = 1
+                }}><PlusIcon /></ShButton>
+                <ShButton variant="ghost" size="icon-sm" aria-label="MCP" onclick={() => importModulesToSelectedFolder(importMCPModule)}><Waypoints /></ShButton>
+                <ShButton variant="ghost" size="icon-sm" aria-label={language.importModule} onclick={() => importModulesToSelectedFolder(importModule)}><HardDriveUpload /></ShButton>
+            </div>
+        {/snippet}
 
-    <div class="contain w-full max-w-full mt-4 flex flex-col border-selected border-1 rounded-md flex-1 overflow-y-auto">
-        {#if DBState.db.modules.length === 0}
-            <div class="text-textcolor2 p-3">{language.noModules}</div>
-        {:else}
-            {#each sortModules(DBState.db.modules, moduleSearch) as rmodule, i}
-                {#if i !== 0}
-                    <div class="border-t-1 border-selected"></div>
-                {/if}
-
+        {#snippet itemContent(moduleId)}
+            {@const moduleIndex = DBState.db.modules.findIndex((module) => module.id === moduleId)}
+            {#if moduleIndex >= 0}
+                {@const rmodule = DBState.db.modules[moduleIndex]}
                 <div class="pl-3 pt-3 text-left flex items-center">
                     {#if rmodule.mcp}
                         <Waypoints size={18} class="mr-2" />
@@ -246,9 +240,9 @@
                 <div class="mt-1 mb-3 pl-3">
                     <span class="text-sm text-textcolor2">{rmodule.description || 'No description provided'}</span>
                 </div>
-            {/each}
-        {/if}
-    </div>
+            {/if}
+        {/snippet}
+    </CollectionOrganizerList>
 
     </SettingPage>
 {:else if mode === 1}
@@ -256,6 +250,7 @@
     <ModuleMenu bind:currentModule={tempModule}/>
     <Button className="mt-6" onclick={() => {
         DBState.db.modules.push(tempModule)
+        assignModuleToFolder(tempModule.id, selectedModuleFolder)
         notifySuccess(language.moduleCreated)
         mode = 0
     }}>{language.createModule}</Button>
@@ -278,13 +273,6 @@
     {/if}
     </SettingPage>
 {/if}
-
-<CollectionOrganizerDialog
-    bind:open={organizerOpen}
-    kind="modules"
-    items={organizerModuleItems}
-    collectionLabel={language.modules}
-/>
 
 <ShDialog
     bind:open={personaAssignmentOpen}

@@ -1,8 +1,8 @@
 <script lang="ts">
-    import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon, FolderOpenIcon } from "@lucide/svelte";
+    import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
-    import { alertConfirm, alertMd, alertSelect, notifySuccess } from "src/ts/alert";
+    import { alertConfirm, alertMd, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
     import { TriangleAlert } from '@lucide/svelte';
 
     import { DBState, hotReloading } from "src/ts/stores.svelte";
@@ -16,77 +16,94 @@
     import CheckInput from "src/lib/UI/GUI/CheckInput.svelte";
     import TextAreaInput from "src/lib/UI/GUI/TextAreaInput.svelte";
     import { hotReloadPluginFiles } from "src/ts/plugins/apiV3/developMode";
-    import CollectionOrganizerDialog from "src/lib/UI/CollectionOrganizerDialog.svelte";
+    import CollectionOrganizerList from "src/lib/UI/CollectionOrganizerList.svelte";
     import ShButton from "src/lib/UI/GUI/ShButton.svelte";
+    import { assignCollectionItem, normalizeCollectionOrganizerState } from "src/ts/collectionOrganizer";
 
-    let showParams = $state([])
-    let organizerOpen = $state(false)
+    let showParams = $state<string[]>([])
+    let updatingPlugins = $state<string[]>([])
+    let selectedPluginFolder = $state<string | null | undefined>(undefined)
     const organizerPluginItems = $derived((DBState.db.plugins ?? []).map((plugin) => ({
         id: plugin.name,
         title: plugin.displayName ?? plugin.name,
         detail: plugin.versionOfPlugin ?? (plugin.version ? String(plugin.version) : ''),
     })))
+
+    async function installPluginUpdate(plugin: (typeof DBState.db.plugins)[number]) {
+        if (updatingPlugins.includes(plugin.name)) return
+        updatingPlugins = [...updatingPlugins, plugin.name]
+        try {
+            if (await updatePlugin(plugin)) notifySuccess(language.pluginUpdateSuccess)
+            else notifyError(language.pluginUpdateFailed)
+        } finally {
+            updatingPlugins = updatingPlugins.filter((name) => name !== plugin.name)
+        }
+    }
+
+    function assignPluginToFolder(pluginName: string, folderId: string | null | undefined) {
+        if (typeof folderId !== 'string' || !DBState.db.collectionOrganizers) return
+        const pluginNames = (DBState.db.plugins ?? []).map((plugin) => plugin.name)
+        const current = normalizeCollectionOrganizerState(DBState.db.collectionOrganizers.plugins, pluginNames)
+        DBState.db.collectionOrganizers = {
+            ...DBState.db.collectionOrganizers,
+            plugins: assignCollectionItem(current, pluginName, folderId),
+        }
+        void requestImmediateSave()
+    }
+
+    async function importPluginsToSelectedFolder(importer: () => Promise<unknown>) {
+        const previousNames = new Set((DBState.db.plugins ?? []).map((plugin) => plugin.name))
+        await importer()
+        for (const plugin of DBState.db.plugins ?? []) {
+            if (!previousNames.has(plugin.name)) assignPluginToFolder(plugin.name, selectedPluginFolder)
+        }
+    }
 </script>
 
 <SettingPage title={language.plugin}>
 <span class="text-draculared text-xs mb-4">{language.pluginWarn}</span>
 
-<div class="text-textcolor2 mb-2 flex flex-wrap gap-2 justify-end">
-    <ShButton variant="outline" size="sm" onclick={() => { organizerOpen = true }}>
-        <FolderOpenIcon size={16}/>{language.collectionOrganizer.open}
-    </ShButton>
-    <button
-        onclick={() => {
-            importPlugin()
-        }}
-        class="hover:text-textcolor cursor-pointer"
-    >
-        <PlusIcon />
-    </button>
-
-    <button
-        onclick={async () => {
-            const v = parseInt(await alertSelect([
-                "Import plugin with hot reload",
-                "Download plugin template",
-                language.cancel
-            ]))
-            switch(v){
-                case 0:
-                    await hotReloadPluginFiles()
-                    break;
-                case 1:{
-                    const a = document.createElement('a');
-                    a.href = '/plugin_start.7z';
-                    a.download = 'plugin_starter.7z';
-                    document.body.appendChild(a);
+<CollectionOrganizerList
+    kind="plugins"
+    items={organizerPluginItems}
+    collectionLabel={language.plugin}
+    bind:selectedFolderId={selectedPluginFolder}
+>
+    {#snippet toolbar(_selectedFolderId)}
+        <div class="flex items-center gap-1 text-textcolor2">
+            <ShButton variant="ghost" size="icon-sm" aria-label={language.import} onclick={() => importPluginsToSelectedFolder(() => importPlugin())}><PlusIcon /></ShButton>
+            <ShButton variant="ghost" size="icon-sm" aria-label="Plugin developer tools" onclick={async () => {
+                const v = parseInt(await alertSelect([
+                    'Import plugin with hot reload',
+                    'Download plugin template',
+                    language.cancel,
+                ]))
+                if (v === 0) await importPluginsToSelectedFolder(hotReloadPluginFiles)
+                if (v === 1) {
+                    const a = document.createElement('a')
+                    a.href = '/plugin_start.7z'
+                    a.download = 'plugin_starter.7z'
+                    document.body.appendChild(a)
+                    a.click()
+                    a.remove()
                 }
-            }
-        }}
-        class="hover:text-textcolor cursor-pointer"
-    >
-        <CodeXmlIcon />
-    </button>
-</div>
+            }}><CodeXmlIcon /></ShButton>
+        </div>
+    {/snippet}
 
-<div class="border-solid border-darkborderc p-2 flex flex-col border-1">
-    {#if !DBState.db.plugins || DBState.db.plugins?.length === 0}
-        <span class="text-textcolor2">{language.noPlugins}</span>
-    {/if}
-    {#each DBState.db.plugins as plugin, i}
-        {#if i!==0}
-        <div
-            class="border-darkborderc mt-2 mb-2 w-full border-solid border-b-1 seperator"
-        ></div>
-        {/if}
+    {#snippet itemContent(pluginName)}
+        {@const i = (DBState.db.plugins ?? []).findIndex((plugin) => plugin.name === pluginName)}
+        {#if i >= 0}
+            {@const plugin = DBState.db.plugins[i]}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div class="flex gap-2" aria-labelledby="show-params" role='button' tabindex="0" onclick={() => {
-            if(showParams.includes(i)){
-                showParams.splice(showParams.indexOf(i),1)
+            if(showParams.includes(plugin.name)){
+                showParams.splice(showParams.indexOf(plugin.name),1)
             }
             else{
-                showParams.push(i)
+                showParams.push(plugin.name)
             }
+            showParams = showParams
         }}>
             <div class="font-bold grow">
                 <span>
@@ -129,13 +146,14 @@
                     {#if updateInfo}
                         <button
                             class="text-green-400 hover:gray-200 cursor-pointer"
+                            disabled={updatingPlugins.includes(plugin.name)}
                             onclick={async (e) => {
                                 e.stopPropagation()
                                 const v = await alertConfirm(
                                     language.pluginUpdateFoundInstallIt
                                 );
                                 if (v) {
-                                    updatePlugin(plugin)
+                                    await installPluginUpdate(plugin)
                                 }
                             }}
                         >
@@ -211,7 +229,7 @@
                     .replace("{{required_version}}", "API V3")}
             </span>
             <!--List up args-->
-        {:else if Object.keys(plugin.arguments).filter((i) => !i.startsWith("hidden_")).length > 0 && showParams.includes(i)}
+        {:else if Object.keys(plugin.arguments).filter((i) => !i.startsWith("hidden_")).length > 0 && showParams.includes(plugin.name)}
             <div class="flex flex-col mt-2 bg-dark-900/50 p-3">
                 {#each Object.keys(plugin.arguments) as arg}
                     {#if !arg.startsWith("hidden_")}
@@ -314,13 +332,7 @@
                 {/each}
             </div>
         {/if}
-    {/each}
-</div>
+        {/if}
+    {/snippet}
+</CollectionOrganizerList>
 </SettingPage>
-
-<CollectionOrganizerDialog
-    bind:open={organizerOpen}
-    kind="plugins"
-    items={organizerPluginItems}
-    collectionLabel={language.plugin}
-/>
