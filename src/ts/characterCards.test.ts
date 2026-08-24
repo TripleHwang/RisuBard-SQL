@@ -183,6 +183,21 @@ describe('Character Card lorebook enabled state', () => {
 })
 
 describe('first message studio character-card extension', () => {
+    test('exports editable Studio source and generated Risu variables together in v2', () => {
+        const project = createBlankStudioProject()
+        project.fallbackMessage = 'Editable source'
+        const card = createBaseV2({
+            ...nativeCharacter([]),
+            firstMessage: '<div data-first-message-studio-compatible></div>',
+            firstMessageStudio: project,
+            defaultVariables: 'first_message_studio_done=0',
+        })
+
+        expect(card.data.first_mes).toContain('data-first-message-studio-compatible')
+        expect(card.data.extensions.risuai?.firstMessageStudio?.fallbackMessage).toBe('Editable source')
+        expect(card.data.extensions.risuai?.defaultVariables).toBe('first_message_studio_done=0')
+    })
+
     test('preserves a project through v3 export and import without sharing references', () => {
         const project = createBlankStudioProject()
         project.variables.push({

@@ -1185,7 +1185,8 @@ export function createBaseV2(char:character) {
                     largePortrait: char.largePortrait,
                     inlayViewScreen: char.inlayViewScreen,
                     newGenData: char.newGenData,
-                    vits: {}
+                    vits: {},
+                    defaultVariables: char.defaultVariables ?? ''
                 },
                 depth_prompt: char.depth_prompt
             }
@@ -1840,6 +1841,7 @@ type CharacterCardV2Risu = {
                     emotionInstructions: string,
                 },
                 vits?: {[key:string]:string}
+                defaultVariables?: string
             }
             depth_prompt?: { depth: number, prompt: string }
         }

@@ -14,9 +14,8 @@
         interpolateStudioTemplate,
         localizeStudioText,
         resetStudioRuntime,
-        resolveStudioLocale,
+        resolveStudioProjectLocale,
         setStudioInput,
-        toFirstMessageStudioLocale,
         type FirstMessageStudioProject,
         type FirstMessageStudioRuntime,
     } from 'src/ts/firstMessageStudio'
@@ -30,13 +29,14 @@
 
     let { project, variables = {}, preview = false, onChange }: Props = $props()
     const scopeId = `fmstudio-${++studioScopeCounter}`
-    const appLocale = toFirstMessageStudioLocale(getCurrentLocale())
+    const appLocale = getCurrentLocale()
     let runtime = $state(untrack(() => createStudioRuntime(project, variables, appLocale)))
     let projectSignature = $state('')
     let validationError = $state('')
     let stage = $derived(project.stages.find((candidate) => candidate.id === runtime.stageId) ?? project.stages[0])
     let stageIndex = $derived(Math.max(0, project.stages.findIndex((candidate) => candidate.id === runtime.stageId)))
-    let locale = $derived(resolveStudioLocale(runtime.variables, runtime.locale))
+    let locale = $derived(resolveStudioProjectLocale(project, runtime.variables, runtime.locale))
+    let projectTitle = $derived(localizeStudioText(project.title, locale))
     let scopedCss = $derived(createScopedStudioCss(scopeId, project.customCss))
     let customHtml = $derived(DOMPurify.sanitize(
         interpolateStudioTemplate(project.customHtml, runtime.variables),
@@ -120,12 +120,12 @@
     class="studio-window skin-{project.appearance.preset}"
     data-first-message-studio-runtime
     data-studio-skin={project.appearance.preset}
-    aria-label={project.title}
+    aria-label={projectTitle}
     style={`--studio-accent:${project.appearance.accentColor};--studio-bg:${project.appearance.backgroundColor};--studio-surface:${project.appearance.surfaceColor};--studio-text:${project.appearance.textColor};--studio-columns:${project.appearance.optionColumns};--studio-radius:${project.appearance.cornerRadius}px`}
 >
     {#if project.appearance.showHeader || project.appearance.showProgress}
         <header class="window-header">
-            {#if project.appearance.showHeader}<strong>{project.title}</strong>{/if}
+            {#if project.appearance.showHeader}<strong>{projectTitle}</strong>{/if}
             {#if project.appearance.showProgress}
                 <div class="progress" aria-label={locale === 'ko' ? '진행 단계' : locale === 'ja' ? '進行段階' : 'Progress'}>
                     {#each project.stages as item, index}

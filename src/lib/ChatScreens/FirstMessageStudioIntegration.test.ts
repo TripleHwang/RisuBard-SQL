@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import { createBlankStudioProject } from 'src/ts/firstMessageStudio'
 import {
     readFirstMessageStudioVariables,
+    resetFirstMessageStudioScriptstate,
     shouldRenderFirstMessageStudio,
     writeFirstMessageStudioVariables,
 } from 'src/ts/firstMessageStudio'
@@ -28,5 +29,22 @@ describe('first message studio chat integration', () => {
 
         expect(written).toEqual({ $keep: 'yes', $language: 'ja', $first_message_studio_done: '1' })
         expect(original).toEqual({ $keep: 'yes' })
+    })
+
+    test('resets stale Studio progress to the configured first screen', () => {
+        const project = createBlankStudioProject()
+        project.completionVariable = 'setup_done'
+        project.stageVariable = 'setup_page'
+        project.variables = [{ name: 'route', label: 'Route', defaultValue: 'default', choices: [] }]
+        const original = { $setup_done: '1', $setup_page: 'stage-2', $route: 'old', $keep: 'yes' }
+
+        expect(resetFirstMessageStudioScriptstate(project, original)).toEqual({
+            $setup_done: '0',
+            $setup_page: 'welcome',
+            $route: 'default',
+            $cv_lang: '1',
+            $keep: 'yes',
+        })
+        expect(original.$setup_page).toBe('stage-2')
     })
 })

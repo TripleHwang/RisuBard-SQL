@@ -8,6 +8,8 @@ import {
     normalizeFirstMessageStudioProject,
     resetStudioRuntime,
     resolveStudioLocale,
+    resolveStudioProjectLocale,
+    setStudioTextLanguage,
     setStudioInput,
 } from './firstMessageStudio'
 
@@ -64,6 +66,43 @@ describe('first message studio engine', () => {
         expect(localizeStudioText('Same', 'en')).toBe('Same')
         expect(resolveStudioLocale({}, 'en')).toBe('en')
         expect(resolveStudioLocale({ cv_lang: '2' }, 'en')).toBe('ja')
+    })
+
+    it('preserves an arbitrary project language list and its translation keys', () => {
+        const project = normalizeFirstMessageStudioProject({
+            enabled: true,
+            localization: {
+                variable: 'message_language',
+                defaultLanguage: 'ko-KR',
+                languages: [
+                    { id: 'ko-KR', label: '한국어', value: 'kr' },
+                    { id: 'fr', label: 'Français', value: 'français' },
+                ],
+            },
+            title: { 'ko-KR': '설정', fr: 'Configuration' },
+            stages: [{
+                id: 'welcome',
+                title: { 'ko-KR': '환영', fr: 'Bienvenue' },
+                description: '',
+                options: [],
+            }],
+        } as any)
+
+        expect(project.localization).toEqual({
+            variable: 'message_language',
+            defaultLanguage: 'ko-KR',
+            languages: [
+                { id: 'ko-KR', label: '한국어', value: 'kr' },
+                { id: 'fr', label: 'Français', value: 'français' },
+            ],
+        })
+        expect(localizeStudioText(project.title, 'fr')).toBe('Configuration')
+        expect(localizeStudioText(project.stages[0].title, 'fr')).toBe('Bienvenue')
+        expect(resolveStudioProjectLocale(project, { message_language: 'français' }, 'ko-KR')).toBe('fr')
+        expect(setStudioTextLanguage('공통', 'fr', 'Commun', project.localization.languages)).toEqual({
+            'ko-KR': '공통',
+            fr: 'Commun',
+        })
     })
 
     it('applies variable assignments and follows screen branches', () => {
