@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { mount, unmount } from 'svelte'
 import type { character } from 'src/ts/storage/database.svelte'
+import { createBlankStudioProject } from 'src/ts/firstMessageStudio'
 import FirstMessageStudioEditor from './FirstMessageStudioEditor.svelte'
 
 let mounted: ReturnType<typeof mount> | undefined
@@ -12,10 +13,15 @@ function blankCharacter(): character {
 }
 
 describe('FirstMessageStudioEditor', () => {
+    beforeEach(() => {
+        localStorage.setItem('risu-lang', 'ko')
+    })
+
     afterEach(async () => {
         if (mounted) await unmount(mounted)
         mounted = undefined
         document.body.replaceChildren()
+        localStorage.clear()
     })
 
     test('opens every character with the neutral minimum builder', () => {
@@ -56,6 +62,28 @@ describe('FirstMessageStudioEditor', () => {
         expect(character.firstMessageStudio?.variables[0].choices).toHaveLength(1)
     })
 
+    test('renames variable references already connected to choices', async () => {
+        const character = blankCharacter()
+        const project = createBlankStudioProject()
+        project.variables = [{ name: 'route', label: 'Route', defaultValue: '', choices: [] }]
+        project.stages[0].options = [{ id: 'calm', label: 'Calm', effects: [{ variable: 'route', value: 'calm' }] }]
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-variables-tab]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-variable-name]')).not.toBeNull())
+        const name = document.body.querySelector<HTMLInputElement>('[data-studio-variable-name]')!
+        name.value = 'path'
+        name.dispatchEvent(new Event('input', { bubbles: true }))
+        document.body.querySelector<HTMLButtonElement>('[data-studio-save]')!.click()
+
+        await vi.waitFor(() => expect(character.firstMessageStudio?.variables[0].name).toBe('path'))
+        expect(character.firstMessageStudio?.stages[0].options[0].effects[0].variable).toBe('path')
+    })
+
     test('edits screens and choices with no-code controls', async () => {
         const character = blankCharacter()
         mounted = mount(FirstMessageStudioEditor, {
@@ -76,33 +104,53 @@ describe('FirstMessageStudioEditor', () => {
         expect(character.firstMessageStudio?.stages[0].options).toHaveLength(1)
     })
 
-    test('keeps intentionally cleared localized fields empty while editing', async () => {
+    test('uses the global app language without a separate language row', async () => {
+        localStorage.setItem('risu-lang', 'en')
         mounted = mount(FirstMessageStudioEditor, {
             target: document.body,
             props: { character: blankCharacter(), onClose: vi.fn() },
         })
 
-        const englishLocale = [...document.body.querySelectorAll<HTMLButtonElement>('.locale-tabs button')]
-            .find((button) => button.textContent?.trim() === 'English')!
-        englishLocale.click()
-        await vi.waitFor(() => expect(document.body.querySelector<HTMLInputElement>('[data-studio-stage-title]')?.value).toBe('First screen'))
+        expect(document.body.querySelector('.locale-tabs')).toBeNull()
+        expect(document.body.querySelector<HTMLInputElement>('[data-studio-stage-title]')?.value).toBe('First screen')
+    })
 
-        document.body.querySelector<HTMLButtonElement>('[data-studio-add-option]')!.click()
-        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-option-card]')).not.toBeNull())
+    test('keeps the live preview on its current screen while that screen is edited', async () => {
+        const character = blankCharacter()
+        const project = createBlankStudioProject()
+        project.stages[0].options = [{
+            id: 'next',
+            label: { ko: '다음', ja: '次へ', en: 'Next' },
+            effects: [],
+            nextStageId: 'second',
+        }]
+        project.stages.push({
+            id: 'second',
+            tag: { ko: '둘', ja: '二', en: 'TWO' },
+            title: { ko: '두 번째 화면', ja: '二番目', en: 'Second screen' },
+            description: { ko: '편집할 화면', ja: '編集画面', en: 'Edit this screen' },
+            options: [],
+        })
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
 
-        const optionLabel = () => document.body.querySelector<HTMLInputElement>(
-            '[data-studio-option-card] .option-body > label input',
-        )!
-        expect(optionLabel().value).toBe('New choice')
-        optionLabel().value = ''
-        optionLabel().dispatchEvent(new Event('input', { bubbles: true }))
-        const koreanLocale = [...document.body.querySelectorAll<HTMLButtonElement>('.locale-tabs button')]
-            .find((button) => button.textContent?.trim() === '한국어')!
-        koreanLocale.click()
-        await vi.waitFor(() => expect(optionLabel().value).toBe('새 선택지'))
-        englishLocale.click()
+        document.body.querySelector<HTMLButtonElement>('[data-studio-option="next"]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-stage="second"]')).not.toBeNull())
+        document.body.querySelector<HTMLButtonElement>('[data-studio-editor-stage="second"]')!.click()
+        const title = document.body.querySelector<HTMLInputElement>('[data-studio-stage-title]')!
+        title.value = '수정된 두 번째 화면'
+        title.dispatchEvent(new Event('input', { bubbles: true }))
 
-        await vi.waitFor(() => expect(optionLabel().value).toBe(''))
+        await vi.waitFor(() => {
+            expect(document.body.querySelector('[data-studio-stage="second"]')).not.toBeNull()
+            expect(document.body.textContent).toContain('수정된 두 번째 화면')
+        })
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-remove-stage]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-stage="welcome"]')).not.toBeNull())
     })
 
     test('opens project settings from every editor tab', async () => {

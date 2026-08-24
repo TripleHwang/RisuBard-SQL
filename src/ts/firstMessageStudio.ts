@@ -89,6 +89,7 @@ export interface FirstMessageStudioRuntime {
     baseVariables: Record<string, string>
     stageVariable?: string
     stageIndexById: Record<string, number>
+    locale: FirstMessageStudioLocale
 }
 
 export type FirstMessageStudioApplyResult = {
@@ -153,10 +154,18 @@ export function localizeStudioText(value: FirstMessageStudioText | undefined, lo
     return value[locale] || value.ko || value.en || value.ja || ''
 }
 
-export function resolveStudioLocale(variables: Record<string, string>): FirstMessageStudioLocale {
+export function toFirstMessageStudioLocale(locale: string | undefined): FirstMessageStudioLocale {
+    const normalized = String(locale ?? '').toLowerCase()
+    if (normalized.startsWith('ja')) return 'ja'
+    if (normalized.startsWith('ko')) return 'ko'
+    return 'en'
+}
+
+export function resolveStudioLocale(variables: Record<string, string>, fallback: FirstMessageStudioLocale = 'ko'): FirstMessageStudioLocale {
     if (variables.cv_lang === '2') return 'ja'
     if (variables.cv_lang === '3') return 'en'
-    return 'ko'
+    if (variables.cv_lang === '1') return 'ko'
+    return fallback
 }
 
 function normalizeText(value: unknown, fallback = ''): FirstMessageStudioText {
@@ -301,7 +310,7 @@ function stageForSavedValue(project: FirstMessageStudioProject, variables: Recor
     return project.stages[legacyIndex]?.id ?? project.startStageId
 }
 
-export function createStudioRuntime(projectValue: FirstMessageStudioProject, variables: Record<string, string> = {}): FirstMessageStudioRuntime {
+export function createStudioRuntime(projectValue: FirstMessageStudioProject, variables: Record<string, string> = {}, locale: FirstMessageStudioLocale = 'ko'): FirstMessageStudioRuntime {
     const project = normalizeFirstMessageStudioProject(projectValue)
     const baseVariables = { ...variables }
     const nextVariables = { ...variables }
@@ -320,6 +329,7 @@ export function createStudioRuntime(projectValue: FirstMessageStudioProject, var
         baseVariables,
         stageVariable: project.stageVariable,
         stageIndexById: Object.fromEntries(project.stages.map((stage, index) => [stage.id, index])),
+        locale,
     }
 }
 
@@ -334,7 +344,7 @@ export function applyStudioOption(projectValue: FirstMessageStudioProject, runti
     if (!stage || !option) return { runtime, error: 'unknown-option' }
     const inputValue = option.input ? (runtime.inputs[option.input.variable] ?? '').trim() : ''
     if (option.input?.required && !inputValue) return { runtime, error: 'required-input' }
-    const locale = resolveStudioLocale(runtime.variables)
+    const locale = resolveStudioLocale(runtime.variables, runtime.locale)
     const variables = { ...runtime.variables }
     for (const effect of option.effects) variables[effect.variable] = localizeStudioText(effect.value, locale)
     if (option.input) {
@@ -375,7 +385,7 @@ export function resetStudioRuntime(projectValue: FirstMessageStudioProject, runt
     variables[project.completionVariable] = '0'
     if (project.stageVariable) variables[project.stageVariable] = project.startStageId
     return {
-        ...createStudioRuntime(project, variables),
+        ...createStudioRuntime(project, variables, runtime.locale),
         baseVariables: { ...runtime.baseVariables },
     }
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
     import type { character as Character } from 'src/ts/storage/database.svelte'
+    import { getCurrentLocale } from 'src/lang'
     import {
         createBlankStudioProject,
         createStudioAppearance,
@@ -10,6 +11,7 @@
         type FirstMessageStudioSkinPreset,
         type FirstMessageStudioText,
         type FirstMessageStudioVariable,
+        toFirstMessageStudioLocale,
     } from 'src/ts/firstMessageStudio'
     import FirstMessageStudioRuntime from './FirstMessageStudioRuntime.svelte'
 
@@ -28,7 +30,7 @@
 
     let draft = $state(makeInitialProject())
     let selectedStageId = $state('')
-    let editLocale: FirstMessageStudioLocale = $state('ko')
+    let editLocale: FirstMessageStudioLocale = $state(toFirstMessageStudioLocale(getCurrentLocale()))
     let showProjectSettings = $state(false)
     let editorMode: 'content' | 'variables' | 'design' | 'code' = $state('content')
     let selectedStage = $derived(draft.stages.find((stage) => stage.id === selectedStageId) ?? draft.stages[0])
@@ -147,6 +149,19 @@
         draft.variables.splice(index, 1)
     }
 
+    function renameVariable(variable: FirstMessageStudioVariable, nextName: string) {
+        const previousName = variable.name
+        variable.name = nextName
+        if (!previousName || previousName === nextName) return
+        for (const stage of draft.stages) {
+            for (const option of stage.options) {
+                for (const effect of option.effects) if (effect.variable === previousName) effect.variable = nextName
+                if (option.input?.variable === previousName) option.input.variable = nextName
+                if (option.input?.displayVariable === previousName) option.input.displayVariable = nextName
+            }
+        }
+    }
+
     function addVariableChoice(variable: FirstMessageStudioVariable) {
         variable.choices.push({
             label: { ko: '새 값', ja: '新しい値', en: 'New value' },
@@ -238,7 +253,7 @@
                             <article class="variable-card" data-studio-variable={variable.name}>
                                 <header><strong>{localized(variable.label) || variable.name}</strong><button type="button" onclick={() => removeVariable(variableIndex)}>삭제</button></header>
                                 <div class="three-columns">
-                                    <label>변수 이름<input data-studio-variable-name bind:value={variable.name} placeholder="route"/></label>
+                                    <label>변수 이름<input data-studio-variable-name value={variable.name} oninput={(event) => renameVariable(variable, event.currentTarget.value)} placeholder="route"/></label>
                                     <label>표시 이름<input value={localized(variable.label)} oninput={(event) => variable.label = setLocalized(variable.label, event.currentTarget.value)}/></label>
                                     <label>기본값<input bind:value={variable.defaultValue} placeholder="default"/></label>
                                 </div>
@@ -297,12 +312,6 @@
                         </article>
                     </section>
                 {:else}
-                    <nav class="locale-tabs" aria-label="편집 언어">
-                        <button type="button" class:active={editLocale === 'ko'} onclick={() => editLocale = 'ko'}>한국어</button>
-                        <button type="button" class:active={editLocale === 'ja'} onclick={() => editLocale = 'ja'}>日本語</button>
-                        <button type="button" class:active={editLocale === 'en'} onclick={() => editLocale = 'en'}>English</button>
-                    </nav>
-
                     {#if showProjectSettings}
                         <div class="form-box three-columns" data-studio-project-settings-panel>
                             <label>창 제목<input bind:value={draft.title}/></label>
@@ -410,7 +419,6 @@
     .rail-move button{padding:.4rem .25rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.4rem;font-size:.6rem}.rail-action.danger{color:#ff8b79}.rail-action.settings{margin-top:auto}
     .editor{padding:1rem}.mode-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:.35rem;margin-bottom:.8rem;padding:.25rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;background:var(--risu-theme-darkbg)}
     .mode-tabs button{padding:.58rem;border-radius:.42rem;color:var(--risu-theme-textcolor2);font-weight:800}.mode-tabs button.active{color:var(--risu-theme-darkbg);background:var(--risu-theme-primary)}
-    .locale-tabs{display:flex;gap:.3rem;margin-bottom:.8rem;padding:.25rem;border-radius:.5rem;background:var(--risu-theme-darkbg)}.locale-tabs button{flex:1;padding:.4rem;border-radius:.35rem;color:var(--risu-theme-textcolor2)}.locale-tabs button.active{color:var(--risu-theme-textcolor);background:var(--risu-theme-bgcolor)}
     .form-box,.option-body{display:grid;gap:.65rem;padding:.75rem}.form-box{border:1px solid var(--risu-theme-darkborderc);border-radius:.6rem;background:var(--risu-theme-darkbg)}
     .two-columns,.three-columns{display:grid;grid-template-columns:1fr 1fr;gap:.55rem}.three-columns{grid-template-columns:repeat(3,1fr)}
     label{display:grid;gap:.28rem;color:var(--risu-theme-textcolor2);font-size:.66rem;font-weight:700}label .optional{font-size:.58rem;font-weight:500}

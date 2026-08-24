@@ -41,6 +41,21 @@ export interface ModelBindingTarget {
     usePromptPresetParams?: boolean
 }
 
+export function resolveRequestModelBindingTarget(
+    explicitTarget: ModelBindingTarget | null | undefined,
+    realChatId: string | undefined,
+    currentChat: ModelBindingTarget | null | undefined,
+): ModelBindingTarget | null | undefined {
+    if (explicitTarget) return explicitTarget
+    if (realChatId) {
+        const requestedChat = getDatabase().characters
+            ?.flatMap((character) => character.chats)
+            .find((chat) => chat.id === realChatId)
+        if (requestedChat) return requestedChat
+    }
+    return currentChat
+}
+
 function findPreset(id: string | undefined, presets: ModelPreset[]): ModelPreset | undefined {
     if (!id) return undefined
     return presets.find((p) => p.id === id)

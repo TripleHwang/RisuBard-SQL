@@ -10,6 +10,7 @@ vi.mock('src/ts/storage/database.svelte', () => ({
 
 import {
     resolveChatModelBinding,
+    resolveRequestModelBindingTarget,
     resolvePresetMaxOutputTokens,
     resolveChatMaxResponseTokens,
     applyPromptPresetParams,
@@ -325,6 +326,38 @@ describe('applyPromptPresetParams — per-chat prompt-preset sampling override',
             schema: [{ key: 'apiKey', mapsTo: { target: 'auth', path: 'apiKey' } }],
         })
         expect(applyPromptPresetParams(preset, onChat, 'model')).toBe(preset)
+    })
+})
+
+describe('resolveRequestModelBindingTarget', () => {
+    test('uses the chat associated with realChatId before the currently open chat', () => {
+        const requestedChat = {
+            id: 'requested-chat',
+            useModelPreset: true,
+            modelBinding: bindingWith('p-main'),
+        }
+        const openChat = { id: 'open-chat', useModelPreset: false }
+        mockDb.characters = [{ chats: [openChat, requestedChat] }]
+
+        expect(resolveRequestModelBindingTarget(
+            undefined,
+            'requested-chat',
+            openChat,
+        )).toBe(requestedChat)
+    })
+
+    test('keeps an explicit non-chat binding target authoritative', () => {
+        const explicitTarget = {
+            useModelPreset: true,
+            modelBinding: bindingWith('p-main'),
+        }
+        mockDb.characters = [{ chats: [{ id: 'requested-chat' }] }]
+
+        expect(resolveRequestModelBindingTarget(
+            explicitTarget,
+            'requested-chat',
+            { useModelPreset: false },
+        )).toBe(explicitTarget)
     })
 })
 

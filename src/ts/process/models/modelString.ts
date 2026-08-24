@@ -1,17 +1,13 @@
 import { getDatabase, getCurrentChat } from "src/ts/storage/database.svelte";
+import { resolveChatModelBinding } from "../request/modelPresetBinding";
 
 export function getGenerationModelString(name?:string){
     const db = getDatabase()
-    // Binding-aware default label: when no explicit model name is passed (the
-    // primary generation), reflect the bound ModelPreset instead of the classic
-    // db.aiModel. Only applies in the binding regime; classic chats fall through.
+    // Keep the initial display label on the same regime/binding resolution as
+    // the request dispatcher, including global preset/legacy mode locks.
     if(name === undefined){
-        const chat = getCurrentChat()
-        const boundMainId = chat?.useModelPreset ? chat.modelBinding?.main : undefined
-        if(boundMainId){
-            const preset = db.modelPresets?.find(p => p.id === boundMainId)
-            if(preset) return preset.name
-        }
+        const binding = resolveChatModelBinding(getCurrentChat(), 'model')
+        if(binding.kind === 'modelPreset') return binding.preset.name
     }
     switch (name ?? db.aiModel){
         case 'reverse_proxy':
