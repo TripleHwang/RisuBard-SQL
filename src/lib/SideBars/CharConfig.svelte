@@ -6,7 +6,7 @@
     import { notifySuccess } from "src/ts/alert";
     import { DBState } from 'src/ts/stores.svelte';
     import { CharConfigSubMenu, MobileGUI, selectedCharID, hypaV3ModalOpen } from "../../ts/stores.svelte";
-    import { PlusIcon, TrashIcon, DownloadIcon, HardDriveUploadIcon, ImageIcon, ImageOffIcon, ArrowUp, ArrowDown, TriangleAlertIcon } from '@lucide/svelte'
+    import { PlusIcon, TrashIcon, DownloadIcon, HardDriveUploadIcon, ImageIcon, ImageOffIcon, ArrowUp, ArrowDown, TriangleAlertIcon, LayoutTemplateIcon } from '@lucide/svelte'
     import Check from "../UI/GUI/CheckInput.svelte";
     import { addCharEmotion, addingEmotion, getCharImage, rmCharEmotion, selectCharImg, removeChar, changeCharImage } from "../../ts/characters";
     import LoreBook from "./LoreBook/LoreBookSetting.svelte";
@@ -34,6 +34,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     import { exportCharacterPackage, importPackageToCharacter } from "src/ts/characterPackage";
     import { exportRegex, importRegex } from "src/ts/process/scripts";
     import SliderInput from "../UI/GUI/SliderInput.svelte";
+    import FirstMessageStudioEditor from '../FirstMessageStudio/FirstMessageStudioEditor.svelte'
 
     interface Props {
         subMenuOverride?: number
@@ -49,6 +50,7 @@ import ShButton from "../UI/GUI/ShButton.svelte";
     let pkgIncludePersona = $state(true)
     let pkgIncludeInlays = $state(false)
     let viewSubMenu = $state(0)
+    let firstMessageStudioOpen = $state(false)
     let emos:[string, string][] = $state([])
     let tokens = $state({
         desc: 0,
@@ -264,7 +266,13 @@ import ShButton from "../UI/GUI/ShButton.svelte";
         <span class="text-textcolor">{language.description} <Help key="charDesc"/></span>
         <TextAreaInput highlight margin="both" autocomplete="off" bind:value={(DBState.db.characters[$selectedCharID] as character).desc}></TextAreaInput>
         <span class="text-textcolor2 mb-6 text-sm">{tokens.desc} {language.tokens}</span>
-        <span class="text-textcolor">{language.firstMessage} <Help key="charFirstMessage"/></span>
+        <div class="flex items-center justify-between gap-2">
+            <span class="text-textcolor">{language.firstMessage} <Help key="charFirstMessage"/></span>
+            <ShButton className="shrink-0" onclick={() => firstMessageStudioOpen = true}>
+                <LayoutTemplateIcon size={15}/>
+                <span>{language.firstMessageStudio}</span>
+            </ShButton>
+        </div>
         <TextAreaInput highlight margin="both" autocomplete="off" bind:value={DBState.db.characters[$selectedCharID].firstMessage}></TextAreaInput>
         <span class="text-textcolor2 mb-6 text-sm">{tokens.firstMsg} {language.tokens}</span>
     {/if}
@@ -1211,6 +1219,10 @@ import ShButton from "../UI/GUI/ShButton.svelte";
             {language.applyModule}
         </Button>
 
+{/if}
+
+{#if firstMessageStudioOpen && currentCharacter?.type === 'character'}
+    <FirstMessageStudioEditor character={currentCharacter as character} onClose={() => firstMessageStudioOpen = false}/>
 {/if}
 {/if}
 

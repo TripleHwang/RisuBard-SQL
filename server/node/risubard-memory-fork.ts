@@ -762,6 +762,38 @@ export async function replaceMemoryWorkspace(
     }
 }
 
+export async function removeRebootMemoryWorkspace(input: {
+    userDataDirectory: string
+    characterId: string
+    chatId: string
+}, options: { fileSystem?: ForkFileSystem } = {}): Promise<{ removed: boolean }> {
+    required(input.characterId, 'characterId')
+    const chatId = required(input.chatId, 'chatId')
+    if (!chatId.startsWith('reboot-')) {
+        throw new Error('Only reboot staging workspaces can be removed')
+    }
+    const fileSystem = options.fileSystem ?? nodeFs
+    const workspace = resolveMemoryWorkspace(
+        input.userDataDirectory,
+        input.characterId,
+        chatId
+    )
+    try {
+        const status = await fileSystem.lstat(workspace.directory)
+        if (status.isSymbolicLink() || !status.isDirectory()) {
+            throw new Error('Reboot staging workspace is unsafe')
+        }
+    }
+    catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return { removed: false }
+        }
+        throw error
+    }
+    await fileSystem.rm(workspace.directory, { recursive: true, force: false })
+    return { removed: true }
+}
+
 export async function completeMemoryWorkspaceFork(
     input: CompleteMemoryForkInput,
     options: { fileSystem?: ForkFileSystem } = {}

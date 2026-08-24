@@ -14,6 +14,7 @@
         XCircleIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
+    import ShDialog from 'src/lib/UI/GUI/ShDialog.svelte'
     import { language } from 'src/lang'
     import { forageStorage } from 'src/ts/globalApi.svelte'
     import {
@@ -48,12 +49,24 @@
     import forceUpdateHover from 'src/assets/risubard-memory/additional-analysis-hover.gif'
     import type { DirectWikiCommandResult } from 'src/ts/risubard/directWikiCommand'
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar'
+    import { alertConfirm, alertError } from 'src/ts/alert'
+    import {
+        resolveWikiRebootViewChatId,
+        type WikiRebootBatchSize,
+        type WikiRebootJob,
+    } from 'src/ts/risubard/wikiReboot'
+    import { resolveRisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
 
     interface Props {
         open?: boolean
         characterId: string
         chatId: string
         onForceWikiUpdate?: () => Promise<boolean>
+        rebootJob?: WikiRebootJob
+        onStartWikiReboot?: (batchSize: WikiRebootBatchSize) => Promise<boolean>
+        onStopWikiReboot?: () => Promise<boolean>
+        onResumeWikiReboot?: () => Promise<boolean>
+        onCancelWikiReboot?: () => Promise<boolean>
         onExecuteWikiCommand?: (
             instruction: string
         ) => Promise<DirectWikiCommandResult>
@@ -65,6 +78,11 @@
         characterId,
         chatId,
         onForceWikiUpdate,
+        rebootJob,
+        onStartWikiReboot,
+        onStopWikiReboot,
+        onResumeWikiReboot,
+        onCancelWikiReboot,
         onExecuteWikiCommand,
         onNavigateStorySource,
     }: Props = $props()
@@ -90,6 +108,9 @@
     let editorFocus = $state(false)
     let helpOpen = $state(false)
     let selectedMarkdownId = $state('')
+    let rebootChooserOpen = $state(false)
+    let rebootActionBusy = $state(false)
+    let wikiChatId = $derived(resolveWikiRebootViewChatId(chatId, rebootJob))
 
     let v1State = $derived(wiki?.mode === 'v1' ? wiki.state : null)
     let activeFacts = $derived(
@@ -112,6 +133,12 @@
             character.chaId === characterId
         )?.chats.find((chat) => chat.id === chatId)
     )
+    let rebootAnalysisTokenLimit = $derived(
+        resolveRisuBardChatSettings(
+            DBState.db,
+            currentChat?.risuBardSettings
+        ).risuBardAnalysisTokenLimit
+    )
     let empty = $derived(
         wiki?.mode === 'v1'
         && !wiki.baseline
@@ -119,10 +146,74 @@
         && invalidatedFacts.length === 0
         && recentEvents.length === 0
     )
+    let rebootButtonLabel = $derived.by(() => {
+        if (!rebootJob) return language.risuBardWikiReboot
+        if (rebootJob.status === 'paused' || rebootJob.status === 'failed') {
+            return language.risuBardWikiRebootResume
+        }
+        if (rebootJob.status === 'stop-requested') {
+            return language.risuBardWikiRebootStopping
+        }
+        if (rebootJob.status === 'finalizing') {
+            return language.risuBardWikiRebootFinalizing
+        }
+        return language.risuBardWikiRebootStop
+    })
+
+    async function handleRebootAction() {
+        if (rebootActionBusy) return
+        if (!rebootJob) {
+            if (!await alertConfirm(language.risuBardWikiRebootWarning)) return
+            rebootChooserOpen = true
+            return
+        }
+        rebootActionBusy = true
+        try {
+            if (rebootJob.status === 'running') {
+                await onStopWikiReboot?.()
+            }
+            else if (rebootJob.status === 'paused'
+                || rebootJob.status === 'failed') {
+                const operation = onResumeWikiReboot?.()
+                rebootActionBusy = false
+                void operation?.catch((cause) => alertError(cause))
+            }
+        }
+        catch (cause) {
+            alertError(cause)
+        }
+        finally {
+            rebootActionBusy = false
+        }
+    }
+
+    function startReboot(batchSize: WikiRebootBatchSize) {
+        rebootChooserOpen = false
+        rebootActionBusy = true
+        const operation = onStartWikiReboot?.(batchSize)
+        rebootActionBusy = false
+        void operation?.catch((cause) => {
+            alertError(cause)
+        })
+    }
+
+    async function cancelReboot() {
+        if (!await alertConfirm(language.risuBardWikiRebootCancelWarning)) return
+        rebootActionBusy = true
+        try {
+            await onCancelWikiReboot?.()
+        }
+        catch (cause) {
+            alertError(cause)
+        }
+        finally {
+            rebootActionBusy = false
+        }
+    }
 
     async function loadWiki() {
         const sequence = ++requestSequence
-        const scope = `${characterId}\u0000${chatId}`
+        const scope = `${characterId}\u0000${wikiChatId}`
         const refreshingCurrentScope = loadedScope === scope
         if (!refreshingCurrentScope) {
             wiki = null
@@ -133,7 +224,7 @@
         try {
             const loaded = await loadNarrativeMemoryWiki({
                 characterId,
-                chatId,
+                chatId: wikiChatId,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
@@ -162,7 +253,7 @@
     }
 
     async function forceWikiUpdate() {
-        if (forceUpdating) return
+        if (forceUpdating || rebootJob) return
         forceUpdating = true
         forceUpdateStatus = ''
         forceUpdateError = ''
@@ -230,7 +321,7 @@
         if (input.wiki) {
             wikiResult = await replaceWikiText({
                 characterId,
-                chatId,
+                chatId: wikiChatId,
                 find: input.find,
                 replacement: input.replacement,
                 fetchImpl: fetch,
@@ -350,7 +441,7 @@
 
     $effect(() => {
         void open
-        if (!characterId || !chatId) return
+        if (!characterId || !wikiChatId) return
         void loadWiki()
     })
 
@@ -364,7 +455,7 @@
                 RisuBardMemoryUpdatedDetail
             >).detail
             if (detail?.characterId !== characterId
-                || detail.chatId !== chatId) return
+                || detail.chatId !== wikiChatId) return
             void loadWiki()
         }
         window.addEventListener(
@@ -430,7 +521,8 @@
                     aria-label={language.risuBardMemoryForceUpdate}
                     aria-busy={forceUpdating}
                     onclick={forceWikiUpdate}
-                    disabled={forceUpdating || !onForceWikiUpdate}
+                    disabled={forceUpdating || Boolean(rebootJob)
+                        || !onForceWikiUpdate}
                 >
                     <img class="force-update-idle" src={forceUpdateIdle} alt="" />
                     <img class="force-update-hover" src={forceUpdateHover} alt="" />
@@ -438,6 +530,33 @@
                         ? language.risuBardMemoryForceUpdating
                         : language.risuBardMemoryForceUpdate}</span>
                 </button>
+                <button
+                    type="button"
+                    class="reboot-button"
+                    class:active={Boolean(rebootJob)}
+                    data-risubard-wiki-reboot
+                    title={rebootJob
+                        ? `${rebootButtonLabel} · ${rebootJob.completedAssistantMessageIds.length}/${rebootJob.targetAssistantMessageIds.length}`
+                        : language.risuBardWikiRebootDescription}
+                    aria-busy={rebootActionBusy
+                        || rebootJob?.status === 'running'
+                        || rebootJob?.status === 'finalizing'}
+                    onclick={handleRebootAction}
+                    disabled={rebootActionBusy
+                        || rebootJob?.status === 'stop-requested'
+                        || rebootJob?.status === 'finalizing'
+                        || (!rebootJob && !onStartWikiReboot)}
+                ><span>{rebootButtonLabel}</span></button>
+                {#if rebootJob && (rebootJob.status === 'paused'
+                    || rebootJob.status === 'failed')}
+                    <button
+                        type="button"
+                        class="reboot-cancel-button"
+                        title={language.risuBardWikiRebootCancelDescription}
+                        onclick={cancelReboot}
+                        disabled={rebootActionBusy}
+                    ><span>{language.risuBardWikiRebootCancel}</span></button>
+                {/if}
             {/if}
             <div class="dock-view-actions">
                 <button
@@ -576,7 +695,8 @@
         {:else if wiki?.mode === 'markdown'}
             <div
                 class="markdown-wiki"
-                class:workspace-split={activeView === 'workspace' && !!onExecuteWikiCommand}
+                class:workspace-split={activeView === 'workspace'
+                    && !!onExecuteWikiCommand && !rebootJob}
                 class:command-collapsed={!commandExpanded}
                 class:editor-focus={editorFocus}
                 class:activity-view={activeView === 'log'}
@@ -589,7 +709,8 @@
                     <div class="wiki-editor-region">
                         <RisuBardWikiEditor
                             {characterId}
-                            {chatId}
+                            chatId={wikiChatId}
+                            locked={Boolean(rebootJob)}
                             documents={wiki.documents}
                             health={wiki.health}
                             bind:selectedId={selectedMarkdownId}
@@ -598,7 +719,7 @@
                             onOpenFindReplace={() => findReplaceOpen = true}
                         />
                     </div>
-                    {#if onExecuteWikiCommand}
+                    {#if onExecuteWikiCommand && !rebootJob}
                         <button
                             type="button"
                             class="workspace-resizer"
@@ -761,6 +882,55 @@
     {/if}
 </aside>
 
+{#if rebootChooserOpen}
+    <ShDialog
+        open={true}
+        onOpenChange={(value) => { if (!value) rebootChooserOpen = false }}
+        size="default"
+        tier="top"
+        footer={rebootChooserFooter}
+    >
+        {#snippet title()}{language.risuBardWikiRebootChooseTitle}{/snippet}
+        <p class="reboot-choice-intro">
+            {language.risuBardWikiRebootChooseDescription}
+        </p>
+        <p
+            class="reboot-token-budget"
+            data-risubard-wiki-reboot-token-budget
+        >
+            {language.risuBardWikiRebootTokenBudget(rebootAnalysisTokenLimit)}
+        </p>
+        <div class="reboot-choices" data-risubard-wiki-reboot-choices>
+            <button
+                type="button"
+                class="reboot-choice"
+                title={language.risuBardWikiRebootOneTurnTooltip}
+                onclick={() => startReboot(1)}
+            >
+                <strong>{language.risuBardWikiRebootOneTurn}</strong>
+                <span>{language.risuBardWikiRebootOneTurnSummary}</span>
+            </button>
+            <button
+                type="button"
+                class="reboot-choice"
+                title={language.risuBardWikiRebootTwoTurnTooltip}
+                onclick={() => startReboot(2)}
+            >
+                <strong>{language.risuBardWikiRebootTwoTurn}</strong>
+                <span>{language.risuBardWikiRebootTwoTurnSummary}</span>
+            </button>
+        </div>
+    </ShDialog>
+{/if}
+
+{#snippet rebootChooserFooter()}
+    <div class="reboot-choice-footer">
+        <ShButton variant="outline" onclick={() => rebootChooserOpen = false}>
+            {language.cancel}
+        </ShButton>
+    </div>
+{/snippet}
+
 <RisuBardMemoryWikiHelp bind:open={helpOpen} />
 
 <style>
@@ -880,6 +1050,17 @@
     }
     .dock-views button, .dock-views summary { width: 2.35rem; min-height: 2.25rem; padding: .35rem; }
     .dock-views .force-update-button { position: relative; flex: 0 0 52px; width: 52px; height: 52px; min-height: 52px; padding: 2px; overflow: hidden; border-color: color-mix(in srgb, var(--risu-theme-primary) 42%, var(--risu-theme-darkborderc)); border-radius: .72rem; background: color-mix(in srgb, var(--risu-theme-primary) 13%, var(--risu-theme-darkbg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--risu-theme-primary) 10%, transparent), 0 .22rem .6rem rgb(0 0 0 / .16); }
+    .dock-views .reboot-button,
+    .dock-views .reboot-cancel-button {
+        width: auto;
+        min-width: 5.7rem;
+        padding-inline: .72rem;
+        border-color: color-mix(in srgb, var(--risu-theme-primary) 32%, var(--risu-theme-darkborderc));
+    }
+    .dock-views .reboot-cancel-button {
+        min-width: auto;
+        color: var(--risu-theme-draculared);
+    }
     .force-update-button img { display: block; width: 46px; height: 46px; object-fit: contain; image-rendering: auto; }
     .force-update-hover { display: none !important; }
     .force-update-button:hover:not(:disabled) .force-update-idle,
@@ -888,6 +1069,14 @@
     .force-update-button.running .force-update-hover { display: block !important; }
     .dock-view-actions svg { display: block; width: 22px; height: 22px; fill: currentColor; }
     .dock-views button span, .dock-views summary span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .dock-views .reboot-button span,
+    .dock-views .reboot-cancel-button span {
+        position: static;
+        width: auto;
+        height: auto;
+        overflow: visible;
+        clip-path: none;
+    }
     .dock-views button:hover, .dock-views button.active,
     .dock-views summary:hover, .dock-settings[open] > summary,
     .dock-close:hover {
@@ -930,6 +1119,56 @@
         box-shadow: 0 1rem 2.8rem rgb(0 0 0 / .38);
     }
     .dock-close { flex: 0 0 auto; padding-inline: .38rem; }
+    .reboot-choice-intro {
+        margin: 0 0 .65rem;
+        color: var(--risu-theme-textcolor2);
+        font-size: .82rem;
+        line-height: 1.55;
+        text-align: center;
+    }
+    .reboot-token-budget {
+        margin: 0 0 1rem;
+        padding: .65rem .75rem;
+        border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 24%, var(--risu-theme-darkborderc));
+        border-radius: .5rem;
+        color: var(--risu-theme-textcolor2);
+        background: color-mix(in srgb, var(--risu-theme-primary) 6%, transparent);
+        font-size: .74rem;
+        line-height: 1.5;
+        text-align: center;
+    }
+    .reboot-choices {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: .85rem;
+    }
+    .reboot-choice {
+        aspect-ratio: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: .7rem;
+        min-width: 0;
+        padding: 1rem;
+        border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 35%, var(--risu-theme-darkborderc));
+        border-radius: .7rem;
+        color: var(--risu-theme-textcolor);
+        background: color-mix(in srgb, var(--risu-theme-primary) 8%, var(--risu-theme-darkbg));
+        cursor: pointer;
+    }
+    .reboot-choice:hover {
+        border-color: var(--risu-theme-primary);
+        background: color-mix(in srgb, var(--risu-theme-primary) 17%, var(--risu-theme-darkbg));
+    }
+    .reboot-choice strong { font-size: 1rem; }
+    .reboot-choice span {
+        color: var(--risu-theme-textcolor2);
+        font-size: .72rem;
+        line-height: 1.45;
+        text-align: center;
+    }
+    .reboot-choice-footer { display: flex; width: 100%; justify-content: center; }
     .memory-ledger {
         display: flex;
         flex: 1;

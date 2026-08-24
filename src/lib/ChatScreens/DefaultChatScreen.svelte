@@ -6,7 +6,7 @@
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
     import ShDropdownMenuItem from 'src/lib/UI/GUI/ShDropdownMenuItem.svelte';
-    import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore } from "../../ts/stores.svelte";
+    import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, MobileGUI } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
     import {
@@ -22,10 +22,14 @@
     import { getCharImage } from "../../ts/characters";
     import {
         chatProcessStage,
+        cancelCurrentWikiReboot,
         confirmCurrentNarrativeMessage,
         doingChat,
         executeCurrentNarrativeWikiCommand,
         forceCurrentNarrativeWikiUpdate,
+        resumeCurrentWikiReboot,
+        startCurrentWikiReboot,
+        stopCurrentWikiReboot,
         undoCurrentNarrativeCanonicalReceipt,
         sendChat,
     } from "../../ts/process/index.svelte";
@@ -52,6 +56,8 @@ import { isMobile } from 'src/ts/platform'
     import { getInlayAsset } from 'src/ts/process/files/inlays';
     import { quickMenu } from 'src/ts/hotkey';
     import { loadChatDraft, scheduleSaveChatDraft, flushChatDraft, removeChatDraft } from 'src/ts/storage/chatDraft';
+    import { blocksChatGeneration } from 'src/ts/risubard/wikiReboot';
+    import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
 
     import Chats from './Chats.svelte';
     import Button from '../UI/GUI/Button.svelte';
@@ -59,6 +65,7 @@ import { isMobile } from 'src/ts/platform'
     import PluginFloatingActionButtons from '../Others/PluginFloatingActionButtons.svelte';
     import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
     import RisuBardMemoryWiki from '../Others/RisuBardMemoryWiki.svelte';
+    import RisuBardSaveLoadShortcuts from './RisuBardSaveLoadShortcuts.svelte';
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar';
     import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
     import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg';
@@ -126,6 +133,9 @@ import { isMobile } from 'src/ts/platform'
     }: Props = $props();
     let currentCharacter = $derived(DBState.db.characters[$selectedCharID])
     let currentChatSlot = $derived(currentCharacter?.chats[currentCharacter.chatPage])
+    let wikiRebootBlocksGeneration = $derived(
+        blocksChatGeneration(currentChatSlot?.risuBardWikiReboot)
+    )
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
@@ -426,6 +436,10 @@ import { isMobile } from 'src/ts/platform'
         if($doingChat){
             return
         }
+        if (wikiRebootBlocksGeneration) {
+            alertError(language.risuBardWikiRebootChatLocked)
+            return
+        }
 
         const activeChat = await ensureActiveChatReady(selectedChar)
         if(!activeChat) return
@@ -544,6 +558,10 @@ import { isMobile } from 'src/ts/platform'
 
     async function reroll() {
         if($doingChat) return
+        if (wikiRebootBlocksGeneration) {
+            alertError(language.risuBardWikiRebootChatLocked)
+            return
+        }
         const lastMsg = getLastCharMsg()
         if (!lastMsg) return
 
@@ -654,6 +672,7 @@ import { isMobile } from 'src/ts/platform'
     async function sendChatMain(continued:boolean = false) {
 
         messageInput = ''
+        if (wikiRebootBlocksGeneration) return false
         const genKey = currentChatGenKey()
         // Mirror sendChat's per-chat guard BEFORE any side effects: a blocked
         // send must not run the unconditional conclude below, which would tear
@@ -697,6 +716,10 @@ import { isMobile } from 'src/ts/platform'
     // server-side CLAIM must succeed — the atomic claim is what makes the
     // re-run at-most-once across devices, tabs and reloads.
     async function resumeInterruptedSend(chatId: string) {
+        if (wikiRebootBlocksGeneration) {
+            markResumable(chatId)
+            return
+        }
         if (currentChatGenKey() !== chatId || $generationStates.has(chatId)) {
             // Not runnable right now (selection moved / something generating)
             // but not concluded either — restore the flag so returning to the
@@ -756,6 +779,7 @@ import { isMobile } from 'src/ts/platform'
     let inputEle:HTMLTextAreaElement = $state()
     let inputTranslateHeight = $state("44px")
     let inputTranslateEle:HTMLTextAreaElement = $state()
+    let saveLoadShortcutAnchor = $state<HTMLElement | null>(null)
 
     // Standard theme: composer width follows the configured chat width (matches message cards).
     // Other themes: no width limit (original full-width behavior).
@@ -1055,7 +1079,11 @@ import { isMobile } from 'src/ts/platform'
                     class="{DBState.db.fixedChatTextarea ? 'sticky pt-2 pb-2 right-0 bottom-0 bg-bgcolor' : 'mt-2 mb-2'} w-full"
                     style="{DBState.db.fixedChatTextarea ? 'z-index:29;' : ''}"
             >
-              <div class="mx-auto w-full {composerWidthClass} px-2">
+              <div
+                    bind:this={saveLoadShortcutAnchor}
+                    data-save-load-shortcut-anchor
+                    class="mx-auto w-full {composerWidthClass} px-2"
+              >
                 <!-- "plugin-compat-items-stretch" is a compat hook (not a Tailwind class):
                      plugins that locate the composer via div[class*="items-stretch"] (e.g. gemini-cache-keeper)
                      relied on the pre-redesign container class. Keep it so they can still find/anchor their UI,
@@ -1256,8 +1284,12 @@ import { isMobile } from 'src/ts/platform'
                 {:else}
                     <button
                             onclick={send}
+                            disabled={wikiRebootBlocksGeneration}
+                            title={wikiRebootBlocksGeneration
+                                ? language.risuBardWikiRebootChatLocked
+                                : undefined}
                             aria-label={willResend ? language.reroll : language.send}
-                            class="order-2 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors button-icon-send"
+                            class="order-2 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors button-icon-send disabled:opacity-45 disabled:cursor-not-allowed"
                     >
                         {#if willResend}
                             <RefreshCcwIcon size={18} />
@@ -1276,6 +1308,7 @@ import { isMobile } from 'src/ts/platform'
                                 aria-label={language.risuBardMemoryOpenManual}
                                 title={language.risuBardMemoryOpenManual}
                                 class="relative z-10 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-orange-500 text-white shadow-sm hover:bg-orange-400 active:bg-orange-600 transition-colors"
+                                class:wiki-generating={$isWikiGenerating}
                         >
                             <BookOpenIcon size={18} strokeWidth={2.2} />
                         </button>
@@ -1520,6 +1553,18 @@ import { isMobile } from 'src/ts/platform'
         </div>
 
     {/if}
+        {#if !$MobileGUI
+            && currentCharacter?.chaId
+            && currentCharacter.chaId !== '§playground'
+            && !$chatDeselected
+            && DBState.db.showRisuBardSaveLoadShortcuts !== false}
+            <RisuBardSaveLoadShortcuts
+                anchorElement={saveLoadShortcutAnchor}
+                saving={savingSlot}
+                onSave={onSaveChat}
+                onLoad={onOpenChatLoad}
+            />
+        {/if}
         <PluginFloatingActionButtons
             buttons={additionalFloatingActionButtons}
             placements={DBState.db.pluginFabPlacements}
@@ -1532,6 +1577,11 @@ import { isMobile } from 'src/ts/platform'
             characterId={currentCharacter.chaId}
             chatId={currentChatSlot.id}
             onForceWikiUpdate={forceCurrentNarrativeWikiUpdate}
+            rebootJob={currentChatSlot.risuBardWikiReboot}
+            onStartWikiReboot={startCurrentWikiReboot}
+            onStopWikiReboot={stopCurrentWikiReboot}
+            onResumeWikiReboot={resumeCurrentWikiReboot}
+            onCancelWikiReboot={cancelCurrentWikiReboot}
             onExecuteWikiCommand={executeCurrentNarrativeWikiCommand}
             onNavigateStorySource={navigateStorySource}
         />
@@ -1557,7 +1607,11 @@ import { isMobile } from 'src/ts/platform'
             ></textarea>
             <div class="flex justify-end mt-3">
                 <button onclick={sendFullscreen} aria-label="send"
-                        class="flex items-center gap-1 px-4 h-10 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors">
+                        disabled={wikiRebootBlocksGeneration}
+                        title={wikiRebootBlocksGeneration
+                            ? language.risuBardWikiRebootChatLocked
+                            : undefined}
+                        class="flex items-center gap-1 px-4 h-10 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors disabled:opacity-45 disabled:cursor-not-allowed">
                     <Send size={18} />
                     <span>{language.send}</span>
                 </button>
@@ -1567,6 +1621,15 @@ import { isMobile } from 'src/ts/platform'
 {/if}
 
 <style>
+
+    :global(.wiki-generating svg) {
+        animation: risubard-wiki-spin 1s linear infinite;
+        transform-origin: center;
+    }
+
+    @keyframes risubard-wiki-spin {
+        to { transform: rotate(360deg); }
+    }
 
     .chat-process-stage-1{
         border-top: 0.4rem solid #60a5fa;

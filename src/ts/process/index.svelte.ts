@@ -74,6 +74,24 @@ import {
     resolveWikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
+import { saveChatToServer } from '../storage/chatStorage';
+import {
+    createWikiRebootJob,
+    nextWikiRebootBatch,
+    projectWikiRebootTurns,
+    type WikiRebootBatchSize,
+    type WikiRebootTurn,
+} from '../risubard/wikiReboot';
+import {
+    cleanupWikiRebootWorkspace,
+    prepareWikiRebootReplacement,
+    recoverWikiRebootBatch,
+} from '../risubard/wikiRebootTransport';
+import { completeMemoryWikiFork } from '../risubard/memoryWikiFork';
+import {
+    beginWikiGeneration,
+    endWikiGeneration,
+} from '../risubard/wikiGenerationState';
 
 function resolvedRisuBardSettings(chat?: Chat) {
     return resolveRisuBardChatSettings(DBState.db, chat?.risuBardSettings)
@@ -113,6 +131,8 @@ async function confirmProjectedNarrativeTurn(input: {
     ])
     if (narrativeConfirmations.has(key)) return false
     narrativeConfirmations.add(key)
+    const generationOperation = `analysis:${key}`
+    beginWikiGeneration(generationOperation)
     try {
         const character = DBState.db.characters.find(
             (item) => item.chaId === input.characterId
@@ -195,6 +215,7 @@ async function confirmProjectedNarrativeTurn(input: {
         throw error
     }
     finally {
+        endWikiGeneration(generationOperation)
         narrativeConfirmations.delete(key)
     }
 }
@@ -245,6 +266,336 @@ export async function forceCurrentNarrativeWikiUpdate(): Promise<boolean> {
     })
 }
 
+const activeWikiReboots = new Set<string>()
+
+function currentRisuBardConversation(): {
+    character: character
+    chat: Chat
+    chatIndex: number
+} | undefined {
+    const character = DBState.db.characters[get(selectedCharID)]
+    const chatIndex = character?.chatPage
+    const chat = character?.chats[chatIndex]
+    if (!character || !chat || typeof chatIndex !== 'number') return undefined
+    return { character, chat, chatIndex }
+}
+
+async function persistWikiReboot(
+    character: character,
+    chat: Chat,
+    chatIndex: number
+): Promise<void> {
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    await saveChatToServer(character.chaId, chatIndex, chatId, chat)
+}
+
+function projectRebootBatch(batch: readonly WikiRebootTurn[]) {
+    const used = new Set<string>()
+    const rebootTurns = batch.map((turn) => {
+        const sourceMessageIds = turn.messageIds.filter((id) => {
+            if (used.has(id)) return false
+            used.add(id)
+            return true
+        })
+        return {
+            assistantMessageId: turn.assistantMessageId,
+            sourceMessageIds,
+        }
+    })
+    const byId = new Map(batch.flatMap((turn) => turn.messages)
+        .map((message) => [message.messageId, message] as const))
+    return {
+        rebootTurns,
+        messages: rebootTurns.flatMap((turn) =>
+            turn.sourceMessageIds.flatMap((id) => {
+                const message = byId.get(id)
+                return message ? [message] : []
+            })
+        ),
+        sourceMessageIds: rebootTurns.flatMap((turn) => turn.sourceMessageIds),
+        eventSourceGroups: rebootTurns.map((turn) => turn.sourceMessageIds),
+    }
+}
+
+function applyWikiRebootBatchReceipt(
+    chat: Chat,
+    batch: readonly WikiRebootTurn[],
+    receipt: NonNullable<Message['risubardCanonicalReceipt']>
+): void {
+    const job = chat.risuBardWikiReboot
+    if (!job) return
+    for (const turn of batch) {
+        if (!job.completedAssistantMessageIds.includes(
+            turn.assistantMessageId
+        )) {
+            job.completedAssistantMessageIds.push(turn.assistantMessageId)
+        }
+        job.receipts[turn.assistantMessageId] = receipt
+    }
+    delete job.inFlightAssistantMessageIds
+    delete job.lastError
+    job.updatedAt = Date.now()
+}
+
+async function finalizeWikiReboot(
+    character: character,
+    chat: Chat,
+    chatIndex: number
+): Promise<void> {
+    const job = chat.risuBardWikiReboot
+    if (!job) return
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    job.status = 'finalizing'
+    job.updatedAt = Date.now()
+    await persistWikiReboot(character, chat, chatIndex)
+    if (!job.replacementForkToken) {
+        const replacement = await prepareWikiRebootReplacement({
+            characterId: character.chaId,
+            stagingChatId: job.stagingChatId,
+            chatId,
+            fetchImpl: fetch,
+            createAuth: () => forageStorage.createAuth(),
+        })
+        job.replacementForkToken = replacement.forkToken
+        job.updatedAt = Date.now()
+        await persistWikiReboot(character, chat, chatIndex)
+    }
+    await completeMemoryWikiFork({
+        characterId: character.chaId,
+        destinationChatId: chatId,
+        forkToken: job.replacementForkToken,
+        action: 'finalize',
+        fetchImpl: fetch,
+        createAuth: () => forageStorage.createAuth(),
+    })
+    const targetIds = new Set(job.targetAssistantMessageIds)
+    for (const message of chat.message) {
+        delete message.risubardMemoryConfirmed
+        delete message.risubardCanonicalReceipt
+        if (message.chatId && targetIds.has(message.chatId)) {
+            message.risubardMemoryConfirmed = true
+            const receipt = job.receipts[message.chatId]
+            if (receipt) message.risubardCanonicalReceipt = receipt
+        }
+    }
+    const stagingChatId = job.stagingChatId
+    delete chat.risuBardWikiReboot
+    await persistWikiReboot(character, chat, chatIndex)
+    await cleanupWikiRebootWorkspace({
+        characterId: character.chaId,
+        stagingChatId,
+        fetchImpl: fetch,
+        createAuth: () => forageStorage.createAuth(),
+    }).catch((error) => {
+        console.warn('[RisuBard wiki reboot cleanup]', error)
+    })
+    announceRisuBardMemoryUpdated({ characterId: character.chaId, chatId })
+}
+
+async function runWikiReboot(
+    character: character,
+    chat: Chat,
+    chatIndex: number
+): Promise<boolean> {
+    const chatId = ensureNarrativeSessionChatId(chat, v4)
+    const operationId = `reboot:${character.chaId}:${chatId}`
+    if (activeWikiReboots.has(operationId)) return false
+    activeWikiReboots.add(operationId)
+    beginWikiGeneration(operationId)
+    try {
+        while (chat.risuBardWikiReboot) {
+            const job = chat.risuBardWikiReboot
+            const turns = projectWikiRebootTurns(chat.message)
+            if (job.status === 'stop-requested'
+                && !job.inFlightAssistantMessageIds?.length) {
+                job.status = 'paused'
+                job.updatedAt = Date.now()
+                await persistWikiReboot(character, chat, chatIndex)
+                return true
+            }
+            const inFlightIds = job.inFlightAssistantMessageIds
+            const batch = inFlightIds?.length
+                ? inFlightIds.map((id) => turns.find((turn) =>
+                    turn.assistantMessageId === id
+                )).filter((turn): turn is WikiRebootTurn => Boolean(turn))
+                : nextWikiRebootBatch(job, turns)
+            if (inFlightIds?.length && batch.length !== inFlightIds.length) {
+                throw new Error('진행 중이던 리부트 대상 메시지를 찾을 수 없습니다.')
+            }
+            if (batch.length === 0) {
+                await finalizeWikiReboot(character, chat, chatIndex)
+                return true
+            }
+            const projected = projectRebootBatch(batch)
+            if (inFlightIds?.length) {
+                const recovered = await recoverWikiRebootBatch({
+                    characterId: character.chaId,
+                    stagingChatId: job.stagingChatId,
+                    sourceMessageIds: projected.sourceMessageIds,
+                    eventSourceGroups: projected.eventSourceGroups,
+                    fetchImpl: fetch,
+                    createAuth: () => forageStorage.createAuth(),
+                })
+                if (recovered) {
+                    applyWikiRebootBatchReceipt(chat, batch, recovered)
+                    await persistWikiReboot(character, chat, chatIndex)
+                    continue
+                }
+            }
+            else {
+                job.inFlightAssistantMessageIds = batch.map((turn) =>
+                    turn.assistantMessageId
+                )
+                job.updatedAt = Date.now()
+                await persistWikiReboot(character, chat, chatIndex)
+            }
+            const settings = resolvedRisuBardSettings(chat)
+            const wikiPromptPreset = resolveWikiPromptPreset(
+                DBState.db.risuBardWikiPromptPresets,
+                DBState.db.risuBardChatWikiPromptPresetId
+            )
+            const compiledWikiPromptGuide = wikiPromptPreset
+                ? compileWikiPromptGuide(wikiPromptPreset, {
+                    characterGuide: risuChatParser(
+                        character.risuBardWikiGuide ?? '',
+                        { chara: character }
+                    ),
+                    chatGuide: risuChatParser(chat.risuBardWikiGuide ?? '', {
+                        chara: character,
+                    }),
+                })
+                : undefined
+            const receipt = await storedResponseMemoryAnalysis.confirm({
+                characterId: character.chaId,
+                chatId: job.stagingChatId,
+                modelSessionChatId: chatId,
+                messages: projected.messages,
+                rebootTurns: projected.rebootTurns,
+                analysisTokenLimit: settings.risuBardAnalysisTokenLimit,
+                additionalSearchLimit: settings.risuBardAdditionalSearchLimit,
+                canonicalTargetLimit: settings.risuBardCanonicalTargetLimit,
+                inquiryTokenBudget: {
+                    target: settings.risuBardInquiryTargetTokenBudget,
+                    maximum: settings.risuBardInquiryMaximumTokenBudget,
+                },
+                canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
+                canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+                ...(compiledWikiPromptGuide ? {
+                    wikiPromptGuide: {
+                        analysis: compiledWikiPromptGuide.analysis,
+                        canonicalRewrite:
+                            compiledWikiPromptGuide.canonicalRewrite,
+                    },
+                } : {}),
+                contextMessages: projectRecentMemoryMessages(
+                    chat.message,
+                    normalizeNarrativeWorkingMessageLimit(
+                        settings.risuBardRecentMessageCount
+                    ),
+                    batch.at(-1)?.assistantMessageId
+                ),
+            })
+            if (!receipt) {
+                throw new Error('리부트 배치 완료 영수증을 저장하지 못했습니다.')
+            }
+            applyWikiRebootBatchReceipt(chat, batch, receipt)
+            await persistWikiReboot(character, chat, chatIndex)
+        }
+        return true
+    }
+    catch (error) {
+        const job = chat.risuBardWikiReboot
+        if (job) {
+            job.status = 'failed'
+            job.lastError = (error instanceof Error
+                ? error.message
+                : String(error)).trim().slice(0, 512)
+            job.updatedAt = Date.now()
+            await persistWikiReboot(character, chat, chatIndex).catch(() => {})
+        }
+        throw error
+    }
+    finally {
+        endWikiGeneration(operationId)
+        activeWikiReboots.delete(operationId)
+    }
+}
+
+export async function startCurrentWikiReboot(
+    batchSize: WikiRebootBatchSize
+): Promise<boolean> {
+    const current = currentRisuBardConversation()
+    if (!current || current.chat.risuBardWikiReboot) return false
+    const chatId = ensureNarrativeSessionChatId(current.chat, v4)
+    const turns = projectWikiRebootTurns(current.chat.message)
+    if (turns.length === 0) return false
+    const jobId = v4()
+    current.chat.risuBardWikiReboot = createWikiRebootJob({
+        jobId,
+        stagingChatId: `reboot-${jobId}`,
+        batchSize,
+        targetAssistantMessageIds: turns.map((turn) =>
+            turn.assistantMessageId
+        ),
+    })
+    await saveChatToServer(
+        current.character.chaId,
+        current.chatIndex,
+        chatId,
+        current.chat
+    )
+    return runWikiReboot(current.character, current.chat, current.chatIndex)
+}
+
+export async function stopCurrentWikiReboot(): Promise<boolean> {
+    const current = currentRisuBardConversation()
+    const job = current?.chat.risuBardWikiReboot
+    if (!current || !job || (job.status !== 'running'
+        && job.status !== 'stop-requested')) return false
+    job.status = 'stop-requested'
+    job.updatedAt = Date.now()
+    await persistWikiReboot(current.character, current.chat, current.chatIndex)
+    return true
+}
+
+export async function resumeCurrentWikiReboot(): Promise<boolean> {
+    const current = currentRisuBardConversation()
+    const job = current?.chat.risuBardWikiReboot
+    if (!current || !job || (job.status !== 'paused'
+        && job.status !== 'failed')) return false
+    job.status = 'running'
+    delete job.lastError
+    job.updatedAt = Date.now()
+    await persistWikiReboot(current.character, current.chat, current.chatIndex)
+    return runWikiReboot(current.character, current.chat, current.chatIndex)
+}
+
+export async function cancelCurrentWikiReboot(): Promise<boolean> {
+    const current = currentRisuBardConversation()
+    const job = current?.chat.risuBardWikiReboot
+    if (!current || !job || (job.status !== 'paused'
+        && job.status !== 'failed')) return false
+    if (job.replacementForkToken) {
+        await completeMemoryWikiFork({
+            characterId: current.character.chaId,
+            destinationChatId: ensureNarrativeSessionChatId(current.chat, v4),
+            forkToken: job.replacementForkToken,
+            action: 'discard',
+            fetchImpl: fetch,
+            createAuth: () => forageStorage.createAuth(),
+        })
+    }
+    await cleanupWikiRebootWorkspace({
+        characterId: current.character.chaId,
+        stagingChatId: job.stagingChatId,
+        fetchImpl: fetch,
+        createAuth: () => forageStorage.createAuth(),
+    })
+    delete current.chat.risuBardWikiReboot
+    await persistWikiReboot(current.character, current.chat, current.chatIndex)
+    return true
+}
+
 export async function executeCurrentNarrativeWikiCommand(
     instruction: string
 ): Promise<DirectWikiCommandResult> {
@@ -291,6 +642,8 @@ export async function executeCurrentNarrativeWikiCommand(
         timestamp: Date.now(),
         message: '사용자 직접 위키 명령을 실행합니다.',
     })
+    const generationOperation = `command:${characterId}:${chatId}`
+    beginWikiGeneration(generationOperation)
     try {
         const result = await executeDirectWikiCommand({
             instruction,
@@ -364,6 +717,9 @@ export async function executeCurrentNarrativeWikiCommand(
             message: `직접 위키 명령 실패: ${reason || '알 수 없는 오류'}`,
         })
         throw cause
+    }
+    finally {
+        endWikiGeneration(generationOperation)
     }
 }
 
@@ -464,6 +820,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     preview?:boolean
     previewPrompt?:boolean
 } = {}):Promise<boolean> {
+
+    const selected = DBState.db.characters[get(selectedCharID)]
+    const selectedConversation = selected?.chats[selected.chatPage]
+    if (selectedConversation?.risuBardWikiReboot) return false
 
     chatProcessStage.set(0)
     const abortSignal = arg.signal ?? (new AbortController()).signal

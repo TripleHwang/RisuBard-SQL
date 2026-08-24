@@ -16,6 +16,54 @@ afterEach(async () => {
 })
 
 describe('Markdown narrative wiki', () => {
+    test('restores an interrupted reboot batch or returns its completed receipt', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const baseline = await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '라비안', markdown: '## 라비안\n\n검을 가진다.',
+        })
+        const snapshot = await wiki.snapshotBeforeTurn({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+        })
+        await wiki.saveCanonicalDocument({
+            characterId: 'character', chatId: 'chat', documentId: baseline.id,
+            type: 'character', title: '라비안', sourceMessageIds: ['u1', 'a1'],
+            markdown: '## 라비안\n\n검을 잃었다.',
+            expectedContentHash: baseline.contentHash,
+        })
+        await wiki.saveCanonicalDocument({
+            characterId: 'character', chatId: 'chat', type: 'item',
+            title: '검', sourceMessageIds: ['u1', 'a1'], markdown: '## 검\n\n분실됨.',
+        })
+        await wiki.saveConfirmedTurn({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'], markdown: '## 분실\n\n- 검을 잃었다.',
+        })
+
+        await expect(wiki.recoverRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
+        })).resolves.toBeNull()
+        const restored = await wiki.loadView('character', 'chat')
+        expect(restored.documents.find((item) => item.id === baseline.id)?.content)
+            .toContain('검을 가진다.')
+        expect(restored.documents.some((item) => item.type === 'item')).toBe(false)
+        expect(restored.documents.some((item) => item.type === 'event')).toBe(false)
+
+        await wiki.recordTurnReceipt({
+            characterId: 'character', chatId: 'chat', snapshotId: snapshot.snapshotId,
+            sourceMessageIds: ['u1', 'a1'], changes: [], warnings: [],
+        })
+        await expect(wiki.recoverRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'], eventSourceGroups: [['u1', 'a1']],
+        })).resolves.toMatchObject({ snapshotId: snapshot.snapshotId })
+    })
+
     test('replaces literal text in canonical and event documents without history', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
@@ -239,6 +287,37 @@ describe('Markdown narrative wiki', () => {
         expect(created.content).toContain('### 관련 문서')
         expect(created.content).toContain('- [[길버드]]')
         expect(created.links).toContain('길버드')
+    })
+
+    test('keeps event evidence in character chronology without duplicating it in related documents', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        await wiki.saveConfirmedTurn({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['turn-1'],
+            markdown: '## 첫 만남\n\n### 이야기 요약\n\n- 두 사람이 처음 만났다.',
+        })
+
+        const created = await wiki.saveCanonicalDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '리즐렛', sourceMessageIds: ['turn-1'],
+            markdown: [
+                '## 리즐렛',
+                '',
+                '### 작중 행적',
+                '',
+                '- [[첫 만남]]에서 타카기와 처음 만났다.',
+                '',
+                '### 관련 문서',
+                '',
+                '- [[첫 만남]]',
+            ].join('\n'),
+        })
+
+        expect(created.content.match(/\[\[첫 만남\]\]/g)).toHaveLength(1)
+        expect(created.content).not.toContain('### 관련 문서')
+        expect(created.links).toEqual(['첫 만남'])
     })
 
     test('resolves only an existing document ID to its absolute wiki file', async () => {

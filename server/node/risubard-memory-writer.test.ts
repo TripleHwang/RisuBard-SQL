@@ -2,9 +2,11 @@ import { describe, expect, test } from 'vitest'
 import {
     canonicalBatchSchema,
     memoryWriterDraftSchema,
+    rebootBatchDraftSchema,
     memoryWriterSystemPrompt,
     hasMemoryWriterContent,
     parseMemoryWriterDraft,
+    parseRebootBatchDraft,
     serializeMemoryWriterDraft,
 } from './risubard-memory-writer'
 
@@ -98,6 +100,36 @@ describe('BardWiki memory writer skill', () => {
             '',
             '- [[라비안]]이 [[케사리아]] 성문에 도착했다.',
         ].join('\n'))
+    })
+
+    test('keeps two reboot events separate while sharing canonical candidates', () => {
+        const schema = JSON.parse(rebootBatchDraftSchema)
+        expect(schema.properties.turns).toMatchObject({ minItems: 1, maxItems: 2 })
+        const draft = parseRebootBatchDraft(JSON.stringify({
+            schemaVersion: 1,
+            turns: [{
+                assistantMessageId: 'a1', title: '검을 잃음',
+                establishedEvents: ['라비안이 검을 잃었다.'],
+            }, {
+                assistantMessageId: 'a2', title: '검을 되찾음',
+                establishedEvents: ['라비안이 검을 되찾았다.'],
+            }],
+            stateChanges: [{ subject: '라비안의 검', before: '분실', after: '소유' }],
+            characterKnowledge: [], persistentFacts: [], openContinuity: [],
+            canonicalUpdateCandidates: [{
+                type: 'character', title: '라비안', reason: '소지품이 바뀌었다.',
+                action: 'update', targetDocumentId: 'character.lavian',
+                confidence: 0.95,
+            }],
+        }), ['a1', 'a2'])
+        expect(draft.turns.map((turn) => turn.title)).toEqual([
+            '검을 잃음', '검을 되찾음',
+        ])
+        expect(draft.canonicalUpdateCandidates).toHaveLength(1)
+        expect(() => parseRebootBatchDraft(JSON.stringify({
+            ...draft,
+            turns: [...draft.turns].reverse(),
+        }), ['a1', 'a2'])).toThrow(/order|assistant/i)
     })
 
     test('normalizes Gemini operation as the canonical action field', () => {

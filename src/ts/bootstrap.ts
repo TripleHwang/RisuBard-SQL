@@ -32,6 +32,7 @@ import { registerModelDynamic } from "./model/modellist";
 import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { isChatStub, purgeUnsupportedGroupChats } from "./storage/database.svelte";
+import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 
 /**
  * Loads the application data.
@@ -271,6 +272,9 @@ async function checkNewFormat(): Promise<void> {
         v.chats ??= [];
         v.customscript ??= [];
         v.firstMessage ??= '';
+        if (v.type === 'character' && v.firstMessageStudio) {
+            v.firstMessageStudio = normalizeFirstMessageStudioProject(v.firstMessageStudio)
+        }
         v.globalLore ??= [];
         v.name ??= '';
         v.viewScreen ??= 'none';

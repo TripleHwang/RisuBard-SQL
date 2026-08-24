@@ -271,6 +271,73 @@ function registerRisuBardMemoryRoutes(app, options) {
         }
     })
 
+    app.post('/api/risubard/memory/reboot/replace', async (req, res, next) => {
+        try {
+            if (!await options.auth(req, res)) return
+            if (!hasExactKeys(req.body, [
+                'characterId', 'sourceChatId', 'destinationChatId',
+            ])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.sourceChatId)
+                || !req.body.sourceChatId.startsWith('reboot-')
+                || !hasBoundedId(req.body.destinationChatId)
+                || req.body.sourceChatId === req.body.destinationChatId) {
+                res.status(400).send({ error: 'Invalid memory reboot replacement' })
+                return
+            }
+            res.send(await options.service.replaceMemory(req.body))
+        }
+        catch (error) {
+            next(error)
+        }
+    })
+
+    app.post('/api/risubard/memory/reboot/remove', async (req, res, next) => {
+        try {
+            if (!await options.auth(req, res)) return
+            if (!hasExactKeys(req.body, ['characterId', 'chatId'])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.chatId)
+                || !req.body.chatId.startsWith('reboot-')) {
+                res.status(400).send({ error: 'Invalid memory reboot cleanup' })
+                return
+            }
+            res.send(await options.service.removeRebootMemory(req.body))
+        }
+        catch (error) {
+            next(error)
+        }
+    })
+
+    app.post('/api/risubard/memory/wiki/reboot/recover', async (req, res, next) => {
+        try {
+            if (!await options.auth(req, res)) return
+            const groups = req.body?.eventSourceGroups
+            if (!hasExactKeys(req.body, [
+                'characterId', 'chatId', 'sourceMessageIds',
+                'eventSourceGroups',
+            ])
+                || !hasBoundedId(req.body.characterId)
+                || !hasBoundedId(req.body.chatId)
+                || !req.body.chatId.startsWith('reboot-')
+                || !Array.isArray(req.body.sourceMessageIds)
+                || req.body.sourceMessageIds.length < 1
+                || req.body.sourceMessageIds.length > 12
+                || !req.body.sourceMessageIds.every(hasBoundedId)
+                || !Array.isArray(groups) || groups.length < 1 || groups.length > 2
+                || !groups.every((group) => Array.isArray(group)
+                    && group.length >= 1 && group.length <= 2
+                    && group.every(hasBoundedId))) {
+                res.status(400).send({ error: 'Invalid memory reboot recovery' })
+                return
+            }
+            res.send(await options.service.recoverWikiRebootBatch(req.body))
+        }
+        catch (error) {
+            next(error)
+        }
+    })
+
     app.post('/api/risubard/memory/fork/complete', async (req, res, next) => {
         try {
             if (!await options.auth(req, res)) return

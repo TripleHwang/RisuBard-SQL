@@ -3,6 +3,13 @@ import { normalizeRisuBardCanonicalCustomStyle } from '../risubard/risuBardSetti
 
 export const risuBardCommonSettingsItems: SettingItem[] = [
     {
+        id: 'risubard.common.showSaveLoadShortcuts',
+        type: 'check',
+        labelKey: 'risuBardShowSaveLoadShortcuts',
+        bindKey: 'showRisuBardSaveLoadShortcuts',
+        keywords: ['save', 'load', 'shortcut', 'floating', '세이브', '로드', '바로가기'],
+    },
+    {
         id: 'risubard.common.canonicalWritingStyle',
         type: 'select',
         labelKey: 'risuBardCanonicalWritingStyle',

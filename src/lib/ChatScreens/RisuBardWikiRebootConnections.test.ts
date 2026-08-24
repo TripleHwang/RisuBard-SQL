@@ -1,0 +1,75 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, expect, test } from 'vitest'
+
+const processSource = readFileSync(resolve(
+    process.cwd(), 'src/ts/process/index.svelte.ts'
+), 'utf8')
+const chatSource = readFileSync(resolve(
+    process.cwd(), 'src/lib/ChatScreens/DefaultChatScreen.svelte'
+), 'utf8')
+const wikiSource = readFileSync(resolve(
+    process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+), 'utf8')
+const koSource = readFileSync(resolve(process.cwd(), 'src/lang/ko.ts'), 'utf8')
+const enSource = readFileSync(resolve(process.cwd(), 'src/lang/en.ts'), 'utf8')
+
+describe('BardWiki reboot connections', () => {
+    test('checkpoints the batch before analysis and replaces only at completion', () => {
+        const runner = processSource.slice(
+            processSource.indexOf('async function runWikiReboot'),
+            processSource.indexOf('export async function startCurrentWikiReboot')
+        )
+        expect(runner.indexOf('job.inFlightAssistantMessageIds ='))
+            .toBeLessThan(runner.indexOf('storedResponseMemoryAnalysis.confirm'))
+        expect(runner).toContain('recoverWikiRebootBatch')
+
+        const finalize = processSource.slice(
+            processSource.indexOf('async function finalizeWikiReboot'),
+            processSource.indexOf('async function runWikiReboot')
+        )
+        expect(finalize.indexOf('prepareWikiRebootReplacement'))
+            .toBeLessThan(finalize.indexOf("action: 'finalize'"))
+        expect(finalize.indexOf("action: 'finalize'"))
+            .toBeLessThan(finalize.indexOf('delete chat.risuBardWikiReboot'))
+    })
+
+    test('blocks response paths and shares the wiki generation indicator', () => {
+        expect(chatSource).toContain('wikiRebootBlocksGeneration')
+        expect(chatSource).toContain('if (wikiRebootBlocksGeneration)')
+        expect(chatSource).toContain('disabled={wikiRebootBlocksGeneration}')
+        expect(chatSource).toContain('class:wiki-generating={$isWikiGenerating}')
+    })
+
+    test('offers text lifecycle controls and one-turn or two-turn choices', () => {
+        expect(wikiSource).toContain('data-risubard-wiki-reboot')
+        expect(wikiSource).toContain('{rebootButtonLabel}')
+        expect(wikiSource).toContain('startReboot(1)')
+        expect(wikiSource).toContain('startReboot(2)')
+        expect(wikiSource).toContain('risuBardWikiRebootOneTurnTooltip')
+        expect(wikiSource).toContain('risuBardWikiRebootTwoTurnTooltip')
+        expect(wikiSource).toContain('onCancelWikiReboot')
+    })
+
+    test('loads and refreshes the visible staging wiki during reboot', () => {
+        expect(wikiSource).toContain('resolveWikiRebootViewChatId')
+        expect(wikiSource).toContain('let wikiChatId = $derived(')
+        expect(wikiSource).toContain('chatId: wikiChatId')
+        expect(wikiSource).toContain('detail.chatId !== wikiChatId')
+        expect(wikiSource).toContain('locked={Boolean(rebootJob)}')
+        expect(wikiSource).toContain('{#if onExecuteWikiCommand && !rebootJob}')
+    })
+
+    test('describes two-turn mode as reducing semantic analysis calls', () => {
+        expect(koSource).toContain('의미 분석 호출 수와 반복 프롬프트 토큰')
+        expect(enSource).toContain('semantic-analysis calls and repeated prompt tokens')
+    })
+
+    test('shows the active analysis token limit before choosing a batch size', () => {
+        expect(wikiSource).toContain('resolveRisuBardChatSettings')
+        expect(wikiSource).toContain('data-risubard-wiki-reboot-token-budget')
+        expect(wikiSource).toContain('risuBardWikiRebootTokenBudget(')
+        expect(koSource).toContain('정본 갱신 배치가 이 한도를 넘을 것으로 예상되면 문서 단위로 자동 분할됩니다')
+        expect(enSource).toContain('Canonical update batches are automatically split by document')
+    })
+})

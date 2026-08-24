@@ -2,8 +2,7 @@
     import { getCustomBackground, getEmotion } from "../../ts/util";
     
     import { DBState } from 'src/ts/stores.svelte';
-    import { CharEmotion, selectedCharID, openModuleListStore, MobileGUI, chatDeselected } from "../../ts/stores.svelte";
-    import { LoaderCircleIcon } from '@lucide/svelte';
+    import { CharEmotion, selectedCharID, openModuleListStore } from "../../ts/stores.svelte";
     import { v4 } from 'uuid';
     import ResizeBox from './ResizeBox.svelte'
     import DefaultChatScreen from "./DefaultChatScreen.svelte";
@@ -13,16 +12,12 @@
     import BackgroundDom from "./BackgroundDom.svelte";
     import SideBarArrow from "../UI/GUI/SideBarArrow.svelte";
     import ModuleChatMenu from "../Setting/Pages/Module/ModuleChatMenu.svelte";
-    import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
     import RisuBardSaveSlotsDialog from '../SideBars/RisuBardSaveSlotsDialog.svelte';
-    import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
-    import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg';
     import { ensureChatHydrated } from 'src/ts/storage/chatStorage';
     import { notifyError, notifySuccess } from 'src/ts/alert';
     import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
     import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
-    import { language } from 'src/lang';
     let openChatList = $state(false)
     let openModuleList = $state(false)
     let saveSlotsOpen = $state(false)
@@ -174,38 +169,6 @@
 
 {#snippet chatChrome()}
     <SideBarArrow />
-    {#if !$MobileGUI
-        && currentCharacter?.chaId
-        && currentCharacter.chaId !== '§playground'
-        && !$chatDeselected}
-        <div data-chat-file-edge-actions class="absolute bottom-20 left-0 z-30 flex flex-col gap-2">
-            <button
-                type="button"
-                data-edge-save-chat
-                class="risu-button-lift flex size-12 items-center justify-center rounded-r-md border border-l-0 border-primary/45 bg-primary/25 text-textcolor shadow-sm transition-colors hover:bg-primary/35 disabled:pointer-events-none disabled:opacity-50"
-                disabled={savingSlot}
-                aria-label={language.saveChatFileAction}
-                title={language.saveChatFileAction}
-                onclick={() => void saveCurrentChat()}
-            >
-                {#if savingSlot}
-                    <LoaderCircleIcon size={22} class="animate-spin" />
-                {:else}
-                    <SolarAssetIcon src={feedIcon} name="feed-bold" size={24} />
-                {/if}
-            </button>
-            <button
-                type="button"
-                data-edge-load-chat
-                class="risu-button-lift flex size-12 items-center justify-center rounded-r-md border border-l-0 border-primary/45 bg-primary/25 text-textcolor shadow-sm transition-colors hover:bg-primary/35"
-                aria-label={language.loadChatFileAction}
-                title={language.loadChatFileAction}
-                onclick={() => { saveSlotsOpen = true }}
-            >
-                <SolarAssetIcon src={loadIcon} name="undo-left-square-bold" size={24} />
-            </button>
-        </div>
-    {/if}
 {/snippet}
 
 {#if DBState.db.theme === 'waifu'}

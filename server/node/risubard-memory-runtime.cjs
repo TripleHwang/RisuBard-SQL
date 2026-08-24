@@ -15,6 +15,8 @@ const {
 const {
     completeMemoryWorkspaceFork,
     forkMemoryWorkspace,
+    removeRebootMemoryWorkspace,
+    replaceMemoryWorkspace,
 } = require('./risubard-memory-fork.ts')
 const {
     createMemorySaveSlot,
@@ -40,6 +42,9 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
     const forkWorkspace = options.forkWorkspace || forkMemoryWorkspace
     const completeForkWorkspace = options.completeForkWorkspace
         || completeMemoryWorkspaceFork
+    const replaceWorkspace = options.replaceWorkspace || replaceMemoryWorkspace
+    const removeRebootWorkspace = options.removeRebootWorkspace
+        || removeRebootMemoryWorkspace
     const createSaveSlot = options.createSaveSlot || createMemorySaveSlot
     const listSaveSlots = options.listSaveSlots || listMemorySaveSlots
     const prepareSaveLoad = options.prepareSaveLoad || prepareMemorySaveLoad
@@ -81,6 +86,22 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
             userDataDirectory,
             ...input,
         })),
+        replaceMemory: (input) => serializedMany([
+            [input.characterId, input.sourceChatId],
+            [input.characterId, input.destinationChatId],
+        ], () => replaceWorkspace({ userDataDirectory, ...input })),
+        removeRebootMemory: (input) => serialized(
+            input.characterId,
+            input.chatId,
+            async () => {
+                const removed = await removeRebootWorkspace({
+                    userDataDirectory,
+                    ...input,
+                })
+                wiki.invalidateCache(input.characterId, input.chatId)
+                return removed
+            }
+        ),
         completeMemoryFork: (input) => serialized(
             input.characterId,
             input.destinationChatId,
@@ -235,6 +256,11 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
             input.characterId,
             input.chatId,
             () => wiki.recordTurnReceipt(input)
+        ),
+        recoverWikiRebootBatch: (input) => serialized(
+            input.characterId,
+            input.chatId,
+            async () => ({ receipt: await wiki.recoverRebootBatch(input) })
         ),
         undoWikiTurnReceipt: (input) => serialized(
             input.characterId,

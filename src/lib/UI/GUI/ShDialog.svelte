@@ -4,8 +4,8 @@
     export type ShDialogSize = 'sm' | 'default' | 'lg' | 'xl';
     // Stacking tier — see .agent/guide/ui.md "Dialog z-index 컨벤션".
     // base (z-40): 베이스 리스트/관리 다이얼로그 (위에 alert 떠야 함)
-    // alert (z-50): 기본. confirm/input/error/일반 팝업
-    // top (z-[60]): 모든 것 위에 떠야 하는 로딩 등 특수 케이스
+    // alert (z-[2147483600]): 모든 앱 surface 위의 일반 팝업
+    // top (z-[2147483640]): 확인/로딩 등 최상위 blocking surface
     export type ShDialogTier = 'base' | 'alert' | 'top';
 </script>
 
@@ -76,8 +76,8 @@
 
     const tierClasses: Record<ShDialogTier, string> = {
         base: 'z-40',
-        alert: 'z-50',
-        top: 'z-[60]',
+        alert: 'z-[2147483600]',
+        top: 'z-[2147483640]',
     };
 
     // w-[calc(100vw-2rem)] guarantees a 1rem gutter on each side at any

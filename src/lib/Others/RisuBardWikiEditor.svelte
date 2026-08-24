@@ -41,6 +41,7 @@
         chatId: string
         documents: WikiDocument[]
         health?: NarrativeMemoryWikiMarkdown['health']
+        locked?: boolean
         selectedId?: string
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
@@ -53,6 +54,7 @@
         chatId,
         documents,
         health = { danglingLinks: [], unlinkedDocumentIds: [] },
+        locked = false,
         selectedId = $bindable(''),
         onChanged,
         onSelected,
@@ -94,7 +96,8 @@
     let selected = $derived(
         documents.find((document) => document.id === selectedId) ?? null
     )
-    let readOnly = $derived(selected?.type === 'event' && !creating)
+    let readOnly = $derived(locked
+        || (selected?.type === 'event' && !creating))
     let contextDocument = $derived(
         documents.find((document) => document.id === contextDocumentId) ?? null
     )
@@ -127,6 +130,7 @@
     }
 
     function startNew() {
+        if (locked) return
         selectedId = ''
         creating = true
         type = 'character'
@@ -222,6 +226,7 @@
     }
 
     async function changeContextMode(mode: 'always' | 'auto' | 'never') {
+        if (locked) return
         if (!contextDocument
             || contextDocument.type === 'event'
             || contextDocument.type === 'scene') return
@@ -484,7 +489,7 @@
     <nav id="risubard-wiki-file-tree" class="file-tree" aria-label="위키 파일 트리">
         <div class="tree-toolbar">
             <strong>WIKI</strong>
-            <ShButton size="sm" variant="ghost" onclick={startNew} aria-label="새 문서">
+            <ShButton size="sm" variant="ghost" onclick={startNew} aria-label="새 문서" disabled={locked}>
                 <PlusIcon size={14} /> 새 문서
             </ShButton>
         </div>
@@ -629,6 +634,7 @@
                     title="모두 바꾸기"
                     data-wiki-open-find-replace
                     onclick={() => onOpenFindReplace?.()}
+                    disabled={locked}
                 >
                     <SolarBoldIcon name="magnifier" size={14} />
                     <span data-wiki-action-label>모두 바꾸기</span>

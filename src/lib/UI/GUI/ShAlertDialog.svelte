@@ -35,7 +35,7 @@
         open = $bindable(false),
         onOpenChange,
         size = 'default',
-        tier = 'alert',
+        tier = 'top',
         closeOnEscape = false,
         closeOnOutsideClick = false,
         contentClass = '',
@@ -54,8 +54,8 @@
 
     const tierClasses: Record<ShDialogTier, string> = {
         base: 'z-40',
-        alert: 'z-50',
-        top: 'z-[60]',
+        alert: 'z-[2147483600]',
+        top: 'z-[2147483640]',
     };
 
     // w-[calc(100vw-2rem)] guarantees a 1rem gutter on each side at any

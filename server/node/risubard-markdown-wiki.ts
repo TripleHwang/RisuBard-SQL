@@ -183,6 +183,45 @@ function appendKnownDocumentLinks(
     return `${content}\n\n### 관련 문서\n\n${bullets}`
 }
 
+function removeCharacterEventLinksFromRelatedDocuments(
+    content: string,
+    documents: readonly MarkdownWikiDocument[]
+): string {
+    const eventTitles = new Set(documents
+        .filter((document) => document.type === 'event')
+        .map((document) => document.title.normalize('NFKC')
+            .toLocaleLowerCase().trim()))
+    if (eventTitles.size === 0) return content
+    let inRelatedDocuments = false
+    const filtered = content.split(/\r?\n/).filter((line) => {
+        const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/)
+        if (heading) {
+            if (heading[1].length <= 3) {
+                inRelatedDocuments = heading[1].length === 3
+                    && heading[2].normalize('NFKC').trim() === '관련 문서'
+            }
+            return true
+        }
+        if (!inRelatedDocuments) return true
+        const bullet = line.match(/^\s*[-*+]\s+\[\[([^\]|#]+)(?:[^\]]*)\]\]\s*$/)
+        if (!bullet) return true
+        return !eventTitles.has(bullet[1].normalize('NFKC')
+            .toLocaleLowerCase().trim())
+    })
+    const relatedHeading = filtered.findIndex((line) =>
+        /^###\s+관련 문서\s*$/.test(line))
+    if (relatedHeading >= 0) {
+        const nextSection = filtered.findIndex((line, index) =>
+            index > relatedHeading && /^#{1,3}\s+\S/.test(line))
+        const sectionEnd = nextSection >= 0 ? nextSection : filtered.length
+        if (filtered.slice(relatedHeading + 1, sectionEnd)
+            .every((line) => line.trim().length === 0)) {
+            filtered.splice(relatedHeading, sectionEnd - relatedHeading)
+        }
+    }
+    return filtered.join('\n').trim()
+}
+
 function hashDocumentBytes(contents: string): string {
     return createHash('sha256').update(contents).digest('base64url')
 }
@@ -527,6 +566,105 @@ export function createMarkdownNarrativeWiki(
     return {
         invalidateCache(characterId: string, chatId: string): void {
             documentCache.delete(workspaceFor(characterId, chatId).directory)
+        },
+        async recoverRebootBatch(input: {
+            characterId: string
+            chatId: string
+            sourceMessageIds: string[]
+            eventSourceGroups: string[][]
+        }): Promise<CanonicalTurnReceipt | null> {
+            const sourceMessageIds = input.sourceMessageIds.map((id) =>
+                required(id, 'Source message ID')
+            )
+            if (sourceMessageIds.length < 1 || sourceMessageIds.length > 12
+                || input.eventSourceGroups.length < 1
+                || input.eventSourceGroups.length > 2) {
+                throw new Error('Invalid reboot recovery sources')
+            }
+            const eventSourceGroups = input.eventSourceGroups.map((group) => {
+                const normalized = group.map((id) =>
+                    required(id, 'Event source message ID')
+                )
+                if (normalized.length < 1 || normalized.length > 2) {
+                    throw new Error('Invalid reboot event source group')
+                }
+                return normalized
+            })
+            const workspace = workspaceFor(input.characterId, input.chatId)
+            const snapshotId = `turn-${stableId(sourceMessageIds)}`
+            const snapshotDirectory = join(
+                workspace.snapshotsDirectory,
+                snapshotId
+            )
+            const manifestFile = join(snapshotDirectory, 'manifest.json')
+            let manifest: TurnSnapshotManifest
+            try {
+                manifest = JSON.parse(await fileSystem.readFile(
+                    manifestFile,
+                    'utf8'
+                )) as TurnSnapshotManifest
+            }
+            catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+                throw error
+            }
+            if (manifest.snapshotId !== snapshotId
+                || JSON.stringify(manifest.sourceMessageIds)
+                    !== JSON.stringify(sourceMessageIds)
+                || !Array.isArray(manifest.documents)) {
+                throw new Error('Wiki reboot snapshot is invalid')
+            }
+            if (manifest.receipt?.snapshotId === snapshotId) {
+                return manifest.receipt
+            }
+            const current = await loadDocuments(
+                input.characterId,
+                input.chatId
+            )
+            const baselineCanonical = new Map(manifest.documents
+                .filter((document) => document.type !== 'event')
+                .map((document) => [document.id, document]))
+            const exactEventSources = new Set(eventSourceGroups.map((group) =>
+                JSON.stringify(group)
+            ))
+            for (const document of current) {
+                const removeEvent = document.type === 'event'
+                    && exactEventSources.has(JSON.stringify(
+                        document.sourceMessageIds
+                    ))
+                const removeCreatedCanonical = document.type !== 'event'
+                    && !baselineCanonical.has(document.id)
+                const baseline = baselineCanonical.get(document.id)
+                const removeMovedCanonical = Boolean(baseline
+                    && baseline.relativePath !== document.relativePath)
+                if (removeEvent || removeCreatedCanonical
+                    || removeMovedCanonical) {
+                    await fileSystem.rm(join(
+                        workspace.directory,
+                        ...document.relativePath.split('/')
+                    ), { force: true })
+                }
+            }
+            for (const document of baselineCanonical.values()) {
+                const source = join(
+                    snapshotDirectory,
+                    ...document.relativePath.split('/')
+                )
+                const target = join(
+                    workspace.directory,
+                    ...document.relativePath.split('/')
+                )
+                await fileSystem.mkdir(resolve(target, '..'), {
+                    recursive: true,
+                })
+                await writeAtomically(
+                    fileSystem,
+                    target,
+                    await fileSystem.readFile(source, 'utf8')
+                )
+            }
+            await rebuildIndex(input.characterId, input.chatId)
+            return null
         },
         async snapshotBeforeTurn(input: {
             characterId: string
@@ -996,9 +1134,19 @@ export function createMarkdownNarrativeWiki(
                 )
             }
             let normalized = normalizeMarkdown(input.markdown)
+            if (input.type === 'character') {
+                normalized = normalizeMarkdown(
+                    removeCharacterEventLinksFromRelatedDocuments(
+                        normalized.content,
+                        documents
+                    )
+                )
+            }
             normalized = normalizeMarkdown(appendKnownDocumentLinks(
                 normalized.content,
-                documents,
+                input.type === 'character'
+                    ? documents.filter((document) => document.type !== 'event')
+                    : documents,
                 id
             ))
             const prepared = prepareDocument({

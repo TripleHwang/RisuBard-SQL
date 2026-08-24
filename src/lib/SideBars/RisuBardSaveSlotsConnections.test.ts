@@ -8,6 +8,12 @@ const source = readFileSync(resolve(
 const chatScreenSource = readFileSync(resolve(
     process.cwd(), 'src/lib/ChatScreens/ChatScreen.svelte'
 ), 'utf8')
+const shortcutsPath = resolve(
+    process.cwd(), 'src/lib/ChatScreens/RisuBardSaveLoadShortcuts.svelte'
+)
+const shortcutsSource = existsSync(shortcutsPath)
+    ? readFileSync(shortcutsPath, 'utf8')
+    : ''
 const defaultChatSource = readFileSync(resolve(
     process.cwd(), 'src/lib/ChatScreens/DefaultChatScreen.svelte'
 ), 'utf8')
@@ -18,6 +24,13 @@ const buttonSource = readFileSync(resolve(
     process.cwd(), 'src/lib/UI/GUI/ShButton.svelte'
 ), 'utf8')
 const stylesSource = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8')
+const commonSettingsSource = readFileSync(resolve(
+    process.cwd(), 'src/ts/setting/risuBardCommonSettingsData.ts'
+), 'utf8')
+const databaseSource = readFileSync(resolve(
+    process.cwd(), 'src/ts/storage/database.svelte.ts'
+), 'utf8')
+const koreanSource = readFileSync(resolve(process.cwd(), 'src/lang/ko.ts'), 'utf8')
 
 describe('chat file save slot connections', () => {
     test('removes save and load actions from the character sidebar', () => {
@@ -28,31 +41,61 @@ describe('chat file save slot connections', () => {
         expect(source).not.toContain('<RisuBardSaveSlotsDialog')
     })
 
-    test('adds shared save and load entries to the composer menu and chat edge', () => {
+    test('adds shared save and load entries to the composer menu and floating dock', () => {
         expect(defaultChatSource).toContain('data-composer-save-chat')
         expect(defaultChatSource).toContain('data-composer-load-chat')
         expect(defaultChatSource).toContain('onSaveChat')
         expect(defaultChatSource).toContain('onOpenChatLoad')
-        expect(chatScreenSource).toContain('data-chat-file-edge-actions')
-        expect(chatScreenSource).toContain('data-edge-save-chat')
-        expect(chatScreenSource).toContain('data-edge-load-chat')
-        expect(chatScreenSource).toContain('class="absolute bottom-20 left-0')
-        expect(chatScreenSource).toContain('flex-col')
+        expect(defaultChatSource).toMatch(
+            /<main[^>]*data-chat-pane[\s\S]*<RisuBardSaveLoadShortcuts/
+        )
+        expect(defaultChatSource).toContain('data-save-load-shortcut-anchor')
+        expect(defaultChatSource).toContain('anchorElement={saveLoadShortcutAnchor}')
+        expect(chatScreenSource).not.toContain('<RisuBardSaveLoadShortcuts')
+        expect(shortcutsSource).toContain('data-chat-file-shortcuts')
+        expect(shortcutsSource).toContain('data-shortcut-save-chat')
+        expect(shortcutsSource).toContain('data-shortcut-load-chat')
+        expect(shortcutsSource).toContain('>save</span>')
+        expect(shortcutsSource).toContain('>load</span>')
+        expect(shortcutsSource).toContain('role="group"')
+        expect(shortcutsSource).toContain('aria-label={language.risuBardShowSaveLoadShortcuts}')
+        expect(shortcutsSource).toContain('position: absolute')
         expect(chatScreenSource).toContain('<RisuBardSaveSlotsDialog')
     })
 
-    test('uses aligned icon-only edge buttons with the requested Solar icons', () => {
-        expect(chatScreenSource).toContain('size-12')
-        expect(chatScreenSource).toContain('<SolarAssetIcon src={feedIcon} name="feed-bold"')
-        expect(chatScreenSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
-        expect(chatScreenSource).not.toContain('>SAVE</span>')
-        expect(chatScreenSource).not.toContain('>LOAD</span>')
+    test('keeps the labeled shortcut block draggable and persistently movable', () => {
+        expect(shortcutsSource).toContain('resolveSaveLoadShortcutPosition(')
+        expect(shortcutsSource).toContain('anchorSaveLoadShortcut(')
+        expect(shortcutsSource).toContain('onpointerdown={beginDrag}')
+        expect(shortcutsSource).toContain('onpointermove={moveDrag}')
+        expect(shortcutsSource).toContain('onpointerup={endDrag}')
+        expect(shortcutsSource).toContain('(event.target as HTMLElement).setPointerCapture')
+        expect(shortcutsSource).toContain('risuBardSaveLoadShortcutPlacement')
+        expect(shortcutsSource).toContain('requestImmediateSave()')
+        expect(shortcutsSource).toContain('touch-action: none')
+    })
+
+    test('uses the requested Solar icons inside the floating block', () => {
+        expect(shortcutsSource).toContain('<SolarAssetIcon src={feedIcon} name="feed-bold"')
+        expect(shortcutsSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
         for (const asset of [
             'src/assets/solar-bold/feed-bold.svg',
             'src/assets/solar-bold/undo-left-square-bold.svg',
         ]) {
             expect(existsSync(resolve(process.cwd(), asset))).toBe(true)
         }
+    })
+
+    test('can hide and restore the shortcut block from RisuBard common settings', () => {
+        expect(shortcutsSource).toContain('alertConfirm(language.risuBardSaveLoadShortcutHideConfirm)')
+        expect(shortcutsSource).toContain('DBState.db.showRisuBardSaveLoadShortcuts = false')
+        expect(koreanSource).toContain('세이브/로드 버튼을 끌까요? Bardwiki / 공통 옵션에서 다시 켤 수 있습니다')
+        expect(commonSettingsSource).toContain("id: 'risubard.common.showSaveLoadShortcuts'")
+        expect(commonSettingsSource).toContain("type: 'check'")
+        expect(commonSettingsSource).toContain("bindKey: 'showRisuBardSaveLoadShortcuts'")
+        expect(databaseSource).toContain('showRisuBardSaveLoadShortcuts?: boolean')
+        expect(databaseSource).toContain('data.showRisuBardSaveLoadShortcuts ??= true')
+        expect(defaultChatSource).toContain('DBState.db.showRisuBardSaveLoadShortcuts')
     })
 
     test('shows the current chat as a plain title above a separate chat-list disclosure', () => {

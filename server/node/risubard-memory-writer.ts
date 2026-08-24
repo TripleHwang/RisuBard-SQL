@@ -105,6 +105,40 @@ export const memoryWriterDraftSchema = JSON.stringify({
     },
 })
 
+const memoryWriterProperties = JSON.parse(memoryWriterDraftSchema).properties
+
+export const rebootBatchDraftSchema = JSON.stringify({
+    type: 'object',
+    additionalProperties: false,
+    required: [
+        'schemaVersion', 'turns', 'stateChanges', 'characterKnowledge',
+        'persistentFacts', 'openContinuity', 'canonicalUpdateCandidates',
+    ],
+    properties: {
+        schemaVersion: { const: 1 },
+        turns: {
+            type: 'array', minItems: 1, maxItems: 2,
+            items: {
+                type: 'object', additionalProperties: false,
+                required: ['assistantMessageId', 'title', 'establishedEvents'],
+                properties: {
+                    assistantMessageId: {
+                        type: 'string', minLength: 1, maxLength: 1_024,
+                    },
+                    title: { type: 'string', minLength: 1, maxLength: 160 },
+                    establishedEvents: memoryWriterProperties.establishedEvents,
+                },
+            },
+        },
+        stateChanges: memoryWriterProperties.stateChanges,
+        characterKnowledge: memoryWriterProperties.characterKnowledge,
+        persistentFacts: memoryWriterProperties.persistentFacts,
+        openContinuity: memoryWriterProperties.openContinuity,
+        canonicalUpdateCandidates:
+            memoryWriterProperties.canonicalUpdateCandidates,
+    },
+})
+
 export const canonicalBatchSchema = JSON.stringify({
     type: 'object',
     additionalProperties: false,
@@ -171,6 +205,17 @@ export interface CanonicalBatch {
     documents: Array<{
         candidateIndex: number
         markdown: string
+    }>
+}
+
+export interface RebootBatchDraft extends Omit<
+    MemoryWriterDraft,
+    'title' | 'establishedEvents'
+> {
+    turns: Array<{
+        assistantMessageId: string
+        title: string
+        establishedEvents: string[]
     }>
 }
 
@@ -328,6 +373,85 @@ export function parseMemoryWriterDraft(output: string): MemoryWriterDraft {
         persistentFacts,
         openContinuity,
         canonicalUpdateCandidates,
+    }
+}
+
+export function parseRebootBatchDraft(
+    output: string,
+    expectedAssistantMessageIds: readonly string[]
+): RebootBatchDraft {
+    const parsed = parseSingleJsonObject(output)
+    if (!isRecord(parsed)) throw new Error('Reboot batch draft must be an object')
+    exactKeys(parsed, [
+        'schemaVersion', 'turns', 'stateChanges', 'characterKnowledge',
+        'persistentFacts', 'openContinuity', 'canonicalUpdateCandidates',
+    ], 'reboot batch draft')
+    if (parsed.schemaVersion !== 1) {
+        throw new Error('Reboot batch schemaVersion must be 1')
+    }
+    if (expectedAssistantMessageIds.length < 1
+        || expectedAssistantMessageIds.length > 2) {
+        throw new Error('Reboot batch requires one or two assistant IDs')
+    }
+    const rawTurns = boundedArray(parsed.turns, 'reboot batch turns', 2)
+    if (rawTurns.length !== expectedAssistantMessageIds.length) {
+        throw new Error('Reboot batch turn count does not match assistant IDs')
+    }
+    const turns = rawTurns.map((item, index) => {
+        if (!isRecord(item)) {
+            throw new Error(`reboot batch turns[${index}] must be an object`)
+        }
+        exactKeys(
+            item,
+            ['assistantMessageId', 'title', 'establishedEvents'],
+            `reboot batch turns[${index}]`
+        )
+        const assistantMessageId = text(
+            item.assistantMessageId,
+            `reboot batch turns[${index}].assistantMessageId`,
+            1_024
+        )
+        if (assistantMessageId !== expectedAssistantMessageIds[index]) {
+            throw new Error('Reboot batch assistant order does not match input')
+        }
+        return {
+            assistantMessageId,
+            title: text(item.title, `reboot batch turns[${index}].title`, 160),
+            establishedEvents: boundedArray(
+                item.establishedEvents,
+                `reboot batch turns[${index}].establishedEvents`,
+                12
+            ).map((event, eventIndex) => text(
+                event,
+                `reboot batch turns[${index}].establishedEvents[${eventIndex}]`
+            )),
+        }
+    })
+    const aggregate = parseMemoryWriterDraft(JSON.stringify({
+        schemaVersion: 1,
+        title: turns.map((turn) => turn.title).join(' · ').slice(0, 160),
+        establishedEvents: turns.flatMap((turn) => turn.establishedEvents)
+            .slice(0, 12),
+        stateChanges: parsed.stateChanges,
+        characterKnowledge: parsed.characterKnowledge,
+        persistentFacts: parsed.persistentFacts,
+        openContinuity: parsed.openContinuity,
+        canonicalUpdateCandidates: parsed.canonicalUpdateCandidates,
+    }))
+    const { title: _title, establishedEvents: _events, ...shared } = aggregate
+    return { ...shared, turns }
+}
+
+export function rebootBatchToMemoryDraft(
+    draft: RebootBatchDraft
+): MemoryWriterDraft {
+    const { turns, ...shared } = draft
+    return {
+        ...shared,
+        title: turns.map((turn) => turn.title).join(' · ').slice(0, 160),
+        establishedEvents: turns.flatMap((turn) =>
+            turn.establishedEvents
+        ).slice(0, 12),
     }
 }
 

@@ -28,6 +28,14 @@
     import PartialEditController from './PartialEditController.svelte';
     import RisuBardTurnReceipt from './RisuBardTurnReceipt.svelte';
     import type { CanonicalTurnReceipt } from 'src/ts/risubard/memoryWiki';
+    import FirstMessageStudioRuntime from '../FirstMessageStudio/FirstMessageStudioRuntime.svelte'
+    import {
+        readFirstMessageStudioVariables,
+        shouldRenderFirstMessageStudio,
+        writeFirstMessageStudioVariables,
+        type FirstMessageStudioRuntime as FirstMessageStudioRuntimeState,
+    } from 'src/ts/firstMessageStudio'
+    import type { character as Character } from 'src/ts/storage/database.svelte'
 
     let translating = $state(false)
     let editMode = $state(false)
@@ -200,6 +208,29 @@
                 chatRole: null,
             }
         }
+    }
+
+    function getFirstMessageStudioContext() {
+        const current = DBState.db.characters[selIdState.selId] as Character | undefined
+        const chat = current?.chats?.[current.chatPage]
+        const project = current?.type === 'character' ? current.firstMessageStudio : undefined
+        const scriptstate = chat?.scriptstate ?? {}
+        return {
+            project,
+            variables: readFirstMessageStudioVariables(scriptstate, current?.defaultVariables ?? ''),
+            visible: shouldRenderFirstMessageStudio(firstMessage, project, scriptstate, current?.defaultVariables ?? ''),
+        }
+    }
+
+    function handleFirstMessageStudioChange(runtime: FirstMessageStudioRuntimeState) {
+        const current = DBState.db.characters[selIdState.selId] as Character | undefined
+        const chat = current?.chats?.[current.chatPage]
+        if (!chat) return
+        chat.scriptstate = writeFirstMessageStudioVariables(chat.scriptstate ?? {}, runtime.variables)
+        ReloadChatPointer.update((value) => ({
+            ...value,
+            [idx]: (value[idx] ?? 0) + 1,
+        }))
     }
 
     async function getTranslationCacheKey(): Promise<string> {
@@ -442,6 +473,7 @@
 {/snippet}
 
 {#snippet textBox()}
+    {@const studioContext = getFirstMessageStudioContext()}
     {#if editTranslationMode}
         <AutoresizeArea bind:value={editTranslationText} handleLongPress={() => {
             saveTranslationEdit()
@@ -472,6 +504,14 @@
             {:else}
                 {msgDisplay}
             {/if}
+        </div>
+    {:else if studioContext.visible && studioContext.project}
+        <div class="chat-width w-full min-w-0" data-first-message-studio-chat>
+            <FirstMessageStudioRuntime
+                project={studioContext.project}
+                variables={studioContext.variables}
+                onChange={handleFirstMessageStudioChange}
+            />
         </div>
     {:else if blankMessage}
         <div class="w-full flex justify-center text-textcolor2 italic mb-12">

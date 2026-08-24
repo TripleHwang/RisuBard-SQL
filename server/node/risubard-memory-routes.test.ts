@@ -41,6 +41,39 @@ function createHarness() {
 }
 
 describe('RisuBard memory routes', () => {
+    test('validates reboot replacement, cleanup, and recovery operations', async () => {
+        const service = {
+            replaceMemory: vi.fn(async () => ({
+                mode: 'copy', sourceExists: true, destinationChatId: 'chat',
+                warnings: [], forkToken: 'token',
+            })),
+            removeRebootMemory: vi.fn(async () => ({ removed: true })),
+            recoverWikiRebootBatch: vi.fn(async () => ({ receipt: null })),
+        }
+        const { registerRisuBardMemoryRoutes } = require(
+            './risubard-memory-routes.cjs'
+        )
+        const harness = createHarness()
+        registerRisuBardMemoryRoutes(harness.app, {
+            auth: async () => true,
+            service,
+        })
+        await harness.routes.get('/api/risubard/memory/reboot/replace')!({ body: {
+            characterId: 'character', sourceChatId: 'reboot-job',
+            destinationChatId: 'chat',
+        } }, harness.response, vi.fn())
+        await harness.routes.get('/api/risubard/memory/reboot/remove')!({ body: {
+            characterId: 'character', chatId: 'reboot-job',
+        } }, harness.response, vi.fn())
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/recover')!({ body: {
+            characterId: 'character', chatId: 'reboot-job',
+            sourceMessageIds: ['u1', 'a1'], eventSourceGroups: [['u1', 'a1']],
+        } }, harness.response, vi.fn())
+        expect(service.replaceMemory).toHaveBeenCalledOnce()
+        expect(service.removeRebootMemory).toHaveBeenCalledOnce()
+        expect(service.recoverWikiRebootBatch).toHaveBeenCalledOnce()
+    })
+
     test('passes a bounded wiki-wide literal replacement to persistence', async () => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'

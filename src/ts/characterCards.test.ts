@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import type { character } from './storage/database.svelte'
-import { convertCharbook, createBaseV2, createBaseV3 } from './characterCards'
+import { convertCharbook, createBaseV2, createBaseV3, readFirstMessageStudioExtension } from './characterCards'
+import { createBlankStudioProject } from './firstMessageStudio'
 
 vi.mock('./process/modules', () => ({
     exportModuleLegacy: vi.fn(),
@@ -178,5 +179,27 @@ describe('Character Card lorebook enabled state', () => {
 
         expect(imported.id).toBe('73')
         expect(imported.extentions).toMatchObject({ unknown_extension: 'kept' })
+    })
+})
+
+describe('first message studio character-card extension', () => {
+    test('preserves a project through v3 export and import without sharing references', () => {
+        const project = createBlankStudioProject()
+        project.variables.push({
+            name: 'route', label: 'Route', defaultValue: '', choices: [{ label: 'Calm', value: 'calm' }],
+        })
+        project.customCss = ':scope { border-width: 2px; }'
+        const card = createBaseV3({
+            ...nativeCharacter([]),
+            firstMessageStudio: project,
+        })
+
+        const extension = card.data.extensions.risuai?.firstMessageStudio
+        const imported = readFirstMessageStudioExtension(card.data)
+
+        expect(extension).toEqual(project)
+        expect(imported).toEqual(project)
+        expect(imported).not.toBe(project)
+        expect(imported?.stages).not.toBe(project.stages)
     })
 })

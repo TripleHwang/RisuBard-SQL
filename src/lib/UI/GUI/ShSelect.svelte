@@ -255,7 +255,7 @@
             bind:this={dropdownEl}
             use:portalToBody
             role="listbox"
-            class="fixed z-50 max-h-64 overflow-y-auto pointer-events-auto rounded-md bg-darkbg shadow-md
+            class="fixed z-[2147483620] max-h-64 overflow-y-auto pointer-events-auto rounded-md bg-darkbg shadow-md
                    ring-1 ring-textcolor/10 p-1"
             style={dropdownStyle}
         >

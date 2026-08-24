@@ -19,11 +19,17 @@ import type { OnnxModelFiles } from "./process/transformers"
 import { CharXImporter, CharXSkippableChecker, CharXWriter } from "./process/processzip"
 import { exportModuleLegacy, readModule, type RisuModule } from "./process/modules"
 import { pinCharacterVaultQuickAccess } from './characterVault'
+import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } from './firstMessageStudio'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
 const NIGHTLY_HUB_URL = 'https://nightly.sv.risuai.xyz'
 export const hubURL = '/hub-proxy';
+
+export function readFirstMessageStudioExtension(data: { extensions?: { risuai?: { firstMessageStudio?: unknown } } }): FirstMessageStudioProject | undefined {
+    const project = data?.extensions?.risuai?.firstMessageStudio
+    return project ? normalizeFirstMessageStudioProject(safeStructuredClone(project)) : undefined
+}
 
 export async function importCharacter() {
     try {
@@ -873,6 +879,7 @@ async function importCharacterCardSpec<T extends boolean = false>(card:Character
     let char:character = {
         name: data.name ?? '',
         firstMessage: data.first_mes ?? '',
+        firstMessageStudio: readFirstMessageStudioExtension(data),
         desc: data.description ?? '',
         notes: '',
         chats: [{
@@ -1166,6 +1173,7 @@ export function createBaseV2(char:character) {
                     bias: char.bias,
                     viewScreen: char.viewScreen,
                     customScripts: char.customscript,
+                    firstMessageStudio: char.firstMessageStudio ? safeStructuredClone(char.firstMessageStudio) : undefined,
                     utilityBot: char.utilityBot,
                     sdData: char.sdData,
                     // additionalAssets: char.additionalAssets,
@@ -1597,6 +1605,7 @@ export function createBaseV3(char:character){
                     bias: char.bias,
                     viewScreen: char.viewScreen,
                     customScripts: char.customscript,
+                    firstMessageStudio: char.firstMessageStudio ? safeStructuredClone(char.firstMessageStudio) : undefined,
                     utilityBot: char.utilityBot,
                     sdData: char.sdData,
                     backgroundHTML: char.backgroundHTML,
@@ -1812,6 +1821,7 @@ type CharacterCardV2Risu = {
                 bias?:[string, number][],
                 viewScreen?: any,
                 customScripts?:customscript[]
+                firstMessageStudio?:FirstMessageStudioProject
                 utilityBot?: boolean,
                 sdData?:[string,string][],
                 additionalAssets?:[string,string,string][],

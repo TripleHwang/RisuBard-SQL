@@ -34,6 +34,7 @@ import {
 import {
     canonicalBatchSchema,
     memoryWriterDraftSchema,
+    rebootBatchDraftSchema,
 } from '../../../server/node/risubard-memory-writer'
 
 interface StoredMessage {
@@ -799,6 +800,8 @@ export function createStoredResponseMemoryAnalysis(
                     : {
                         schema: request.format === 'memory-draft'
                             ? memoryWriterDraftSchema
+                            : request.format === 'reboot-batch'
+                                ? rebootBatchDraftSchema
                             : request.format === 'canonical-batch'
                                 ? canonicalBatchSchema
                                 : request.schemaVersion === 2

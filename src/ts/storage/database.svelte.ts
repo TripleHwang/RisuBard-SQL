@@ -38,6 +38,7 @@ import {
     normalizeRisuBardCanonicalWritingStyle,
     normalizeRisuBardInquiryTokenBudget,
 } from '../risubard/risuBardSettings';
+import { normalizeWikiRebootJob } from '../risubard/wikiReboot';
 import type { CanonicalTurnReceipt } from '../risubard/memoryWiki';
 import {
     normalizeWikiPromptPresetState,
@@ -832,6 +833,7 @@ export function setDatabase(data:Database){
         typeof data.risuBardAutoWikiEnabled === 'boolean'
             ? data.risuBardAutoWikiEnabled
             : true
+    data.showRisuBardSaveLoadShortcuts ??= true
     data.risuBardRecentMessageCount = Number.isSafeInteger(data.risuBardRecentMessageCount)
         && data.risuBardRecentMessageCount! >= 1
         && data.risuBardRecentMessageCount! <= 100
@@ -1458,6 +1460,10 @@ export interface Database{
     }
     risuBardMemoryDockRatio?: number
     risuBardMemoryWorkspaceHeight?: number
+    showRisuBardSaveLoadShortcuts?: boolean
+    risuBardSaveLoadShortcutPlacement?:
+        | import('../risubard/saveLoadShortcutLayout').SaveLoadShortcutPlacement
+        | { xRatio: number, yRatio: number }
     pluginFabPlacements?: Record<string, {
         xRatio: number
         yRatio: number
@@ -1817,11 +1823,14 @@ export interface loreBook{
     folder?:string
 }
 
+import type { FirstMessageStudioProject } from '../firstMessageStudio'
+
 export interface character{
     type?:"character"
     name:string
     image?:string
     firstMessage:string
+    firstMessageStudio?:FirstMessageStudioProject
     desc:string
     notes:string
     chats:Chat[]
@@ -2318,6 +2327,7 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
     if (typeof c.name !== 'string') c.name = ''
     if (!Array.isArray(c.localLore)) c.localLore = []
     if (typeof c.risuBardWikiGuide !== 'string') c.risuBardWikiGuide = ''
+    c.risuBardWikiReboot = normalizeWikiRebootJob(c.risuBardWikiReboot)
     return c
 }
 
@@ -2328,6 +2338,7 @@ export interface Chat{
     localLore: loreBook[]
     risuBardWikiGuide?: string
     risuBardSettings?: import('../risubard/risuBardSettings').RisuBardChatSettings
+    risuBardWikiReboot?: import('../risubard/wikiReboot').WikiRebootJob
     sdData?:string
     suggestMessages?:string[]
     isStreaming?:boolean
