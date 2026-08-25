@@ -205,6 +205,17 @@ export function localizeStudioText(value: FirstMessageStudioText | undefined, lo
     return value[locale] || value.ko || value.en || value.ja || Object.values(value).find(Boolean) || ''
 }
 
+export function hasFirstMessageStudioPresentation(value: FirstMessageStudioOptionPresentation | undefined): boolean {
+    const hasText = (text: FirstMessageStudioText | undefined) => typeof text === 'string'
+        ? Boolean(text.trim())
+        : Boolean(text && Object.values(text).some((entry) => entry.trim()))
+    return Boolean(value && (
+        (value.imageEnabled && value.imageAssetName)
+        || hasText(value.speaker)
+        || hasText(value.description)
+    ))
+}
+
 export function toFirstMessageStudioLocale(locale: string | undefined): FirstMessageStudioLocale {
     const normalized = String(locale ?? '').toLowerCase()
     if (normalized.startsWith('ja')) return 'ja'

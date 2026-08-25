@@ -33,6 +33,7 @@ import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { isChatStub, purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
+import { canDeleteAssetsAfterPluginStorageScan, collectNestedAssetReferences, isAutoAssetCleanupEnabled, shouldDeleteUnreferencedAsset } from './storage/assetRefs'
 
 /**
  * Loads the application data.
@@ -457,8 +458,26 @@ async function checkNewFormat(): Promise<void> {
  */
 async function cleanChunks() {
     const db = getDatabase()
-    const uncleanable = new Set(getUncleanables(db))
     const indexes = await forageStorage.keys()
+    const assetCleanupRequested = isAutoAssetCleanupEnabled(db)
+    const uncleanable = assetCleanupRequested ? new Set(getUncleanables(db)) : new Set<string>()
+    let pluginStorageScanSucceeded = true
+    if (assetCleanupRequested) {
+        for (const key of indexes) {
+            if (!key.startsWith('cache/plugin-storage/') || !key.endsWith('.json')) continue
+            try {
+                const data = await forageStorage.getItem(key) as unknown as Uint8Array
+                for (const asset of collectNestedAssetReferences(JSON.parse(new TextDecoder().decode(data)))) {
+                    uncleanable.add(getBasename(asset))
+                }
+            } catch {
+                // Missing or corrupt plugin data means references are unknown.
+                pluginStorageScanSucceeded = false
+                break
+            }
+        }
+    }
+    const cleanAssets = canDeleteAssetsAfterPluginStorageScan(assetCleanupRequested, pluginStorageScanSucceeded)
     const allKeys = new Set(indexes)
     const characterIds = new Set<string>(
         db.characters.map((v) => v.chaId)
@@ -467,11 +486,8 @@ async function cleanChunks() {
         if (asset.endsWith('.meta')) {
             continue
         }
-        else if (asset.startsWith('assets/')) {
-            const n = getBasename(asset)
-            if(!uncleanable.has(n)) {
-                await forageStorage.removeItem(asset)
-            }
+        else if (shouldDeleteUnreferencedAsset(asset, cleanAssets, uncleanable)) {
+            await forageStorage.removeItem(asset)
         }
         else if (asset.startsWith('remotes/')) {
             const name = getBasename(asset).slice(0, -10) //remove .local.bin

@@ -1139,7 +1139,7 @@ export class RisuSavePatcher {
                         v.path = `/characters/${i}` + v.path;
                         return v;
                     })
-                    patch.push(...charPatch);
+                    for (const op of charPatch) patch.push(op)
                     this.hashBlocks[normChar.chaId] = curCharHash ?? calculateHash(normChar);
                     this.lastSyncedDb.characters[i] = normChar;
                 }

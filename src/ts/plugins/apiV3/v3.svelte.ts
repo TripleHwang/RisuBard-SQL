@@ -27,6 +27,7 @@ import type { ModelModeExtended } from "src/ts/process/request/shared";
 import { requestChatDataMain } from "src/ts/process/request/request";
 import type { OpenAIChat } from "src/ts/process/index.svelte";
 import { getModuleLorebooks } from "src/ts/process/modules";
+import { addOwnedChatOutputListener, readInlayWithPermission, removeOwnedChatOutputListener } from "../pluginChatOutput";
 import {
     registerTTSPreprocessor,
     unregisterTTSPreprocessor,
@@ -561,8 +562,8 @@ const unloadV3Plugin = async (pluginName: string) => {
     }
 }
 
-type PluginPermissionDesc = 'fetchLogs'|'db'|'mainDom'|'replacer'|'provider'|'sendChat';
-const pluginPermissionDescs: PluginPermissionDesc[] = ['fetchLogs', 'db', 'mainDom', 'replacer', 'provider', 'sendChat'];
+type PluginPermissionDesc = 'fetchLogs'|'db'|'mainDom'|'replacer'|'provider'|'sendChat'|'inlay';
+const pluginPermissionDescs: PluginPermissionDesc[] = ['fetchLogs', 'db', 'mainDom', 'replacer', 'provider', 'sendChat', 'inlay'];
 
 // Plugin names are free text (the //@name directive), so `${name}_${desc}` keys
 // can collide — both across permissions and with a legacy name-only entry that
@@ -726,6 +727,7 @@ const getPluginPermission = async (pluginName: string, permissionDesc: PluginPer
             : permissionDesc === 'replacer' ? language.replacerPermissionConsent.replace("{}", pluginName)
             : permissionDesc === 'provider' ? language.providerPermissionConsent.replace("{}", pluginName)
             : permissionDesc === 'sendChat' ? language.sendChatConsent.replace("{}", pluginName)
+            : permissionDesc === 'inlay' ? language.inlayPermissionConsent.replace("{}", pluginName)
             : `Error`
         if(alertTitle === 'Error'){
             return false;
@@ -865,12 +867,29 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             oldApis.addRisuReplacer(name, func as any);
         },
         removeRisuReplacer: oldApis.removeRisuReplacer,
+        addRisuChatListener: async (mode: 'output', func: Function) => {
+            const conf = await getPluginPermission(plugin.name, 'replacer', 'periodically');
+            if(!conf){
+                return;
+            }
+            const owner = `v3:${plugin.name}`;
+            addOwnedChatOutputListener(pluginV2.chatOutput, owner, mode, func as any);
+            pluginV2.chatOutput.ensureOwnerCleanup(owner, (cleanup) =>
+                addPluginUnloadCallback(plugin.name, cleanup)
+            );
+        },
+        removeRisuChatListener: (mode: 'output', func: Function) => {
+            removeOwnedChatOutputListener(pluginV2.chatOutput, `v3:${plugin.name}`, mode, func as any);
+        },
         setDatabaseLite: oldApis.setDatabaseLite,
         setDatabase: oldApis.setDatabase,
         loadPlugins: oldApis.loadPlugins,
         readImage: oldApis.readImage,
         readInlay: async (id: string) => {
-            return await getInlayAsset(id);
+            return await readInlayWithPermission(
+                () => getPluginPermission(plugin.name, 'inlay', 'periodically'),
+                () => getInlayAsset(id),
+            );
         },
         saveAsset: oldApis.saveAsset,
         //Same functionality, but new implementation

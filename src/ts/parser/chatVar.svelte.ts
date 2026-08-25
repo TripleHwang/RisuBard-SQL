@@ -2,6 +2,12 @@ import { get } from 'svelte/store'
 import { DBState, selectedCharID } from '../stores.svelte'
 import { parseKeyValue } from '../util'
 
+function getSelectedChat() {
+    const selectedChar = get(selectedCharID)
+    const char = DBState.db.characters[selectedChar]
+    return char?.chats?.[char.chatPage]
+}
+
 export function getChatVar(key:string): string {
     const selectedChar = get(selectedCharID)
     const char = DBState.db.characters[selectedChar]
@@ -24,14 +30,37 @@ export function getChatVar(key:string): string {
     return state.toString()
 }
 
-export function setChatVar(key:string, value:string): void {
+export function setChatVar(key:string, value:string): boolean {
     const selectedChar = get(selectedCharID)
-    if(!DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].scriptstate){
-        DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].scriptstate = {}
+    const chat = DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage]
+    chat.scriptstate ??= {}
+    const stateKey = '$' + key
+    if(chat.scriptstate[stateKey] === value){
+        return false
     }
-    DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].scriptstate['$' + key] = value
+    chat.scriptstate[stateKey] = value
+    return true
 }
 
 export function getGlobalChatVar(key:string): string {
+    const chat = getSelectedChat()
+    if(
+        !DBState.db.disableToggleBinding
+        && chat?.useLocallySetGlobalVariables
+        && chat.GLGlobalVariables
+        && Object.hasOwn(chat.GLGlobalVariables, key)
+    ){
+        return chat.GLGlobalVariables[key]
+    }
     return DBState.db.globalChatVariables[key] ?? 'null'
+}
+
+export function setGlobalChatVar(key:string, value:string): void {
+    const chat = getSelectedChat()
+    if(!DBState.db.disableToggleBinding && chat?.useLocallySetGlobalVariables){
+        chat.GLGlobalVariables ??= {}
+        chat.GLGlobalVariables[key] = value
+        return
+    }
+    DBState.db.globalChatVariables[key] = value
 }

@@ -1339,6 +1339,7 @@ export const languageKorean = {
   persistentStorageFail:
     "저장소 설정에 실패했습니다. 브라우저에서 거부되었을 수 있습니다.",
   persistentStorageRecommended: "영구 저장소 권장됨",
+  unsupportedFileType: "지원하지 않는 파일 형식입니다",
   persistentStorageDesc:
     "당신의 브라우저는 영구 저장소를 지원합니다. 이 기능을 활성화하면, 데이터가 브라우저에 더 오래 남습니다.",
   enable: "활성화",
@@ -2087,6 +2088,8 @@ export const languageKorean = {
     "플러그인 {} 이(가) 메인 Document에 접근하려고 합니다. 민감한 정보가 노출될 수 있습니다. 허용하시겠습니까?",
   replacerPermissionConsent:
     "플러그인 {} 이(가) 채팅 내용을 교체할 권한을 요청합니다. 대화 조작에 사용될 수 있습니다. 허용하시겠습니까?",
+  inlayPermissionConsent:
+    "플러그인 {} 이(가) 채팅 메시지에 첨부된 인레이 에셋을 읽을 권한을 요청합니다. 허용하시겠습니까?",
   providerPermissionConsent:
     "플러그인 {} 이(가) Provider 접근 권한을 요청합니다. 무단 API 호출이 발생할 수 있습니다. 허용하시겠습니까?",
   sendChatConsent:
@@ -2153,16 +2156,16 @@ export const languageKorean = {
   },
   hamburgerButtonBottom: "메뉴 버튼을 사이드바 하단으로 이동",
   hideLeftBarCollapseButton: "메뉴바 접기 버튼 숨기기",
-  toggleBindingLabel: "토글 바인딩",
-  togglePinToChat: "채팅에 토글 바인드",
-  togglePinLabel: "토글 바인드",
-  togglePinSaved: "토글이 바인드 되었습니다.",
+  toggleBindingLabel: "채팅별 토글",
+  togglePinToChat: "현재 토글 값을 이 채팅에만 고정",
+  togglePinLabel: "채팅에 고정",
+  togglePinSaved: "토글 값이 이 채팅에 고정되었습니다.",
   toggleSaveAsPreset: "토글 프리셋으로 저장",
   toggleLoadPreset: "토글 프리셋에서 불러오기",
   togglePinUpdate: "토글 저장",
   togglePinUpdateLabel: "저장",
-  togglePinRemove: "토글 바인드를 해제할까요?",
-  togglePinUnbound: "토글 바인드가 해제되었습니다.",
+  togglePinRemove: "채팅별 토글 고정을 해제할까요? 전역 값으로 돌아갑니다.",
+  togglePinUnbound: "채팅별 고정이 해제되었습니다.",
   togglePresetNamePrompt: "토글 프리셋 이름을 입력하세요",
   togglePresetDelete: "── 삭제 ──",
   togglePresetDeleteConfirm: (name: string) =>

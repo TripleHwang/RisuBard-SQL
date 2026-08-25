@@ -1,12 +1,21 @@
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 // shared.ts imports getDatabase at module load; stub it so this pure-helper test
 // stays off the big database import graph (mirrors modelPresetBinding.test.ts).
+const mocks = vi.hoisted(() => ({ db: {} as any }))
+
 vi.mock('src/ts/storage/database.svelte', () => ({
-    getDatabase: () => ({}),
+    getDatabase: () => mocks.db,
 }))
 
-import { collectStreamingText } from './shared'
+import { applyParameters, collectStreamingText } from './shared'
+
+beforeEach(() => {
+    mocks.db = {
+        seperateParametersEnabled: false,
+        reasoningEffort: 2,
+    }
+})
 
 // collectStreamingText underpins per-preset decoupled streaming: the wire stays
 // SSE, but the stream is drained to a single string. Every chunk carries the
@@ -42,5 +51,20 @@ describe('collectStreamingText', () => {
     test('returns empty string for an empty stream', async () => {
         const stream = streamOf([])
         expect(await collectStreamingText(stream)).toBe('')
+    })
+})
+
+describe('applyParameters reasoning capability modifiers', () => {
+    test.each([
+        [['reasoning_effort'], -1, 'minimal'],
+        [['reasoning_effort', 'reasoning_effort_none'], -1, 'none'],
+        [['reasoning_effort', 'reasoning_effort_min_medium'], 0, 'medium'],
+        [['reasoning_effort', 'reasoning_effort_xhigh'], 3, 'xhigh'],
+        [['reasoning_effort'], 3, 'high'],
+    ])('uses %j to resolve effort %i as %s', (parameters, effort, expected) => {
+        mocks.db.reasoningEffort = effort
+
+        expect(applyParameters({}, parameters as any, {}, 'model', { modelId: 'model' }))
+            .toMatchObject({ reasoning_effort: expected })
     })
 })

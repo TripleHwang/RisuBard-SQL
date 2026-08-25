@@ -167,11 +167,10 @@ describe('sendChatRequest (non-stream)', () => {
         expect(wire.slice(1)).toEqual(userMessages)
     })
 
-    test('does not add DeepSeek JSON hints to ordinary or other-provider requests', async () => {
+    test('does not add DeepSeek JSON hints to ordinary requests', async () => {
         const { fetchImpl, calls } = captureFetch(() =>
             jsonResponse({ choices: [{ message: { content: 'ok' } }] }),
         )
-        const responseSchema = { type: 'object' }
 
         await sendChatRequest(
             makePreset({
@@ -180,16 +179,39 @@ describe('sendChatRequest (non-stream)', () => {
             { messages: userMessages, fetchImpl },
             { apiKey: 'sk' },
         )
+
+        expect(calls[0].body.response_format).toBeUndefined()
+        expect(calls[0].body.messages).toEqual(userMessages)
+    })
+
+    test('sends native JSON Schema for structured OpenAI-compatible requests', async () => {
+        const { fetchImpl, calls } = captureFetch(() =>
+            jsonResponse({ choices: [{ message: { content: '{"value":"ok"}' } }] }),
+        )
+        const responseSchema = {
+            type: 'object',
+            additionalProperties: false,
+            required: ['value'],
+            properties: { value: { type: 'string' } },
+        }
+
         await sendChatRequest(
-            makePreset(),
+            makePreset({
+                profileSnapshot: makeSnapshot({ providerBaseId: 'openrouter' }),
+            }),
             { messages: userMessages, responseSchema, fetchImpl },
             { apiKey: 'sk' },
         )
 
-        expect(calls[0].body.response_format).toBeUndefined()
+        expect(calls[0].body.response_format).toEqual({
+            type: 'json_schema',
+            json_schema: {
+                name: 'format',
+                strict: true,
+                schema: responseSchema,
+            },
+        })
         expect(calls[0].body.messages).toEqual(userMessages)
-        expect(calls[1].body.response_format).toBeUndefined()
-        expect(calls[1].body.messages).toEqual(userMessages)
     })
 
     test('builds OpenAI-compatible body and parses choices/usage', async () => {

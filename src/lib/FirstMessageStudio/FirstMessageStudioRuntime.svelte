@@ -6,12 +6,12 @@
     import DOMPurify from 'dompurify'
     import { untrack } from 'svelte'
     import { getCurrentLocale } from 'src/lang'
-    import { getFileSrc } from 'src/ts/globalApi.svelte'
     import {
         applyStudioOption,
         backStudioRuntime,
         createScopedStudioCss,
         createStudioRuntime,
+        hasFirstMessageStudioPresentation,
         interpolateStudioTemplate,
         localizeStudioText,
         resetStudioRuntime,
@@ -37,8 +37,16 @@
     let validationError = $state('')
     let activeOptionId = $state('')
     let presentationImageSrc = $state('')
+    const presentationImageCache = new Map<string, string>()
+    let presentationImageAssetPath = ''
+    let presentationImageRequest = 0
     let stage = $derived(project.stages.find((candidate) => candidate.id === runtime.stageId) ?? project.stages[0])
-    let activeOption = $derived(stage?.options.find((option) => option.id === activeOptionId) ?? stage?.options[0])
+    let activeOption = $derived.by(() => {
+        const options = stage?.options ?? []
+        const selected = options.find((option) => option.id === activeOptionId)
+        if (selected && hasFirstMessageStudioPresentation(selected.presentation)) return selected
+        return options.find((option) => hasFirstMessageStudioPresentation(option.presentation)) ?? selected ?? options[0]
+    })
     let stageIndex = $derived(Math.max(0, project.stages.findIndex((candidate) => candidate.id === runtime.stageId)))
     let locale = $derived(resolveStudioProjectLocale(project, runtime.variables, runtime.locale))
     let projectTitle = $derived(localizeStudioText(project.title, locale))
@@ -53,14 +61,30 @@
         const assetPath = presentation?.imageEnabled && presentation.imageAssetName
             ? assets.find((asset) => asset[0] === presentation.imageAssetName)?.[1]
             : undefined
-        let cancelled = false
-        presentationImageSrc = ''
-        if (assetPath) {
-            getFileSrc(assetPath).then((source) => {
-                if (!cancelled) presentationImageSrc = source
-            })
+        if (!assetPath) {
+            presentationImageAssetPath = ''
+            presentationImageRequest++
+            presentationImageSrc = ''
+            return
         }
-        return () => { cancelled = true }
+        if (assetPath === presentationImageAssetPath && presentationImageSrc) return
+        presentationImageAssetPath = assetPath
+        const cached = presentationImageCache.get(assetPath)
+        if (cached) {
+            presentationImageSrc = cached
+            return
+        }
+        const request = ++presentationImageRequest
+        presentationImageSrc = ''
+        import('src/ts/globalApi.svelte')
+            .then(({ getFileSrc }) => getFileSrc(assetPath))
+            .then((source) => {
+                presentationImageCache.set(assetPath, source)
+                if (request === presentationImageRequest && assetPath === presentationImageAssetPath) presentationImageSrc = source
+            })
+            .catch(() => {
+                if (request === presentationImageRequest && assetPath === presentationImageAssetPath) presentationImageSrc = ''
+            })
     })
 
     $effect(() => {
@@ -116,6 +140,10 @@
     function updateInput(variable: string, value: string) {
         validationError = ''
         runtime = setStudioInput(runtime, variable, value)
+    }
+
+    function previewOption(option: NonNullable<typeof stage>['options'][number]) {
+        if (hasFirstMessageStudioPresentation(option.presentation)) activeOptionId = option.id
     }
 
     function goBack() {
@@ -175,7 +203,7 @@
                 {#if stage.optionPresentationEnabled && activeOption?.presentation}
                     <div class="option-presentation" class:with-image={Boolean(presentationImageSrc && activeOption.presentation.imageEnabled)} data-studio-option-presentation={activeOption.id}>
                         {#if presentationImageSrc && activeOption.presentation.imageEnabled}
-                            <div class="presentation-image-frame frame-{activeOption.presentation.imageFrame}" data-studio-presentation-image-frame>
+                            <div class="presentation-image-frame frame-{activeOption.presentation.imageFrame}" data-studio-presentation-image-frame style:position="relative">
                                 <img
                                     data-studio-presentation-image
                                     src={presentationImageSrc}
@@ -185,6 +213,8 @@
                                     style:max-width|important={activeOption.presentation.imageFrame === 'contain' ? '100%' : 'none'}
                                     style:max-height|important={activeOption.presentation.imageFrame === 'contain' ? '17rem' : 'none'}
                                     style:margin|important="0"
+                                    style:position|important={activeOption.presentation.imageFrame === 'contain' ? 'static' : 'absolute'}
+                                    style:inset|important={activeOption.presentation.imageFrame === 'contain' ? 'auto' : '0'}
                                     style:object-fit|important={activeOption.presentation.imageFrame === 'contain' ? 'contain' : 'cover'}
                                     style:object-position|important={activeOption.presentation.imageFrame === 'contain' ? '50% 50%' : `${activeOption.presentation.imagePositionX}% ${activeOption.presentation.imagePositionY}%`}
                                 />
@@ -204,7 +234,7 @@
                 <div class="options">
                     {#each stage.options as option}
                         <div class="option-wrap" class:with-input={Boolean(option.input)}>
-                            <button type="button" data-studio-option={option.id} onpointerenter={() => activeOptionId = option.id} onfocus={() => activeOptionId = option.id} onclick={() => choose(option.id)}>
+                            <button type="button" data-studio-option={option.id} onpointermove={() => previewOption(option)} onfocus={() => previewOption(option)} onclick={() => choose(option.id)}>
                                 {#if option.badge}<span class="option-badge">{localizeStudioText(option.badge, locale)}</span>{/if}
                                 <span class="option-copy">
                                     <strong>{localizeStudioText(option.label, locale)}</strong>
@@ -263,7 +293,7 @@
     .description{margin:.8rem 0;padding:.75rem;border-left:3px solid var(--studio-accent);border-radius:.25rem;background:color-mix(in srgb,var(--studio-accent) 8%,transparent)}
     .description b{display:block;margin-bottom:.25rem;color:var(--studio-accent);font-size:.68rem;letter-spacing:.06em}
     .description p{margin:0;font-size:.82rem;line-height:1.55}
-    .option-presentation{display:grid;gap:.65rem;margin:.8rem 0}.presentation-image-frame{display:grid;width:100%;place-items:center;overflow:hidden;margin-inline:auto;border:1px solid color-mix(in srgb,var(--studio-accent) 30%,transparent);border-radius:calc(var(--studio-radius) * .55);background:color-mix(in srgb,var(--studio-bg) 62%,var(--studio-surface));box-shadow:inset 0 1px color-mix(in srgb,var(--studio-text) 5%,transparent)}.presentation-image-frame.frame-contain{max-height:18rem;padding:.5rem}.presentation-image-frame.frame-square{width:min(100%,20rem);aspect-ratio:1}.presentation-image-frame.frame-landscape{aspect-ratio:16/9}.presentation-image-frame.frame-portrait{width:min(100%,18rem);aspect-ratio:3/4}.presentation-image-frame.frame-contain img{display:block;width:auto;height:auto;max-width:100%;max-height:17rem;object-fit:contain;object-position:center}.presentation-image-frame:not(.frame-contain) img{width:100%;height:100%;object-fit:cover;object-position:center}.presentation-copy{display:grid;align-content:center;gap:.42rem;padding:.75rem;border-left:3px solid var(--studio-accent);border-radius:calc(var(--studio-radius) * .25);background:color-mix(in srgb,var(--studio-accent) 7%,transparent)}.presentation-copy b{color:var(--studio-accent);font-size:.7rem;letter-spacing:.06em}.presentation-copy p{margin:0;font-size:.84rem;line-height:1.6}
+    .option-presentation{display:grid;gap:.65rem;margin:.8rem 0}.presentation-image-frame{position:relative;display:grid;width:100%;place-items:center;overflow:hidden;margin-inline:auto;border:1px solid color-mix(in srgb,var(--studio-accent) 30%,transparent);border-radius:calc(var(--studio-radius) * .55);background:color-mix(in srgb,var(--studio-bg) 62%,var(--studio-surface));box-shadow:inset 0 1px color-mix(in srgb,var(--studio-text) 5%,transparent)}.presentation-image-frame.frame-contain{max-height:18rem;padding:.5rem}.presentation-image-frame.frame-square{width:min(100%,20rem);aspect-ratio:1}.presentation-image-frame.frame-landscape{aspect-ratio:16/9}.presentation-image-frame.frame-portrait{width:min(100%,18rem);aspect-ratio:3/4}.presentation-image-frame.frame-contain img{display:block;width:auto;height:auto;max-width:100%;max-height:17rem;object-fit:contain;object-position:center}.presentation-image-frame:not(.frame-contain) img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center}.presentation-copy{display:grid;align-content:center;gap:.42rem;padding:.75rem;border-left:3px solid var(--studio-accent);border-radius:calc(var(--studio-radius) * .25);background:color-mix(in srgb,var(--studio-accent) 7%,transparent)}.presentation-copy b{color:var(--studio-accent);font-size:.7rem;letter-spacing:.06em}.presentation-copy p{margin:0;font-size:.84rem;line-height:1.6}
     .options{display:grid;grid-template-columns:repeat(var(--studio-columns),minmax(0,1fr));gap:.5rem}
     .option-wrap{display:grid;gap:.35rem}
     .option-wrap.with-input{grid-column:1/-1}

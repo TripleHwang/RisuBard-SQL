@@ -44,6 +44,7 @@ import {
     normalizeWikiPromptPresetState,
     type WikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
+import { normalizeSelectedPersonaIndex } from '../personaScopes';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
 export let appVer = "2026.2.291" //<APP_VERSION_POINT>
@@ -466,13 +467,16 @@ export function setDatabase(data:Database){
     }
     data.selectedPersona ??= 0
     data.personaPrompt ??= ''
-    data.personas ??= [{
-        name: data.username,
-        personaPrompt: "",
-        icon: data.userIcon,
-        note: data.userNote,
-        largePortrait: false
-    }]
+    if(!Array.isArray(data.personas) || data.personas.length === 0){
+        data.personas = [{
+            name: data.username,
+            personaPrompt: "",
+            icon: data.userIcon,
+            note: data.userNote,
+            largePortrait: false
+        }]
+    }
+    data.selectedPersona = normalizeSelectedPersonaIndex(data.personas.length, data.selectedPersona)
     data.personas = ensurePersonaIds(data.personas, uuidv4)
     for(const character of data.characters){
         if(character && Array.isArray(character.personas)){
@@ -812,6 +816,7 @@ export function setDatabase(data:Database){
     data.saveSignatures ??= false
     data.nodeOnlyScrollButtonType ??= 'four'
     data.nodeOnlyHideRecentChats ??= false
+    data.nodeOnlyAutoCleanAssets ??= false
     data.keepSessionAlive ??= 'off'
     data.localNetworkMode ??= false
     if (typeof data.localNetworkMode !== 'boolean') data.localNetworkMode = false
@@ -895,6 +900,7 @@ export function setDatabase(data:Database){
             if(!chat || isChatStub(chat)){
                 continue
             }
+            normalizeChat(chat)
             chat.isStreaming = false
             chat.activeStreamingDisplayOptimizationMode = undefined
             if (typeof chat.risuBardWikiGuide !== 'string') {
@@ -1061,11 +1067,20 @@ export function snapshotToggleValues(db:Database = getDatabase()):Record<string,
     return values
 }
 
-export function snapshotCurrentToggleValues(db:Database = getDatabase()):Record<string, string>{
-    const keys = getToggleKeys(db)
+export function snapshotCurrentToggleValues(
+    db:Database = getDatabase(),
+    char:character = getCurrentCharacter(),
+    chat:Chat = getCurrentChat(),
+):Record<string, string>{
+    const keys = getToggleKeys(db, char, chat)
     const values:Record<string, string> = {}
     for(const key of keys){
-        const value = db.globalChatVariables[key]
+        const value = !db.disableToggleBinding
+            && chat?.useLocallySetGlobalVariables
+            && chat.GLGlobalVariables
+            && Object.hasOwn(chat.GLGlobalVariables, key)
+            ? chat.GLGlobalVariables[key]
+            : db.globalChatVariables[key]
         if(value !== undefined){
             values[key] = value
         }
@@ -1073,21 +1088,62 @@ export function snapshotCurrentToggleValues(db:Database = getDatabase()):Record<
     return values
 }
 
-export function applyToggleValues(values:Record<string, string>, db:Database = getDatabase()):void{
-    const keys = getToggleKeys(db)
+export function applyToggleValues(
+    values:Record<string, string>,
+    db:Database = getDatabase(),
+    char:character = getCurrentCharacter(),
+    chat:Chat = getCurrentChat(),
+):void{
+    const keys = getToggleKeys(db, char, chat)
+    const target = !db.disableToggleBinding && chat?.useLocallySetGlobalVariables
+        ? (chat.GLGlobalVariables ??= {})
+        : db.globalChatVariables
     // Apply current preset's keys (reset if not in saved values)
     for(const key of keys){
         const value = values[key]
         if(value === undefined){
-            delete db.globalChatVariables[key]
+            delete target[key]
             continue
         }
-        db.globalChatVariables[key] = value
+        target[key] = value
     }
     // Restore orphan toggle values from other presets
     for(const [key, value] of Object.entries(values)){
         if(!keys.includes(key)){
-            db.globalChatVariables[key] = value
+            target[key] = value
+        }
+    }
+}
+
+export function pinToggleValuesToChat(
+    chat:Chat,
+    db:Database = getDatabase(),
+    char:character = getCurrentCharacter(),
+):void{
+    chat.GLGlobalVariables = snapshotCurrentToggleValues(db, char, chat)
+    chat.useLocallySetGlobalVariables = true
+    chat.savedToggleValues = undefined
+}
+
+export function unpinToggleValuesFromChat(chat:Chat):void{
+    chat.useLocallySetGlobalVariables = false
+    chat.GLGlobalVariables = undefined
+    chat.savedToggleValues = undefined
+}
+
+export function fillMissingPinnedToggleValues(
+    chat:Chat,
+    keys:string[],
+    db:Database = getDatabase(),
+):void{
+    if(!chat.useLocallySetGlobalVariables) return
+    chat.GLGlobalVariables ??= {}
+    for(const key of keys){
+        if(
+            !Object.hasOwn(chat.GLGlobalVariables, key)
+            && Object.hasOwn(db.globalChatVariables, key)
+        ){
+            chat.GLGlobalVariables[key] = db.globalChatVariables[key]
         }
     }
 }
@@ -1096,13 +1152,19 @@ export function saveTogglesToChat():void{
     if(getDatabase().disableToggleBinding) return
     const chat = getCurrentChat()
     if(!chat) return
-    chat.savedToggleValues = snapshotToggleValues()
+    pinToggleValuesToChat(chat)
 }
 
-export function loadTogglesFromChat(chat:Chat):void{
+export function loadTogglesFromChat(
+    chat:Chat,
+    _db?:Database,
+    _char?:character,
+):void{
     if(getDatabase().disableToggleBinding) return
-    if(!chat?.savedToggleValues) return
-    applyToggleValues(chat.savedToggleValues)
+    if(!chat?.savedToggleValues || chat.GLGlobalVariables) return
+    chat.GLGlobalVariables = { ...chat.savedToggleValues }
+    chat.useLocallySetGlobalVariables = true
+    chat.savedToggleValues = undefined
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1757,6 +1819,7 @@ export interface Database{
     dynamicModelRegistry?:boolean
     nodeOnlyScrollButtonType?:'four'|'two'|'off'
     nodeOnlyHideRecentChats?:boolean
+    nodeOnlyAutoCleanAssets?:boolean
     // Route main-chat model-preset requests through server-side jobs
     // (/api/model-jobs) so generation survives client disconnects.
     // Default OFF (undefined is falsy) — no migration needed. Toggled in
@@ -1858,6 +1921,7 @@ export interface character{
     creatorNotes:string
     systemPrompt:string
     postHistoryInstructions:string
+    postHistoryInstructionsApplied?:string
     alternateGreetings:string[]
     tags:string[]
     creator:string
@@ -1971,6 +2035,7 @@ export interface character{
     defaultVariables?:string
     lowLevelAccess?:boolean
     hideChatIcon?:boolean
+    moduleNamespace?:string
     lastInteraction?:number
     translatorNote?:string
     doNotChangeSeperateModels?:boolean
@@ -2327,6 +2392,11 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
     if (typeof c.name !== 'string') c.name = ''
     if (!Array.isArray(c.localLore)) c.localLore = []
     if (typeof c.risuBardWikiGuide !== 'string') c.risuBardWikiGuide = ''
+    if (c.savedToggleValues && !c.GLGlobalVariables) {
+        c.GLGlobalVariables = { ...c.savedToggleValues }
+        c.useLocallySetGlobalVariables = true
+        c.savedToggleValues = undefined
+    }
     c.risuBardWikiReboot = normalizeWikiRebootJob(c.risuBardWikiReboot)
     return c
 }
@@ -2361,6 +2431,11 @@ export interface Chat{
     bookmarkNames?: { [chatId: string]: string };
     supaMemory?: boolean
     savedToggleValues?: Record<string, string>
+    /** When enabled, global chat variables can be overridden by this chat without
+     * mutating the application-wide values. */
+    useLocallySetGlobalVariables?: boolean
+    /** Per-chat global-variable overrides. Own keys win even when their value is empty. */
+    GLGlobalVariables?: Record<string, string>
     // P4 dual-regime: per-chat model preset binding (plan v6 §7). useModelPreset
     // is the regime toggle; modelBinding (the bundle) persists across toggling so
     // it is restored on re-enable. Off (or absent) => classic global model path.

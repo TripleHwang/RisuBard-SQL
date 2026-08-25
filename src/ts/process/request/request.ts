@@ -41,6 +41,7 @@ import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
 import { resolveChatModelBinding, resolveRequestModelBindingTarget, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
+import { createModelPresetRequestProvenance } from './modelProvenance';
 import {
     createStructuredOutputFallbackMessage,
     sendWithStructuredOutputFallback,
@@ -755,6 +756,7 @@ const formatPresetReasoning = formatReasoningParts
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
     const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
+    const provenance = createModelPresetRequestProvenance(preset)
     // arg.chatId is the per-request generationId for main chat (sendChat passes
     // it under that name; see generation-state-keying.md §1-bis). Aux requests
     // (translate/memory/emotion/sub) don't supply one, so mint a per-request key
@@ -781,7 +783,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         chatId: genId,
         sessionChatId: arg.realChatId,
         generationId: genId,
-        model: preset.profileSnapshot.modelId,
+        model: provenance.wireModelId,
         provider: preset.profileSnapshot.providerBaseId,
         streaming: resolvePresetStreaming(preset, arg),
     })
@@ -836,7 +838,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             }),
             generationId: genId,
             adapterKind: kind,
-            model: preset.profileSnapshot.modelId,
+            model: provenance.wireModelId,
             streaming: resolvePresetStreaming(preset, arg),
             timeoutMs: (getDatabase().localNetworkTimeoutSec ?? 600) * 1000,
             fallbackFetch: proxiedFetch,
@@ -934,7 +936,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     try {
         arg.formated = reformater(safeStructuredClone(arg.formated), presetFlags)
     } catch (err) {
-        return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: preset.name }
+        return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: provenance.wireModelId }
     }
 
     let requestStatusManifest: RequestInjectionManifest | undefined
@@ -982,10 +984,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             return {
                 type: 'success',
                 result: JSON.stringify({ url: prepared.url, body: prepared.body, headers: prepared.headers }),
-                model: preset.name,
+                model: provenance.wireModelId,
             }
         } catch (err) {
-            return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: preset.name }
+            return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: provenance.wireModelId }
         } finally {
             void logScope.close()
         }
@@ -1001,7 +1003,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // The tool loop issues one request per turn; each is its own log
             // entry and all of them flush together here.
             void logScope.close()
-            return { type: 'success', result, model: preset.name, toolExecuted: toolsExecuted }
+            return { type: 'success', result, model: provenance.wireModelId, toolExecuted: toolsExecuted }
         }
 
         const useStreaming = resolvePresetStreaming(preset, arg)
@@ -1023,7 +1025,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             safeStatus(() => startStatus(genId, {
                 kind: statusKind,
                 purpose: logPurpose,
-                label: preset.name,
+                label: provenance.displayModel,
                 chatId: arg.realChatId,
                 phase: 'connecting',
                 now: Date.now(),
@@ -1086,11 +1088,11 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // once instead of token-by-token.
             if(preset.decoupledStreaming){
                 const text = await collectStreamingText(stream)
-                return { type: 'success', result: text, model: preset.name }
+                return { type: 'success', result: text, model: provenance.wireModelId }
             }
             // endStatus fires from the pump's onFinish once the consumer drains
             // the stream — NOT here, because the stream outlives this return.
-            return { type: 'streaming', result: stream, model: preset.name }
+            return { type: 'streaming', result: stream, model: provenance.wireModelId }
         }
         const response = await sendWithStructuredOutputFallback(
             options,
@@ -1125,7 +1127,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                 })
             })
         }
-        return { type: 'success', result: formatPresetReasoning(response.reasoning) + response.text, model: preset.name }
+        return { type: 'success', result: formatPresetReasoning(response.reasoning) + response.text, model: provenance.wireModelId }
     } catch (err) {
         console.error('[ModelPreset] request failed', describeModelPresetError(err))
         // A throw before the stream started (or instead of it) means onFinish
@@ -1139,7 +1141,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         return {
             type: 'fail',
             result: err instanceof Error ? err.message : String(err),
-            model: preset.name,
+            model: provenance.wireModelId,
         }
     }
 }

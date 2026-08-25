@@ -58,6 +58,7 @@ function makeJob(overrides: Record<string, unknown> = {}) {
         chatId: 'chat-1',
         generationId: 'gen-1',
         adapterKind: 'openai-compatible',
+        model: 'wire-model',
         streaming: true,
         status: 'done',
         upstreamStatus: 200,
@@ -151,6 +152,11 @@ function setupServer(behavior: ServerBehavior) {
 }
 
 beforeEach(() => {
+    // Keep any import-time recovery scan local to this harness. setupServer
+    // replaces the stub with its precise per-test behavior.
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
+        String(input).includes('pending-sends') ? { pendingSends: [] } : { jobs: [] },
+    ), { status: 200 })))
     mocks.db = { characters: [], inlayErrorResponse: true, showRequestStatus: true }
     mocks.notifyError.mockReset()
     mocks.notifyInfo.mockReset()
@@ -160,7 +166,6 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-    vi.unstubAllGlobals()
     vi.useRealTimers()
 })
 
@@ -224,7 +229,7 @@ describe('recoverTerminalJob', () => {
             data: 'Hello',
             saying: 'cha-1',
             chatId: 'gen-1',
-            generationInfo: { generationId: 'gen-1' },
+            generationInfo: { generationId: 'gen-1', model: 'wire-model' },
         })
         expect(typeof chat.message[0].time).toBe('number')
         expect(char.reloadKeys).toBe(1)
@@ -255,6 +260,7 @@ describe('recoverTerminalJob', () => {
 
         expect(chat.message).toHaveLength(1) // filled, not duplicated
         expect(chat.message[0].data).toBe('Hello')
+        expect(chat.message[0].generationInfo).toMatchObject({ generationId: 'gen-1', model: 'wire-model' })
         expect(char.reloadKeys).toBe(1)
         expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
     })
@@ -283,6 +289,7 @@ describe('recoverTerminalJob', () => {
         expect(chat.message).toHaveLength(2)
         expect(chat.message[1].role).toBe('char')
         expect(chat.message[1].data).toBe('```risuerror\nupstream timeout\n```')
+        expect(chat.message[1].generationInfo).toMatchObject({ generationId: 'gen-1', model: 'wire-model' })
         expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
     })
 
@@ -299,7 +306,7 @@ describe('recoverTerminalJob', () => {
         expect(chat.message[1]).toMatchObject({
             role: 'char',
             data: '```risuerror\nboom\n```',
-            generationInfo: { generationId: 'gen-1' }, // future idempotency scans match it
+            generationInfo: { generationId: 'gen-1', model: 'wire-model' }, // future idempotency scans match it
         })
     })
 

@@ -27,13 +27,15 @@ function makeChar() {
     c.firstMessage = 'Hello there!'
     c.alternateGreetings = ['Hi!', 'Hey!']
     c.creatorNotes = 'note text'
-    c.postHistoryInstructions = 'stay in character'
+    c.replaceGlobalNote = 'replace the global note'
     c.customscript = [{ comment: 'c1', in: 'a', out: 'b', type: 'editinput' }] as any
     c.globalLore = [{
         key: 'k', secondkey: '', insertorder: 1, comment: 'real lore',
         content: 'lore body', mode: 'normal', alwaysActive: false, selective: false,
     }] as any
     c.lowLevelAccess = true
+    c.hideChatIcon = true
+    c.moduleNamespace = 'test-namespace'
     c.image = 'asset://icon.png'
     return c
 }
@@ -46,11 +48,13 @@ describe('interchangeability: character <-> module round-trip', () => {
         expect(m.description).toBe('note text')
         expect(m.regex).toEqual(c.customscript)
         expect(m.lowLevelAccess).toBe(true)
-        // desc / first message / phi encoded as @@indicator lorebook entries
+        // desc / first message / replace-global-note encoded as @@indicator lorebook entries
         const contents = (m.lorebook ?? []).map((l) => l.content)
         expect(contents.some((x) => x.startsWith('@@indicator character_desc'))).toBe(true)
         expect(contents.some((x) => x.startsWith('@@indicator character_first_message'))).toBe(true)
-        expect(contents.some((x) => x.startsWith('@@indicator phi'))).toBe(true)
+        expect(contents.some((x) => x.startsWith('@@indicator replace_global_note'))).toBe(true)
+        expect(m.hideIcon).toBe(true)
+        expect(m.namespace).toBe('test-namespace')
         // the real (non-indicator) lore entry is preserved
         expect(contents.some((x) => x === 'lore body')).toBe(true)
     })
@@ -62,9 +66,11 @@ describe('interchangeability: character <-> module round-trip', () => {
         expect(back.desc).toBe(c.desc)
         expect(back.firstMessage).toBe(c.firstMessage)
         expect(back.alternateGreetings).toEqual(c.alternateGreetings)
-        expect(back.postHistoryInstructions).toBe(c.postHistoryInstructions)
+        expect(back.replaceGlobalNote).toBe(c.replaceGlobalNote)
         expect(back.customscript).toEqual(c.customscript)
         expect(back.lowLevelAccess).toBe(c.lowLevelAccess)
+        expect(back.hideChatIcon).toBe(c.hideChatIcon)
+        expect(back.moduleNamespace).toBe(c.moduleNamespace)
         expect(back.image).toBe(c.image) // module icon preserves character image (#21381972)
         // the real lore entry survives; indicator entries are consumed back into fields
         expect(back.globalLore.some((l) => l.content === 'lore body')).toBe(true)
@@ -87,6 +93,35 @@ describe('interchangeability: character <-> module round-trip', () => {
         // the @@indicator consumption splices a clone, not the module's own lorebook
         expect(m.lorebook.length).toBe(loreLenBefore)
         expect(m.lorebook.filter((l) => l.content.startsWith('@@indicator')).length).toBe(indicatorsBefore)
+    })
+
+    it('accepts legacy phi indicators as a replace-global-note fallback', () => {
+        const m = convertCharacterToModule(makeChar())
+        m.lorebook ??= []
+        m.lorebook = m.lorebook.filter((l) => !l.content.startsWith('@@indicator replace_global_note'))
+        m.lorebook.push({
+            key: '', secondkey: '', insertorder: 0, comment: 'legacy',
+            content: '@@indicator phi\n\nlegacy replacement', mode: 'constant', alwaysActive: true, selective: false,
+        })
+
+        const converted = convertModuleToCharacter(m)
+
+        expect(converted.replaceGlobalNote).toBe('legacy replacement')
+        expect(converted.postHistoryInstructions).toBe('')
+    })
+
+    it('does not consume similarly named replace-global-note indicators', () => {
+        const m = convertCharacterToModule(makeChar())
+        m.lorebook ??= []
+        m.lorebook.push({
+            key: '', secondkey: '', insertorder: 0, comment: 'not an indicator',
+            content: '@@indicator replace_global_note_extra\n\nkeep this lore', mode: 'constant', alwaysActive: true, selective: false,
+        })
+
+        const converted = convertModuleToCharacter(m)
+
+        expect(converted.globalLore.some((l) => l.content.startsWith('@@indicator replace_global_note_extra'))).toBe(true)
+        expect(converted.replaceGlobalNote).toBe(makeChar().replaceGlobalNote)
     })
 })
 

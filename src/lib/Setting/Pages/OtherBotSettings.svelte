@@ -1092,7 +1092,7 @@
 
                 <button class="mr-2 text-textcolor2 hover:text-primary cursor-pointer" onclick={async() => {
                     try {
-                        const bytesImport = (await selectSingleFile(['json'])).data
+                        const bytesImport = (await selectSingleFile(['json']))?.data
 
                         if(!bytesImport) return
 

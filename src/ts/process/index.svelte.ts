@@ -11,6 +11,7 @@ import { findCharacterbyId, getAuthorNoteDefaultText, getPersonaPrompt, getUserN
 import { requestChatData } from "./request/request";
 import { stableDiff } from "./stableDiff";
 import { processScript, processScriptFull, risuChatParser } from "./scripts";
+import { getGlobalChatVar } from "../parser/chatVar.svelte";
 import { exampleMessage } from "./exampleMessages";
 import { sayTTS } from "./tts";
 import { v4 } from "uuid";
@@ -22,6 +23,8 @@ import { getGenerationModelString } from "./models/modelString";
 import { runInlayScreen } from "./inlayScreen";
 import { runImageEmbedding } from "./transformers";
 import { runLuaEditTrigger } from "./scriptings";
+import { pluginV2 } from "../plugins/plugins.svelte";
+import { dispatchCommittedChatOutput } from "../plugins/pluginChatOutput";
 import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
@@ -764,6 +767,13 @@ export interface OpenAIChat{
     requestStatusSources?: RequestInjectionSource[]
 }
 
+function findMessageIndexByChatId(chat: { message: Array<{ chatId?: string }> }, chatId?: string) {
+    if(!chatId){
+        return -1
+    }
+    return chat.message.findIndex((message) => message.chatId === chatId)
+}
+
 function setRequestStatusSource(
     message: OpenAIChat,
     kind: RequestInjectionKind,
@@ -999,7 +1009,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         initialPresetNameForPromptInfo = DBState.db.botPresets[DBState.db.botPresetsId]?.name ?? ''
         initialPromptTogglesForPromptInfo = parseToggleSyntax(DBState.db.customPromptTemplateToggle + getModuleToggles())
             .flatMap(toggle => {
-                const raw = DBState.db.globalChatVariables[`toggle_${toggle.key}`]
+                const raw = getGlobalChatVar(`toggle_${toggle.key}`)
                 if (toggle.type === 'select' || toggle.type === 'text') {
                     return [{ key: toggle.value, value: toggle.options[raw] }];
                 }
@@ -2548,6 +2558,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     let result = ''
     let emoChanged = false
     let resendChat = false
+    let outputMessageId: string | undefined
     
     if(abortSignal.aborted === true){
         if (realChatId) clearPendingSend(realChatId)
@@ -2578,6 +2589,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 chatId: generationId,
             })
         }
+        outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.chatId
         const performanceMode: StreamingDisplayOptimizationMode = DBState.db.streamingDisplayOptimizationMode ?? 'balanced'
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
         DBState.db.characters[selectedChar].chats[selectedChat].activeStreamingDisplayOptimizationMode = performanceMode
@@ -2743,6 +2755,13 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             currentChat.message[msgIndex].data = t
             DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
         }
+        await dispatchCommittedChatOutput(pluginV2.chatOutput, {
+            char: currentChar,
+            chat: currentChat,
+            characterIndex: selectedChar,
+            chatIndex: selectedChat,
+            messageIndex: findMessageIndexByChatId(currentChat, outputMessageId),
+        })
         if(DBState.db.ttsAutoSpeech){
             await sayTTS(currentChar, result)
         }
@@ -2806,6 +2825,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             else{
                 mrerolls.push(result)
             }
+            if(i === 0){
+                outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.chatId
+            }
             DBState.db.characters[selectedChar].reloadKeys += 1
             if(DBState.db.ttsAutoSpeech){
                 await sayTTS(currentChar, result)
@@ -2817,11 +2839,19 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
         const triggerResult = await runTrigger(currentChar, 'output', {chat:currentChat})
         if(triggerResult && triggerResult.chat){
-            DBState.db.characters[selectedChar].chats[selectedChat] = normalizeChat(triggerResult.chat)
+            currentChat = normalizeChat(triggerResult.chat)
+            DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
         }
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true
         }
+        await dispatchCommittedChatOutput(pluginV2.chatOutput, {
+            char: currentChar,
+            chat: currentChat,
+            characterIndex: selectedChar,
+            chatIndex: selectedChat,
+            messageIndex: findMessageIndexByChatId(currentChat, outputMessageId),
+        })
     }
 
     let needsAutoContinue = false

@@ -113,6 +113,11 @@ describe('FirstMessageStudioRuntime', () => {
                     speaker: 'Warrior', description: 'You trust your inherited sword.', imageEnabled: false, imageFrame: 'contain', imagePositionX: 50, imagePositionY: 50, imageAssetName: 'warrior.webp',
                 },
             },
+            {
+                id: 'empty', label: 'Empty', effects: [], presentation: {
+                    description: '', imageEnabled: false, imageFrame: 'contain', imagePositionX: 50, imagePositionY: 50,
+                },
+            },
         ]
         mounted = mount(FirstMessageStudioRuntime, {
             target: document.body,
@@ -123,7 +128,7 @@ describe('FirstMessageStudioRuntime', () => {
         })
 
         await vi.waitFor(() => expect(document.body.querySelector('[data-studio-presentation-speaker]')?.textContent).toBe('Farmer'))
-        expect(getFileSrc).toHaveBeenCalledWith('assets/farmer-hash.webp')
+        await vi.waitFor(() => expect(getFileSrc).toHaveBeenCalledWith('assets/farmer-hash.webp'))
         await vi.waitFor(() => expect(document.body.querySelector<HTMLImageElement>('[data-studio-presentation-image]')?.src).toContain('FARMER'))
         const imageFrame = document.body.querySelector<HTMLElement>('[data-studio-presentation-image-frame]')!
         const presentationCopy = document.body.querySelector<HTMLElement>('[data-studio-presentation-copy]')!
@@ -132,16 +137,27 @@ describe('FirstMessageStudioRuntime', () => {
         const presentationImage = document.body.querySelector<HTMLImageElement>('[data-studio-presentation-image]')!
         expect(presentationImage.style.objectPosition).toBe('35% 65%')
         expect(presentationImage.style.getPropertyPriority('object-position')).toBe('important')
+        expect(imageFrame.style.position).toBe('relative')
+        expect(presentationImage.style.position).toBe('absolute')
+        expect(presentationImage.style.getPropertyValue('inset')).toBe('0')
         for (const property of ['width', 'height', 'max-width', 'max-height', 'object-fit', 'margin']) {
             expect(presentationImage.style.getPropertyPriority(property), property).toBe('important')
         }
 
-        document.body.querySelector<HTMLButtonElement>('[data-studio-option="warrior"]')!.dispatchEvent(new Event('pointerenter'))
+        document.body.querySelector<HTMLButtonElement>('[data-studio-option="warrior"]')!.dispatchEvent(new Event('pointermove', { bubbles: true }))
         await vi.waitFor(() => expect(document.body.querySelector('[data-studio-presentation-speaker]')?.textContent).toBe('Warrior'))
         expect(document.body.textContent).toContain('You trust your inherited sword.')
         expect(document.body.querySelector('[data-studio-presentation-image]')).toBeNull()
 
         document.body.querySelector<HTMLButtonElement>('[data-studio-option="farmer"]')!.focus()
         await vi.waitFor(() => expect(document.body.querySelector('[data-studio-presentation-speaker]')?.textContent).toBe('Farmer'))
+
+        const emptyOption = document.body.querySelector<HTMLButtonElement>('[data-studio-option="empty"]')!
+        emptyOption.dispatchEvent(new Event('pointermove', { bubbles: true }))
+        emptyOption.focus()
+        expect(document.body.querySelector('[data-studio-presentation-speaker]')?.textContent).toBe('Farmer')
+        expect(document.body.textContent).toContain('You gather grain in the field.')
+        expect(document.body.querySelector<HTMLImageElement>('[data-studio-presentation-image]')?.src).toContain('FARMER')
+        expect(getFileSrc).toHaveBeenCalledTimes(1)
     })
 })

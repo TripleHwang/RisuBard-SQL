@@ -28,7 +28,7 @@ import { applyChatTemplate } from "../../templates/chatTemplate"
 import { supportsInlayImage } from "../../files/inlays"
 import { callTool, decodeToolCall, encodeToolCall } from "../../mcp/mcp"
 import type { RequestDataArgumentExtended, requestDataResponse, StreamResponseChunk } from '../request'
-import { applyAdditionalParameters, applyParameters, getAdditionalParameters } from '../shared'
+import { applyAdditionalParameters, applyParameters, getAdditionalParameters, isReasoningCapabilityParameter } from '../shared'
 
 import type { Contents, OpenAIChatExtra, OpenAIChatFull, ResponseInputItem, ResponseItem, ResponseOutputItem, ToolCall } from './types'
 
@@ -994,15 +994,25 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
     
+    const responseParameters = arg.modelInfo.parameters.filter((parameter) =>
+        parameter === 'temperature' || parameter === 'top_p' || parameter === 'verbosity'
+            || isReasoningCapabilityParameter(parameter)
+    )
     const body = applyParameters({
         model: arg.modelInfo.internalID ?? aiModel,
         input: items,
         max_output_tokens: maxTokens,
         tools: [],
         store: false
-    }, ['temperature', 'top_p'], {}, arg.mode, {
+    }, responseParameters, {
+        reasoning_effort: 'reasoning.effort',
+        verbosity: 'text.verbosity',
+    }, arg.mode, {
         modelId: arg.modelInfo.id
     })
+    if (body.reasoning) {
+        body.reasoning.summary = 'auto'
+    }
 
     let requestURL = arg.customURL ?? "https://api.openai.com/v1/responses"
     if(arg.modelInfo?.endpoint){

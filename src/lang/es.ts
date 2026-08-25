@@ -1283,6 +1283,7 @@ export const languageSpanish = {
     "fetchLogConsent": "El complemento {} está solicitando obtener registros, lo cual podría exponer información confidencial. ¿Desea permitir esto?",
     "mainDomAccessConsent": "El plugin {} está solicitando acceso al Documento principal, lo que podría exponer información confidencial. ¿Desea permitir esto?",
     "replacerPermissionConsent": "El plugin {} está solicitando permiso para reemplazar contenido en el chat, lo que podría usarse para manipular la conversación. ¿Desea permitir esto?",
+    "inlayPermissionConsent": "El plugin {} está solicitando permiso para leer recursos incrustados adjuntos a mensajes de chat. ¿Desea permitir esto?",
     "providerPermissionConsent": "El plugin {} está solicitando permiso para acceder al proveedor, lo que podría permitirle realizar llamadas API no autorizadas. ¿Desea permitir esto?",
     "sendChatConsent": "El plugin {} está solicitando permiso para enviar mensajes de chat en su nombre, lo que activará respuestas de IA. ¿Desea permitir esto?",
     "pluginV2Warning": "Los plugins V2 y V2.1 se consideran inseguros y dejarán de funcionar en futuras versiones. **Por favor, no use estas versiones de plugins.** Si usted es el desarrollador de este plugin, actualícelo a V3 lo antes posible.",

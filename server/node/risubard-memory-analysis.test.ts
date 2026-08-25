@@ -39,11 +39,13 @@ afterEach(async () => {
 })
 
 describe('memory analysis runner', () => {
-    test('analyzes two reboot turns once, stores separate events, and rewrites canon once', async () => {
+    test('retries a malformed reboot batch with its explicit field contract', async () => {
         const formats: Array<string | undefined> = []
         const sessions: Array<string | undefined> = []
+        const systems: string[] = []
         const savedEvents: string[][] = []
         const eventIds: string[] = []
+        let rebootAttempts = 0
         const saveCanonicalDocument = vi.fn(async () => ({
             id: 'character.lavian', type: 'character' as const,
             status: 'active' as const, title: '라비안',
@@ -90,8 +92,22 @@ describe('memory analysis runner', () => {
             analyze: async (request) => {
                 formats.push(request.format)
                 sessions.push(request.sessionChatId)
+                systems.push(request.system)
                 if (request.format === 'canonical-batch') {
                     return canonicalBatch('## 라비안\n\n검을 소유한다.')
+                }
+                rebootAttempts += 1
+                if (rebootAttempts === 1) {
+                    return JSON.stringify({
+                        schemaVersion: 1,
+                        turns: [{ assistantMessageId: 'a1', title: '분실',
+                            establishedEvents: ['검을 잃었다.'] },
+                        { assistantMessageId: 'a2', title: '회수',
+                            establishedEvents: ['검을 되찾았다.'] }],
+                        stateChanges: [], characterKnowledge: [], persistentFacts: [],
+                        openContinuity: [], canonicalUpdateCandidates: [],
+                        establishedEvents: ['루트에 잘못 추가된 사건'],
+                    })
                 }
                 return JSON.stringify({
                     schemaVersion: 1,
@@ -122,8 +138,21 @@ describe('memory analysis runner', () => {
             }],
             additionalSearchLimit: 0,
         })
-        expect(formats).toEqual(['reboot-batch', 'canonical-batch'])
-        expect(sessions).toEqual(['original-chat', 'original-chat'])
+        expect(formats).toEqual([
+            'reboot-batch', 'reboot-batch', 'canonical-batch',
+        ])
+        expect(sessions).toEqual([
+            'original-chat', 'original-chat', 'original-chat',
+        ])
+        expect(systems[0]).toContain(
+            'Top-level fields must be exactly schemaVersion, turns, stateChanges, characterKnowledge, persistentFacts, openContinuity, and canonicalUpdateCandidates.'
+        )
+        expect(systems[1]).toContain(
+            'Do not return top-level title, establishedEvents, or drafts.'
+        )
+        expect(systems[1]).toContain(
+            'Unexpected reboot batch draft field: establishedEvents'
+        )
         expect(savedEvents).toEqual([['u1', 'a1'], ['u2', 'a2']])
         expect(saveCanonicalDocument).toHaveBeenCalledOnce()
         expect(result.canonicalReceipt?.eventIds).toEqual(['event.a1', 'event.a2'])

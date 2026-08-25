@@ -6,6 +6,7 @@ import {
     getCharacterPersonas,
     getEffectivePersona,
     nextPersonaCopyNote,
+    normalizeSelectedPersonaIndex,
     resolvePersonaById,
 } from './personaScopes'
 
@@ -24,6 +25,13 @@ const owner = (personas?: RisuPersona[]): character => ({
 } as unknown as character)
 
 describe('persona scopes', () => {
+    test('normalizes corrupted selected persona indices to a valid global entry', () => {
+        expect(normalizeSelectedPersonaIndex(2, -5)).toBe(0)
+        expect(normalizeSelectedPersonaIndex(2, 99)).toBe(1)
+        expect(normalizeSelectedPersonaIndex(2, Number.NaN)).toBe(0)
+        expect(normalizeSelectedPersonaIndex(0, 99)).toBe(0)
+    })
+
     test('resolves a bound persona from the current character before the global store', () => {
         const global = persona('Global duplicate', 'same-id')
         const local = persona('Character persona', 'same-id')

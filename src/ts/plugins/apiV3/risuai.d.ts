@@ -1828,6 +1828,34 @@ interface RisuaiPluginAPI {
         func: Function
     ): Promise<void>;
 
+    /**
+     * Adds a listener that runs after a model output is committed to the chat.
+     * Requires 'replacer' permission. The listener receives serialized snapshots;
+     * mutating them does not change host chat state.
+     */
+    addRisuChatListener(
+        mode: 'output',
+        func: (arg: {
+            char: any;
+            chat: any;
+            characterIndex: number;
+            chatIndex: number;
+            messageIndex: number;
+        }) => void | Promise<void>
+    ): Promise<void>;
+
+    /** Removes a chat output listener. */
+    removeRisuChatListener(
+        mode: 'output',
+        func: (arg: {
+            char: any;
+            chat: any;
+            characterIndex: number;
+            chatIndex: number;
+            messageIndex: number;
+        }) => void | Promise<void>
+    ): Promise<void>;
+
     // ========== Body Interceptors ==========
 
     /**
@@ -1882,6 +1910,7 @@ interface RisuaiPluginAPI {
      * (`getChatFromIndex(...).message[i].data`).
      *
      * Returns `null` if no asset exists for that UUID.
+     * Requires 'inlay' permission; returns `null` when permission is denied.
      *
      * @param id - Inlay UUID
      * @returns Asset with `data` as a base64 data-URI string, or `null`

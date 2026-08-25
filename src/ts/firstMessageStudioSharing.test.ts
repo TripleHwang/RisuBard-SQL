@@ -190,6 +190,11 @@ describe('First Message Studio sharing', () => {
                 imagePositionY: 50,
             },
         })
+        project.stages[0].options.push({
+            id: 'empty', label: { ko: '빈 선택지', en: 'Empty' }, effects: [], presentation: {
+                description: '', imageEnabled: false, imageFrame: 'contain', imagePositionX: 50, imagePositionY: 50,
+            },
+        })
 
         const result = compileFirstMessageStudioCompatibility(project)
 
@@ -197,11 +202,15 @@ describe('First Message Studio sharing', () => {
         expect(result.firstMessage).toContain('class="fms-presentation with-image"')
         expect(result.firstMessage).toContain('class="fms-presentation-image-frame frame-square fms-presentation-position-0-0"')
         expect(result.firstMessage).toContain('</div><div class="fms-presentation-copy">')
+        expect(result.firstMessage).toContain('.fms-presentation-image-frame{position:relative;')
+        expect(result.firstMessage).toContain('.fms-presentation-image-frame:not(.frame-contain) img{position:absolute;inset:0;')
         expect(result.firstMessage).toContain('.fms-presentation-position-0-0 img{object-position:35% 65%!important}')
         expect(result.firstMessage).toContain('style="width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;object-fit:cover!important;object-position:35% 65%!important"')
         expect(result.firstMessage).toContain('src="{{raw::farmer.webp}}"')
         expect(result.firstMessage).toContain('오늘도 밭에서 이삭을 줍습니다.')
         expect(result.firstMessage).toContain('You trust your inherited sword.')
+        expect(result.firstMessage).not.toContain('<div class="fms-presentation-copy"><p></p>')
+        expect(result.firstMessage.match(/src="\{\{raw::farmer\.webp\}\}"/g)).toHaveLength(2)
         expect(result.firstMessage).toContain(':has(.fms-option:nth-child(2):hover)')
         expect(result.firstMessage).toContain(':has(.fms-option:nth-child(2):focus-visible)')
     })

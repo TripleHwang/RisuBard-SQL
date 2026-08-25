@@ -473,7 +473,19 @@
     }
 </script>
 
-<div class="overlay" role="dialog" aria-modal="true" aria-label="퍼스트 메시지 스튜디오">
+<div
+    class="overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-label="퍼스트 메시지 스튜디오"
+    tabindex="-1"
+    onclick={(event) => {
+        if (event.target === event.currentTarget) onClose()
+    }}
+    onkeydown={(event) => {
+        if (event.key === 'Escape') onClose()
+    }}
+>
     <section class="shell">
         <header class="topbar">
             <div class="title-row" data-studio-title-row>

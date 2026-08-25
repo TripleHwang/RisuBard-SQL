@@ -197,6 +197,16 @@ async function prepareOpenAiBody(
     if (structuredOutputMessage) {
         prepared.body.response_format = { type: 'json_object' }
     }
+    else if (options.responseSchema) {
+        prepared.body.response_format = {
+            type: 'json_schema',
+            json_schema: {
+                name: 'format',
+                strict: true,
+                schema: options.responseSchema,
+            },
+        }
+    }
     // Streaming responses carry no usage unless it is requested. Only set when
     // the user opted in: a strict OpenAI-compatible server can 400 on an
     // unknown field, and that would break the generation, not just the stats.

@@ -10,10 +10,34 @@ export type LLMParameter =
     | 'frequency_penalty'
     | 'presence_penalty'
     | 'reasoning_effort'
+    | 'reasoning_effort_none'
+    | 'reasoning_effort_min_medium'
+    | 'reasoning_effort_xhigh'
     | 'thinking_tokens'
     | 'verbosity'
 
 export type ModelModeExtended = 'model' | 'submodel' | 'memory' | 'emotion' | 'otherAx' | 'translate'
+
+export function isReasoningCapabilityParameter(parameter: LLMParameter): boolean {
+    return parameter === 'reasoning_effort'
+        || parameter === 'reasoning_effort_none'
+        || parameter === 'reasoning_effort_min_medium'
+        || parameter === 'reasoning_effort_xhigh'
+}
+
+export function resolveReasoningEffort(effort: number, parameters: readonly LLMParameter[]): string {
+    if (effort === -1 && parameters.includes('reasoning_effort_none')) return 'none'
+    if (effort === 0 && parameters.includes('reasoning_effort_min_medium')) return 'medium'
+    if (effort === 3) return parameters.includes('reasoning_effort_xhigh') ? 'xhigh' : 'high'
+
+    switch (effort) {
+        case -1: return 'minimal'
+        case 0: return 'low'
+        case 1: return 'medium'
+        case 2: return 'high'
+        default: return 'medium'
+    }
+}
 
 export function setObjectValue<T>(obj: T, key: string, value: any): T {
     const splitKey = key.split('.')
@@ -157,26 +181,6 @@ export function applyParameters(
 ): Record<string, any> {
     const db = getDatabase()
 
-    function getEffort(effort: number) {
-        switch (effort) {
-            case -1: {
-                return 'minimal'
-            }
-            case 0: {
-                return 'low'
-            }
-            case 1: {
-                return 'medium'
-            }
-            case 2: {
-                return 'high'
-            }
-            default: {
-                return 'medium'
-            }
-        }
-    }
-
     function getVerbosity(verbosity: number) {
         switch (verbosity) {
             case 0: {
@@ -209,6 +213,7 @@ export function applyParameters(
 
         for (const parameter of parameters) {
             let value: number | string = 0
+            if (parameter !== 'reasoning_effort' && isReasoningCapabilityParameter(parameter)) continue
             if (parameter === 'top_k' && arg.ignoreTopKIfZero && sepParams[parameter] === 0) {
                 continue
             }
@@ -260,7 +265,7 @@ export function applyParameters(
                     break
                 }
                 case 'reasoning_effort': {
-                    value = getEffort(sepParams.reasoning_effort)
+                    value = resolveReasoningEffort(sepParams.reasoning_effort, parameters)
                     break
                 }
                 case 'verbosity': {
@@ -285,6 +290,7 @@ export function applyParameters(
 
     for (const parameter of parameters) {
         let value: number | string = 0
+        if (parameter !== 'reasoning_effort' && isReasoningCapabilityParameter(parameter)) continue
         if (parameter === 'top_k' && arg.ignoreTopKIfZero && db.top_k === 0) {
             continue
         }
@@ -314,7 +320,7 @@ export function applyParameters(
                 break
             }
             case 'reasoning_effort': {
-                value = getEffort(db.reasoningEffort)
+                value = resolveReasoningEffort(db.reasoningEffort, parameters)
                 break
             }
             case 'verbosity': {

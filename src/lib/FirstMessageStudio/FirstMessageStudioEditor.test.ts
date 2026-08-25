@@ -63,6 +63,31 @@ describe('FirstMessageStudioEditor', () => {
         expect(document.body.textContent).toContain('첫 화면')
     })
 
+    test('closes only when the modal backdrop itself is clicked', () => {
+        const onClose = vi.fn()
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character: blankCharacter(), onClose },
+        })
+
+        document.body.querySelector<HTMLElement>('.shell')!.click()
+        expect(onClose).not.toHaveBeenCalled()
+
+        document.body.querySelector<HTMLElement>('.overlay')!.click()
+        expect(onClose).toHaveBeenCalledOnce()
+    })
+
+    test('closes when Escape is pressed on the modal', () => {
+        const onClose = vi.fn()
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character: blankCharacter(), onClose },
+        })
+
+        document.body.querySelector<HTMLElement>('.overlay')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        expect(onClose).toHaveBeenCalledOnce()
+    })
+
     test('builds localized scenarios from AND groups containing OR conditions', async () => {
         const character = blankCharacter()
         const project = createBlankStudioProject()

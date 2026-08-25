@@ -20,9 +20,19 @@ function plugin(): PluginUpdateTarget & { script: string } {
 }
 
 describe('plugin updater', () => {
-    test('waits for a durable database save before an update can report success', () => {
+    test('downloads update sources through the native fetch fallback', () => {
         const importerSource = fs.readFileSync('src/ts/plugins/plugins.svelte.ts', 'utf8')
-        expect(importerSource).toContain('await requestImmediateSave({ rejectOnFailure: true })')
+        expect(importerSource).toContain("fetcher: (url) => fetchNative(url, { method: 'GET' })")
+        expect(importerSource).not.toContain('fetcher: fetch,')
+    })
+
+    test('flushes patch persistence before an update can report success', () => {
+        const importerSource = fs.readFileSync('src/ts/plugins/plugins.svelte.ts', 'utf8')
+        const saveSource = fs.readFileSync('src/ts/globalApi.svelte.ts', 'utf8')
+        expect(importerSource).toContain('await requestImmediateSave({ flushServer: true, rejectOnFailure: true })')
+        expect(importerSource).not.toContain('await requestImmediateSave({ forceFullWrite: true, rejectOnFailure: true })')
+        expect(saveSource).toContain('if (options?.flushServer && supportsPatchSync)')
+        expect(saveSource).toContain('await flushServerDbNow()')
         expect(importerSource).toMatch(/catch \(error\) \{[\s\S]*?if \(argu\.isUpdate\) throw error/)
     })
 

@@ -82,7 +82,7 @@ function makePermissionState() {
     return { given, denied, cache }
 }
 
-const PERMISSION_DESCS = ['fetchLogs', 'db', 'mainDom', 'replacer', 'provider', 'sendChat']
+const PERMISSION_DESCS = ['fetchLogs', 'db', 'mainDom', 'replacer', 'provider', 'sendChat', 'inlay']
 
 // Mirrors permissionKeyOf() in v3.svelte.ts: JSON-encode the (name, desc) pair so
 // keys can never collide across permissions or with a legacy name-only entry.
