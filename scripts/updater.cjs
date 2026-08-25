@@ -16,8 +16,8 @@ const { execSync } = require('child_process');
 // A standalone build must be pointed at the fork that owns its releases.
 // Do not fall back to the upstream repository: its artifacts may carry a
 // different schema, bundled code, or security policy.
-const REPO = (process.env.RISU_UPDATE_REPOSITORY || '').trim();
-const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuBard-Standalone';
+const REPO = (process.env.RISU_UPDATE_REPOSITORY || 'TripleHwang/RisuBard-SQL').trim();
+const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuBard-SQL';
 const ROOT = path.resolve(__dirname, '..');
 
 const isWin = process.platform === 'win32';

@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rpaddict/RisuBard/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/rpaddict/RisuBard?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/TripleHwang/RisuBard-SQL/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/TripleHwang/RisuBard-SQL?display_name=tag&sort=semver"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/rpaddict/RisuBard/releases">Download</a></strong> ·
+  <strong><a href="https://github.com/TripleHwang/RisuBard-SQL/releases">Download</a></strong> ·
   <a href="docs/en/install.md">Installation</a> ·
   <a href="docs/en/migration.md">Migrate from RisuAI</a> ·
-  <a href="https://github.com/rpaddict/RisuBard/issues">Issues</a>
+  <a href="https://github.com/TripleHwang/RisuBard-SQL/issues">Issues</a>
 </p>
 
 > **Project lineage:** RisuBard is developed as a fork of [PocketRisu](https://github.com/PocketRisu/PocketRisu).
@@ -113,16 +113,16 @@ Required context is never silently discarded. Optional memories are selected by 
 
 The portable package is the simplest way to run RisuBard. It does not require Node.js or Docker.
 
-1. Open [GitHub Releases](https://github.com/rpaddict/RisuBard/releases).
+1. Open [GitHub Releases](https://github.com/TripleHwang/RisuBard-SQL/releases).
 2. Download and extract the package for your platform.
 3. Start RisuBard and open `http://localhost:6001`.
 
 | Platform | Package | Start |
 | --- | --- | --- |
-| Windows x64 | `RisuBard-vX.Y.Z-win-x64.zip` | Double-click `RisuBard.exe` |
-| Linux x64 | `RisuBard-vX.Y.Z-linux-x64.tar.gz` | Run `./start.sh` |
-| Linux ARM64 | `RisuBard-vX.Y.Z-linux-arm64.tar.gz` | Run `./start.sh` |
-| macOS Apple Silicon | `RisuBard-vX.Y.Z-macos-arm64.tar.gz` | Open `RisuBard.app` |
+| Windows x64 | `RisuBard-SQL-vX.Y.Z-win-x64.zip` | Double-click `RisuBard-SQL.exe` |
+| Linux x64 | `RisuBard-SQL-vX.Y.Z-linux-x64.tar.gz` | Run `./start.sh` |
+| Linux ARM64 | `RisuBard-SQL-vX.Y.Z-linux-arm64.tar.gz` | Run `./start.sh` |
+| macOS Apple Silicon | `RisuBard-SQL-vX.Y.Z-macos-arm64.tar.gz` | Open `RisuBard-SQL.app` |
 
 For Docker, source builds, remote access, updates, and platform-specific requirements, read the [complete installation guide](docs/en/install.md).
 
@@ -158,7 +158,7 @@ Additional translated installation and migration guides are available in `docs/d
 
 ## Project status
 
-RisuBard is under active development. Keep a current backup before migrating important data, and check the [release notes](https://github.com/rpaddict/RisuBard/releases) for changes that affect storage or compatibility.
+RisuBard SQL is under active development. Keep a current backup before migrating important data, and check the [release notes](https://github.com/TripleHwang/RisuBard-SQL/releases) for changes that affect storage or compatibility.
 
 The repository validates releases with Svelte and TypeScript checks, browser and server unit tests, compatibility round-trips, and a production build.
 

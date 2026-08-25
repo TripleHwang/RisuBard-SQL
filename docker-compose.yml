@@ -1,18 +1,21 @@
 # Neutral local identifiers keep this fork independent of the upstream registry.
 # Change them deliberately if this is deployed beside an existing installation.
-name: risubard-standalone
+name: risubard-sql
 
 services:
-  risubard:
-    container_name: risubard-standalone
+  risubard-sql:
+    container_name: risubard-sql
     build: .
-    image: risubard-standalone:local
+    image: risubard-sql:local
     restart: always
     ports:
       - 6001:6001
+    environment:
+      RISU_UPDATE_REPOSITORY: TripleHwang/RisuBard-SQL
+      RISU_RELEASE_ARTIFACT_PREFIX: RisuBard-SQL
     volumes:
-      - risubard-standalone-save:/app/save
+      - risubard-sql-save:/app/save
 
 volumes:
-  risubard-standalone-save:
-    name: risubard-standalone-save
+  risubard-sql-save:
+    name: risubard-sql-save

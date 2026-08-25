@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="rpaddict/RisuBard"
+REPO="${RISU_UPDATE_REPOSITORY:-TripleHwang/RisuBard-SQL}"
 INSTALL_DIR="${RISU_INSTALL_DIR:-$HOME/risubard}"
 PORT="${PORT:-6001}"
 

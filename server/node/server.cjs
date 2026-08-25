@@ -996,16 +996,14 @@ function stopTunnel() {
 }
 
 // ── Update check ─────────────────────────────────────────────────────────────
-// Standalone builds never inherit an upstream update channel. A maintainer must
-// explicitly configure its own repository (or a release API URL) before users
-// are offered an update. This prevents a fork from silently replacing itself
-// with an incompatible upstream package.
-const GITHUB_REPO = (process.env.RISU_UPDATE_REPOSITORY || '').trim();
+// Standalone builds never inherit the upstream channel. The default points to
+// this fork and remains overrideable for downstream distributions.
+const GITHUB_REPO = (process.env.RISU_UPDATE_REPOSITORY || 'TripleHwang/RisuBard-SQL').trim();
 const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false'
     || (!GITHUB_REPO && !process.env.RISU_UPDATE_URL);
 const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL
     || (GITHUB_REPO ? `https://api.github.com/repos/${GITHUB_REPO}/releases/latest` : '');
-const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuBard-Standalone';
+const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuBard-SQL';
 
 // Re-read on each call so non-portable updates (docker/git pull) without a
 // process restart don't keep reporting the old version to the update worker.
