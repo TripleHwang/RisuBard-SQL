@@ -128,4 +128,81 @@ describe('First Message Studio sharing', () => {
         const reset = result.triggers.find((trigger) => trigger.comment === '[First Message Studio] reset')!
         expect(reset.effect.filter((effect: any) => effect.type === 'setvar' && effect.var === 'message_language')).toHaveLength(1)
     })
+
+    it('compiles scenario groups into AND/OR CBS branches with a guarded fallback', () => {
+        const project = sharingFixture()
+        project.scenarioRules = [{
+            id: 'second-day-lead',
+            label: 'Second day lead',
+            message: { ko: '둘째 날의 리더 도입', en: 'Second-day leader intro' },
+            groups: [
+                { id: 'start', conditions: [{ variable: 'start', operator: 'equals', value: '2' }] },
+                { id: 'role', conditions: [
+                    { variable: 'protagonist', operator: 'equals', value: 'none' },
+                    { variable: 'role', operator: 'not-equals', value: 'guest' },
+                ] },
+            ],
+        }]
+
+        const result = compileFirstMessageStudioCompatibility(project)
+
+        expect(result.firstMessage).toContain('{{and::')
+        expect(result.firstMessage).toContain('{{or::')
+        expect(result.firstMessage).toContain('{{equal::{{getvar::start}}::2}}')
+        expect(result.firstMessage).toContain('{{notequal::{{getvar::role}}::guest}}')
+        expect(result.firstMessage).toContain('둘째 날의 리더 도입')
+        expect(result.firstMessage).toContain('Second-day leader intro')
+        expect(result.firstMessage).toMatch(/notequal::\{\{and::[\s\S]+The story begins\./)
+    })
+
+    it('uses the first matching scenario when ordered rules overlap', () => {
+        const project = sharingFixture()
+        project.scenarioRules = [
+            { id: 'specific', label: 'Specific', message: 'Specific intro', groups: [{ id: 'g1', conditions: [{ variable: 'route', operator: 'equals', value: 'calm' }] }] },
+            { id: 'general', label: 'General', message: 'General intro', groups: [{ id: 'g2', conditions: [{ variable: 'route', operator: 'not-equals', value: 'chaos' }] }] },
+        ]
+
+        const result = compileFirstMessageStudioCompatibility(project)
+
+        expect(result.firstMessage).toContain('{{and::{{notequal::{{getvar::route}}::chaos}}::{{notequal::{{equal::{{getvar::route}}::calm}}::1}}}}')
+        expect(result.firstMessage.indexOf('Specific intro')).toBeLessThan(result.firstMessage.indexOf('General intro'))
+    })
+
+    it('compiles option hover presentations with localized copy and card asset names', () => {
+        const project = sharingFixture()
+        project.stages[0].optionPresentationEnabled = true
+        project.stages[0].options[0].presentation = {
+            speaker: { ko: '농부', en: 'Farmer' },
+            description: { ko: '오늘도 밭에서 이삭을 줍습니다.', en: 'You gather grain in the field.' },
+            imageEnabled: true,
+            imageFrame: 'square',
+            imagePositionX: 35,
+            imagePositionY: 65,
+            imageAssetName: 'farmer.webp',
+        }
+        project.stages[0].options.push({
+            id: 'warrior', label: { ko: '전사', en: 'Warrior' }, effects: [], presentation: {
+                speaker: { ko: '전사', en: 'Warrior' },
+                description: { ko: '당신이 믿는 것은 물려받은 장검뿐입니다.', en: 'You trust your inherited sword.' },
+                imageEnabled: false,
+                imageFrame: 'contain',
+                imagePositionX: 50,
+                imagePositionY: 50,
+            },
+        })
+
+        const result = compileFirstMessageStudioCompatibility(project)
+
+        expect(result.firstMessage).toContain('class="fms-presentations"')
+        expect(result.firstMessage).toContain('class="fms-presentation with-image"')
+        expect(result.firstMessage).toContain('class="fms-presentation-image-frame frame-square fms-presentation-position-0-0"')
+        expect(result.firstMessage).toContain('</div><div class="fms-presentation-copy">')
+        expect(result.firstMessage).toContain('.fms-presentation-position-0-0 img{object-position:35% 65%!important}')
+        expect(result.firstMessage).toContain('style="width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;object-fit:cover!important;object-position:35% 65%!important"')
+        expect(result.firstMessage).toContain('src="{{raw::farmer.webp}}"')
+        expect(result.firstMessage).toContain('오늘도 밭에서 이삭을 줍습니다.')
+        expect(result.firstMessage).toContain('You trust your inherited sword.')
+        expect(result.firstMessage).toContain(':has(.fms-option:nth-child(2):hover)')
+        expect(result.firstMessage).toContain(':has(.fms-option:nth-child(2):focus-visible)')
+    })
 })

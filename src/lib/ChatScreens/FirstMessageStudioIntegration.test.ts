@@ -6,8 +6,19 @@ import {
     shouldRenderFirstMessageStudio,
     writeFirstMessageStudioVariables,
 } from 'src/ts/firstMessageStudio'
+import { clearGenericChatImageStyles, isFirstMessageStudioManagedImage } from './chatImageHandling'
 
 describe('first message studio chat integration', () => {
+    test('keeps Studio presentation assets out of generic chat image styling', () => {
+        document.body.innerHTML = `<div data-first-message-studio-compatible><div><img id="studio-image" class="root-loaded-image root-loaded-image-dynamic keep-me"></div></div><img id="ordinary-image">`
+
+        const studioImage = document.querySelector('#studio-image')!
+        expect(isFirstMessageStudioManagedImage(studioImage)).toBe(true)
+        expect(isFirstMessageStudioManagedImage(document.querySelector('#ordinary-image')!)).toBe(false)
+        clearGenericChatImageStyles(studioImage)
+        expect(studioImage.className).toBe('keep-me')
+    })
+
     test('renders only for an enabled incomplete first message', () => {
         const project = createBlankStudioProject()
         expect(shouldRenderFirstMessageStudio(true, project, {}, 'first_message_studio_done=0')).toBe(true)

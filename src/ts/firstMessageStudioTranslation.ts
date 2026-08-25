@@ -45,7 +45,16 @@ function visitVisibleTexts(
                     visit(`stage.${stageId}.option.${optionId}.input.placeholder`, option.input.placeholder, (value) => option.input!.placeholder = value)
                 }
             }
+            if (option.presentation) {
+                if (option.presentation.speaker) {
+                    visit(`stage.${stageId}.option.${optionId}.presentation.speaker`, option.presentation.speaker, (value) => option.presentation!.speaker = value)
+                }
+                visit(`stage.${stageId}.option.${optionId}.presentation.description`, option.presentation.description, (value) => option.presentation!.description = value)
+            }
         })
+    })
+    project.scenarioRules.forEach((rule) => {
+        visit(`scenario.${part(rule.id)}.message`, rule.message, (value) => rule.message = value)
     })
 }
 

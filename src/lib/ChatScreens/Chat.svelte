@@ -218,6 +218,7 @@
         return {
             project,
             variables: readFirstMessageStudioVariables(scriptstate, current?.defaultVariables ?? ''),
+            assets: current?.type === 'character' ? current.additionalAssets ?? [] : [],
             visible: shouldRenderFirstMessageStudio(firstMessage, project, scriptstate, current?.defaultVariables ?? ''),
         }
     }
@@ -510,6 +511,7 @@
             <FirstMessageStudioRuntime
                 project={studioContext.project}
                 variables={studioContext.variables}
+                assets={studioContext.assets}
                 onChange={handleFirstMessageStudioChange}
             />
         </div>

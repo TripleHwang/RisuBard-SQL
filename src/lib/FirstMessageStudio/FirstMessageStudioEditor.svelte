@@ -3,7 +3,7 @@
     import type { character as Character } from 'src/ts/storage/database.svelte'
     import { getCurrentLocale } from 'src/lang'
     import { requestChatData } from 'src/ts/process/request/request'
-    import { downloadFile } from 'src/ts/globalApi.svelte'
+    import { downloadFile, saveAsset } from 'src/ts/globalApi.svelte'
     import { selectFileByDom } from 'src/ts/util'
     import {
         createBlankStudioProject,
@@ -13,9 +13,12 @@
         resolveStudioProjectLocale,
         setStudioTextLanguage,
         type FirstMessageStudioLocale,
+        type FirstMessageStudioImageFrame,
         type FirstMessageStudioLanguage,
         type FirstMessageStudioOption,
         type FirstMessageStudioProject,
+        type FirstMessageStudioScenarioGroup,
+        type FirstMessageStudioScenarioRule,
         type FirstMessageStudioSkinPreset,
         type FirstMessageStudioText,
         type FirstMessageStudioVariable,
@@ -30,9 +33,11 @@
         compileFirstMessageStudioCompatibility,
         exportFirstMessageStudioProject,
         importFirstMessageStudioProject,
+        isFirstMessageStudioCompatibilityMessage,
         mergeFirstMessageStudioDefaultVariables,
         mergeFirstMessageStudioTriggers,
     } from 'src/ts/firstMessageStudioSharing'
+    import FirstMessageStudioImageCropEditor from './FirstMessageStudioImageCropEditor.svelte'
     import FirstMessageStudioRuntime from './FirstMessageStudioRuntime.svelte'
 
     interface Props {
@@ -46,8 +51,12 @@
         const project = character.firstMessageStudio
             ? normalizeFirstMessageStudioProject(structuredClone(character.firstMessageStudio))
             : createBlankStudioProject()
-        if (!character.firstMessageStudio || !Object.prototype.hasOwnProperty.call(character.firstMessageStudio, 'fallbackMessage')) {
-            project.fallbackMessage = character.firstMessage ?? ''
+        const firstMessage = character.firstMessage ?? ''
+        const fallbackMissing = !character.firstMessageStudio
+            || !Object.prototype.hasOwnProperty.call(character.firstMessageStudio, 'fallbackMessage')
+            || !project.fallbackMessage.trim()
+        if (fallbackMissing && firstMessage.trim() && !isFirstMessageStudioCompatibilityMessage(firstMessage)) {
+            project.fallbackMessage = firstMessage
         }
         return project
     }
@@ -55,8 +64,9 @@
     const initialProject = makeInitialProject()
     let draft = $state(initialProject)
     let selectedStageId = $state('')
+    let presentationOptionId = $state('')
     let editLocale: FirstMessageStudioLocale = $state(resolveStudioProjectLocale(initialProject, {}, getCurrentLocale()))
-    let editorMode: 'content' | 'languages' | 'variables' | 'design' | 'code' | 'share' = $state('content')
+    let editorMode: 'content' | 'languages' | 'variables' | 'scenarios' | 'design' | 'code' | 'share' = $state('content')
     let showAiTranslation = $state(false)
     let translationSource = $state(initialProject.localization.defaultLanguage)
     let translationTarget = $state(initialProject.localization.languages.find((language) => language.id !== initialProject.localization.defaultLanguage)?.id ?? initialProject.localization.defaultLanguage)
@@ -65,6 +75,21 @@
     let shareMessage = $state('')
     let translationController: AbortController | undefined
     let selectedStage = $derived(draft.stages.find((stage) => stage.id === selectedStageId) ?? draft.stages[0])
+    let presentationOption = $derived(selectedStage?.options.find((option) => option.id === presentationOptionId) ?? selectedStage?.options[0])
+    let scenarioVariableNames = $derived.by(() => {
+        const names = new Set<string>()
+        if (draft.stageVariable) names.add(draft.stageVariable)
+        if (draft.localization.variable) names.add(draft.localization.variable)
+        for (const variable of draft.variables) if (variable.name) names.add(variable.name)
+        for (const stage of draft.stages) {
+            for (const option of stage.options) {
+                for (const effect of option.effects) if (effect.variable) names.add(effect.variable)
+                if (option.input?.variable) names.add(option.input.variable)
+                if (option.input?.displayVariable) names.add(option.input.displayVariable)
+            }
+        }
+        return [...names]
+    })
 
     function localized(value: FirstMessageStudioText | undefined) {
         if (typeof value === 'string') return value
@@ -118,8 +143,13 @@
                     option.input.label = migrate(option.input.label)!
                     option.input.placeholder = migrate(option.input.placeholder)
                 }
+                if (option.presentation) {
+                    option.presentation.speaker = migrate(option.presentation.speaker)
+                    option.presentation.description = migrate(option.presentation.description)!
+                }
             }
         }
+        for (const rule of draft.scenarioRules) rule.message = migrate(rule.message)!
         language.id = nextId
         if (draft.localization.defaultLanguage === previous) draft.localization.defaultLanguage = nextId
         if (editLocale === previous) editLocale = nextId
@@ -206,6 +236,7 @@
             tag: newLocalized('단계'),
             title: newLocalized('새 화면'),
             description: newLocalized('안내나 질문을 적어 주세요.'),
+            optionPresentationEnabled: false,
             options: [],
         })
         selectedStageId = id
@@ -233,12 +264,14 @@
 
     function addOption() {
         if (!selectedStage) return
-        selectedStage.options.push({
+        const option: FirstMessageStudioOption = {
             id: uniqueId('choice', selectedStage.options.map((option) => option.id)),
             label: newLocalized('새 선택지'),
             description: newLocalized(''),
             effects: draft.variables[0] ? [{ variable: draft.variables[0].name, value: '' }] : [],
-        })
+        }
+        if (selectedStage.optionPresentationEnabled) option.presentation = newOptionPresentation()
+        selectedStage.options.push(option)
     }
 
     function removeOption(id: string) {
@@ -270,6 +303,63 @@
         } : undefined
     }
 
+    function newOptionPresentation() {
+        return {
+            speaker: newLocalized(''),
+            description: newLocalized(''),
+            imageEnabled: false,
+            imageFrame: 'contain' as const,
+            imagePositionX: 50,
+            imagePositionY: 50,
+        }
+    }
+
+    function ensureOptionPresentation(option: FirstMessageStudioOption) {
+        option.presentation ??= newOptionPresentation()
+        return option.presentation
+    }
+
+    function toggleOptionPresentations(checked: boolean) {
+        if (!selectedStage) return
+        selectedStage.optionPresentationEnabled = checked
+        if (checked) {
+            for (const option of selectedStage.options) ensureOptionPresentation(option)
+            presentationOptionId = selectedStage.options[0]?.id ?? ''
+        }
+    }
+
+    function selectPresentationOption(option: FirstMessageStudioOption) {
+        ensureOptionPresentation(option)
+        presentationOptionId = option.id
+    }
+
+    function uniquePresentationAssetName(option: FirstMessageStudioOption, fileName: string) {
+        const safeName = fileName.trim().replace(/[^\p{L}\p{N}._-]+/gu, '-') || 'illustration.png'
+        const prefix = `fmstudio-${selectedStage?.id ?? 'stage'}-${option.id}-`
+        const base = `${prefix}${safeName}`
+        const existing = new Set((character.additionalAssets ?? []).map((asset) => asset[0]))
+        if (!existing.has(base)) return base
+        const dot = base.lastIndexOf('.')
+        const stem = dot > 0 ? base.slice(0, dot) : base
+        const extension = dot > 0 ? base.slice(dot) : ''
+        let index = 2
+        while (existing.has(`${stem}-${index}${extension}`)) index++
+        return `${stem}-${index}${extension}`
+    }
+
+    async function uploadPresentationImage(option: FirstMessageStudioOption) {
+        const files = await selectFileByDom(['png', 'webp', 'jpeg', 'jpg', 'gif', 'avif'])
+        const file = files?.[0]
+        if (!file) return
+        const extension = file.name.split('.').pop()?.toLowerCase() || 'png'
+        const assetName = uniquePresentationAssetName(option, file.name)
+        const assetPath = await saveAsset(new Uint8Array(await file.arrayBuffer()), '', extension)
+        character.additionalAssets = [...(character.additionalAssets ?? []), [assetName, assetPath, extension]]
+        const presentation = ensureOptionPresentation(option)
+        presentation.imageEnabled = true
+        presentation.imageAssetName = assetName
+    }
+
     function addVariable() {
         const names = draft.variables.map((variable) => variable.name)
         const name = uniqueId('variable', names)
@@ -285,6 +375,13 @@
         draft.variables.splice(index, 1)
     }
 
+    function moveVariable(index: number, direction: -1 | 1) {
+        const target = index + direction
+        if (target < 0 || target >= draft.variables.length) return
+        const [moved] = draft.variables.splice(index, 1)
+        draft.variables.splice(target, 0, moved)
+    }
+
     function renameVariable(variable: FirstMessageStudioVariable, nextName: string) {
         const previousName = variable.name
         variable.name = nextName
@@ -298,23 +395,38 @@
         }
     }
 
-    function addVariableChoice(variable: FirstMessageStudioVariable) {
-        variable.choices.push({
-            label: newLocalized('새 값'),
-            value: '',
+    function newScenarioCondition() {
+        return { variable: scenarioVariableNames[0] ?? '', operator: 'equals' as const, value: '' }
+    }
+
+    function addScenarioRule() {
+        const id = uniqueId('scenario', draft.scenarioRules.map((rule) => rule.id))
+        draft.scenarioRules.push({
+            id,
+            label: '새 시나리오',
+            message: newLocalized(''),
+            groups: [{ id: `${id}-group-1`, conditions: [newScenarioCondition()] }],
         })
     }
 
-    function useVariableChoices(variable: FirstMessageStudioVariable) {
-        if (!selectedStage) return
-        for (const choice of variable.choices) {
-            selectedStage.options.push({
-                id: uniqueId('choice', selectedStage.options.map((option) => option.id)),
-                label: structuredClone(choice.label),
-                effects: [{ variable: variable.name, value: structuredClone(choice.value) }],
-            })
-        }
-        editorMode = 'content'
+    function moveScenarioRule(index: number, direction: -1 | 1) {
+        const target = index + direction
+        if (target < 0 || target >= draft.scenarioRules.length) return
+        const [moved] = draft.scenarioRules.splice(index, 1)
+        draft.scenarioRules.splice(target, 0, moved)
+    }
+
+    function removeScenarioRule(index: number) {
+        draft.scenarioRules.splice(index, 1)
+    }
+
+    function addScenarioGroup(rule: FirstMessageStudioScenarioRule) {
+        const id = uniqueId(`${rule.id}-group`, rule.groups.map((group) => group.id))
+        rule.groups.push({ id, conditions: [newScenarioCondition()] })
+    }
+
+    function addScenarioCondition(group: FirstMessageStudioScenarioGroup) {
+        group.conditions.push(newScenarioCondition())
     }
 
     function save() {
@@ -366,10 +478,14 @@
         <header class="topbar">
             <div class="title-row" data-studio-title-row>
                 <h2>퍼스트 메시지 스튜디오</h2>
-                <p>변수와 선택지를 연결하고, 첫 화면의 모양을 직접 구성합니다.</p>
+                <p>누구나 쉽게 만드는 퍼스트 메시지</p>
+                <label class="studio-enabled" data-studio-enabled-toggle title="끄면 스튜디오 선택기 대신 기존 퍼스트 메시지를 사용합니다.">
+                    <input class="studio-toggle-input" type="checkbox" bind:checked={draft.enabled}/>
+                    <span class="studio-toggle-track" data-studio-enabled-track aria-hidden="true"><i></i></span>
+                    <span>스튜디오 사용</span>
+                </label>
             </div>
-            <div class="top-actions">
-                <label class="switch" data-studio-enabled-toggle title="끄면 스튜디오 선택기 대신 기존 퍼스트 메시지를 사용합니다."><input type="checkbox" bind:checked={draft.enabled}/> 스튜디오 사용</label>
+            <div class="top-actions" data-studio-top-actions>
                 <button type="button" aria-label="닫기" onclick={onClose}>✕</button>
             </div>
         </header>
@@ -402,12 +518,13 @@
                 <nav class="mode-tabs" data-studio-primary-toolbar aria-label="스튜디오 편집 영역">
                     <button type="button" data-studio-languages-tab class:active={editorMode === 'languages'} onclick={() => editorMode = 'languages'}>언어</button>
                     <button type="button" data-studio-variables-tab class:active={editorMode === 'variables'} onclick={() => editorMode = 'variables'}>변수</button>
+                    <button type="button" data-studio-scenarios-tab class:active={editorMode === 'scenarios'} onclick={() => editorMode = 'scenarios'}>시나리오</button>
                     <button type="button" data-studio-design-tab class:active={editorMode === 'design'} onclick={() => editorMode = 'design'}>창 디자인</button>
                     <button type="button" data-studio-code-tab class:active={editorMode === 'code'} onclick={() => editorMode = 'code'}>고급 코드</button>
                     <button type="button" data-studio-share-tab class:active={editorMode === 'share'} onclick={() => editorMode = 'share'}>공유</button>
                 </nav>
 
-                {#if editorMode === 'content'}
+                {#if editorMode === 'content' || editorMode === 'scenarios'}
                     <section class="screen-toolbar" data-studio-screen-toolbar aria-label="화면 번역 편집 도구">
                         <span aria-hidden="true"></span>
                         <button
@@ -424,7 +541,7 @@
                         </label>
                     </section>
                 {/if}
-                {#if editorMode === 'content' && showAiTranslation}
+                {#if (editorMode === 'content' || editorMode === 'scenarios') && showAiTranslation}
                     <section class="translation-panel" data-studio-ai-translation-panel>
                         <div>
                             <strong>메인 모델로 UI 문구 번역</strong>
@@ -473,32 +590,97 @@
                 {:else if editorMode === 'variables'}
                     <section class="variable-editor">
                         <div class="section-heading">
-                            <div><span>VARIABLES</span><h3>변수와 선택 가능한 값</h3><p>선택 결과를 저장할 이름과 값 목록을 먼저 등록합니다.</p></div>
+                            <div><span>VARIABLES</span><h3>변수</h3><p>선택 결과를 저장하거나 시나리오 조건에서 사용할 변수를 관리합니다.</p></div>
                             <button type="button" data-studio-add-variable onclick={addVariable}>＋ 변수 등록</button>
                         </div>
                         {#if draft.variables.length === 0}
-                            <div class="empty-state">아직 변수가 없습니다. 변수를 등록한 뒤 각 값으로 선택지를 만들 수 있습니다.</div>
+                            <div class="empty-state">아직 등록한 변수가 없습니다. 화면의 선택 결과나 시나리오 조건에 사용할 변수를 추가하세요.</div>
+                        {:else}
+                            <div class="variable-list">
+                                <div class="variable-list-header" aria-hidden="true">
+                                    <span data-studio-variable-name-label title="선택 결과를 저장하고 시나리오 조건식에서 참조하는 내부 변수 이름입니다.">변수 이름</span>
+                                    <span data-studio-variable-label-label title="스튜디오 화면에서 이 변수를 알아보기 쉽게 표시하는 이름입니다. 실행 결과에는 영향을 주지 않습니다.">표시 이름</span>
+                                    <span data-studio-variable-default-label title="사용자가 값을 선택하기 전에 변수에 들어 있는 초기값입니다.">기본값</span>
+                                    <span></span><span></span><span></span>
+                                </div>
+                                {#each draft.variables as variable, variableIndex}
+                                    <div class="variable-row" data-studio-variable={variable.name}>
+                                        <input
+                                            aria-label="변수 이름"
+                                            data-studio-variable-name
+                                            title="선택 결과를 저장하고 시나리오 조건식에서 참조하는 내부 변수 이름입니다."
+                                            value={variable.name}
+                                            oninput={(event) => renameVariable(variable, event.currentTarget.value)}
+                                            placeholder="route"
+                                        />
+                                        <input
+                                            aria-label="표시 이름"
+                                            data-studio-variable-label
+                                            title="스튜디오 화면에서 이 변수를 알아보기 쉽게 표시하는 이름입니다. 실행 결과에는 영향을 주지 않습니다."
+                                            value={localized(variable.label)}
+                                            oninput={(event) => variable.label = setLocalized(variable.label, event.currentTarget.value)}
+                                            placeholder="주인공 유형"
+                                        />
+                                        <input
+                                            aria-label="기본값"
+                                            data-studio-variable-default
+                                            title="사용자가 값을 선택하기 전에 변수에 들어 있는 초기값입니다."
+                                            bind:value={variable.defaultValue}
+                                            placeholder="1"
+                                        />
+                                        <button type="button" data-studio-move-variable-up title="이 변수를 목록에서 위로 이동합니다." aria-label="변수 위로 이동" onclick={() => moveVariable(variableIndex, -1)} disabled={variableIndex === 0}>↑</button>
+                                        <button type="button" data-studio-move-variable-down title="이 변수를 목록에서 아래로 이동합니다." aria-label="변수 아래로 이동" onclick={() => moveVariable(variableIndex, 1)} disabled={variableIndex === draft.variables.length - 1}>↓</button>
+                                        <button class="delete" type="button" data-studio-delete-variable title="이 변수의 기본값 등록을 삭제합니다. 화면 선택지에 이미 연결된 저장 동작은 유지됩니다." onclick={() => removeVariable(variableIndex)}>삭제</button>
+                                    </div>
+                                {/each}
+                            </div>
                         {/if}
-                        {#each draft.variables as variable, variableIndex}
-                            <article class="variable-card" data-studio-variable={variable.name}>
-                                <header><strong>{localized(variable.label) || variable.name}</strong><button type="button" onclick={() => removeVariable(variableIndex)}>삭제</button></header>
-                                <div class="three-columns">
-                                    <label>변수 이름<input data-studio-variable-name value={variable.name} oninput={(event) => renameVariable(variable, event.currentTarget.value)} placeholder="route"/></label>
-                                    <label>표시 이름<input value={localized(variable.label)} oninput={(event) => variable.label = setLocalized(variable.label, event.currentTarget.value)}/></label>
-                                    <label>기본값<input bind:value={variable.defaultValue} placeholder="default"/></label>
+                    </section>
+                {:else if editorMode === 'scenarios'}
+                    <section class="scenario-editor" data-studio-scenario-settings>
+                        <div class="section-heading">
+                            <div><span>SCENARIOS</span><h3>완료 후 시나리오</h3><p>위에서부터 조건을 확인해 처음 맞는 시나리오를 표시합니다. 묶음끼리는 모두 맞아야 하고(AND), 한 묶음 안에서는 하나만 맞으면 됩니다(OR).</p></div>
+                            <button type="button" data-studio-add-scenario onclick={addScenarioRule}>＋ 시나리오 추가</button>
+                        </div>
+                        <datalist id="studio-scenario-variables" data-studio-scenario-variables>
+                            {#each scenarioVariableNames as name}<option value={name}></option>{/each}
+                        </datalist>
+                        {#if draft.scenarioRules.length === 0}
+                            <div class="empty-state">아직 시나리오가 없습니다. 선택이 끝난 뒤 조건별로 다른 첫 메시지를 보여 주려면 추가하세요.</div>
+                        {/if}
+                        {#each draft.scenarioRules as rule, ruleIndex}
+                            <article class="scenario-card" data-studio-scenario-rule={rule.id}>
+                                <header class="scenario-header">
+                                    <b>{String(ruleIndex + 1).padStart(2, '0')}</b>
+                                    <label>관리용 이름<input data-studio-scenario-label bind:value={rule.label} placeholder="예: 시골 주인공 · 정사 루트"/></label>
+                                    <div class="scenario-actions">
+                                        <button type="button" data-studio-move-scenario-up onclick={() => moveScenarioRule(ruleIndex, -1)} disabled={ruleIndex === 0}>↑</button>
+                                        <button type="button" data-studio-move-scenario-down onclick={() => moveScenarioRule(ruleIndex, 1)} disabled={ruleIndex === draft.scenarioRules.length - 1}>↓</button>
+                                        <button class="delete" type="button" data-studio-delete-scenario onclick={() => removeScenarioRule(ruleIndex)}>삭제</button>
+                                    </div>
+                                </header>
+                                <div class="scenario-body">
+                                    <div class="scenario-groups">
+                                        {#each rule.groups as group, groupIndex}
+                                            {#if groupIndex > 0}<div class="logic-divider"><span>AND · 이 묶음도 맞아야 함</span></div>{/if}
+                                            <section class="scenario-group" data-studio-scenario-group={group.id}>
+                                                <header><strong>조건 묶음 {groupIndex + 1}</strong><small>아래 조건 중 하나만 맞으면 통과 (OR)</small></header>
+                                                {#each group.conditions as condition, conditionIndex}
+                                                    {#if conditionIndex > 0}<div class="or-divider">또는</div>{/if}
+                                                    <div class="condition-row" data-studio-scenario-condition>
+                                                        <label>변수<input data-studio-scenario-variable list="studio-scenario-variables" bind:value={condition.variable} placeholder="cv_start"/></label>
+                                                        <label>비교<select data-studio-scenario-operator bind:value={condition.operator}><option value="equals">같음</option><option value="not-equals">다름</option></select></label>
+                                                        <label>값<input data-studio-scenario-value bind:value={condition.value} placeholder="1"/></label>
+                                                        <button type="button" aria-label="조건 삭제" onclick={() => group.conditions.splice(conditionIndex, 1)} disabled={group.conditions.length === 1}>✕</button>
+                                                    </div>
+                                                {/each}
+                                                <button class="condition-add" type="button" data-studio-add-condition onclick={() => addScenarioCondition(group)}>＋ 또는 조건 추가</button>
+                                            </section>
+                                        {/each}
+                                    </div>
+                                    <button class="group-add" type="button" data-studio-add-condition-group onclick={() => addScenarioGroup(rule)}>＋ AND 조건 묶음 추가</button>
+                                    <label class="scenario-message">이 조건에서 사용할 첫 메시지<textarea data-studio-scenario-message rows="12" value={localized(rule.message)} oninput={(event) => rule.message = setLocalized(rule.message, event.currentTarget.value)} placeholder="선택이 끝난 뒤 표시할 메시지를 적으세요."></textarea></label>
                                 </div>
-                                <div class="value-heading"><strong>선택 가능한 값</strong><button type="button" data-studio-add-variable-choice onclick={() => addVariableChoice(variable)}>＋ 값 추가</button></div>
-                                <div class="value-list">
-                                    {#each variable.choices as choice, choiceIndex}
-                                        <div class="value-row" data-studio-variable-choice>
-                                            <input aria-label="값 표시 이름" value={localized(choice.label)} oninput={(event) => choice.label = setLocalized(choice.label, event.currentTarget.value)} placeholder="표시 이름"/>
-                                            <span>→</span>
-                                            <input aria-label="저장 값" value={localized(choice.value)} oninput={(event) => choice.value = setLocalized(choice.value, event.currentTarget.value)} placeholder="저장 값"/>
-                                            <button type="button" aria-label="값 삭제" onclick={() => variable.choices.splice(choiceIndex, 1)}>✕</button>
-                                        </div>
-                                    {/each}
-                                </div>
-                                <button class="use-values" type="button" disabled={variable.choices.length === 0} onclick={() => useVariableChoices(variable)}>현재 화면에 이 값들을 선택지로 추가</button>
                             </article>
                         {/each}
                     </section>
@@ -566,9 +748,67 @@
                         <div class="form-box">
                             <label>화면 태그<input value={localized(selectedStage.tag)} oninput={(event) => selectedStage.tag = setLocalized(selectedStage.tag, event.currentTarget.value)}/></label>
                             <label>화면 제목<input data-studio-stage-title value={localized(selectedStage.title)} oninput={(event) => selectedStage.title = setLocalized(selectedStage.title, event.currentTarget.value)}/></label>
-                            <label>화자 <span class="optional">선택 사항 · 비우면 표시하지 않음</span><input data-studio-stage-speaker value={localized(selectedStage.speaker)} oninput={(event) => selectedStage.speaker = event.currentTarget.value ? setLocalized(selectedStage.speaker, event.currentTarget.value) : undefined}/></label>
-                            <label>질문 · 설명<textarea rows="2" value={localized(selectedStage.description)} oninput={(event) => selectedStage.description = setLocalized(selectedStage.description, event.currentTarget.value)}></textarea></label>
+                            <label class="check presentation-master-toggle" title="선택지에 마우스를 올리거나 키보드로 초점을 맞출 때 메인 삽화와 설명을 바꿉니다."><input data-studio-option-presentation-toggle type="checkbox" checked={selectedStage.optionPresentationEnabled} onchange={(event) => toggleOptionPresentations(event.currentTarget.checked)}/> 선택지별 메인 삽화와 설명 사용</label>
+                            {#if !selectedStage.optionPresentationEnabled}
+                                <label>화자 <span class="optional">선택 사항 · 비우면 표시하지 않음</span><input data-studio-stage-speaker value={localized(selectedStage.speaker)} oninput={(event) => selectedStage.speaker = event.currentTarget.value ? setLocalized(selectedStage.speaker, event.currentTarget.value) : undefined}/></label>
+                                <label>질문 · 설명<textarea rows="2" value={localized(selectedStage.description)} oninput={(event) => selectedStage.description = setLocalized(selectedStage.description, event.currentTarget.value)}></textarea></label>
+                            {/if}
                         </div>
+
+                        {#if selectedStage.optionPresentationEnabled}
+                            <section class="presentation-editor" data-studio-option-presentation-editor>
+                                <div class="presentation-editor-heading"><div><strong>선택지 프레젠테이션</strong><small>탭마다 호버 시 표시할 화자·설명·삽화를 설정합니다.</small></div></div>
+                                {#if selectedStage.options.length === 0}
+                                    <div class="empty-state">먼저 이 화면에 선택지를 추가하세요.</div>
+                                {:else}
+                                    <div class="presentation-tabs" role="tablist" aria-label="선택지 프레젠테이션">
+                                        {#each selectedStage.options as option, optionIndex}
+                                            <button type="button" role="tab" data-studio-presentation-tab={option.id} class:active={presentationOption?.id === option.id} aria-selected={presentationOption?.id === option.id} onclick={() => selectPresentationOption(option)}><b>{String(optionIndex + 1).padStart(2, '0')}</b>{localized(option.label) || `선택지 ${optionIndex + 1}`}</button>
+                                        {/each}
+                                    </div>
+                                    {#if presentationOption}
+                                        {@const presentation = ensureOptionPresentation(presentationOption)}
+                                        <div class="presentation-fields" role="tabpanel">
+                                            <div class="presentation-image-controls">
+                                                <label class="check" title="끄면 이 선택지는 삽화 없이 화자와 설명만 넓게 표시합니다."><input data-studio-presentation-image-toggle type="checkbox" bind:checked={presentation.imageEnabled}/> 선택지 삽화 사용</label>
+                                                {#if presentation.imageEnabled}
+                                                    <label class="frame-mode-field" title="삽화를 표시할 프레임 형태를 정합니다. 잘리는 위치는 아래 미리보기에서 직접 조절합니다.">삽화 프레임
+                                                        <select data-studio-presentation-image-frame value={presentation.imageFrame} onchange={(event) => presentation.imageFrame = event.currentTarget.value as FirstMessageStudioImageFrame}>
+                                                            <option value="contain" title="사용 가능한 너비와 높이 안에 삽화 전체를 중앙 정렬해 표시합니다.">전체 표시 · 크롭 없음</option>
+                                                            <option value="square" title="정사각형 프레임입니다. 잘리는 위치는 아래에서 드래그해 정합니다.">정사각형</option>
+                                                            <option value="landscape" title="16:9 가로형 프레임입니다. 잘리는 위치는 아래에서 드래그해 정합니다.">가로형 16:9</option>
+                                                            <option value="portrait" title="3:4 세로형 프레임입니다. 잘리는 위치는 아래에서 드래그해 정합니다.">세로형 3:4</option>
+                                                        </select>
+                                                    </label>
+                                                    <div class="asset-actions">
+                                                        <button type="button" data-studio-upload-presentation-image onclick={() => uploadPresentationImage(presentationOption)}>{presentation.imageAssetName ? '삽화 바꾸기' : '삽화 넣기'}</button>
+                                                        {#if presentation.imageAssetName}
+                                                            <span data-studio-presentation-asset-name title={presentation.imageAssetName}>{presentation.imageAssetName}</span>
+                                                            <button class="delete" type="button" data-studio-remove-presentation-image title="연결만 해제하며 캐릭터 에셋 파일은 삭제하지 않습니다." onclick={() => presentation.imageAssetName = undefined}>연결 해제</button>
+                                                        {/if}
+                                                    </div>
+                                                    {#if presentation.imageAssetName}
+                                                        <FirstMessageStudioImageCropEditor
+                                                            assetName={presentation.imageAssetName}
+                                                            assets={character.additionalAssets ?? []}
+                                                            frame={presentation.imageFrame}
+                                                            positionX={presentation.imagePositionX}
+                                                            positionY={presentation.imagePositionY}
+                                                            onPositionChange={(x, y) => {
+                                                                presentation.imagePositionX = x
+                                                                presentation.imagePositionY = y
+                                                            }}
+                                                        />
+                                                    {/if}
+                                                {/if}
+                                            </div>
+                                            <label>화자 <span class="optional">비우면 표시하지 않음</span><input data-studio-presentation-speaker value={localized(presentation.speaker)} oninput={(event) => presentation.speaker = event.currentTarget.value ? setLocalized(presentation.speaker, event.currentTarget.value) : undefined} placeholder="농부"/></label>
+                                            <label>메인 설명<textarea data-studio-presentation-description rows="4" value={localized(presentation.description)} oninput={(event) => presentation.description = setLocalized(presentation.description, event.currentTarget.value)} placeholder="이 선택지에 마우스를 올렸을 때 보여 줄 설명을 적으세요."></textarea></label>
+                                        </div>
+                                    {/if}
+                                {/if}
+                            </section>
+                        {/if}
 
                         <div class="option-heading">
                             <div><strong>선택지</strong><small>선택하면 저장할 변수와 값을 정합니다.</small></div>
@@ -627,7 +867,7 @@
 
             <aside class="preview">
                 <header><strong>실제 미리보기</strong><small>직접 클릭해 전체 흐름을 시험하세요.</small></header>
-                <FirstMessageStudioRuntime project={draft} preview/>
+                <FirstMessageStudioRuntime project={draft} assets={character.additionalAssets ?? []} preview/>
                 <details>
                     <summary>완료 후 원문 메시지</summary>
                     <p>스튜디오가 꺼져 있거나 완료된 뒤에는 이 원문이 사용됩니다.</p>
@@ -648,8 +888,9 @@
     .shell{display:grid;grid-template-rows:auto 1fr auto;width:min(96rem,100%);height:100%;margin:auto;overflow:hidden;border:1px solid var(--risu-theme-darkborderc);border-radius:1rem;color:var(--risu-theme-textcolor);background:var(--risu-theme-bgcolor);box-shadow:0 2rem 6rem rgba(0,0,0,.5)}
     .topbar,.footer{display:flex;align-items:center;justify-content:space-between;gap:1rem}
     .topbar{padding:1rem 1.25rem;border-bottom:1px solid var(--risu-theme-darkborderc);background:var(--risu-theme-darkbg)}
-    .title-row{display:flex;min-width:0;align-items:baseline;gap:1rem}.topbar h2{flex:none;margin:0;font-size:1.3rem}.topbar p{overflow:hidden;margin:0;color:var(--risu-theme-textcolor2);font-size:.78rem;text-overflow:ellipsis;white-space:nowrap}
-    .top-actions{display:flex;flex:none;align-items:center;gap:.7rem}.switch{display:flex;align-items:center;gap:.4rem;padding:.45rem .65rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.45rem;white-space:nowrap}.switch input{flex:none}
+    .title-row{display:flex;min-width:0;flex:1;align-items:center;gap:1rem}.topbar h2{flex:none;margin:0;font-size:1.3rem}.topbar p{overflow:hidden;margin:0;color:var(--risu-theme-textcolor2);font-size:.78rem;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
+    .studio-enabled{position:relative;display:flex;flex:none;align-items:center;gap:.5rem;padding:.4rem .68rem;border:1px solid color-mix(in srgb,var(--risu-theme-primary) 55%,var(--risu-theme-darkborderc));border-radius:999px;color:var(--risu-theme-textcolor);background:color-mix(in srgb,var(--risu-theme-primary) 9%,var(--risu-theme-darkbg));font-size:.7rem;font-weight:850;white-space:nowrap;cursor:pointer}.studio-toggle-input{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);border:0;white-space:nowrap}.studio-toggle-track{position:relative;width:2rem;height:1.05rem;border-radius:999px;background:var(--risu-theme-darkborderc);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--risu-theme-textcolor) 12%,transparent);transition:background .15s ease,box-shadow .15s ease}.studio-toggle-track i{position:absolute;top:.16rem;left:.17rem;width:.73rem;height:.73rem;border-radius:50%;background:var(--risu-theme-textcolor);box-shadow:0 .1rem .25rem rgba(0,0,0,.35);transition:transform .15s ease}.studio-toggle-input:checked+.studio-toggle-track{background:var(--risu-theme-primary);box-shadow:0 0 .65rem color-mix(in srgb,var(--risu-theme-primary) 40%,transparent)}.studio-toggle-input:checked+.studio-toggle-track i{transform:translateX(.93rem);background:var(--risu-theme-darkbg)}.studio-toggle-input:focus-visible+.studio-toggle-track{outline:2px solid var(--risu-theme-textcolor);outline-offset:2px}
+    .top-actions{display:flex;flex:none;align-items:center;gap:.7rem}.top-actions>button{display:grid;width:2.15rem;height:2.15rem;place-items:center;padding:0;border-radius:50%}.switch{display:flex;align-items:center;gap:.4rem;padding:.45rem .65rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.45rem;white-space:nowrap}.switch input{width:auto;flex:none}
     .workspace{display:grid;grid-template-columns:13rem minmax(27rem,1fr) minmax(28rem,36rem);min-height:0}
     .rail,.editor,.preview{min-height:0;overflow:auto}.rail{display:flex;flex-direction:column;padding:.65rem;border-right:1px solid var(--risu-theme-darkborderc);background:var(--risu-theme-darkbg)}
     .rail-title{display:flex;align-items:center;justify-content:space-between;gap:.55rem;padding:.3rem;color:var(--risu-theme-textcolor2);font-size:.7rem;font-weight:800}.rail-title button{padding:.48rem .7rem;border:1px solid var(--risu-theme-darkborderc);background:var(--risu-theme-bgcolor);font-size:.7rem;font-weight:800}
@@ -658,7 +899,7 @@
     .stage-list small{color:var(--risu-theme-primary);font:700 .6rem ui-monospace,monospace}.stage-list span{color:var(--risu-theme-textcolor2);font-size:.62rem}
     .rail-action{margin-top:.6rem;padding:.45rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.4rem;font-size:.66rem}.rail-move{display:grid;grid-template-columns:1fr 1fr;gap:.3rem;margin-top:.6rem}
     .rail-move button{padding:.4rem .25rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.4rem;font-size:.6rem}.rail-action.danger{color:#ff8b79}
-    .editor{padding:1rem}.mode-tabs{position:sticky;z-index:20;top:0;display:grid;grid-template-columns:repeat(5,minmax(7rem,1fr));gap:.35rem;overflow-x:auto;margin-bottom:.8rem;padding:.25rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;background:var(--risu-theme-darkbg);box-shadow:0 .5rem 1rem color-mix(in srgb,var(--risu-theme-darkbg) 70%,transparent)}
+    .editor{padding:1rem}.mode-tabs{position:sticky;z-index:20;top:0;display:grid;grid-template-columns:repeat(6,minmax(7rem,1fr));gap:.35rem;overflow-x:auto;margin-bottom:.8rem;padding:.25rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;background:var(--risu-theme-darkbg);box-shadow:0 .5rem 1rem color-mix(in srgb,var(--risu-theme-darkbg) 70%,transparent)}
     .mode-tabs button{padding:.58rem;border-radius:.42rem;color:var(--risu-theme-textcolor2);font-weight:800}.mode-tabs button.active{color:var(--risu-theme-darkbg);background:var(--risu-theme-primary)}
     .screen-toolbar{position:sticky;z-index:19;top:3.2rem;display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:.65rem;margin-bottom:.8rem;padding:.55rem .7rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.6rem;background:var(--risu-theme-darkbg);box-shadow:0 .5rem 1rem color-mix(in srgb,var(--risu-theme-darkbg) 70%,transparent)}
     .screen-toolbar>button{justify-self:center;border:1px solid var(--risu-theme-darkborderc);font-weight:800}.screen-toolbar>button.active{border-color:var(--risu-theme-primary);color:var(--risu-theme-primary)}.screen-toolbar>label{display:flex;justify-self:end;align-items:center;gap:.45rem;white-space:nowrap}.screen-toolbar select{width:8.5rem}
@@ -667,18 +908,20 @@
     .language-page{display:grid;gap:.75rem}
     .language-settings{display:grid;gap:.75rem;padding:.75rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.6rem;background:var(--risu-theme-darkbg)}.language-project-fields{display:grid;grid-template-columns:1fr 1fr;gap:.55rem}.language-list-heading{display:flex;align-items:end;justify-content:space-between}.language-list-heading>div{display:grid}.language-list{display:grid;gap:.4rem}.language-row{display:grid;grid-template-columns:auto 1fr 1fr 1fr auto;align-items:end;gap:.45rem;padding:.55rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.45rem;background:var(--risu-theme-bgcolor)}.language-row>b{align-self:center;color:var(--risu-theme-primary);font:800 .62rem ui-monospace,monospace}.language-row>button{align-self:end;color:#ff8b79}
     .form-box,.option-body{display:grid;gap:.65rem;padding:.75rem}.form-box{border:1px solid var(--risu-theme-darkborderc);border-radius:.6rem;background:var(--risu-theme-darkbg)}
+    .presentation-master-toggle{justify-self:start;padding:.45rem .6rem;border:1px solid color-mix(in srgb,var(--risu-theme-primary) 45%,var(--risu-theme-darkborderc));border-radius:.45rem;background:color-mix(in srgb,var(--risu-theme-primary) 7%,transparent)}.presentation-editor{display:grid;gap:.65rem;margin-top:.75rem;padding:.75rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;background:var(--risu-theme-darkbg)}.presentation-editor-heading>div{display:grid;gap:.15rem}.presentation-editor-heading small{color:var(--risu-theme-textcolor2);font-size:.65rem}.presentation-tabs{display:flex;gap:.35rem;overflow-x:auto;padding-bottom:.15rem}.presentation-tabs button{display:flex;min-width:max-content;align-items:center;gap:.42rem;padding:.5rem .7rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.45rem;color:var(--risu-theme-textcolor2);background:var(--risu-theme-bgcolor);font-weight:750}.presentation-tabs button b{color:var(--risu-theme-primary);font:800 .58rem ui-monospace,monospace}.presentation-tabs button.active{border-color:var(--risu-theme-primary);color:var(--risu-theme-textcolor);box-shadow:inset 0 -2px var(--risu-theme-primary)}.presentation-fields{display:grid;gap:.65rem;padding:.7rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.5rem;background:var(--risu-theme-bgcolor)}.presentation-image-controls{display:grid;gap:.45rem}.asset-actions{display:flex;align-items:center;gap:.45rem;min-width:0}.asset-actions>button:first-child{border:1px solid var(--risu-theme-primary);color:var(--risu-theme-primary)}.asset-actions span{overflow:hidden;min-width:0;color:var(--risu-theme-textcolor2);font:600 .65rem ui-monospace,monospace;text-overflow:ellipsis;white-space:nowrap}.asset-actions .delete{flex:none;color:#ff8b79}
+    .frame-mode-field{display:grid;grid-template-columns:minmax(6rem,max-content) minmax(12rem,22rem);align-items:center;gap:.55rem}
     .two-columns,.three-columns{display:grid;grid-template-columns:1fr 1fr;gap:.55rem}.three-columns{grid-template-columns:repeat(3,1fr)}
     label{display:grid;gap:.28rem;color:var(--risu-theme-textcolor2);font-size:.66rem;font-weight:700}label .optional{font-size:.58rem;font-weight:500}
     input,textarea,select{width:100%;border:1px solid var(--risu-theme-darkborderc);border-radius:.38rem;padding:.46rem .52rem;color:var(--risu-theme-textcolor);background:var(--risu-theme-bgcolor);font:inherit;font-size:.74rem}
-    .option-heading,.section-heading,.value-heading{display:flex;align-items:end;justify-content:space-between;gap:.7rem}.option-heading{margin:1rem 0 .55rem}.option-heading>div,.section-heading>div,.preview>header,.code-card header>div{display:grid}
+    .option-heading,.section-heading{display:flex;align-items:end;justify-content:space-between;gap:.7rem}.option-heading{margin:1rem 0 .55rem}.option-heading>div,.section-heading>div,.preview>header,.code-card header>div{display:grid}
     .section-heading span{color:var(--risu-theme-primary);font:800 .6rem ui-monospace,monospace;letter-spacing:.12em}.section-heading h3{margin:.2rem 0;font-size:1.1rem}.section-heading p,.preview small,.option-heading small,.code-card small{margin:0;color:var(--risu-theme-textcolor2);font-size:.68rem}
-    .option-list,.variable-editor,.design-editor,.code-editor,.value-list{display:grid;gap:.7rem}.option-card,.variable-card,.design-card,.code-card{overflow:hidden;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;background:var(--risu-theme-darkbg)}
-    .option-card>header,.variable-card>header,.code-card>header{display:flex;align-items:center;gap:.5rem;padding:.58rem .7rem;border-bottom:1px solid var(--risu-theme-darkborderc)}.option-card>header b{color:var(--risu-theme-primary);font:800 .65rem ui-monospace,monospace}
-    .option-actions{display:flex;gap:.25rem;margin-left:auto}.option-actions button{min-width:2rem;border:1px solid var(--risu-theme-darkborderc)}.option-actions .delete,.variable-card>header button{margin-left:auto;color:#ff8b79}
+    .option-list,.variable-editor,.scenario-editor,.design-editor,.code-editor{display:grid;gap:.7rem}.option-card,.scenario-card,.design-card,.code-card{overflow:hidden;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;background:var(--risu-theme-darkbg)}
+    .option-card>header,.code-card>header{display:flex;align-items:center;gap:.5rem;padding:.58rem .7rem;border-bottom:1px solid var(--risu-theme-darkborderc)}.option-card>header b{color:var(--risu-theme-primary);font:800 .65rem ui-monospace,monospace}
+    .option-actions{display:flex;gap:.25rem;margin-left:auto}.option-actions button{min-width:2rem;border:1px solid var(--risu-theme-darkborderc)}.option-actions .delete{margin-left:auto;color:#ff8b79}
     .check{display:flex;align-items:center;gap:.4rem}.check input{width:auto}.effects{display:grid;gap:.35rem;padding:.5rem;border-radius:.4rem;background:var(--risu-theme-bgcolor)}.effects>div:first-child{display:flex;justify-content:space-between}
-    .effect-row,.value-row{display:grid;grid-template-columns:1fr auto 1fr auto;align-items:center;gap:.3rem}.input-settings{padding:.5rem;border:1px dashed var(--risu-theme-darkborderc);border-radius:.4rem}
-    .variable-card{display:grid;gap:.7rem;padding-bottom:.8rem}.variable-card>.three-columns,.variable-card>.value-heading,.variable-card>.value-list,.variable-card>.use-values{margin-inline:.8rem}.variable-card>.three-columns{margin-top:.1rem}.value-heading{align-items:center}
-    .use-values{padding:.55rem;border:1px solid var(--risu-theme-primary);border-radius:.4rem;color:var(--risu-theme-primary)}.empty-state{padding:1rem;border:1px dashed var(--risu-theme-darkborderc);border-radius:.6rem;color:var(--risu-theme-textcolor2);font-size:.72rem;text-align:center}
+    .effect-row{display:grid;grid-template-columns:1fr auto 1fr auto;align-items:center;gap:.3rem}.input-settings{padding:.5rem;border:1px dashed var(--risu-theme-darkborderc);border-radius:.4rem}
+    .variable-list{display:grid;gap:.38rem;overflow-x:auto;padding:.15rem}.variable-list-header,.variable-row{display:grid;grid-template-columns:minmax(9rem,1fr) minmax(9rem,1fr) minmax(7rem,1fr) 2.4rem 2.4rem 3.6rem;gap:.42rem;min-width:38rem}.variable-list-header{padding:0 .05rem;color:var(--risu-theme-textcolor2);font-size:.63rem;font-weight:800}.variable-list-header span[title]{cursor:help}.variable-row{align-items:center}.variable-row input{min-width:0}.variable-row button{height:100%;min-height:2.15rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.38rem;font-weight:800}.variable-row button:not(:disabled):hover{border-color:var(--risu-theme-primary);color:var(--risu-theme-primary)}.variable-row .delete{color:#ff8b79}.empty-state{padding:1rem;border:1px dashed var(--risu-theme-darkborderc);border-radius:.6rem;color:var(--risu-theme-textcolor2);font-size:.72rem;text-align:center}
+    .scenario-header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:end;gap:.65rem;padding:.65rem .75rem;border-bottom:1px solid var(--risu-theme-darkborderc)}.scenario-header>b{align-self:center;color:var(--risu-theme-primary);font:800 .65rem ui-monospace,monospace}.scenario-actions{display:flex;gap:.25rem}.scenario-actions button{min-width:2rem;border:1px solid var(--risu-theme-darkborderc)}.scenario-actions .delete{color:#ff8b79}.scenario-body,.scenario-groups{display:grid;gap:.65rem}.scenario-body{padding:.75rem}.scenario-group{display:grid;gap:.45rem;padding:.65rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.5rem;background:var(--risu-theme-bgcolor)}.scenario-group>header{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem}.scenario-group small{color:var(--risu-theme-textcolor2);font-size:.62rem}.condition-row{display:grid;grid-template-columns:minmax(8rem,1.2fr) minmax(6rem,.6fr) minmax(8rem,1fr) auto;align-items:end;gap:.4rem}.condition-row>button{margin-bottom:.05rem;color:#ff8b79}.logic-divider{text-align:center}.logic-divider span{display:inline-block;padding:.2rem .65rem;border-radius:999px;color:var(--risu-theme-darkbg);background:var(--risu-theme-primary);font-size:.62rem;font-weight:900}.or-divider{color:var(--risu-theme-primary);font-size:.62rem;font-weight:800;text-align:center}.condition-add,.group-add{justify-self:start;border:1px dashed var(--risu-theme-primary);color:var(--risu-theme-primary)}.scenario-message textarea{min-height:12rem;resize:vertical}
     .skin-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}.skin-grid button{display:grid;gap:.18rem;padding:.55rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.65rem;text-align:left;background:var(--risu-theme-darkbg)}.skin-grid button.active{border-color:var(--risu-theme-primary);box-shadow:inset 0 0 0 1px var(--risu-theme-primary)}.skin-grid small{color:var(--risu-theme-textcolor2);font-size:.58rem}
     .skin-swatch{height:3rem;margin-bottom:.2rem;border-radius:.4rem}.skin-swatch.minimal{background:linear-gradient(145deg,#1f2937 0 64%,#5b8cff 64% 72%,#111827 72%)}.skin-swatch.glass{background:radial-gradient(circle at 70% 20%,#65d9ff88,transparent 35%),linear-gradient(145deg,#1b4661cc,#101827)}.skin-swatch.custom{background:conic-gradient(from 90deg,#ff6b6b,#ffd166,#65d9ff,#b18cff,#ff6b6b)}
     .design-card{display:grid;gap:.75rem;padding:.8rem}.color-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.6rem}.color-input{display:grid;grid-template-columns:2.35rem 1fr;gap:.35rem}.color-input input[type='color']{height:2rem;padding:.15rem}.design-card.toggles{grid-template-columns:repeat(3,minmax(0,1fr))}.design-card.toggles header{grid-column:1/-1}
@@ -687,5 +930,5 @@
     .preview{padding:.9rem;border-left:1px solid var(--risu-theme-darkborderc);background:var(--risu-theme-darkbg)}.preview details{margin-top:.7rem;padding:.5rem;border:1px solid var(--risu-theme-darkborderc);border-radius:.45rem}.preview details p{color:var(--risu-theme-textcolor2);font-size:.65rem}
     .footer{padding:.7rem 1rem;border-top:1px solid var(--risu-theme-darkborderc);background:var(--risu-theme-darkbg)}.footer>span{color:var(--risu-theme-textcolor2);font-size:.67rem}.footer>div{display:flex;gap:.45rem}
     button{padding:.4rem .58rem;border-radius:.4rem;color:inherit}button.save{color:var(--risu-theme-darkbg);background:var(--risu-theme-primary);font-weight:800}
-    @media(max-width:72rem){.workspace{grid-template-columns:12rem 1fr}.preview{display:none}.translation-panel{grid-template-columns:1fr 1fr}.translation-panel>div{grid-column:1/-1}}@media(max-width:48rem){.overlay{padding:0}.shell{border:0;border-radius:0}.topbar{padding:.75rem}.title-row{gap:.55rem}.title-row p{display:none}.workspace{grid-template-columns:1fr}.rail{max-height:11rem}.stage-list{display:flex;overflow:auto}.stage-list button{min-width:9rem}.mode-tabs{grid-template-columns:repeat(5,minmax(7rem,1fr))}.screen-toolbar{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}.screen-toolbar>span{display:block}.screen-toolbar>label{font-size:0}.screen-toolbar>label select{width:7rem;font-size:.7rem}.translation-panel,.language-project-fields,.language-row,.two-columns,.three-columns,.color-grid,.design-card.toggles{grid-template-columns:1fr}.share-card{display:grid}.skin-grid{grid-template-columns:1fr}}
+    @media(max-width:72rem){.workspace{grid-template-columns:12rem 1fr}.preview{display:none}.translation-panel{grid-template-columns:1fr 1fr}.translation-panel>div{grid-column:1/-1}}@media(max-width:48rem){.overlay{padding:0}.shell{border:0;border-radius:0}.topbar{padding:.75rem}.title-row{gap:.55rem}.title-row p{display:none}.workspace{grid-template-columns:1fr}.rail{max-height:11rem}.stage-list{display:flex;overflow:auto}.stage-list button{min-width:9rem}.mode-tabs{grid-template-columns:repeat(6,minmax(7rem,1fr))}.screen-toolbar{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}.screen-toolbar>span{display:block}.screen-toolbar>label{font-size:0}.screen-toolbar>label select{width:7rem;font-size:.7rem}.translation-panel,.language-project-fields,.language-row,.two-columns,.three-columns,.color-grid,.design-card.toggles,.scenario-header,.condition-row{grid-template-columns:1fr}.share-card{display:grid}.skin-grid{grid-template-columns:1fr}}
 </style>

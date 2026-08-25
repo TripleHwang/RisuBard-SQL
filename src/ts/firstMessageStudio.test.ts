@@ -5,6 +5,7 @@ import {
     createBlankStudioProject,
     createStudioRuntime,
     localizeStudioText,
+    matchesFirstMessageStudioScenario,
     normalizeFirstMessageStudioProject,
     resetStudioRuntime,
     resolveStudioLocale,
@@ -154,5 +155,90 @@ describe('first message studio engine', () => {
         expect(project.completionVariable).toBe('done')
         expect(project.startStageId).toBe(project.stages[0].id)
         expect(project.appearance).toMatchObject({ preset: 'glass', optionColumns: 3, cornerRadius: 32 })
+    })
+
+    it('normalizes opt-in hover presentations without treating asset names as local paths', () => {
+        const project = normalizeFirstMessageStudioProject({
+            enabled: true,
+            stages: [{
+                id: 'persona',
+                title: 'Persona',
+                description: 'Choose.',
+                optionPresentationEnabled: true,
+                options: [
+                    { id: 'farmer', label: 'Farmer', effects: [], presentation: {
+                        speaker: { ko: '농부' },
+                        description: { ko: '오늘도 밭에서 이삭을 줍습니다.' },
+                        imageEnabled: true,
+                        imageFrame: 'square',
+                        imagePositionX: 120,
+                        imagePositionY: -10,
+                        imageAssetName: '  farmer.webp  ',
+                    } },
+                    { id: 'warrior', label: 'Warrior', effects: [], presentation: {
+                        description: 'A sword inherited from your father.',
+                        imageEnabled: false,
+                        imageFrame: 'unsupported',
+                        imagePositionX: 'invalid',
+                        imageAssetName: '   ',
+                    } },
+                ],
+            }],
+        })
+
+        expect(project.stages[0].optionPresentationEnabled).toBe(true)
+        expect(project.stages[0].options[0].presentation).toMatchObject({
+            speaker: { ko: '농부' },
+            description: { ko: '오늘도 밭에서 이삭을 줍습니다.' },
+            imageEnabled: true,
+            imageFrame: 'square',
+            imagePositionX: 100,
+            imagePositionY: 0,
+            imageAssetName: 'farmer.webp',
+        })
+        expect(project.stages[0].options[1].presentation?.imageFrame).toBe('contain')
+        expect(project.stages[0].options[1].presentation).toMatchObject({ imagePositionX: 50, imagePositionY: 50 })
+        expect(project.stages[0].options[1].presentation?.imageAssetName).toBeUndefined()
+    })
+
+    it('normalizes scenario rules and matches AND groups containing OR conditions', () => {
+        const project = normalizeFirstMessageStudioProject({
+            enabled: true,
+            stages: [{ id: 'welcome', title: 'Welcome', description: '', options: [] }],
+            scenarioRules: [{
+                id: 'route-intro',
+                label: 'Route introduction',
+                message: { ko: '선택된 도입부', en: 'Selected intro' },
+                groups: [
+                    { id: 'start', conditions: [{ variable: '$start', operator: 'equals', value: '2' }] },
+                    { id: 'role', conditions: [
+                        { variable: 'protagonist', operator: 'equals', value: 'none' },
+                        { variable: 'role', operator: 'equals', value: 'leader' },
+                    ] },
+                    { id: 'mode', conditions: [{ variable: 'mode', operator: 'broken', value: 'canon' }] },
+                ],
+            }],
+        } as any)
+
+        expect(project.scenarioRules[0]).toMatchObject({
+            id: 'route-intro',
+            label: 'Route introduction',
+            message: { ko: '선택된 도입부', en: 'Selected intro' },
+            groups: [
+                { id: 'start', conditions: [{ variable: 'start', operator: 'equals', value: '2' }] },
+                { id: 'role' },
+                { id: 'mode', conditions: [{ variable: 'mode', operator: 'equals', value: 'canon' }] },
+            ],
+        })
+        expect(matchesFirstMessageStudioScenario(project.scenarioRules[0], {
+            start: '2', protagonist: 'yes', role: 'leader', mode: 'canon',
+        })).toBe(true)
+        expect(matchesFirstMessageStudioScenario(project.scenarioRules[0], {
+            start: '2', protagonist: 'yes', role: 'guest', mode: 'canon',
+        })).toBe(false)
+        project.scenarioRules[0].groups[2].conditions[0].operator = 'not-equals'
+        expect(matchesFirstMessageStudioScenario(project.scenarioRules[0], {
+            start: '2', protagonist: 'none', role: 'guest', mode: 'custom',
+        })).toBe(true)
     })
 })

@@ -8,9 +8,11 @@ import FirstMessageStudioEditor from './FirstMessageStudioEditor.svelte'
 
 const requestChatData = vi.hoisted(() => vi.fn())
 const downloadFile = vi.hoisted(() => vi.fn())
+const getFileSrc = vi.hoisted(() => vi.fn())
+const saveAsset = vi.hoisted(() => vi.fn())
 const selectFileByDom = vi.hoisted(() => vi.fn())
 vi.mock('src/ts/process/request/request', () => ({ requestChatData }))
-vi.mock('src/ts/globalApi.svelte', () => ({ downloadFile }))
+vi.mock('src/ts/globalApi.svelte', () => ({ downloadFile, getFileSrc, saveAsset }))
 vi.mock('src/ts/util', () => ({ selectFileByDom }))
 
 let mounted: ReturnType<typeof mount> | undefined
@@ -24,6 +26,8 @@ describe('FirstMessageStudioEditor', () => {
         localStorage.setItem('risu-lang', 'ko')
         requestChatData.mockReset()
         downloadFile.mockReset()
+        getFileSrc.mockReset()
+        saveAsset.mockReset()
         selectFileByDom.mockReset()
     })
 
@@ -42,15 +46,89 @@ describe('FirstMessageStudioEditor', () => {
 
         expect(document.body.textContent).toContain('퍼스트 메시지 스튜디오')
         expect(document.body.textContent).not.toContain('FIRST MESSAGE BUILDER')
-        expect(document.body.querySelector('[data-studio-title-row]')?.textContent).toContain('변수와 선택지를 연결하고')
-        expect(document.body.querySelector<HTMLLabelElement>('[data-studio-enabled-toggle]')?.textContent?.replace(/\s/g, '')).toBe('스튜디오사용')
+        const titleRow = document.body.querySelector('[data-studio-title-row]')
+        const enabledToggle = document.body.querySelector<HTMLLabelElement>('[data-studio-enabled-toggle]')
+        expect(titleRow?.textContent).toContain('누구나 쉽게 만드는 퍼스트 메시지')
+        expect(enabledToggle?.textContent?.replace(/\s/g, '')).toBe('스튜디오사용')
+        expect(titleRow?.contains(enabledToggle)).toBe(true)
+        expect(enabledToggle?.querySelector('[data-studio-enabled-track]')).not.toBeNull()
+        expect(document.body.querySelector('[data-studio-top-actions]')?.contains(enabledToggle)).toBe(false)
         expect(document.body.textContent).toContain('언어')
         expect(document.body.textContent).toContain('변수')
+        expect(document.body.textContent).toContain('시나리오')
         expect(document.body.textContent).toContain('창 디자인')
         expect(document.body.textContent).toContain('고급 코드')
         expect(document.body.textContent).toContain('공유')
         expect(document.body.querySelectorAll('[data-studio-editor-stage]')).toHaveLength(1)
         expect(document.body.textContent).toContain('첫 화면')
+    })
+
+    test('builds localized scenarios from AND groups containing OR conditions', async () => {
+        const character = blankCharacter()
+        const project = createBlankStudioProject()
+        project.stages[0].options = [{
+            id: 'route', label: 'Route', effects: [{ variable: 'route', value: 'calm' }], completes: true,
+        }]
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-scenarios-tab]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-scenario-settings]')).not.toBeNull())
+        document.body.querySelector<HTMLButtonElement>('[data-studio-add-scenario]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-scenario-rule]')).toHaveLength(1))
+
+        const label = document.body.querySelector<HTMLInputElement>('[data-studio-scenario-label]')!
+        label.value = 'Calm opening'
+        label.dispatchEvent(new Event('input', { bubbles: true }))
+        const variable = document.body.querySelector<HTMLInputElement>('[data-studio-scenario-variable]')!
+        expect([...document.body.querySelectorAll<HTMLOptionElement>('[data-studio-scenario-variables] option')].map((option) => option.value)).toContain('route')
+        variable.value = 'route'
+        variable.dispatchEvent(new Event('input', { bubbles: true }))
+        const value = document.body.querySelector<HTMLInputElement>('[data-studio-scenario-value]')!
+        value.value = 'calm'
+        value.dispatchEvent(new Event('input', { bubbles: true }))
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-add-condition]')!.click()
+        document.body.querySelector<HTMLButtonElement>('[data-studio-add-condition-group]')!.click()
+        await vi.waitFor(() => {
+            expect(document.body.querySelectorAll('[data-studio-scenario-group]')).toHaveLength(2)
+            expect(document.body.querySelectorAll('[data-studio-scenario-condition]')).toHaveLength(3)
+        })
+        const message = document.body.querySelector<HTMLTextAreaElement>('[data-studio-scenario-message]')!
+        message.value = '차분한 도입부'
+        message.dispatchEvent(new Event('input', { bubbles: true }))
+        document.body.querySelector<HTMLButtonElement>('[data-studio-save]')!.click()
+
+        await vi.waitFor(() => expect(character.firstMessageStudio?.scenarioRules).toHaveLength(1))
+        expect(character.firstMessageStudio?.scenarioRules[0]).toMatchObject({
+            label: 'Calm opening',
+            message: { ko: '차분한 도입부' },
+            groups: [{ conditions: [{ variable: 'route', operator: 'equals', value: 'calm' }, {}] }, { conditions: [{}] }],
+        })
+    })
+
+    test('reorders and deletes scenario rules', async () => {
+        const character = blankCharacter()
+        const project = createBlankStudioProject()
+        project.scenarioRules = [
+            { id: 'first', label: 'First', message: 'One', groups: [{ id: 'g1', conditions: [{ variable: 'route', operator: 'equals', value: '1' }] }] },
+            { id: 'second', label: 'Second', message: 'Two', groups: [{ id: 'g2', conditions: [{ variable: 'route', operator: 'equals', value: '2' }] }] },
+        ]
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-scenarios-tab]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-scenario-rule]')).toHaveLength(2))
+        document.body.querySelectorAll<HTMLButtonElement>('[data-studio-move-scenario-up]')[1].click()
+        await vi.waitFor(() => expect(document.body.querySelector<HTMLInputElement>('[data-studio-scenario-label]')?.value).toBe('Second'))
+        document.body.querySelectorAll<HTMLButtonElement>('[data-studio-delete-scenario]')[1].click()
+        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-scenario-rule]')).toHaveLength(1))
     })
 
     test('shows portable project controls on an isolated Share page', async () => {
@@ -86,6 +164,21 @@ describe('FirstMessageStudioEditor', () => {
         expect(character.firstMessage).toContain('Editable ending')
         expect(character.firstMessage).toContain('data-first-message-studio-compatible')
         expect(character.defaultVariables).toContain('first_message_studio_done=0')
+    })
+
+    test('recovers a legacy completion source when an existing Studio project has an empty fallback', async () => {
+        const character = blankCharacter()
+        character.firstMessage = 'Legacy Persona scenario source'
+        character.firstMessageStudio = createBlankStudioProject()
+        character.firstMessageStudio.fallbackMessage = ''
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-share-tab]')!.click()
+
+        await vi.waitFor(() => expect(document.body.querySelector<HTMLTextAreaElement>('[data-studio-fallback-message]')?.value).toBe('Legacy Persona scenario source'))
     })
 
     test('resets the current chat to the first Studio screen when project settings are saved', async () => {
@@ -131,7 +224,7 @@ describe('FirstMessageStudioEditor', () => {
         await vi.waitFor(() => expect(document.body.querySelector<HTMLInputElement>('[data-studio-stage-title]')?.value).toBe('가져온 화면'))
     })
 
-    test('registers a variable and its selectable values', async () => {
+    test('shows registered variables as compact rows with explanatory tooltips', async () => {
         const character = blankCharacter()
         mounted = mount(FirstMessageStudioEditor, {
             target: document.body,
@@ -146,12 +239,41 @@ describe('FirstMessageStudioEditor', () => {
         const name = document.body.querySelector<HTMLInputElement>('[data-studio-variable-name]')!
         name.value = 'route'
         name.dispatchEvent(new Event('input', { bubbles: true }))
-        document.body.querySelector<HTMLButtonElement>('[data-studio-add-variable-choice]')!.click()
-        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-variable-choice]')).toHaveLength(1))
+
+        expect(document.body.querySelector('[data-studio-add-variable-choice]')).toBeNull()
+        expect(document.body.querySelector('[data-studio-variable-choice]')).toBeNull()
+        expect(document.body.textContent).not.toContain('선택 가능한 값')
+        expect(document.body.querySelector('[data-studio-variable-name-label]')?.getAttribute('title')).toContain('조건식')
+        expect(document.body.querySelector('[data-studio-variable-label-label]')?.getAttribute('title')).toContain('화면')
+        expect(document.body.querySelector('[data-studio-variable-default-label]')?.getAttribute('title')).toContain('선택하기 전')
+        expect(document.body.querySelector('[data-studio-delete-variable]')?.getAttribute('title')).toContain('기본값')
 
         document.body.querySelector<HTMLButtonElement>('[data-studio-save]')!.click()
         await vi.waitFor(() => expect(character.firstMessageStudio?.variables[0].name).toBe('route'))
-        expect(character.firstMessageStudio?.variables[0].choices).toHaveLength(1)
+    })
+
+    test('reorders and deletes variables from the compact list', async () => {
+        const character = blankCharacter()
+        const project = createBlankStudioProject()
+        project.variables = [
+            { name: 'persona', label: '페르소나', defaultValue: '1', choices: [] },
+            { name: 'scenario', label: '시나리오', defaultValue: '2', choices: [] },
+        ]
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        document.body.querySelector<HTMLButtonElement>('[data-studio-variables-tab]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-variable]')).toHaveLength(2))
+        document.body.querySelectorAll<HTMLButtonElement>('[data-studio-move-variable-up]')[1].click()
+        await vi.waitFor(() => expect(document.body.querySelector<HTMLInputElement>('[data-studio-variable-name]')?.value).toBe('scenario'))
+        document.body.querySelectorAll<HTMLButtonElement>('[data-studio-delete-variable]')[1].click()
+        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-variable]')).toHaveLength(1))
+        document.body.querySelector<HTMLButtonElement>('[data-studio-save]')!.click()
+
+        await vi.waitFor(() => expect(character.firstMessageStudio?.variables.map((variable) => variable.name)).toEqual(['scenario']))
     })
 
     test('renames variable references already connected to choices', async () => {
@@ -196,6 +318,96 @@ describe('FirstMessageStudioEditor', () => {
         expect(character.firstMessageStudio?.stages[0].options).toHaveLength(1)
     })
 
+    test('edits option presentations in tabs and saves uploaded illustrations as character assets', async () => {
+        getFileSrc.mockResolvedValue('data:image/webp;base64,FARMER')
+        saveAsset.mockResolvedValue('assets/farmer-hash.webp')
+        selectFileByDom.mockResolvedValue([new File(['farmer-image'], 'farmer.webp', { type: 'image/webp' })])
+        const character = blankCharacter()
+        const project = createBlankStudioProject()
+        project.stages[0].title = 'Persona selection'
+        project.stages[0].options = [
+            { id: 'farmer', label: 'Farmer', effects: [] },
+            { id: 'warrior', label: 'Warrior', effects: [] },
+        ]
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        expect(document.body.querySelector('[data-studio-option-presentation-editor]')).toBeNull()
+        document.body.querySelector<HTMLInputElement>('[data-studio-option-presentation-toggle]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelectorAll('[data-studio-presentation-tab]')).toHaveLength(2))
+        expect(document.body.querySelector('[data-studio-presentation-tab="farmer"]')?.classList.contains('active')).toBe(true)
+
+        const speaker = document.body.querySelector<HTMLInputElement>('[data-studio-presentation-speaker]')!
+        speaker.value = '농부'
+        speaker.dispatchEvent(new Event('input', { bubbles: true }))
+        const description = document.body.querySelector<HTMLTextAreaElement>('[data-studio-presentation-description]')!
+        description.value = '오늘도 당신은 밭에서 이삭을 줍습니다.'
+        description.dispatchEvent(new Event('input', { bubbles: true }))
+        document.body.querySelector<HTMLInputElement>('[data-studio-presentation-image-toggle]')!.click()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-upload-presentation-image]')).not.toBeNull())
+        const frameSelect = document.body.querySelector<HTMLSelectElement>('[data-studio-presentation-image-frame]')!
+        expect([...frameSelect.options].map((option) => option.value)).toEqual(['contain', 'square', 'landscape', 'portrait'])
+        frameSelect.value = 'landscape'
+        frameSelect.dispatchEvent(new Event('change', { bubbles: true }))
+        document.body.querySelector<HTMLButtonElement>('[data-studio-upload-presentation-image]')!.click()
+
+        await vi.waitFor(() => expect(saveAsset).toHaveBeenCalledOnce())
+        expect(character.additionalAssets).toEqual([['fmstudio-welcome-farmer-farmer.webp', 'assets/farmer-hash.webp', 'webp']])
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-presentation-asset-name]')?.textContent).toContain('farmer.webp'))
+        await vi.waitFor(() => expect(document.body.querySelector('[data-studio-image-crop-editor]')).not.toBeNull())
+        expect(document.body.querySelector('[data-studio-image-crop-guide]')).not.toBeNull()
+        const cropFrame = document.body.querySelector<HTMLElement>('[data-studio-image-crop-frame]')!
+        cropFrame.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100, toJSON: () => ({}) })
+        cropFrame.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100, clientY: 50 }))
+        cropFrame.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 75 }))
+        cropFrame.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 100, clientY: 75 }))
+        document.body.querySelector<HTMLButtonElement>('[data-studio-save]')!.click()
+
+        await vi.waitFor(() => expect(character.firstMessageStudio?.stages[0].optionPresentationEnabled).toBe(true))
+        expect(character.firstMessageStudio?.stages[0].options[0].presentation).toMatchObject({
+            speaker: { ko: '농부' },
+            description: { ko: '오늘도 당신은 밭에서 이삭을 줍습니다.' },
+            imageEnabled: true,
+            imageFrame: 'landscape',
+            imagePositionX: 50,
+            imagePositionY: 25,
+            imageAssetName: 'fmstudio-welcome-farmer-farmer.webp',
+        })
+    })
+
+    test('applies dragged crop positions to the live preview immediately', async () => {
+        getFileSrc.mockResolvedValue('data:image/webp;base64,FARMER')
+        const character = blankCharacter()
+        character.additionalAssets = [['farmer.webp', 'assets/farmer.webp', 'webp']]
+        const project = createBlankStudioProject()
+        project.stages[0].optionPresentationEnabled = true
+        project.stages[0].options = [{
+            id: 'farmer', label: 'Farmer', effects: [], presentation: {
+                speaker: 'Farmer', description: 'A farmer.', imageEnabled: true,
+                imageFrame: 'landscape', imagePositionX: 50, imagePositionY: 50,
+                imageAssetName: 'farmer.webp',
+            },
+        }]
+        character.firstMessageStudio = project
+        mounted = mount(FirstMessageStudioEditor, {
+            target: document.body,
+            props: { character, onClose: vi.fn() },
+        })
+
+        await vi.waitFor(() => expect(document.body.querySelector<HTMLImageElement>('[data-studio-presentation-image]')?.style.objectPosition).toBe('50% 50%'))
+        const cropFrame = document.body.querySelector<HTMLElement>('[data-studio-image-crop-frame]')!
+        cropFrame.getBoundingClientRect = () => ({ x: 0, y: 0, left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100, toJSON: () => ({}) })
+        cropFrame.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100, clientY: 50 }))
+        cropFrame.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 100, clientY: 75 }))
+        cropFrame.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 100, clientY: 75 }))
+
+        await vi.waitFor(() => expect(document.body.querySelector<HTMLImageElement>('[data-studio-presentation-image]')?.style.objectPosition).toBe('50% 25%'))
+        expect(document.body.querySelector<HTMLImageElement>('[data-studio-presentation-image]')?.style.getPropertyPriority('object-position')).toBe('important')
+    })
+
     test('uses the global app language without a separate language row', async () => {
         localStorage.setItem('risu-lang', 'en')
         mounted = mount(FirstMessageStudioEditor, {
@@ -221,6 +433,7 @@ describe('FirstMessageStudioEditor', () => {
             tag: { ko: '둘', ja: '二', en: 'TWO' },
             title: { ko: '두 번째 화면', ja: '二番目', en: 'Second screen' },
             description: { ko: '편집할 화면', ja: '編集画面', en: 'Edit this screen' },
+            optionPresentationEnabled: false,
             options: [],
         })
         character.firstMessageStudio = project

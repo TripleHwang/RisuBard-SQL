@@ -41,6 +41,26 @@ export interface FirstMessageStudioLocalization {
     languages: FirstMessageStudioLanguage[]
 }
 
+export type FirstMessageStudioScenarioOperator = 'equals' | 'not-equals'
+
+export interface FirstMessageStudioScenarioCondition {
+    variable: string
+    operator: FirstMessageStudioScenarioOperator
+    value: string
+}
+
+export interface FirstMessageStudioScenarioGroup {
+    id: string
+    conditions: FirstMessageStudioScenarioCondition[]
+}
+
+export interface FirstMessageStudioScenarioRule {
+    id: string
+    label: string
+    message: FirstMessageStudioText
+    groups: FirstMessageStudioScenarioGroup[]
+}
+
 export interface FirstMessageStudioEffect {
     variable: string
     value: FirstMessageStudioText
@@ -54,6 +74,18 @@ export interface FirstMessageStudioInput {
     displayVariable?: string
 }
 
+export type FirstMessageStudioImageFrame = 'contain' | 'square' | 'landscape' | 'portrait'
+
+export interface FirstMessageStudioOptionPresentation {
+    speaker?: FirstMessageStudioText
+    description: FirstMessageStudioText
+    imageEnabled: boolean
+    imageFrame: FirstMessageStudioImageFrame
+    imagePositionX: number
+    imagePositionY: number
+    imageAssetName?: string
+}
+
 export interface FirstMessageStudioOption {
     id: string
     label: FirstMessageStudioText
@@ -62,6 +94,7 @@ export interface FirstMessageStudioOption {
     effects: FirstMessageStudioEffect[]
     nextStageId?: string
     input?: FirstMessageStudioInput
+    presentation?: FirstMessageStudioOptionPresentation
     completes?: boolean
 }
 
@@ -71,6 +104,7 @@ export interface FirstMessageStudioStage {
     title: FirstMessageStudioText
     speaker?: FirstMessageStudioText
     description: FirstMessageStudioText
+    optionPresentationEnabled: boolean
     options: FirstMessageStudioOption[]
 }
 
@@ -84,6 +118,7 @@ export interface FirstMessageStudioProject {
     stageVariable?: string
     startStageId: string
     localization: FirstMessageStudioLocalization
+    scenarioRules: FirstMessageStudioScenarioRule[]
     variables: FirstMessageStudioVariable[]
     stages: FirstMessageStudioStage[]
     appearance: FirstMessageStudioAppearance
@@ -227,6 +262,16 @@ function normalizeText(value: unknown, fallback = ''): FirstMessageStudioText {
     return fallback
 }
 
+function normalizeImageFrame(value: unknown): FirstMessageStudioImageFrame {
+    return value === 'square' || value === 'landscape' || value === 'portrait' ? value : 'contain'
+}
+
+function normalizeImagePosition(value: unknown): number {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return 50
+    return Math.round(Math.min(100, Math.max(0, numeric)) * 100) / 100
+}
+
 function normalizeLocalization(value: unknown): FirstMessageStudioLocalization {
     const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
     const candidates = Array.isArray(raw.languages) && raw.languages.length > 0 ? raw.languages : legacyLanguages()
@@ -250,6 +295,57 @@ function normalizeLocalization(value: unknown): FirstMessageStudioLocalization {
     }
 }
 
+function normalizeScenarioRules(value: unknown): FirstMessageStudioScenarioRule[] {
+    if (!Array.isArray(value)) return []
+    const usedRuleIds = new Set<string>()
+    return value.map((entry, ruleIndex) => {
+        const source = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {}
+        let id = cleanId(source.id, `scenario-${ruleIndex + 1}`)
+        while (usedRuleIds.has(id)) id = `${id}-${ruleIndex + 1}`
+        usedRuleIds.add(id)
+        const usedGroupIds = new Set<string>()
+        const groups: FirstMessageStudioScenarioGroup[] = Array.isArray(source.groups)
+            ? source.groups.map((groupEntry, groupIndex) => {
+                const groupSource = groupEntry && typeof groupEntry === 'object' ? groupEntry as Record<string, unknown> : {}
+                let groupId = cleanId(groupSource.id, `group-${groupIndex + 1}`)
+                while (usedGroupIds.has(groupId)) groupId = `${groupId}-${groupIndex + 1}`
+                usedGroupIds.add(groupId)
+                const conditions: FirstMessageStudioScenarioCondition[] = Array.isArray(groupSource.conditions)
+                    ? groupSource.conditions.flatMap((conditionEntry) => {
+                        const condition = conditionEntry && typeof conditionEntry === 'object' ? conditionEntry as Record<string, unknown> : {}
+                        const variable = cleanVariable(condition.variable)
+                        if (!variable) return []
+                        return [{
+                            variable,
+                            operator: condition.operator === 'not-equals' ? 'not-equals' : 'equals',
+                            value: String(condition.value ?? ''),
+                        } satisfies FirstMessageStudioScenarioCondition]
+                    })
+                    : []
+                return { id: groupId, conditions }
+            })
+            : []
+        return {
+            id,
+            label: String(source.label ?? `Scenario ${ruleIndex + 1}`).trim() || `Scenario ${ruleIndex + 1}`,
+            message: normalizeText(source.message),
+            groups,
+        }
+    })
+}
+
+export function matchesFirstMessageStudioScenario(
+    rule: FirstMessageStudioScenarioRule,
+    variables: Record<string, string>,
+): boolean {
+    return rule.groups.length > 0 && rule.groups.every((group) => (
+        group.conditions.length > 0 && group.conditions.some((condition) => {
+            const equal = (variables[cleanVariable(condition.variable)] ?? '') === condition.value
+            return condition.operator === 'not-equals' ? !equal : equal
+        })
+    ))
+}
+
 export function normalizeFirstMessageStudioProject(value: unknown): FirstMessageStudioProject {
     const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
     const rawStages = Array.isArray(raw.stages) && raw.stages.length > 0 ? raw.stages : [{
@@ -268,6 +364,7 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
         const options = Array.isArray(source.options) ? source.options.map((optionEntry, optionIndex) => {
             const option = optionEntry && typeof optionEntry === 'object' ? optionEntry as Record<string, unknown> : {}
             const inputSource = option.input && typeof option.input === 'object' ? option.input as Record<string, unknown> : undefined
+            const presentationSource = option.presentation && typeof option.presentation === 'object' ? option.presentation as Record<string, unknown> : undefined
             const effects = Array.isArray(option.effects) ? option.effects.flatMap((effectEntry) => {
                 const effect = effectEntry && typeof effectEntry === 'object' ? effectEntry as Record<string, unknown> : {}
                 const variable = cleanVariable(effect.variable)
@@ -287,6 +384,15 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
                     required: Boolean(inputSource.required),
                     displayVariable: inputSource.displayVariable ? cleanVariable(inputSource.displayVariable) : undefined,
                 } : undefined,
+                presentation: presentationSource ? {
+                    speaker: presentationSource.speaker === undefined ? undefined : normalizeText(presentationSource.speaker),
+                    description: normalizeText(presentationSource.description),
+                    imageEnabled: Boolean(presentationSource.imageEnabled),
+                    imageFrame: normalizeImageFrame(presentationSource.imageFrame),
+                    imagePositionX: normalizeImagePosition(presentationSource.imagePositionX),
+                    imagePositionY: normalizeImagePosition(presentationSource.imagePositionY),
+                    imageAssetName: String(presentationSource.imageAssetName ?? '').trim() || undefined,
+                } : undefined,
                 completes: Boolean(option.completes),
             } satisfies FirstMessageStudioOption
         }) : []
@@ -296,6 +402,7 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
             title: normalizeText(source.title, `Stage ${stageIndex + 1}`),
             speaker: source.speaker === undefined ? undefined : normalizeText(source.speaker),
             description: normalizeText(source.description),
+            optionPresentationEnabled: Boolean(source.optionPresentationEnabled),
             options,
         }
     })
@@ -328,6 +435,7 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
         stageVariable: raw.stageVariable ? cleanVariable(raw.stageVariable) : undefined,
         startStageId: stages.some((stage) => stage.id === requestedStart) ? requestedStart : stages[0].id,
         localization: normalizeLocalization(raw.localization),
+        scenarioRules: normalizeScenarioRules(raw.scenarioRules),
         variables,
         stages,
         appearance: normalizeAppearance(raw.appearance),
@@ -350,6 +458,7 @@ export function createBlankStudioProject(): FirstMessageStudioProject {
             defaultLanguage: 'ko',
             languages: legacyLanguages(),
         },
+        scenarioRules: [],
         variables: [],
         appearance: createStudioAppearance('minimal'),
         customCss: '',

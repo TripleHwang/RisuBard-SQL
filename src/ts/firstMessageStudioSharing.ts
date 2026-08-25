@@ -72,14 +72,47 @@ function compileOptions(project: FirstMessageStudioProject, stage: FirstMessageS
     return stage.options.map((option) => {
         const badge = option.badge ? `<small>${cbsValue(option.badge, project, true)}</small>` : ''
         const description = option.description ? `<span>${cbsValue(option.description, project, true)}</span>` : ''
-        return `<button type="button" risu-trigger="${escapeHtml(triggerName(stage.id, option.id))}"><strong>${cbsValue(option.label, project, true)}</strong>${description}${badge}</button>`
+        return `<button class="fms-option" type="button" risu-trigger="${escapeHtml(triggerName(stage.id, option.id))}"><strong>${cbsValue(option.label, project, true)}</strong>${description}${badge}</button>`
     }).join('')
 }
 
-function compileStage(project: FirstMessageStudioProject, stage: FirstMessageStudioProject['stages'][number]): string {
+function compilePresentations(project: FirstMessageStudioProject, stage: FirstMessageStudioProject['stages'][number], stageIndex: number): string {
+    if (!stage.optionPresentationEnabled || stage.options.length === 0) return ''
+    const presentations = stage.options.map((option, optionIndex) => {
+        const presentation = option.presentation
+        const speaker = presentation?.speaker ? `<b>${cbsValue(presentation.speaker, project, true)}</b>` : ''
+        const description = presentation ? cbsValue(presentation.description, project, true) : ''
+        const assetName = presentation?.imageEnabled
+            ? (presentation.imageAssetName ?? '').replace(/[{}]/g, '')
+            : ''
+        const positionClass = `fms-presentation-position-${stageIndex}-${optionIndex}`
+        const imageStyle = presentation?.imageFrame === 'contain'
+            ? 'width:auto!important;height:auto!important;max-width:100%!important;max-height:17rem!important;margin:0!important;object-fit:contain!important;object-position:50% 50%!important'
+            : `width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;object-fit:cover!important;object-position:${presentation?.imagePositionX ?? 50}% ${presentation?.imagePositionY ?? 50}%!important`
+        const image = assetName
+            ? `<div class="fms-presentation-image-frame frame-${presentation?.imageFrame ?? 'contain'} ${positionClass}"><img src="{{raw::${escapeHtml(assetName)}}}" alt="${cbsValue(option.label, project, true)}" style="${imageStyle}"></div>`
+            : ''
+        return `<div class="fms-presentation${image ? ' with-image' : ''}">${image}<div class="fms-presentation-copy">${speaker}<p>${description}</p></div></div>`
+    }).join('')
+    const stageClass = `.fms-stage-${stageIndex}`
+    const interactionCss = stage.options.slice(1).map((_, offset) => {
+        const optionIndex = offset + 2
+        return `${stageClass}:has(.fms-option:nth-child(${optionIndex}):hover) .fms-presentation{display:none}${stageClass}:has(.fms-option:nth-child(${optionIndex}):hover) .fms-presentation:nth-child(${optionIndex}){display:grid}${stageClass}:has(.fms-option:nth-child(${optionIndex}):focus-visible) .fms-presentation{display:none}${stageClass}:has(.fms-option:nth-child(${optionIndex}):focus-visible) .fms-presentation:nth-child(${optionIndex}){display:grid}`
+    }).join('')
+    const positionCss = stage.options.map((option, optionIndex) => {
+        const presentation = option.presentation
+        return `.fms-presentation-position-${stageIndex}-${optionIndex} img{object-position:${presentation?.imagePositionX ?? 50}% ${presentation?.imagePositionY ?? 50}%!important}`
+    }).join('')
+    return `<style>[data-first-message-studio-compatible] .fms-presentations{margin:.8rem 0}[data-first-message-studio-compatible] .fms-presentation{display:none;gap:.65rem}[data-first-message-studio-compatible] .fms-presentation:first-child{display:grid}[data-first-message-studio-compatible] .fms-presentation-image-frame{display:grid;width:100%;place-items:center;overflow:hidden;margin-inline:auto;border:1px solid color-mix(in srgb,${project.appearance.accentColor} 30%,transparent);border-radius:${Math.max(4, Math.round(project.appearance.cornerRadius * .55))}px;background:color-mix(in srgb,${project.appearance.backgroundColor} 62%,${project.appearance.surfaceColor})}[data-first-message-studio-compatible] .fms-presentation-image-frame.frame-contain{max-height:18rem;padding:.5rem}[data-first-message-studio-compatible] .fms-presentation-image-frame.frame-square{width:min(100%,20rem);aspect-ratio:1}[data-first-message-studio-compatible] .fms-presentation-image-frame.frame-landscape{aspect-ratio:16/9}[data-first-message-studio-compatible] .fms-presentation-image-frame.frame-portrait{width:min(100%,18rem);aspect-ratio:3/4}[data-first-message-studio-compatible] .fms-presentation-image-frame.frame-contain img{display:block;width:auto;height:auto;max-width:100%;max-height:17rem;object-fit:contain;object-position:center}[data-first-message-studio-compatible] .fms-presentation-image-frame:not(.frame-contain) img{width:100%;height:100%;object-fit:cover;object-position:center}[data-first-message-studio-compatible] .fms-presentation-copy{display:grid;align-content:center;gap:.42rem;padding:.75rem;border-left:3px solid ${project.appearance.accentColor};border-radius:${Math.max(3, Math.round(project.appearance.cornerRadius * .25))}px;background:color-mix(in srgb,${project.appearance.accentColor} 7%,transparent)}[data-first-message-studio-compatible] .fms-presentation-copy b{color:${project.appearance.accentColor};font-size:.7rem;letter-spacing:.06em}[data-first-message-studio-compatible] .fms-presentation-copy p{font-size:.84rem;line-height:1.6}${positionCss}${interactionCss}</style><div class="fms-presentations">${presentations}</div>`
+}
+
+function compileStage(project: FirstMessageStudioProject, stage: FirstMessageStudioProject['stages'][number], stageIndex: number): string {
     const stageVariable = compatibilityStageVariable(project)
     const speaker = stage.speaker ? `<b>${cbsValue(stage.speaker, project, true)}</b>` : ''
-    return `{{#if {{equal::{{getvar::${stageVariable}}}::${stage.id}}}}}<section class="fms-stage"><div class="fms-stage-heading"><small>${cbsValue(stage.tag, project, true)}</small><h2>${cbsValue(stage.title, project, true)}</h2></div><div class="fms-description">${speaker}<p>${cbsValue(stage.description, project, true)}</p></div><div class="fms-options">${compileOptions(project, stage)}</div></section>{{/if}}`
+    const description = stage.optionPresentationEnabled
+        ? compilePresentations(project, stage, stageIndex)
+        : `<div class="fms-description">${speaker}<p>${cbsValue(stage.description, project, true)}</p></div>`
+    return `{{#if {{equal::{{getvar::${stageVariable}}}::${stage.id}}}}}<section class="fms-stage fms-stage-${stageIndex}"><div class="fms-stage-heading"><small>${cbsValue(stage.tag, project, true)}</small><h2>${cbsValue(stage.title, project, true)}</h2></div>${description}<div class="fms-options">${compileOptions(project, stage)}</div></section>{{/if}}`
 }
 
 function compileProgress(project: FirstMessageStudioProject): string {
@@ -105,6 +138,45 @@ function compileExtraHtml(project: FirstMessageStudioProject): string {
     return project.customHtml.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, '{{getvar::$1}}')
 }
 
+function combineCbs(name: 'and' | 'or', expressions: string[]): string {
+    if (expressions.length === 0) return '0'
+    return expressions.slice(1).reduce((combined, expression) => `{{${name}::${combined}::${expression}}}`, expressions[0])
+}
+
+function compileScenarioCondition(project: FirstMessageStudioProject, rule: FirstMessageStudioProject['scenarioRules'][number]): string {
+    const groups = rule.groups.flatMap((group) => {
+        const conditions = group.conditions.map((condition) => {
+            const operation = condition.operator === 'not-equals' ? 'notequal' : 'equal'
+            return `{{${operation}::{{getvar::${condition.variable}}}::${condition.value}}}`
+        })
+        return conditions.length > 0 ? [combineCbs('or', conditions)] : []
+    })
+    return groups.length === rule.groups.length && groups.length > 0 ? combineCbs('and', groups) : '0'
+}
+
+function compileCompletionMessage(project: FirstMessageStudioProject): string {
+    const rules = project.scenarioRules.flatMap((rule) => {
+        const condition = compileScenarioCondition(project, rule)
+        return condition === '0' ? [] : [{ rule, condition }]
+    })
+    if (rules.length === 0) return project.fallbackMessage
+    const previousConditions: string[] = []
+    const scenarios = rules.map(({ rule, condition }) => {
+        const firstMatchCondition = previousConditions.length === 0
+            ? condition
+            : combineCbs('and', [condition, ...previousConditions.map((previous) => `{{notequal::${previous}::1}}`)])
+        previousConditions.push(condition)
+        return `{{#if ${firstMatchCondition}}}${cbsValue(rule.message, project)}{{/if}}`
+    }).join('')
+    const anyScenario = combineCbs('or', rules.map(({ condition }) => condition))
+    const fallback = `{{#if {{notequal::${anyScenario}::1}}}}${project.fallbackMessage}{{/if}}`
+    return `${scenarios}${fallback}`
+}
+
+export function isFirstMessageStudioCompatibilityMessage(value: string): boolean {
+    return value.includes(`<!-- ${PROJECT_TYPE} -->`)
+}
+
 export function compileFirstMessageStudioCompatibility(projectValue: FirstMessageStudioProject): FirstMessageStudioCompatibilityResult {
     const project = normalizeFirstMessageStudioProject(projectValue)
     const header = project.appearance.showHeader || project.appearance.showProgress
@@ -113,8 +185,8 @@ export function compileFirstMessageStudioCompatibility(projectValue: FirstMessag
     const actions = project.appearance.showNavigation
         ? `<footer class="fms-window-actions"><button type="button" risu-trigger="${TRIGGER_PREFIX}reset">${cbsValue({ ko: '처음부터', ja: '最初から', en: 'Reset' }, project, true)}</button></footer>`
         : ''
-    const selector = `${compileCss(project)}<div data-first-message-studio-compatible>${header}<div class="fms-window-body">${compileExtraHtml(project)}${project.stages.map((stage) => compileStage(project, stage)).join('')}</div>${actions}</div>`
-    const firstMessage = `<!-- ${PROJECT_TYPE} -->\n{{#if {{notequal::{{getvar::${project.completionVariable}}}::1}}}}${selector}{{/if}}\n{{#if {{equal::{{getvar::${project.completionVariable}}}::1}}}}${project.fallbackMessage}{{/if}}`
+    const selector = `${compileCss(project)}<div data-first-message-studio-compatible>${header}<div class="fms-window-body">${compileExtraHtml(project)}${project.stages.map((stage, index) => compileStage(project, stage, index)).join('')}</div>${actions}</div>`
+    const firstMessage = `<!-- ${PROJECT_TYPE} -->\n{{#if {{notequal::{{getvar::${project.completionVariable}}}::1}}}}${selector}{{/if}}\n{{#if {{equal::{{getvar::${project.completionVariable}}}::1}}}}${compileCompletionMessage(project)}{{/if}}`
     const defaults = [
         `${project.completionVariable}=0`,
         `${compatibilityStageVariable(project)}=${project.startStageId}`,
