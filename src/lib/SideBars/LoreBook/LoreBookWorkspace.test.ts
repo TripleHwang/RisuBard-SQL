@@ -169,11 +169,6 @@ beforeEach(() => {
 afterEach(async () => {
     if (mounted) await unmount(mounted)
     mounted = undefined
-    // bits-ui intentionally restores the body scroll lock on a 24 ms timer.
-    // Let that teardown finish while happy-dom still owns `document`; otherwise
-    // the final dialog test can leave the callback running after the environment
-    // has been disposed, which fails the otherwise-green Vitest run on CI.
-    await new Promise<void>((resolveWait) => window.setTimeout(resolveWait, 30))
     document.body.replaceChildren()
     vi.clearAllMocks()
     sortableMock.options = undefined
