@@ -241,6 +241,12 @@ export class NodeStorage{
         return response
     }
 
+    /** Authenticated transport for standalone server-owned subsystems such as
+     * the canonical relational SQLite backend. */
+    async authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+        return await this.authFetch(input, init)
+    }
+
     async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
         const headers: Record<string, string> = {
             'content-type': 'application/octet-stream',

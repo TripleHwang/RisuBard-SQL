@@ -1,4 +1,5 @@
 import { safeStructuredClone } from "../../polyfill";
+import { isNodeServer } from "../../platform";
 import type { Database } from "../database.svelte";
 import type { ISqlStorage } from "./ISqlStorage";
 import { buildSqlDeltaCommit } from "./sqlDelta";
@@ -75,6 +76,21 @@ let activeSqlBaseline: Database | null = null;
 let sqlCommitChain: Promise<void> = Promise.resolve();
 let pendingSqlStorage: ISqlStorage | null = null;
 
+async function createDefaultSqlStorage(): Promise<ISqlStorage> {
+  if (!isNodeServer) return new WebSqliteStorage();
+
+  // Keep this dynamic: globalApi constructs AutoStorage, while SQL bootstrap is
+  // itself imported by database boot. A static dependency would form a cycle.
+  const [{ forageStorage }, { NodeSqliteStorage }] = await Promise.all([
+    import("../../globalApi.svelte"),
+    import("./nodeSqliteStorage"),
+  ]);
+  await forageStorage.Init();
+  return new NodeSqliteStorage((input, init) =>
+    forageStorage.realStorage.authenticatedFetch(input, init),
+  );
+}
+
 function activateSqlStorage(storage: ISqlStorage, database: Database): void {
   activeSqlStorage = storage;
   activeSqlBaseline = safeStructuredClone(database);
@@ -83,9 +99,10 @@ function activateSqlStorage(storage: ISqlStorage, database: Database): void {
 
 /** Open an already-migrated SQL graph before touching its legacy projection. */
 export async function openExistingStandaloneSql(
-  storage: ISqlStorage = new WebSqliteStorage(),
+  storage?: ISqlStorage,
 ): Promise<SqlBootstrapResult | null> {
   try {
+    storage ??= await createDefaultSqlStorage();
     if (!(await storage.init())) return null;
     const loaded = await storage.loadDatabase({ shallow: false });
     if (loaded?.status === "ready" && loaded.database) {
@@ -112,7 +129,7 @@ export async function openStandaloneSql(
   options?: SqlBootstrapOptions,
 ): Promise<SqlBootstrapResult> {
   const result = await selectCanonicalDatabase(
-    pendingSqlStorage ?? new WebSqliteStorage(),
+    pendingSqlStorage ?? await createDefaultSqlStorage(),
     legacyDatabase,
     options,
   );
