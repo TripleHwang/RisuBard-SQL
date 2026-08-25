@@ -7,13 +7,16 @@ import {
 } from './novelAIImage'
 
 describe('NovelAI Diffusion V5 image support', () => {
-    test('lists the V5 Full production model first', () => {
+    test('lists both V5 production models first', () => {
         expect(NOVEL_AI_IMAGE_MODELS[0]).toBe('nai-diffusion-5-full')
+        expect(NOVEL_AI_IMAGE_MODELS[1]).toBe('nai-diffusion-5-curated')
     })
 
     test('disables unsupported V5 settings without changing V4.5 capabilities', () => {
         expect(supportsNovelAIImageNoiseSchedule('nai-diffusion-5-full')).toBe(false)
         expect(supportsNovelAIImageVibeTransfer('nai-diffusion-5-full')).toBe(false)
+        expect(supportsNovelAIImageNoiseSchedule('nai-diffusion-5-curated')).toBe(false)
+        expect(supportsNovelAIImageVibeTransfer('nai-diffusion-5-curated')).toBe(false)
         expect(supportsNovelAIImageNoiseSchedule('nai-diffusion-4-5-full')).toBe(true)
         expect(supportsNovelAIImageVibeTransfer('nai-diffusion-4-5-full')).toBe(true)
     })

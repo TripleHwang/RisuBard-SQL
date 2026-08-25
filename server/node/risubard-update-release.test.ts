@@ -32,12 +32,18 @@ describe('standalone release updater target', () => {
         const sourceUpdater = readFileSync(sourceUpdaterSource, 'utf8')
 
         expect(server).toContain('RISU_UPDATE_REPOSITORY')
-        expect(server).toContain(
-            'https://api.github.com/repos/${GITHUB_REPO}/releases/latest'
-        )
-    expect(server).toContain("'RisuVault'")
+        expect(server).toContain("require('./update-manifest.cjs')")
+        expect(server).toContain('getValidatedReleaseArtifact')
+        expect(server).toContain('selfUpdateArtifact')
+        expect(server).toContain('Downloaded update hash does not match the verified manifest')
+        expect(server).toContain('data.manualOnly = !artifact')
+        expect(server).toContain("UPDATE_CHANNEL === 'stable' ? '/latest' : '?per_page=20'")
+        expect(server).toContain("getCurrentVersion().includes('-') ? 'beta' : 'stable'")
+        expect(server).toContain("'TripleHwang/RisuVault'")
         expect(updater).toContain('RISU_UPDATE_REPOSITORY')
-    expect(updater).toContain("'RisuVault'")
+        expect(updater).toContain("require('../server/node/update-manifest.cjs')")
+        expect(updater).toContain('Downloaded package SHA-256')
+        expect(updater).toContain("'TripleHwang/RisuVault'")
         expect(sourceUpdater).toContain('RISU_UPDATE_REPOSITORY')
         expect(server).not.toContain("const GITHUB_REPO = 'rpaddict/RisuBard';")
         expect(updater).not.toContain("const REPO = 'rpaddict/RisuBard';")

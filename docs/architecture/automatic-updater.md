@@ -19,6 +19,12 @@ Portable artifacts use `RisuVault` by default:
 
 Set `RISU_RELEASE_ARTIFACT_PREFIX` only when the server, updater, and release workflow are configured to use the same value. The release workflow produces a draft release and requires a tag exactly matching `v` plus `package.json`'s version.
 
+Every self-updatable release must also contain `update-manifest.json`. The release workflow generates it after packaging and records the exact product ID (`risuvault`), channel, version, platform, architecture, byte size, GitHub Release URL, and SHA-256 for each portable archive. A release without this manifest remains visible in the app, but can only be installed manually.
+
+The server and bundled updater fail closed. They reject another product or repository, a downgrade, a mismatched tag/channel/platform/architecture, non-HTTPS artifact URLs, oversized or truncated downloads, and a SHA-256 mismatch. HaejeokRisuAI release packages are source references only and are never installed over RisuVault.
+
+Users can run a manual check from **Settings → System → Updates**. Portable builds can then back up and apply the verified package from the existing update dialog; Git, Docker, and unknown deployments receive the release link instead.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -27,6 +33,9 @@ Set `RISU_RELEASE_ARTIFACT_PREFIX` only when the server, updater, and release wo
 | `RISU_UPDATE_REPOSITORY` | Overrides the default `TripleHwang/RisuVault` release repository. |
 | `RISU_UPDATE_URL` | Overrides the release-check API with a GitHub Release-compatible endpoint. |
 | `RISU_RELEASE_ARTIFACT_PREFIX` | Overrides the portable artifact prefix; defaults to `RisuVault`. |
+| `RISU_UPDATE_PRODUCT_ID` | Overrides the manifest product ID expected by a downstream distribution. |
+| `RISU_UPDATE_CHANNEL` | Selects `stable` or `beta`; defaults from the installed version (`beta` for prereleases). |
+| `RISU_UPDATE_MANIFEST_ASSET` | Overrides the manifest asset name; defaults to `update-manifest.json`. |
 
 ## Release-owner responsibilities
 

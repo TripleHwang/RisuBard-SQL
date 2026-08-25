@@ -18,8 +18,12 @@ const stateFile = path.join(logRoot, 'state.json');
 const writeLockFile = path.join(logRoot, '.write.lock');
 const LOCK_WAIT_MS = 5;
 const LOCK_TIMEOUT_MS = 5000;
-const LOCK_OWNER_GRACE_MS = 100;
+// Process startup can exceed 100 ms under Windows CI load. A blank lock is the
+// tiny interval between O_EXCL creation and recording its owner, so give that
+// state enough time before treating it as abandoned.
+const LOCK_OWNER_GRACE_MS = 1000;
 const LOCK_STALE_MS = 30000;
+const LOCK_UNLINK_TIMEOUT_MS = 1000;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
 fs.mkdirSync(logRoot, { recursive: true });
 
@@ -33,6 +37,21 @@ function processIsAlive(pid) {
     }
 }
 
+function unlinkWriteLockWithRetry() {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < LOCK_UNLINK_TIMEOUT_MS) {
+        try {
+            fs.unlinkSync(writeLockFile);
+            return true;
+        } catch (error) {
+            if (error?.code === 'ENOENT') return true;
+            if (!['EPERM', 'EACCES', 'EBUSY'].includes(error?.code)) return false;
+            Atomics.wait(lockWaitBuffer, 0, 0, LOCK_WAIT_MS);
+        }
+    }
+    return false;
+}
+
 function removeStaleWriteLock() {
     try {
         const stat = fs.statSync(writeLockFile);
@@ -40,8 +59,7 @@ function removeStaleWriteLock() {
         const age = Date.now() - stat.mtimeMs;
         if (!Number.isInteger(pid) && age < LOCK_OWNER_GRACE_MS) return false;
         if (processIsAlive(pid) && age < LOCK_STALE_MS) return false;
-        fs.unlinkSync(writeLockFile);
-        return true;
+        return unlinkWriteLockWithRetry();
     } catch (error) {
         return error?.code === 'ENOENT';
     }
@@ -52,10 +70,21 @@ function acquireWriteLock() {
     while (Date.now() - startedAt < LOCK_TIMEOUT_MS) {
         try {
             const fd = fs.openSync(writeLockFile, 'wx', 0o600);
-            fs.writeFileSync(fd, String(process.pid), 'utf8');
-            return fd;
+            try {
+                fs.writeFileSync(fd, String(process.pid), 'utf8');
+            } catch (error) {
+                try { fs.closeSync(fd); } catch {}
+                unlinkWriteLockWithRetry();
+                throw error;
+            }
+            // The lock is represented by the exclusive pathname, not an open
+            // descriptor. Closing here avoids Windows delete-sharing races.
+            fs.closeSync(fd);
+            return;
         } catch (error) {
-            if (error?.code !== 'EEXIST') throw error;
+            const transientWindowsContention = process.platform === 'win32'
+                && ['EPERM', 'EACCES', 'EBUSY'].includes(error?.code);
+            if (error?.code !== 'EEXIST' && !transientWindowsContention) throw error;
             removeStaleWriteLock();
             Atomics.wait(lockWaitBuffer, 0, 0, LOCK_WAIT_MS);
         }
@@ -64,12 +93,13 @@ function acquireWriteLock() {
 }
 
 function withWriteLock(action) {
-    const fd = acquireWriteLock();
+    acquireWriteLock();
     try {
         return action();
     } finally {
-        try { fs.closeSync(fd); } catch {}
-        try { fs.unlinkSync(writeLockFile); } catch {}
+        if (!unlinkWriteLockWithRetry()) {
+            throw new Error('Failed to release the system log write lock');
+        }
     }
 }
 

@@ -560,6 +560,13 @@ export function setDatabase(data:Database){
     data.openrouterMiddleOut ??= false
     data.memoryLimitThickness ??= 1
     data.modules = normalizeModuleEntries(data.modules)
+    // These values are used by recent Haejeok saves. They are intentionally
+    // initialized here rather than discarded so importing and re-saving a
+    // compatible backup remains lossless while the standalone UI catches up.
+    data.moduleFolders ??= []
+    data.loadouts ??= []
+    data.customSidebarItems ??= []
+    data.lastLoadedLoadoutName ??= ''
     data.enabledModules ??= []
     data.personaEnabledModules = normalizePersonaEnabledModules(
         data.personaEnabledModules,
@@ -1430,6 +1437,12 @@ export interface Database{
     lastPatchNoteCheckVersion?:string,
     memoryLimitThickness?:number
     modules: RisuModule[]
+    /** Folder metadata for modules imported from recent Haejeok versions. */
+    moduleFolders?: import('../process/modules').ModuleFolder[]
+    /** Stored for backup compatibility; this build does not yet expose loadout UI. */
+    loadouts?: Loadout[]
+    customSidebarItems?: CustomSideBarItem[]
+    lastLoadedLoadoutName?: string
     enabledModules: string[]
     personaEnabledModules: Record<string, string[]>
     sideMenuRerollButton?:boolean
@@ -1919,6 +1932,14 @@ export interface character{
     }
     supaMemory?:boolean
     additionalAssets?:[string, string, string][]
+    /** Nested additional-asset folders from recent Haejeok backups. */
+    additionalAssetFolders?: Array<{
+        id: string
+        name: string
+        parentId?: string
+    }>
+    /** Additional-asset display name -> folder id mapping. */
+    additionalAssetFolderAssignments?: Record<string, string>
     ttsReadOnlyQuoted?:boolean
     replaceGlobalNote:string
     backgroundHTML?:string
@@ -2359,6 +2380,9 @@ export interface Chat{
     lastDate?:number
     bookmarks?: string[];
     bookmarkNames?: { [chatId: string]: string };
+    /** Per-chat override of global chat variables (Haejeok v2026.8.240+). */
+    useLocallySetGlobalVariables?: boolean
+    GLGlobalVariables?: { [key: string]: string }
     supaMemory?: boolean
     savedToggleValues?: Record<string, string>
     // P4 dual-regime: per-chat model preset binding (plan v6 §7). useModelPreset
@@ -3150,6 +3174,30 @@ import type { HypaModel } from '../process/memory/hypamemory';
 import type { SerializableHypaV3Data } from '../process/memory/hypav3';
 import { defaultHotkeys, type Hotkey } from '../defaulthotkeys';
 import type { OpenAIChat } from '../process/index.svelte';
+
+/**
+ * Persisted loadout shape used by current Haejeok `.risu` backups. This is a
+ * data-only compatibility type until the standalone UI adopts loadouts.
+ */
+export interface Loadout {
+    name: string
+    id: string
+    lastUsed: number
+    favorite: boolean
+    characterIds: string[]
+    modules: string[]
+    globalVariables: { [key: string]: string }
+    presetName: string
+    personaId: string
+    icons?: string[]
+}
+
+export interface CustomSideBarItem {
+    id: string
+    type: 'model' | 'databaseKey' | 'loadout' | 'persona' | 'preset' | 'setting'
+    subType: string
+    label: string
+}
 
 export async function downloadPreset(id:number, type:'json'|'risupreset'|'return' = 'json'){
     saveCurrentPreset()

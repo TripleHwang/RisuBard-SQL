@@ -36,6 +36,7 @@ const { commitTransaction, moveToTrash } = require('./file-store.cjs');
 const { createRuntimeMemoryService } = require('./risubard-memory-runtime.cjs');
 const { openServerBrowser } = require('./open-server-browser.cjs');
 const { releaseToUpdateInfo } = require('./release-update.cjs');
+const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest } = require('./update-manifest.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
@@ -999,11 +1000,16 @@ function stopTunnel() {
 // Standalone builds never inherit the upstream channel. The default points to
 // this fork and remains overrideable for downstream distributions.
 const GITHUB_REPO = (process.env.RISU_UPDATE_REPOSITORY || 'TripleHwang/RisuVault').trim();
+const UPDATE_CHANNEL = process.env.RISU_UPDATE_CHANNEL
+    || (getCurrentVersion().includes('-') ? 'beta' : 'stable');
 const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false'
     || (!GITHUB_REPO && !process.env.RISU_UPDATE_URL);
 const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL
-    || (GITHUB_REPO ? `https://api.github.com/repos/${GITHUB_REPO}/releases/latest` : '');
-const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuVault';
+    || (GITHUB_REPO
+        ? `https://api.github.com/repos/${GITHUB_REPO}/releases${UPDATE_CHANNEL === 'stable' ? '/latest' : '?per_page=20'}`
+        : '');
+const UPDATE_PRODUCT_ID = process.env.RISU_UPDATE_PRODUCT_ID || 'risuvault';
+const UPDATE_MANIFEST_ASSET = process.env.RISU_UPDATE_MANIFEST_ASSET || 'update-manifest.json';
 
 // Re-read on each call so non-portable updates (docker/git pull) without a
 // process restart don't keep reporting the old version to the update worker.
@@ -1032,16 +1038,50 @@ const deploymentType = (() => {
     return 'unknown';
 })();
 
-function getSelfUpdateAssetInfo(version) {
-    if (!GITHUB_REPO) return null;
-    const platformMap = { win32: 'win', linux: 'linux', darwin: 'macos' };
-    const platformName = platformMap[process.platform];
-    if (!platformName) return null;
-    const arch = process.arch; // x64, arm64
-    const ext = process.platform === 'win32' ? 'zip' : 'tar.gz';
-    const filename = `${RELEASE_ARTIFACT_PREFIX}-v${version}-${platformName}-${arch}.${ext}`;
-    const url = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${filename}`;
-    return { platformName, arch, ext, filename, url };
+function getUpdatePlatform() {
+    return ({ win32: 'win', linux: 'linux', darwin: 'macos' })[process.platform] || null;
+}
+
+/**
+ * The release page remains useful when a legacy release has no manifest, but
+ * only a validated-channel manifest is allowed to authorize an in-place update.
+ */
+async function getValidatedReleaseArtifact(release, currentVersion) {
+    if (!GITHUB_REPO || !Array.isArray(release?.assets)) return null;
+    const manifestAsset = release.assets.find(asset => asset?.name === UPDATE_MANIFEST_ASSET);
+    if (!manifestAsset || !isAllowedGitHubReleaseUrl(manifestAsset.browser_download_url, [GITHUB_REPO])) {
+        return null;
+    }
+
+    const platform = getUpdatePlatform();
+    if (!platform) return null;
+    try {
+        const manifestResponse = await fetch(manifestAsset.browser_download_url, {
+            headers: { Accept: 'application/json', 'User-Agent': 'RisuVault-Updater' },
+            redirect: 'follow',
+        });
+        if (!manifestResponse.ok) return null;
+        const result = validateUpdateManifest(await manifestResponse.json(), {
+            productId: UPDATE_PRODUCT_ID,
+            channel: UPDATE_CHANNEL,
+            currentVersion,
+            platform,
+            arch: process.arch,
+            allowedGithubRepositories: [GITHUB_REPO],
+        });
+        if (!result.valid) {
+            logger.warn(`[Update] Ignoring invalid update manifest: ${result.reason}`);
+            return null;
+        }
+        if (compareUpdateVersions(result.manifest.version, release.tag_name) !== 0) {
+            logger.warn('[Update] Ignoring manifest whose version does not match its release tag');
+            return null;
+        }
+        return result.artifact;
+    } catch (error) {
+        logger.warn(`[Update] Failed to obtain update manifest: ${error.message}`);
+        return null;
+    }
 }
 
 function isSafeInlayId(id) {
@@ -1386,8 +1426,18 @@ async function fetchLatestRelease() {
         });
         if (res.status === 404) return null;
         if (!res.ok) return null;
-        const data = releaseToUpdateInfo(await res.json(), currentVersion);
+        const payload = await res.json();
+        const release = Array.isArray(payload)
+            ? payload.find(candidate => !candidate?.draft && (UPDATE_CHANNEL !== 'stable' || !candidate?.prerelease))
+            : payload;
+        if (!release) return null;
+        const data = releaseToUpdateInfo(release, currentVersion);
         if (data?.hasUpdate) {
+            const artifact = await getValidatedReleaseArtifact(release, currentVersion);
+            // Fail closed: old releases can still be viewed/downloaded manually,
+            // but cannot replace a running installation without a valid manifest.
+            data.manualOnly = !artifact;
+            if (artifact) data.selfUpdateArtifact = artifact;
             console.log(`[Update] New version available: v${data.latestVersion} (current: v${currentVersion}, ${data.severity})`);
         }
         return data;
@@ -5932,7 +5982,10 @@ app.get('/api/update-check', async (req, res) => {
     response.canSelfUpdate = deploymentType === 'portable'
         && !!response.hasUpdate
         && !response.manualOnly
-        && !!getSelfUpdateAssetInfo(response.latestVersion);
+        && !!response.selfUpdateArtifact;
+    // The client needs capability information only. The endpoint re-fetches
+    // and revalidates this private authorization data immediately before use.
+    delete response.selfUpdateArtifact;
     res.json(response);
 });
 
@@ -5984,29 +6037,34 @@ app.post('/api/self-update', async (req, res) => {
         }
 
         const targetVersion = updateInfo.latestVersion;
-        const assetInfo = getSelfUpdateAssetInfo(targetVersion);
+        const assetInfo = updateInfo.selfUpdateArtifact;
         if (!assetInfo) {
-            throw new Error(`No release asset for ${process.platform}-${process.arch}`);
+            throw new Error('No verified update artifact is available for this installation');
         }
 
         // 2. Download
         tmpDir = path.join(os.tmpdir(), `risu-update-${Date.now()}`);
         await fs.mkdir(tmpDir, { recursive: true });
-        const archivePath = path.join(tmpDir, assetInfo.filename);
+        const archivePath = path.join(tmpDir, process.platform === 'win32' ? 'update.zip' : 'update.tar.gz');
 
         send('downloading', 0, 'Starting download...');
         const dlRes = await fetch(assetInfo.url, { redirect: 'follow' });
         if (!dlRes.ok) throw new Error(`Download failed: ${dlRes.status} ${dlRes.statusText}`);
 
         const totalSize = parseInt(dlRes.headers.get('content-length'), 10) || 0;
+        if (totalSize && totalSize !== assetInfo.size) {
+            throw new Error('Downloaded update size does not match the verified manifest');
+        }
         const fileStream = require('fs').createWriteStream(archivePath);
         let downloaded = 0;
         let lastPct = -1;
+        const archiveHash = nodeCrypto.createHash('sha256');
 
         const progress = new Transform({
             transform(chunk, _enc, cb) {
                 if (clientDisconnected) { cb(new Error('Client disconnected')); return; }
                 downloaded += chunk.length;
+                archiveHash.update(chunk);
                 if (totalSize > 0) {
                     const pct = Math.round((downloaded / totalSize) * 100);
                     if (pct >= lastPct + 5) {
@@ -6020,6 +6078,12 @@ app.post('/api/self-update', async (req, res) => {
             },
         });
         await pipeline(Readable.fromWeb(dlRes.body), progress, fileStream);
+        if (downloaded !== assetInfo.size) {
+            throw new Error('Downloaded update size does not match the verified manifest');
+        }
+        if (archiveHash.digest('hex') !== assetInfo.sha256) {
+            throw new Error('Downloaded update hash does not match the verified manifest');
+        }
         send('downloading', 100, 'Download complete.');
 
         // 3. Extract

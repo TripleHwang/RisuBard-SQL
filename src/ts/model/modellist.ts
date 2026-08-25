@@ -783,7 +783,9 @@ export function getModelList<T extends boolean>(arg:{
     recommendedOnly?:boolean,
     groupedByProvider?:T
 } = {}): T extends true ? GetModelListGroup[] : LLMModel[]{
-    let models = LLMModels
+    // Callers augment the returned list with plugin models.  Never hand out the
+    // canonical array: mutating it makes plugin models leak into every selector.
+    let models = [...LLMModels]
     if(arg.recommendedOnly){
          models = models.filter(model => model.recommended)
     }

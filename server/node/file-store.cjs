@@ -4,6 +4,26 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+const WINDOWS_RENAME_RETRY_MS = 1000;
+const WINDOWS_RENAME_WAIT_MS = 5;
+const renameWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+function renameWithRetry(source, destination) {
+    const startedAt = Date.now();
+    while (true) {
+        try {
+            fs.renameSync(source, destination);
+            return;
+        } catch (error) {
+            const retryable = process.platform === 'win32'
+                && ['EPERM', 'EACCES', 'EBUSY'].includes(error?.code)
+                && Date.now() - startedAt < WINDOWS_RENAME_RETRY_MS;
+            if (!retryable) throw error;
+            Atomics.wait(renameWaitBuffer, 0, 0, WINDOWS_RENAME_WAIT_MS);
+        }
+    }
+}
+
 function checksum(data) {
     return crypto.createHash('sha256').update(data).digest('hex');
 }
@@ -72,7 +92,7 @@ function replaceAtomic(target, data) {
     const temp = path.join(directory, `.${path.basename(target)}.${crypto.randomUUID()}.tmp`);
     writeSynced(temp, data);
     try {
-        fs.renameSync(temp, target);
+        renameWithRetry(temp, target);
         fsyncDirectory(directory);
     } catch (error) {
         try { fs.unlinkSync(temp); } catch {}
@@ -84,9 +104,14 @@ function preserveBackup(target) {
     if (!fs.existsSync(target)) return;
     const backup = `${target}.bak`;
     const temp = `${backup}.${crypto.randomUUID()}.tmp`;
-    copySynced(target, temp);
-    fs.renameSync(temp, backup);
-    fsyncDirectory(path.dirname(backup));
+    try {
+        copySynced(target, temp);
+        renameWithRetry(temp, backup);
+        fsyncDirectory(path.dirname(backup));
+    } catch (error) {
+        try { fs.unlinkSync(temp); } catch {}
+        throw error;
+    }
 }
 
 function atomicWriteFile(root, relativePath, value, options = {}) {
@@ -109,7 +134,7 @@ function atomicWriteFile(root, relativePath, value, options = {}) {
 
     try {
         preserveBackup(target);
-        fs.renameSync(temp, target);
+        renameWithRetry(temp, target);
         replaceAtomic(`${target}.sha256`, Buffer.from(`${digest}\n`, 'utf8'));
         fsyncDirectory(directory);
     } catch (error) {

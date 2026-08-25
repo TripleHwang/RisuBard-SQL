@@ -356,11 +356,17 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout release tooling
+        uses: actions/checkout@v6
+
       - name: Download all portable artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: portable-*
           merge-multiple: true
+
+      - name: Generate verified update manifest
+        run: node scripts/generate-update-manifest.mjs . "${{ github.ref_name }}" "${{ github.repository }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -369,4 +375,7 @@ jobs:
           name: "${{ env.RELEASE_DISPLAY_NAME }} ${{ github.ref_name }}"
           generate_release_notes: true
           draft: true
-          files: ${{ env.RELEASE_ARTIFACT_PREFIX }}-*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ${{ env.RELEASE_ARTIFACT_PREFIX }}-*
+            update-manifest.json

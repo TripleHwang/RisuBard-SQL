@@ -294,4 +294,12 @@ export const searchManifestEntries: ManualSearchEntry[] = [
         route: SettingsRoute.System,
         subTab: SystemTab.PluginStorage,
     },
+    {
+        id: 'manual.system.updates',
+        label: () => language.systemUpdateTab,
+        help: () => language.systemUpdateDesc,
+        keywords: ['update', 'upgrade', 'patch', 'release', '업데이트', '패치', '버전'],
+        route: SettingsRoute.System,
+        subTab: SystemTab.Updates,
+    },
 ];

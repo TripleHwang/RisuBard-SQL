@@ -41,14 +41,27 @@ describe("Node server SQLite client", () => {
     const source = {
       username: "standalone",
       pluginCustomStorage: { "pagefold.config.v1": { provider: "google" } },
+      moduleFolders: [{ id: "folder-1", name: "Modules", color: "#123456" }],
+      loadouts: [{
+        id: "loadout-1", name: "Recent setup", lastUsed: 1, favorite: true,
+        characterIds: ["character-1"], modules: ["module-1"],
+        globalVariables: { scene: "night" }, presetName: "Default", personaId: "persona-1",
+      }],
+      customSidebarItems: [{ id: "sidebar-1", type: "loadout", subType: "quick", label: "Quick" }],
+      lastLoadedLoadoutName: "Recent setup",
       botPresets: [{ id: "preset-1", name: "Default" }],
       botPresetsId: 0,
+      modules: [{ id: "module-1", name: "Module", description: "", folderId: "folder-1" }],
       characters: [{
         chaId: "character-1",
         name: "Character",
+        additionalAssetFolders: [{ id: "asset-folder-1", name: "Assets" }],
+        additionalAssetFolderAssignments: { Portrait: "asset-folder-1" },
         chats: [{
           id: "chat-1",
           name: "Chat",
+          useLocallySetGlobalVariables: true,
+          GLGlobalVariables: { scene: "night" },
           message: [{ chatId: "message-1", role: "user", data: "hello" }],
         }],
       }],
@@ -56,7 +69,12 @@ describe("Node server SQLite client", () => {
 
     expect((await client.loadDatabase())?.status).toBe("empty");
     expect(await client.replaceDatabase(source)).toBe(true);
-    expect((await client.loadDatabase())?.database).toMatchObject(source);
+    const loaded = (await client.loadDatabase())?.database as any;
+    expect(loaded).toMatchObject(source);
+    expect(loaded.modules[0].folderId).toBe("folder-1");
+    expect(loaded.characters[0].additionalAssetFolders).toEqual(source.characters[0].additionalAssetFolders);
+    expect(loaded.characters[0].additionalAssetFolderAssignments).toEqual(source.characters[0].additionalAssetFolderAssignments);
+    expect(loaded.characters[0].chats[0].GLGlobalVariables).toEqual({ scene: "night" });
     server.close();
   });
 

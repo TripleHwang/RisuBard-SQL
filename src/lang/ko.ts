@@ -780,6 +780,17 @@ export const languageKorean = {
   selfUpdateFailed: "업데이트 실패",
   selfUpdateReloadHint: "새 버전을 적용하려면 페이지를 새로고침하세요.",
   selfUpdateReload: "새로고침",
+  systemUpdateTab: "업데이트",
+  systemUpdateDesc: "호환되는 RisuVault 패치를 확인하고 앱 안에서 적용합니다.",
+  systemUpdateChannel: "업데이트 채널",
+  systemUpdateTrust: "이 RisuVault 저장소와 현재 배포 형식에 맞는 패키지만 제공합니다. HaejeokRisuAI 패키지를 직접 설치하지 않습니다.",
+  systemUpdateCheck: "지금 확인",
+  systemUpdateChecking: "확인 중...",
+  systemUpdateCheckFailed: "업데이트를 확인하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도하세요.",
+  systemUpdateCurrent: "현재 버전",
+  systemUpdateLatest: "최신 버전",
+  systemUpdateAvailable: "RisuVault {{version}} 패치를 사용할 수 있습니다.",
+  systemUpdateUpToDate: "현재 호환되는 최신 버전을 사용 중입니다.",
   close: "닫기",
   remindLaterQuestion: "며칠 뒤에 다시 알려드릴까요?",
   remindIgnore: "무시",
@@ -2098,6 +2109,10 @@ export const languageKorean = {
     "플러그인 {} 이(가) Provider 접근 권한을 요청합니다. 무단 API 호출이 발생할 수 있습니다. 허용하시겠습니까?",
   sendChatConsent:
     "플러그인 {} 이(가) 사용자 대신 채팅 메시지를 전송할 권한을 요청합니다. AI 응답이 트리거됩니다. 허용하시겠습니까?",
+  inlayPermissionConsent:
+    "플러그인 {}이(가) 인레이 이미지를 읽으려고 합니다. 허용하시겠습니까?",
+  localToggles: "이 채팅에 사이드바 토글값 저장",
+  localToggleReset: "이 채팅의 값을 지우고 전역값 사용",
   resetPluginPermission: "권한 응답 초기화",
   resetPluginPermissionConfirm:
     '플러그인 "{}"의 저장된 권한 응답(허용/거부 이력)을 모두 삭제하시겠습니까?\n\n다음에 플러그인이 권한을 요청할 때 다시 묻게 됩니다.',

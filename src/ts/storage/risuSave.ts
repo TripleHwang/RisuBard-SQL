@@ -530,7 +530,10 @@ export class RisuSaveDecoder {
                     break;
                 }
                 case RisuSaveType.LOADOUTS:{
-                    // Loadout feature removed; ignore any legacy blocks from older backups.
+                    // Keep the legacy dedicated block even though current saves keep
+                    // this data in ROOT. Haejeok/RisuAI saves use this block and
+                    // dropping it made an otherwise compatible import lossy.
+                    db.loadouts = JSON.parse(this.blocks[key].content);
                     break;
                 }
                 case RisuSaveType.PLUGIN_STORAGE:{

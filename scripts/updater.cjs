@@ -7,17 +7,16 @@
  */
 
 const https = require('https');
-const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest } = require('../server/node/update-manifest.cjs');
 
 // A standalone build must be pointed at the fork that owns its releases.
 // Do not fall back to the upstream repository: its artifacts may carry a
 // different schema, bundled code, or security policy.
 const REPO = (process.env.RISU_UPDATE_REPOSITORY || 'TripleHwang/RisuVault').trim();
-const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuVault';
 const ROOT = path.resolve(__dirname, '..');
 
 const isWin = process.platform === 'win32';
@@ -73,8 +72,8 @@ const MAX_REDIRECTS = 10;
 function httpsGet(url, redirectCount = 0) {
     return new Promise((resolve, reject) => {
         if (redirectCount > MAX_REDIRECTS) return reject(new Error('Too many redirects'));
-        const get = url.startsWith('https') ? https.get : http.get;
-        get(url, { headers: { 'User-Agent': 'RisuBard-Updater' } }, (res) => {
+        if (!url.startsWith('https://')) return reject(new Error('Updater only allows HTTPS downloads'));
+        https.get(url, { headers: { 'User-Agent': 'RisuVault-Updater' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return httpsGet(res.headers.location, redirectCount + 1).then(resolve, reject);
             }
@@ -89,42 +88,48 @@ function httpsGet(url, redirectCount = 0) {
     });
 }
 
-function downloadToFile(url, dest, redirectCount = 0) {
+function downloadToFile(url, dest, expected, redirectCount = 0) {
     return new Promise((resolve, reject) => {
         if (redirectCount > MAX_REDIRECTS) return reject(new Error('Too many redirects'));
         const file = fs.createWriteStream(dest);
-        const get = url.startsWith('https') ? https.get : http.get;
-        get(url, { headers: { 'User-Agent': 'RisuBard-Updater' } }, (res) => {
+        if (!url.startsWith('https://')) return reject(new Error('Updater only allows HTTPS downloads'));
+        https.get(url, { headers: { 'User-Agent': 'RisuVault-Updater' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 file.close();
                 fs.unlinkSync(dest);
-                return downloadToFile(res.headers.location, dest, redirectCount + 1).then(resolve, reject);
+                if (!res.headers.location.startsWith('https://')) return reject(new Error('Updater redirect must remain on HTTPS'));
+                return downloadToFile(res.headers.location, dest, expected, redirectCount + 1).then(resolve, reject);
             }
             if (res.statusCode !== 200) {
                 file.close();
                 return reject(new Error(`HTTP ${res.statusCode}`));
             }
             const total = parseInt(res.headers['content-length'] || '0', 10);
+            if (total > 0 && total !== expected.size) {
+                file.close();
+                return reject(new Error(`Download size mismatch (expected ${expected.size}, got ${total})`));
+            }
             let downloaded = 0;
+            const hash = crypto.createHash('sha256');
             res.on('data', (chunk) => {
                 downloaded += chunk.length;
+                hash.update(chunk);
                 if (total > 0) {
                     const pct = ((downloaded / total) * 100).toFixed(1);
                     process.stdout.write(`\r[updater] Downloading... ${pct}%  `);
                 }
             });
             res.pipe(file);
-            file.on('finish', () => { file.close(); process.stdout.write('\n'); resolve(); });
+            file.on('finish', () => {
+                file.close();
+                process.stdout.write('\n');
+                if (downloaded !== expected.size) return reject(new Error(`Download size mismatch (expected ${expected.size}, got ${downloaded})`));
+                if (hash.digest('hex') !== expected.sha256) return reject(new Error('Downloaded package SHA-256 does not match the trusted release manifest'));
+                resolve();
+            });
             file.on('error', reject);
         }).on('error', reject);
     });
-}
-
-function getPlatformSuffix() {
-    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-    if (isWin) return `win-${arch}`;
-    if (process.platform === 'darwin') return `macos-${arch}`;
-    return `linux-${arch}`;
 }
 
 function resolveExtractedRoot(extractedDir) {
@@ -217,8 +222,14 @@ async function main() {
     log(`Current version: ${current}`);
     log('Checking for updates...');
 
-    const data = await httpsGet(`https://api.github.com/repos/${REPO}/releases/latest`);
-    const release = JSON.parse(data.toString());
+    const updateChannel = process.env.RISU_UPDATE_CHANNEL || (current.includes('-') ? 'beta' : 'stable');
+    const releasePath = updateChannel === 'stable' ? 'releases/latest' : 'releases?per_page=20';
+    const data = await httpsGet(`https://api.github.com/repos/${REPO}/${releasePath}`);
+    const payload = JSON.parse(data.toString());
+    const release = Array.isArray(payload)
+        ? payload.find(candidate => !candidate?.draft && (updateChannel !== 'stable' || !candidate?.prerelease))
+        : payload;
+    if (!release) error(`No ${updateChannel} release is available.`);
     const latest = release.tag_name;
 
     if (!latest) error('Could not determine latest version.');
@@ -230,11 +241,25 @@ async function main() {
 
     log(`New version available: ${latest}`);
 
-    const suffix = getPlatformSuffix();
-    const asset = (release.assets || []).find(a => a.name === `${RELEASE_ARTIFACT_PREFIX}-v${latest.replace(/^v/i, '')}-${suffix}.${isWin ? 'zip' : 'tar.gz'}`);
-    if (!asset) {
-        error(`No portable package found for ${suffix}. Download manually from:\n  ${release.html_url}`);
+    const manifestAsset = (release.assets || []).find(a => a.name === 'update-manifest.json');
+    if (!manifestAsset || !isAllowedGitHubReleaseUrl(manifestAsset.browser_download_url, [REPO])) {
+        error(`This release has no trusted update manifest. Download it manually from:\n  ${release.html_url}`);
     }
+    const manifest = JSON.parse((await httpsGet(manifestAsset.browser_download_url)).toString('utf8'));
+    const platform = isWin ? 'win' : process.platform === 'darwin' ? 'macos' : 'linux';
+    const validation = validateUpdateManifest(manifest, {
+        productId: 'risuvault',
+        channel: updateChannel,
+        currentVersion: current,
+        platform,
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+        allowedGithubRepositories: [REPO],
+    });
+    if (!validation.valid || compareUpdateVersions(validation.manifest?.version, latest) !== 0) {
+        error(`Release update manifest is not compatible: ${validation.reason || 'release tag mismatch'}`);
+    }
+    const asset = validation.artifact;
+    const assetName = decodeURIComponent(new URL(asset.url).pathname.split('/').pop() || 'update-package');
 
     const tmpDir = path.join(ROOT, '.update-tmp');
     if (fs.existsSync(tmpDir)) {
@@ -247,14 +272,14 @@ async function main() {
     }
     fs.mkdirSync(tmpDir, { recursive: true });
 
-    const downloadPath = path.join(tmpDir, asset.name);
-    log(`Downloading ${asset.name}...`);
-    await downloadToFile(asset.browser_download_url, downloadPath);
+    const downloadPath = path.join(tmpDir, assetName);
+    log(`Downloading ${assetName}...`);
+    await downloadToFile(asset.url, downloadPath, asset);
 
     log('Extracting...');
     const extractedPath = path.join(tmpDir, 'extracted');
     fs.mkdirSync(extractedPath, { recursive: true });
-    if (asset.name.endsWith('.zip')) {
+    if (assetName.endsWith('.zip')) {
         execSync(`powershell -Command "Expand-Archive -Path '${downloadPath}' -DestinationPath '${extractedPath}' -Force"`, { stdio: 'inherit' });
     } else {
         execSync(`tar -xzf "${downloadPath}" -C "${extractedPath}"`, { stdio: 'inherit' });
