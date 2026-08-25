@@ -8,6 +8,14 @@ const { mockStore, mockState } = vi.hoisted(() => ({
     mockStore: new Map<string, Uint8Array>(),
     mockState: { setItemDelay: 0, setItemThrowsAfterStore: false },
 }))
+const { activeSql, sqlDrafts } = vi.hoisted(() => ({
+    activeSql: { current: null as any },
+    sqlDrafts: new Map<string, { m: string, t: string }>(),
+}))
+
+vi.mock('./sql/sqlBootstrap', () => ({
+    getActiveSqlStorage: () => activeSql.current,
+}))
 
 vi.mock('../globalApi.svelte', () => ({
     forageStorage: {
@@ -38,9 +46,23 @@ const {
 
 beforeEach(() => {
     mockStore.clear()
+    sqlDrafts.clear()
+    activeSql.current = null
     mockState.setItemDelay = 0
     mockState.setItemThrowsAfterStore = false
 })
+
+function enableSqlDrafts() {
+    activeSql.current = {
+        async listChatDraftKeys() { return [...sqlDrafts.keys()] },
+        async getChatDraft(key: string) { return sqlDrafts.get(key) ?? null },
+        async setChatDraft(key: string, draft: { m: string, t: string }) { sqlDrafts.set(key, draft) },
+        async removeChatDrafts(keys: string[]) {
+            for (const key of keys) sqlDrafts.delete(key)
+            return keys.length
+        },
+    }
+}
 
 // Each test uses a distinct character id so the module-level index cannot leak
 // between cases.
@@ -97,5 +119,29 @@ describe('chatDraft round trip', () => {
     test('load returns null for a chat with no draft', async () => {
         const loaded = await loadChatDraft('empty', 'c1')
         expect(loaded).toBeNull()
+    })
+})
+
+describe('standalone SQL drafts', () => {
+    test('writes, reads, and removes drafts without creating KV sidecars', async () => {
+        enableSqlDrafts()
+        flushChatDraft('sql', 'c1', { m: 'canonical', t: '번역' })
+        expect(await loadChatDraft('sql', 'c1')).toEqual({ m: 'canonical', t: '번역' })
+        expect(sqlDrafts.get(chatDraftKey('sql', 'c1'))).toEqual({ m: 'canonical', t: '번역' })
+        expect(mockStore.has(chatDraftKey('sql', 'c1'))).toBe(false)
+
+        removeChatDraft('sql', 'c1')
+        expect(await loadChatDraft('sql', 'c1')).toBeNull()
+        expect(sqlDrafts.has(chatDraftKey('sql', 'c1'))).toBe(false)
+    })
+
+    test('migrates an existing KV draft into SQL before loading it', async () => {
+        const key = chatDraftKey('legacy-sql', 'c1')
+        mockStore.set(key, new TextEncoder().encode(JSON.stringify({ m: 'old', t: 'buffer' })))
+        enableSqlDrafts()
+
+        expect(await loadChatDraft('legacy-sql', 'c1')).toEqual({ m: 'old', t: 'buffer' })
+        expect(sqlDrafts.get(key)).toEqual({ m: 'old', t: 'buffer' })
+        expect(mockStore.has(key)).toBe(false)
     })
 })

@@ -127,6 +127,13 @@ export interface ISqlStorage {
   loadPluginCustomStorageKey(key: string): Promise<unknown>;
   loadSettingKey(key: string): Promise<unknown>;
 
+  /** Ephemeral composer state is still user data, so it lives in the canonical
+   * database instead of a sidecar KV store when standalone SQL is active. */
+  getChatDraft(key: string): Promise<{ m: string; t: string } | null>;
+  listChatDraftKeys(): Promise<string[]>;
+  setChatDraft(key: string, draft: { m: string; t: string }): Promise<void>;
+  removeChatDrafts(keys: string[]): Promise<number>;
+
   getColdStorageItem(key: string): Promise<unknown | null>;
   listColdStorageItems(): Promise<{ items: string[] }>;
   setColdStorageItem(key: string, value: unknown): Promise<boolean>;

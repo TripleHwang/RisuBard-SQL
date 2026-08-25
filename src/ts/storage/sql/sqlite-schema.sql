@@ -146,6 +146,16 @@ CREATE TABLE IF NOT EXISTS message_extension_nodes (
 );
 CREATE INDEX IF NOT EXISTS message_nodes_parent_idx ON message_extension_nodes (chat_id, message_id, parent_node_id, node_order);
 
+-- Composer drafts are intentionally separate from chats: typing must not
+-- rewrite a chat or its messages, but drafts remain durable SQL user data.
+CREATE TABLE IF NOT EXISTS chat_drafts (
+    draft_key TEXT PRIMARY KEY,
+    message_text TEXT NOT NULL DEFAULT '',
+    translate_text TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS chat_drafts_updated_idx ON chat_drafts (updated_at);
+
 CREATE TABLE IF NOT EXISTS cold_archives (
     archive_id TEXT PRIMARY KEY,
     archive_kind TEXT NOT NULL CHECK (archive_kind IN ('legacy','character','chat','unknown')),

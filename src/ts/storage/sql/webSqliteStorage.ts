@@ -646,6 +646,40 @@ export class WebSqliteStorage implements ISqlStorage {
     return this.loadSettingValue(key);
   }
 
+  async getChatDraft(key: string): Promise<{ m: string; t: string } | null> {
+    const row = this.selectOne(
+      "SELECT message_text, translate_text FROM chat_drafts WHERE draft_key = ?",
+      [key],
+    );
+    return row
+      ? { m: String(row.message_text ?? ""), t: String(row.translate_text ?? "") }
+      : null;
+  }
+
+  async listChatDraftKeys(): Promise<string[]> {
+    return this.selectRows("SELECT draft_key FROM chat_drafts ORDER BY draft_key")
+      .map((row) => row.draft_key as string);
+  }
+
+  async setChatDraft(key: string, draft: { m: string; t: string }): Promise<void> {
+    this.run(
+      `INSERT INTO chat_drafts (draft_key, message_text, translate_text, updated_at)
+       VALUES (?, ?, ?, datetime('now')) ON CONFLICT(draft_key) DO UPDATE SET
+       message_text=excluded.message_text, translate_text=excluded.translate_text,
+       updated_at=datetime('now')`,
+      [key, draft.m, draft.t],
+    );
+  }
+
+  async removeChatDrafts(keys: string[]): Promise<number> {
+    if (keys.length === 0) return 0;
+    this.run(
+      `DELETE FROM chat_drafts WHERE draft_key IN (${keys.map(() => "?").join(",")})`,
+      keys,
+    );
+    return keys.length;
+  }
+
   async getColdStorageItem(key: string): Promise<unknown | null> {
     const r = this.selectOne(
       "SELECT archive_id FROM cold_archives WHERE archive_id = ?",

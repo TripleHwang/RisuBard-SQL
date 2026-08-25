@@ -1,10 +1,11 @@
 import { forageStorage } from "../globalApi.svelte"
+import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 
 // Per-chat composer drafts. The unsent text in the message input is stored
 // outside the chat content so that unmounting the chat view (e.g. opening
-// Settings) does not lose it. Each draft is its own forage key (an independent
-// file-native KV entry), keyed by character + chat id, so it:
-//   - syncs across devices (shared server backend),
+// Settings) does not lose it. Each draft has a stable character + chat key, so it:
+//   - uses the standalone SQL database when it is canonical (and the legacy KV
+//     backend otherwise),
 //   - is isolated from the chat body (a draft write never re-uploads the chat),
 //   - never touches the Chat schema (no data-compat concerns).
 //
@@ -34,13 +35,44 @@ export function chatDraftKey(chaId: string, chatId: string): string {
 // on next load) — acceptable for drafts.
 let draftKeys: Set<string> | null = null
 let indexLoading: Promise<void> | null = null
+let indexedStorage: ReturnType<typeof getActiveSqlStorage> | undefined
 
 async function ensureIndex(): Promise<void> {
-    if (draftKeys) return
+    const sql = getActiveSqlStorage()
+    if (draftKeys && indexedStorage === sql) return
     if (!indexLoading) {
-        indexLoading = forageStorage.keys(PREFIX)
-            .then((keys) => { draftKeys = new Set(keys) })
-            .catch(() => { draftKeys = new Set() })
+        indexLoading = (async () => {
+            if (!sql) {
+                draftKeys = new Set(await forageStorage.keys(PREFIX))
+                indexedStorage = null
+                return
+            }
+
+            // SQL became canonical after older installations had already
+            // accumulated drafts in KV. Move those values once, deleting a
+            // legacy key only after its SQL replacement has been accepted.
+            const keys = new Set(await sql.listChatDraftKeys())
+            try {
+                for (const key of await forageStorage.keys(PREFIX)) {
+                    if (keys.has(key)) continue
+                    const bytes = await forageStorage.getItem(key)
+                    if (!bytes?.length) continue
+                    const value = JSON.parse(new TextDecoder().decode(bytes))
+                    const draft = { m: String(value.m ?? ''), t: String(value.t ?? '') }
+                    await sql.setChatDraft(key, draft)
+                    await forageStorage.removeItem(key)
+                    keys.add(key)
+                }
+            } catch {
+                // The SQL index is still authoritative. A failed legacy copy
+                // is retried next boot because its KV source remains intact.
+            }
+            draftKeys = keys
+            indexedStorage = sql
+        })().catch(() => {
+            draftKeys = new Set()
+            indexedStorage = sql
+        }).finally(() => { indexLoading = null })
     }
     await indexLoading
 }
@@ -62,9 +94,10 @@ function enqueue(op: () => Promise<void>): void {
 async function persistSave(key: string, draft: ChatDraft): Promise<void> {
     if (!draft.m && !draft.t) { await persistRemove(key); return }
     await ensureIndex()
-    const bytes = new TextEncoder().encode(JSON.stringify(draft))
     maybeSaved.add(key) // mark before the write: the server may keep it even if the response is lost
-    await forageStorage.setItem(key, bytes)
+    const sql = getActiveSqlStorage()
+    if (sql) await sql.setChatDraft(key, draft)
+    else await forageStorage.setItem(key, new TextEncoder().encode(JSON.stringify(draft)))
     draftKeys!.add(key)
 }
 
@@ -73,7 +106,9 @@ async function persistRemove(key: string): Promise<void> {
     // Skip only when nothing was ever written for this key; `maybeSaved` covers
     // a save whose response was lost (server has it, but it is not in the index).
     if (!draftKeys!.has(key) && !maybeSaved.has(key)) return
-    await forageStorage.removeItem(key)
+    const sql = getActiveSqlStorage()
+    if (sql) await sql.removeChatDrafts([key])
+    else await forageStorage.removeItem(key)
     draftKeys!.delete(key)
     maybeSaved.delete(key)
 }
@@ -97,6 +132,8 @@ export async function loadChatDraft(chaId: string, chatId: string): Promise<Chat
     await writeChain
     if (!draftKeys!.has(key)) return null
     try {
+        const sql = getActiveSqlStorage()
+        if (sql) return await sql.getChatDraft(key)
         const buf = await forageStorage.getItem(key)
         if (!buf || buf.length === 0) return null
         const obj = JSON.parse(new TextDecoder().decode(buf))
@@ -139,12 +176,16 @@ export function removeChatDraft(chaId: string, chatId: string): void {
  */
 export async function sweepOrphanDrafts(validKeys: Set<string>): Promise<void> {
     try {
-        const keys = await forageStorage.keys(PREFIX)
+        await ensureIndex()
+        const keys = [...(draftKeys ?? [])]
         for (const key of keys) {
             if (validKeys.has(key)) continue
             enqueue(async () => {
-                await forageStorage.removeItem(key)
+                const sql = getActiveSqlStorage()
+                if (sql) await sql.removeChatDrafts([key])
+                else await forageStorage.removeItem(key)
                 draftKeys?.delete(key)
+                maybeSaved.delete(key)
             })
         }
     } catch {
