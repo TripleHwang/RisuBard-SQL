@@ -154,6 +154,38 @@ describe('BardWiki memory writer skill', () => {
         expect(draft.canonicalUpdateCandidates[0].action).toBe('create')
     })
 
+    test('normalizes contradictory canonical action and target pairs', () => {
+        const draft = parseMemoryWriterDraft(JSON.stringify({
+            schemaVersion: 1,
+            title: 'Canonical candidate correction',
+            establishedEvents: ['Persistent information was confirmed.'],
+            stateChanges: [],
+            characterKnowledge: [],
+            persistentFacts: [],
+            openContinuity: [],
+            canonicalUpdateCandidates: [{
+                type: 'character',
+                title: 'Lavian',
+                reason: 'An existing character has changed persistent information.',
+                action: 'create',
+                targetDocumentId: 'character.lavian',
+                confidence: 0.9,
+            }, {
+                type: 'location',
+                title: 'New location',
+                reason: 'A new location was confirmed.',
+                action: 'update',
+                targetDocumentId: null,
+                confidence: 0.9,
+            }],
+        }))
+
+        expect(draft.canonicalUpdateCandidates).toMatchObject([
+            { action: 'update', targetDocumentId: 'character.lavian' },
+            { action: 'create', targetDocumentId: null },
+        ])
+    })
+
     test('requires an explicit create/update decision and target identity', () => {
         const invalid = {
             schemaVersion: 1,
