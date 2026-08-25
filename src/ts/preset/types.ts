@@ -287,6 +287,12 @@ export interface ModelPreset {
     // once instead of token-by-token. Only meaningful when useStreaming is on.
     // Default off (undefined/false) → ordinary token-by-token streaming.
     decoupledStreaming?: boolean
+    // Route requests for this preset through the built-in PageFold prompt
+    // packer/provider. PageFold's provider, model, credentials and packaging
+    // mode remain in its global settings; this flag only opts this preset in.
+    // Optional so existing Risu/RisuBard presets and backups stay off by
+    // default and round-trip without a migration.
+    usePageFold?: boolean
     // Per-ModelPreset tool use (capabilities Stage 1). Default off
     // (undefined/false): while off, the request stays text-only so existing
     // bound chats are never routed through the tool loop. Only meaningful when

@@ -1,6 +1,7 @@
 import type { RisuPlugin } from "../plugins/plugins.svelte";
 
 export const PAGEFOLD_PLUGIN_NAME = "pagefold";
+export const PAGEFOLD_PROVIDER_NAME = "PageFold";
 
 /**
  * PageFold is shipped with RisuBard instead of being copied into every user

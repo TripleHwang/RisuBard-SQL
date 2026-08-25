@@ -19,12 +19,13 @@
     import { moduleModelBindingItems } from "src/ts/setting/moduleModelBindingData";
     import RegistryNoticeModal from "./RegistryNoticeModal.svelte";
     import { language } from "src/lang";
-    import { DBState, openModelProfileBrowser, modelProfileReplaceTarget, openModelPresetEditId, ModelPresetListTabIndex } from "src/ts/stores.svelte";
+    import { DBState, additionalSettingsMenu, openModelProfileBrowser, modelProfileReplaceTarget, openModelPresetEditId, ModelPresetListTabIndex } from "src/ts/stores.svelte";
     import { alertConfirm, notifySuccess } from "src/ts/alert";
     import { testModelPreset, type ModelPresetTestResult } from "src/ts/process/request/request";
     import { getOfficialRegistry, getPresetUpdateStatus, syncRemoteRegistry } from "src/ts/preset/registry";
     import { buildSeenMap, computeRegistryNotice, noticeCount } from "src/ts/preset/registry/notice";
     import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS } from "src/ts/preset/types";
+    import { getPageFoldPresetSupport } from "src/ts/builtin/pageFoldPresetRoute";
     import { onMount } from "svelte";
     import { v4 as uuidv4 } from "uuid";
 
@@ -67,6 +68,10 @@
             ? DBState.db.modelPresets.find(p => p.id === editingId) ?? null
             : null
     );
+    const pageFoldSettingsMenu = $derived(
+        additionalSettingsMenu.find(menu => menu.pluginName === 'pagefold' && menu.id === 'pagefold')
+    );
+    const pageFoldSupport = $derived(getPageFoldPresetSupport(editingPreset));
 
     // If the preset being edited disappears (deleted elsewhere), fall back to list.
     $effect(() => {
@@ -232,6 +237,43 @@
                     preset={editingPreset}
                 />
             {:else if submenu === 2}
+                <div class="flex flex-col gap-4 mb-6">
+                    <h3 class="text-sm font-semibold text-textcolor2 uppercase tracking-wide">{language.modelPresetPageFoldSection}</h3>
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="flex flex-col gap-0.5 min-w-0">
+                            <span class="text-sm text-textcolor">{language.modelPresetPageFoldEnable}</span>
+                            <span class="text-xs text-textcolor2">{language.modelPresetPageFoldEnableHelp}</span>
+                        </div>
+                        <div class="shrink-0">
+                            <ShSwitch
+                                checked={!!editingPreset.usePageFold}
+                                disabled={!pageFoldSupport.supported && !editingPreset.usePageFold}
+                                onCheckedChange={(v) => { editingPreset.usePageFold = v }}
+                            />
+                        </div>
+                    </div>
+                    {#if pageFoldSupport.supported}
+                        <div class="text-xs text-textcolor2">
+                            {language.modelPresetPageFoldTarget}{pageFoldSupport.label}
+                        </div>
+                    {:else}
+                        <ShAlert variant="destructive">
+                            {#snippet icon()}<TriangleAlertIcon />{/snippet}
+                            {language.modelPresetPageFoldUnsupported}
+                        </ShAlert>
+                    {/if}
+                    {#if editingPreset.usePageFold}
+                        <ShAlert variant="warning">
+                            {#snippet icon()}<TriangleAlertIcon />{/snippet}
+                            {language.modelPresetPageFoldWarning}
+                        </ShAlert>
+                        {#if pageFoldSettingsMenu}
+                            <ShButton variant="outline" size="sm" className="self-start" onclick={() => pageFoldSettingsMenu?.callback()}>
+                                {language.modelPresetPageFoldSettings}
+                            </ShButton>
+                        {/if}
+                    {/if}
+                </div>
                 {#if showAbilities}
                     <div class="flex flex-col gap-4 mb-6">
                         <h3 class="text-sm font-semibold text-textcolor2 uppercase tracking-wide">{language.modelPresetAbilities}</h3>

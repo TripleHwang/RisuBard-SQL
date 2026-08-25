@@ -4,6 +4,8 @@ import { globalFetch, fetchNative } from "../../globalApi.svelte";
 import { getModelInfo, LLMFlags, LLMFormat, type LLMModel } from "../../model/modellist";
 import { risuChatParser, risuEscape, risuUnescape } from "../../parser/parser.svelte";
 import { pluginProcess, pluginV2 } from "../../plugins/plugins.svelte";
+import { PAGEFOLD_PROVIDER_NAME } from "../../builtin/pagefold";
+import { getPageFoldPresetSupport } from "../../builtin/pageFoldPresetRoute";
 import { resolvePluginRequestStatus } from "../../plugins/providerRequestStatus";
 import { getCurrentCharacter, getCurrentChat, getDatabase, type character } from "../../storage/database.svelte";
 import { resolveRisuBardChatSettings } from '../../risubard/risuBardSettings';
@@ -38,7 +40,7 @@ import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
 import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
-import { resolveChatModelBinding, resolveRequestModelBindingTarget, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
+import { resolveChatModelBinding, resolveRequestModelBindingTarget, resolvePresetMaxOutputTokens, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import {
@@ -46,6 +48,7 @@ import {
     sendWithStructuredOutputFallback,
 } from './structuredOutputFallback';
 import { createPluginRequestEvidenceRecorder } from './pluginRequestEvidence';
+import { requestPageFoldPreset as dispatchPageFoldPreset } from './pageFoldPreset';
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, requestLogEnabled, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from "src/ts/requestPurpose";
@@ -753,8 +756,8 @@ function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
 const formatPresetReasoning = formatReasoningParts
 
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
-    const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
+    const usePageFold = preset.usePageFold === true
     // arg.chatId is the per-request generationId for main chat (sendChat passes
     // it under that name; see generation-state-keying.md §1-bis). Aux requests
     // (translate/memory/emotion/sub) don't supply one, so mint a per-request key
@@ -783,7 +786,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         generationId: genId,
         model: preset.profileSnapshot.modelId,
         provider: preset.profileSnapshot.providerBaseId,
-        streaming: resolvePresetStreaming(preset, arg),
+        streaming: usePageFold ? false : resolvePresetStreaming(preset, arg),
     })
     const proxiedFetch = makeProxiedFetch(arg.chatId, (route) => logScope.setRoute(route))
 
@@ -800,7 +803,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     //     editor toggle's visibility — a capability-less custom profile (e.g.
     //     after a profile swap that kept toolUse) can never activate tools.
     const caps = preset.profileSnapshot.capabilities
-    const supportsTools = preset.toolUse === true
+    const supportsTools = !usePageFold && preset.toolUse === true
         && TOOL_CAPABLE_ADAPTER_KINDS.includes(kind)
         && (caps?.includes('tools') ?? false)
     const tools = (supportsTools && arg.tools && arg.tools.length > 0)
@@ -826,7 +829,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // back would double-generate. All defaults off → proxiedFetch →
     // byte-identical to the previous behavior.
     const useServerJob = getDatabase().nodeOnlyServerSideRequests === true
-        && !tools && !arg.previewBody
+        && !usePageFold && !tools && !arg.previewBody
     const transportFetch = useServerJob
         ? makeJobFetch({
             ...resolveModelJobRoute({
@@ -880,7 +883,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // byte-identical to before.
     const cacheAuthKind = preset.profileSnapshot.auth.kind
     let cache: AdapterCacheContext | undefined
-    if (kind === 'google-gemini' && preset.promptCaching?.enabled && mode === 'model'
+    if (!usePageFold && kind === 'google-gemini' && preset.promptCaching?.enabled && mode === 'model'
         && !arg.disablePromptCache
         && (caps?.includes('cache') ?? false)
         && !tools && !arg.previewBody
@@ -955,6 +958,80 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     }
     logScope.setInjectionManifest(requestStatusManifest)
     for (const message of arg.formated) delete message.requestStatusSources
+
+    if (usePageFold) {
+        const support = getPageFoldPresetSupport(preset)
+        if (!support.supported) {
+            void logScope.close()
+            return {
+                type: 'fail',
+                result: support.reason ?? 'This model preset is not compatible with PageFold.',
+                model: preset.name,
+                noRetry: true,
+            }
+        }
+        if (arg.previewBody) {
+            void logScope.close()
+            return {
+                type: 'success',
+                result: JSON.stringify({
+                    transport: PAGEFOLD_PROVIDER_NAME,
+                    provider: support.label,
+                    model: preset.profileSnapshot.modelId,
+                    mode,
+                    note: 'PageFold packages the prompt as PDF and uses this preset\'s model, endpoint and credential.',
+                }),
+                model: preset.name,
+            }
+        }
+
+        if (reportStatus) {
+            safeStatus(() => startStatus(genId, {
+                kind: statusKind,
+                purpose: logPurpose,
+                label: `${preset.name} · PageFold`,
+                chatId: arg.realChatId,
+                phase: 'connecting',
+                now: Date.now(),
+                injectionManifest: requestStatusManifest,
+            }))
+        }
+        try {
+            const response = await dispatchPageFoldPreset(
+                arg,
+                preset,
+                mode,
+                abortSignal,
+                buildModelPresetCredential(preset),
+                resolvePresetMaxOutputTokens(preset),
+            )
+            void logScope.close()
+            if (reportStatus) {
+                safeStatus(() => endStatus(genId, response.type === 'success' ? 'done' : 'failed', {
+                    now: Date.now(),
+                    error: response.type === 'fail' ? response.result : undefined,
+                }))
+            }
+            return response
+        } catch (err) {
+            console.error('[ModelPreset/PageFold] request failed', err)
+            void logScope.close()
+            const outcome = abortSignal?.aborted ? 'aborted' : 'failed'
+            if (reportStatus) {
+                safeStatus(() => endStatus(genId, outcome, {
+                    now: Date.now(),
+                    error: outcome === 'failed' ? (err instanceof Error ? err.message : String(err)) : undefined,
+                }))
+            }
+            return {
+                type: 'fail',
+                result: err instanceof Error ? err.message : String(err),
+                model: preset.name,
+            }
+        }
+    }
+
+    const credential = buildModelPresetCredential(preset)
 
     // Expand `<tool_call>` history into structured tool turns ONLY on the active
     // tool path. With tools off, fall back to the plain mapping so existing chats

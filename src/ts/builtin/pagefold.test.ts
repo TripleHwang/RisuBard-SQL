@@ -27,9 +27,11 @@ describe("built-in PageFold provider", () => {
     expect(builtInPageFoldPlugin.script).toContain(
       "api.pluginStorage ?? (typeof api.getLocalPluginStorage",
     );
+    expect(builtInPageFoldPlugin.script).toContain("applyPresetRoute(await storage.getItem(CONFIG_KEY), args?.pagefold_route)");
+    expect(builtInPageFoldPlugin.script).not.toContain("storage.setItem(CONFIG_KEY, args?.pagefold_route");
   });
 
-  test("is injected into the same provider registry used by every request mode", () => {
+  test("is injected for per-preset dispatch without appearing as a standalone model", () => {
     const source = readFileSync("src/ts/plugins/plugins.svelte.ts", "utf8");
     expect(source).toContain("loadBuiltInPageFoldPlugin");
     expect(source).toContain("!isBuiltInPluginName(p.name)");
@@ -41,8 +43,8 @@ describe("built-in PageFold provider", () => {
       "utf8",
     );
     expect(requestSource).toContain("export async function requestChatData(");
-    expect(requestSource).toContain("case LLMFormat.Plugin:");
-    expect(requestSource).toContain("return requestPlugin(targ)");
+    expect(requestSource).toContain("const usePageFold = preset.usePageFold === true");
+    expect(requestSource).toContain("const response = await dispatchPageFoldPreset(");
 
     const apiSource = readFileSync(
       "src/ts/plugins/apiV3/v3.svelte.ts",
@@ -51,6 +53,15 @@ describe("built-in PageFold provider", () => {
     expect(apiSource).toContain("trustedBuiltInPlugins.has(pluginName)");
     expect(apiSource).toContain("Object.isFrozen(plugin)");
     expect(apiSource).toContain("removeV3Providers(pluginName)");
-    expect(apiSource).toContain("customV3ProviderMetaStore[existingModel] = modelData");
+    expect(apiSource).toContain("const exposeInModelSelector = !(plugin.builtIn && plugin.name === 'pagefold')");
+    expect(apiSource).toContain("pluginV2.builtInProviders.set(providerName, registeredProvider)");
+
+    const uiSource = readFileSync(
+      "src/lib/Setting/Pages/Model/ModelPresetSettings.svelte",
+      "utf8",
+    );
+    expect(uiSource).toContain("editingPreset.usePageFold");
+    expect(uiSource).toContain("modelPresetPageFoldEnable");
+    expect(uiSource).toContain("getPageFoldPresetSupport(editingPreset)");
   });
 });

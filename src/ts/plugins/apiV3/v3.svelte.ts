@@ -661,6 +661,7 @@ const removeV3Provider = (pluginName: string, name: string) => {
     if (v3ProviderOwner.get(name) !== pluginName) return;
 
     pluginV2.providers.delete(name);
+    if (pluginName === 'pagefold') pluginV2.builtInProviders.delete(name);
     pluginV2.providerOptions.delete(name);
     customProviderStore.set(get(customProviderStore).filter(provider => provider !== name));
     const modelIndex = customV3ProviderMetaStore.findIndex(model =>
@@ -857,15 +858,26 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             v3ProviderNamesByPlugin.set(plugin.name, ownedNames)
             ownedNames.add(providerName)
             v3ProviderOwner.set(providerName, plugin.name)
+            // PageFold is exposed as a per-ModelPreset optimization toggle.
+            // Keep its provider callable through the same sandboxed registry,
+            // but do not present it as a standalone model/legacy provider.
+            const exposeInModelSelector = !(plugin.builtIn && plugin.name === 'pagefold')
             const provs = get(customProviderStore).filter(provider => provider !== providerName)
-            provs.push(providerName)
-            pluginV2.providers.set(providerName, async (arg, abortSignal) => {
+            if (exposeInModelSelector) provs.push(providerName)
+            const registeredProvider = async (arg: PluginV2ProviderArgument, abortSignal?: AbortSignal) => {
                await getPluginPermission(plugin.name, 'provider', 'periodically');
                //mode is overridden to v3, due to vulnerabilities using mode.
                //Alternative to mode will be added in future
                arg.mode = 'v3'
                return await func(arg, abortSignal);
-            }),
+            }
+            pluginV2.providers.set(providerName, registeredProvider)
+            // PageFold receives an ephemeral preset credential. Capture an
+            // unreplaceable handle only for the bundled plugin so a third-party
+            // provider with the same display name can never receive it.
+            if (plugin.builtIn && plugin.name === 'pagefold') {
+                pluginV2.builtInProviders.set(providerName, registeredProvider)
+            }
             pluginV2.providerOptions.set(providerName, bindPluginRequestStatusStorage(
                 options,
                 oldApis.pluginStorage.getItem,
@@ -886,10 +898,14 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 tokenizer:options?.model?.tokenizer ??  LLMTokenizer.Unknown
             }
             const existingModel = customV3ProviderMetaStore.findIndex(model => model.id === modelData.id)
-            if (existingModel === -1) {
-                customV3ProviderMetaStore.push(modelData);
-            } else {
-                customV3ProviderMetaStore[existingModel] = modelData;
+            if (exposeInModelSelector) {
+                if (existingModel === -1) {
+                    customV3ProviderMetaStore.push(modelData);
+                } else {
+                    customV3ProviderMetaStore[existingModel] = modelData;
+                }
+            } else if (existingModel !== -1) {
+                customV3ProviderMetaStore.splice(existingModel, 1)
             }
         },
         addTTSPreprocessor: async (

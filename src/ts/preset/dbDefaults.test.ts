@@ -20,7 +20,7 @@ describe('applyModelPresetDefaults', () => {
         const existingCache = createEmptyRegistryCache()
         existingCache.registries.official = { fetchedAt: 123, indexVersion: 7 }
         const db: any = {
-            modelPresets: [{ id: 'preset-a' }],
+            modelPresets: [{ id: 'preset-a', usePageFold: true }],
             apiKeyPool: { keyA: { id: 'keyA' } },
             modelProfileRegistryCache: existingCache,
             modelProfileRegistryLastFetched: 456,
@@ -31,7 +31,7 @@ describe('applyModelPresetDefaults', () => {
 
         applyModelPresetDefaults(db)
 
-        expect(db.modelPresets).toEqual([{ id: 'preset-a' }])
+        expect(db.modelPresets).toEqual([{ id: 'preset-a', usePageFold: true }])
         expect(db.apiKeyPool).toEqual({ keyA: { id: 'keyA' } })
         expect(db.modelProfileRegistryCache).toBe(existingCache)
         expect(db.modelProfileRegistryLastFetched).toBe(456)
