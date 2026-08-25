@@ -531,6 +531,7 @@ const removePluginChatPanels = (pluginName: string) => {
 }
 
 const unloadV3Plugin = async (pluginName: string) => {
+    removeV3Providers(pluginName);
     const callbacks = pluginUnloadCallbacks.get(pluginName);
     const instance = v3PluginInstances.find(p => p.name === pluginName);
     if(instance){
@@ -653,6 +654,31 @@ type PluginV3ProviderOptions = PluginV2ProviderOptions & {
 }
 
 export const customV3ProviderMetaStore:LLMModel[] = []
+const v3ProviderNamesByPlugin = new Map<string, Set<string>>();
+const v3ProviderOwner = new Map<string, string>();
+
+const removeV3Provider = (pluginName: string, name: string) => {
+    if (v3ProviderOwner.get(name) !== pluginName) return;
+
+    pluginV2.providers.delete(name);
+    pluginV2.providerOptions.delete(name);
+    customProviderStore.set(get(customProviderStore).filter(provider => provider !== name));
+    const modelIndex = customV3ProviderMetaStore.findIndex(model =>
+        model.id === `pluginmodel:::${name}`
+    );
+    if (modelIndex !== -1) customV3ProviderMetaStore.splice(modelIndex, 1);
+    v3ProviderOwner.delete(name);
+}
+
+const removeV3Providers = (pluginName: string) => {
+    const names = v3ProviderNamesByPlugin.get(pluginName);
+    if (!names) return;
+
+    for (const name of names) {
+        removeV3Provider(pluginName, name);
+    }
+    v3ProviderNamesByPlugin.delete(pluginName);
+}
 
 // Serializes permission dialogs. Every plugin shares the single global
 // alertStore, so when several plugins request permission at boot they would
@@ -820,16 +846,27 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         setChar: oldApis.setChar,
         addProvider: (name: string, func: (arg: PluginV2ProviderArgument, abortSignal?: AbortSignal) => Promise<{ success: boolean, content: string | ReadableStream<string> }>, options?: PluginV3ProviderOptions) => {
             console.warn(`[WARN] addProvider is a powerful API that can potentially be unsafe if used incorrectly. addProvider's functionality might be limited or changed in future updates to ensure security. please use other APIs if possible.`);
-            let provs = get(customProviderStore)
-            provs.push(name)
-            pluginV2.providers.set(name, async (arg, abortSignal) => {
+            const providerName = name.trim()
+            if (!providerName) {
+                throw new Error('Provider name must not be empty.')
+            }
+            const ownedNames = v3ProviderNamesByPlugin.get(plugin.name) ?? new Set<string>()
+            // A plugin may re-register an existing provider. Replace that one
+            // entry while preserving any other providers it owns.
+            removeV3Provider(plugin.name, providerName)
+            v3ProviderNamesByPlugin.set(plugin.name, ownedNames)
+            ownedNames.add(providerName)
+            v3ProviderOwner.set(providerName, plugin.name)
+            const provs = get(customProviderStore).filter(provider => provider !== providerName)
+            provs.push(providerName)
+            pluginV2.providers.set(providerName, async (arg, abortSignal) => {
                await getPluginPermission(plugin.name, 'provider', 'periodically');
                //mode is overridden to v3, due to vulnerabilities using mode.
                //Alternative to mode will be added in future
                arg.mode = 'v3'
                return await func(arg, abortSignal);
             }),
-            pluginV2.providerOptions.set(name, bindPluginRequestStatusStorage(
+            pluginV2.providerOptions.set(providerName, bindPluginRequestStatusStorage(
                 options,
                 oldApis.pluginStorage.getItem,
                 oldApis.pluginStorage.setItem,
@@ -837,18 +874,23 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             customProviderStore.set(provs)
 
             const modelData:LLMModel = {
-                id: `pluginmodel:::${name}`,
-                name: options?.model?.name ?? name,
-                shortName: options?.model?.shortName ?? name,
-                fullName: options?.model?.fullName ?? name,
-                internalID: options?.model?.internalID ?? `pluginmodel:::${name}`,
+                id: `pluginmodel:::${providerName}`,
+                name: options?.model?.name ?? providerName,
+                shortName: options?.model?.shortName ?? providerName,
+                fullName: options?.model?.fullName ?? providerName,
+                internalID: options?.model?.internalID ?? `pluginmodel:::${providerName}`,
                 provider: LLMProvider.AsIs,
                 format: LLMFormat.Plugin,
                 flags: options?.model?.flags ?? [LLMFlags.hasFullSystemPrompt],
                 parameters: options?.model?.parameters ?? ['temperature', 'top_p', 'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'min_p', 'top_a', 'top_k', 'thinking_tokens'],
                 tokenizer:options?.model?.tokenizer ??  LLMTokenizer.Unknown
             }
-            customV3ProviderMetaStore.push(modelData);
+            const existingModel = customV3ProviderMetaStore.findIndex(model => model.id === modelData.id)
+            if (existingModel === -1) {
+                customV3ProviderMetaStore.push(modelData);
+            } else {
+                customV3ProviderMetaStore[existingModel] = modelData;
+            }
         },
         addTTSPreprocessor: async (
             func: TTSHookFn<BeforeTTSContext, BeforeTTSResult>,

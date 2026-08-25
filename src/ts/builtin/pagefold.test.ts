@@ -1,9 +1,15 @@
-import { describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 
-import { builtInPageFoldPlugin } from "./pagefold";
+import { loadBuiltInPageFoldPlugin } from "./pagefold";
 
 describe("built-in PageFold provider", () => {
+  let builtInPageFoldPlugin: Awaited<ReturnType<typeof loadBuiltInPageFoldPlugin>>;
+
+  beforeAll(async () => {
+    builtInPageFoldPlugin = await loadBuiltInPageFoldPlugin();
+  });
+
   test("ships the fixed API v3 provider without persisting it in user data", () => {
     expect(builtInPageFoldPlugin).toMatchObject({
       name: "pagefold",
@@ -25,7 +31,8 @@ describe("built-in PageFold provider", () => {
 
   test("is injected into the same provider registry used by every request mode", () => {
     const source = readFileSync("src/ts/plugins/plugins.svelte.ts", "utf8");
-    expect(source).toContain("builtInPageFoldPlugin");
+    expect(source).toContain("loadBuiltInPageFoldPlugin");
+    expect(source).toContain("!isBuiltInPluginName(p.name)");
     expect(source).toContain("const enabledPlugins = [");
     expect(source).toContain("await loadV3Plugins(pluginV3)");
 
@@ -43,5 +50,7 @@ describe("built-in PageFold provider", () => {
     );
     expect(apiSource).toContain("trustedBuiltInPlugins.has(pluginName)");
     expect(apiSource).toContain("Object.isFrozen(plugin)");
+    expect(apiSource).toContain("removeV3Providers(pluginName)");
+    expect(apiSource).toContain("customV3ProviderMetaStore[existingModel] = modelData");
   });
 });

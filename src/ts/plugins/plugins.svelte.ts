@@ -12,7 +12,7 @@ import { SafeDocument, SafeIdbFactory, SafeLocalStorage } from "./pluginSafeClas
 import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
 import { runPluginUpdate } from "./pluginUpdate";
-import { builtInPageFoldPlugin } from "../builtin/pagefold";
+import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 
 export const customProviderStore = writable([] as string[])
 
@@ -37,6 +37,9 @@ interface ProviderPluginCustomLink {
 }
 
 export type RisuPlugin = ProviderPlugin
+
+export const isBuiltInPluginName = (name: string | undefined) =>
+    name?.trim().toLowerCase() === PAGEFOLD_PLUGIN_NAME
 
 export async function createBlankPlugin(){
     await importPlugin(
@@ -324,6 +327,15 @@ export async function importPlugin(code:string|null = null, argu:{
             return
         }
 
+        // PageFold is an application asset. Importing another copy would make
+        // two sandbox instances compete for the same provider/model id. Keep
+        // legacy copies in the database untouched for reversibility, but do
+        // not install any new duplicate over the built-in provider.
+        if (isBuiltInPluginName(name)) {
+            showError('PageFold is built in and cannot be installed as a separate plugin.')
+            return
+        }
+
         if(updateURL && versionOfPlugin.length === 0){
             showError('plugin version not found, did you put it correctly? It is required when update URL is provided.')
             return
@@ -448,9 +460,18 @@ export async function loadPlugins() {
     // keeps PageFold available in every model selector (main, sub/aux and
     // module-bound plugin requests) without duplicating a 2 MB bundle in every
     // save or SQL migration.
+    const builtInPageFoldPlugin = await loadBuiltInPageFoldPlugin()
+    const duplicatePageFold = db.plugins?.some((p: RisuPlugin) =>
+        p.enabled && isBuiltInPluginName(p.name)
+    )
+    if (duplicatePageFold) {
+        console.warn('[Plugin] Ignoring installed PageFold because the built-in provider is active.')
+    }
     const enabledPlugins = [
         builtInPageFoldPlugin,
-        ...safeStructuredClone(db.plugins).filter((p: RisuPlugin) => p.enabled),
+        ...safeStructuredClone(db.plugins ?? []).filter((p: RisuPlugin) =>
+            p.enabled && !isBuiltInPluginName(p.name)
+        ),
     ]
     const pluginV2 = enabledPlugins.filter((a: RisuPlugin) => a.version === 2 || a.version === '2.1')
     const pluginV3 = enabledPlugins.filter((a: RisuPlugin) => a.version === '3.0')
