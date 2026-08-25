@@ -4333,6 +4333,22 @@
     delete config2.llmgateway.pdfEngine;
     return config2;
   }
+  function applyPresetRoute(config2, override) {
+    const normalized = normalizeConfig(config2);
+    if (!override || typeof override !== "object") return normalized;
+    const provider = override.activeProvider;
+    const route = override.route;
+    if (!["google", "vertex", "openrouter", "llmgateway"].includes(provider)) return normalized;
+    if (!route || typeof route !== "object") return normalized;
+    return {
+      ...normalized,
+      activeProvider: provider,
+      [provider]: {
+        ...normalized[provider],
+        ...route
+      }
+    };
+  }
   function serializeTranscript(promptChat) {
     const messages = Array.isArray(promptChat) ? promptChat : [];
     return messages.map((message, index) => {
@@ -52974,7 +52990,7 @@ ${account.private_key}`);
     async function vertexAuth(vertex, signal) {
       if (vertex.authMode === "service_account") return serviceAccountToken(vertex, signal);
       if (!vertex.accessToken) throw new Error("Vertex AI access token\uC744 \uC124\uC815\uD558\uC138\uC694.");
-      if (!vertex.projectId) throw new Error("Vertex AI project ID\uB97C \uC124\uC815\uD558\uC138\uC694.");
+      if (!vertex.projectId && !vertex.baseUrl) throw new Error("Vertex AI project ID\uB97C \uC124\uC815\uD558\uC138\uC694.");
       return { token: vertex.accessToken, projectId: vertex.projectId };
     }
     async function callGoogle(args, packed, pdf, currentConfig, signal) {
@@ -52999,12 +53015,14 @@ ${account.private_key}`);
       const auth = await vertexAuth(route, signal);
       const location = route.location || "global";
       const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
-      const url = `https://${host}/v1/projects/${encodeURIComponent(auth.projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(route.model)}:generateContent`;
+      const baseUrl = route.baseUrl ? route.baseUrl.replace(/\/$/, "") : `https://${host}/v1/projects/${encodeURIComponent(auth.projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models`;
+      const url = `${baseUrl}/${encodeURIComponent(route.model)}:generateContent`;
       const payload = await fetchJson(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.token}`
+          Authorization: `Bearer ${auth.token}`,
+          ...route.headers && typeof route.headers === "object" ? route.headers : {}
         },
         body: JSON.stringify(buildGeminiRequest(args, packed, pdf.base64))
       }, signal);
@@ -53064,7 +53082,9 @@ ${account.private_key}`);
         console.info(`[PageFold #${requestId}] ${stage} (+${elapsed}ms)${detail ? ` \xB7 ${detail}` : ""}`);
       };
       log3("\uC694\uCCAD \uC2DC\uC791");
-      const currentConfig = normalizeConfig(await storage.getItem(CONFIG_KEY));
+      // Packaging/font/statistics preferences remain save-backed. The selected
+      // ModelPreset route is merged only into this request and is never stored.
+      const currentConfig = applyPresetRoute(await storage.getItem(CONFIG_KEY), args?.pagefold_route);
       log3("\uC124\uC815 \uB85C\uB4DC \uC644\uB8CC", `${currentConfig.activeProvider} / ${routeConfig(currentConfig).model}`);
       const packed = packagePrompt(args.prompt_chat, currentConfig.packagingMode);
       log3("\uD504\uB86C\uD504\uD2B8 \uD328\uD0A4\uC9D5 \uC644\uB8CC", `${packagingModeName(currentConfig.packagingMode)} / ${packed.baselineText.length}\uC790`);
@@ -53142,7 +53162,7 @@ ${packed.userText}`);
       .pf-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}.pf-message{margin-bottom:14px;border:1px solid #1d4ed8;border-radius:8px;background:#172554;padding:10px 12px;color:#bfdbfe}
       .pf-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.pf-stat{border:1px solid #273449;border-radius:10px;background:#0f172a;padding:15px}.pf-stat span{display:block;color:#94a3b8;font-size:11px}.pf-stat strong{display:block;margin-top:5px;font-size:20px}
       .pf-table-wrap{overflow:auto}.pf-table{width:100%;border-collapse:collapse}.pf-table th,.pf-table td{border-bottom:1px solid #273449;padding:9px 8px;text-align:left;white-space:nowrap}.pf-table th{color:#94a3b8;font-size:11px}.pf-empty{padding:28px;text-align:center;color:#94a3b8}
-      .pf-provider{border-left:3px solid #334155}.pf-provider.active{border-left-color:#60a5fa}.pf-badge{display:inline-block;margin-left:7px;border-radius:999px;background:#1d4ed8;padding:1px 7px;color:#dbeafe;font-size:10px}
+      .pf-provider{display:none!important;border-left:3px solid #334155}.pf-provider.active{border-left-color:#60a5fa}.pf-badge{display:inline-block;margin-left:7px;border-radius:999px;background:#1d4ed8;padding:1px 7px;color:#dbeafe;font-size:10px}
       @media(max-width:760px){.pf-shell{padding:15px}.pf-grid{grid-template-columns:1fr}.pf-card.full{grid-column:auto}.pf-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pf-header{align-items:flex-start}.pf-title{font-size:22px}}
     `;
       document.head.appendChild(style);
@@ -53160,10 +53180,12 @@ ${packed.userText}`);
     function settingsView() {
       const active = config2.activeProvider;
       return `<div id="pf-settings"><div class="pf-grid">
+      <section class="pf-card full"><h2>모델 프리셋 연동</h2>
+        <p class="pf-help">모델·엔드포인트·인증 정보는 모델 프리셋의 고급 설정에서 PageFold를 켠 요청마다 해당 프리셋에서 가져옵니다. 프리셋 요청의 API 키는 이 화면에 저장되지 않으며, 이 화면에서는 PDF 패키징 방식과 통계만 관리합니다.</p>
+      </section>
       <section class="pf-card full"><h2>PDF \uD328\uD0A4\uC9D5</h2>
         <div class="pf-grid">
           ${selectField("packaging-mode", "\uD328\uD0A4\uC9D5 \uBAA8\uB4DC", config2.packagingMode, [["maximum", "\uC808\uC57D"], ["balanced", "\uC548\uC815"]], "\uC808\uC57D \uBAA8\uB4DC\uB294 \uC804\uCCB4 \uB300\uD654\uB97C PDF\uC5D0 \uB123\uB294 \uAD8C\uC7A5 \uC124\uC815\uC785\uB2C8\uB2E4. \uC548\uC815 \uBAA8\uB4DC\uB294 system\uB9CC \uC6D0\uBB38\uC73C\uB85C \uC720\uC9C0\uD558\uACE0 user\xB7assistant \uBA54\uC2DC\uC9C0\uB294 PDF\uC5D0 \uB123\uC2B5\uB2C8\uB2E4.")}
-          ${selectField("active-provider", "\uD65C\uC131 \uD504\uB85C\uBC14\uC774\uB354", active, [["google", "Google AI Studio"], ["vertex", "Vertex AI"], ["openrouter", "OpenRouter"], ["llmgateway", "LLM Gateway"]])}
         </div>
       </section>
       <section class="pf-card full pf-provider ${active === "google" ? "active" : ""}" data-provider="google" ${active === "google" ? "" : "hidden"}><h2>Google AI Studio<span class="pf-badge">\uD65C\uC131</span></h2>
@@ -53240,7 +53262,7 @@ ${packed.userText}`);
         await persistConfig({
           ...config2,
           packagingMode: get("packaging-mode"),
-          activeProvider: get("active-provider"),
+          activeProvider: config2.activeProvider,
           google: {
             apiKey: get("google-key"),
             model: get("google-model"),

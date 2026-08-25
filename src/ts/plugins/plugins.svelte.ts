@@ -491,6 +491,8 @@ export type PluginV2ProviderArgument = {
     temperature: number
     mode: string
     max_tokens: number
+    /** Host-only, request-scoped route for the bundled PageFold provider. Never persist or log it. */
+    pagefold_route?: unknown
 }
 
 export type PluginV2ProviderOptions = {
@@ -509,6 +511,8 @@ type ReplacerFunction = (content: OpenAIChat[], type: string) => OpenAIChat[] | 
 
 export const pluginV2 = {
     providers: new Map<string, (arg: PluginV2ProviderArgument, abortSignal?: AbortSignal) => Promise<{ success: boolean, content: string | ReadableStream<string> }>>(),
+    /** Trusted handles captured only from bundled providers; unlike `providers`, plugins cannot replace these. */
+    builtInProviders: new Map<string, (arg: PluginV2ProviderArgument, abortSignal?: AbortSignal) => Promise<{ success: boolean, content: string | ReadableStream<string> }>>(),
     providerOptions: new Map<string, PluginV2ProviderOptions>(),
     editdisplay: new Set<EditFunction>(),
     editoutput: new Set<EditFunction>(),
@@ -859,6 +863,7 @@ export async function loadV2Plugin(plugins: RisuPlugin[]) {
         }
 
         pluginV2.providers.clear()
+        pluginV2.builtInProviders.clear()
         pluginV2.editdisplay.clear()
         pluginV2.editoutput.clear()
         pluginV2.editprocess.clear()

@@ -48,15 +48,23 @@ deletion without serializing the whole database into a blob.
 
 ## PageFold
 
-PageFold 0.1.1 is loaded as an always-available built-in API v3 provider. It
-uses the same provider registry and request path as installed provider plugins,
-so every existing selector that accepts plugin models can choose it: primary,
-sub/auxiliary, memory, emotion, translation, and other model-bound operations.
+PageFold 0.1.1 is loaded as a hidden, trusted built-in API v3 transport. It is
+not a selectable model. Each ModelPreset exposes an opt-in PageFold switch in
+Advanced settings; the shared ModelPreset dispatcher applies it consistently to
+main, sub/auxiliary, memory, emotion, translation and other model-bound requests.
 
-It is opt-in: bundling does not select PageFold or change an existing model.
-The built-in edition prefers save-backed `pluginStorage`, allowing its settings
-to migrate and commit through SQL, and falls back to local plugin storage only
-on older compatible hosts.
+The PDF request uses that preset's resolved model ID, endpoint and credential.
+Google AI Studio, Vertex Gemini Native, OpenRouter and LLM Gateway profiles are
+supported; incompatible profiles cannot enable the switch. Vertex service-account
+JSON is exchanged by the host and only the short-lived access token crosses the
+built-in plugin boundary. The ephemeral route is never written to PageFold
+storage or request logs. Save-backed PageFold storage holds only packaging and
+statistics preferences used across presets.
+
+It is opt-in and defaults off, so imported Risu presets and existing requests are
+unchanged. PageFold requests intentionally disable streaming, tools, image input,
+provider-native context caching and server-side job routing; structured auxiliary
+outputs use the existing schema-as-system-message fallback.
 
 ## Release gates
 

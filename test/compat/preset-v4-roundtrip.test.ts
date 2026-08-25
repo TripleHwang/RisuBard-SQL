@@ -83,6 +83,7 @@ function buildV4Fixture(): V4Fixture {
                     sourcePath: 'db.aiModel',
                     configHash: 'deadbeef',
                 },
+                usePageFold: true,
                 apiKeyRef: 'key-1',
                 createdAt: 1_700_000_000_000,
                 updatedAt: 1_700_000_000_000,

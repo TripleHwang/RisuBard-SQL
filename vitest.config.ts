@@ -14,6 +14,8 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     setupFiles: ['vitest.setup.ts'],
+    // File-local teardown must run before the shared post-test cleanup below.
+    sequence: { hooks: 'stack' },
     // compat/server suites have their own node-environment configs
     // (vitest.config.compat.ts / vitest.config.server.ts); exclude here so
     // `pnpm test` doesn't pick them up under the wrong environment.
