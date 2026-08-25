@@ -8,6 +8,20 @@ Copyright (C) 2026 rpaddict
 
 The repository is distributed under the GNU General Public License, version 3. See `LICENSE`.
 
+## SQL storage lineage
+
+The relational schema, typed adjacency-list value codec, SQLite commit model,
+and browser OPFS backend are adapted from the user-supplied
+`HaejeokRisuai-b6251` source tree. They have been reshaped around RisuBard's
+PocketRisu-compatible `Database` contract and remain covered by this
+repository's GPLv3 terms.
+
+## Bundled PageFold provider
+
+`src/ts/builtin/pagefold-0.1.1-fix.js` is the user-supplied PageFold 0.1.1
+provider bundle. The built-in wrapper preserves its version metadata and runs
+it through the existing Risu plugin API v3 sandbox.
+
 ## Third-party icons
 
 The workspace mode switch, character configuration navigation, and lorebook workspace use Solar Icons in the Bold style,

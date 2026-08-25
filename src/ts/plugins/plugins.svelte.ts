@@ -12,6 +12,7 @@ import { SafeDocument, SafeIdbFactory, SafeLocalStorage } from "./pluginSafeClas
 import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
 import { runPluginUpdate } from "./pluginUpdate";
+import { builtInPageFoldPlugin } from "../builtin/pagefold";
 
 export const customProviderStore = writable([] as string[])
 
@@ -28,6 +29,7 @@ interface ProviderPlugin {
     updateURL?: string
     enabled?: boolean
     allowedIPC?: string[]
+    builtIn?: boolean
 }
 interface ProviderPluginCustomLink {
     link: string
@@ -442,8 +444,14 @@ export async function loadPlugins() {
     console.log('Loading plugins...')
     let db = getDatabase()
 
-
-    const enabledPlugins = safeStructuredClone(db.plugins).filter((p: RisuPlugin) => p.enabled)
+    // Built-ins are code assets, not mutable rows in the user database. This
+    // keeps PageFold available in every model selector (main, sub/aux and
+    // module-bound plugin requests) without duplicating a 2 MB bundle in every
+    // save or SQL migration.
+    const enabledPlugins = [
+        builtInPageFoldPlugin,
+        ...safeStructuredClone(db.plugins).filter((p: RisuPlugin) => p.enabled),
+    ]
     const pluginV2 = enabledPlugins.filter((a: RisuPlugin) => a.version === 2 || a.version === '2.1')
     const pluginV3 = enabledPlugins.filter((a: RisuPlugin) => a.version === '3.0')
 

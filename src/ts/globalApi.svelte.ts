@@ -32,6 +32,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
+import { syncActiveSqlDatabase } from './storage/sql/sqlBootstrap'
 
 export const forageStorage = new AutoStorage()
 
@@ -1071,6 +1072,7 @@ export async function saveDb() {
         }
 
         updateKnownChatsAfterSuccessfulSave(db, toSave)
+        await syncActiveSqlDatabase(db)
 
         if (newEtag) {
             forageStorage.setDbEtag(newEtag)

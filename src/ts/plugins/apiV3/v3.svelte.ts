@@ -563,6 +563,7 @@ const unloadV3Plugin = async (pluginName: string) => {
 
 type PluginPermissionDesc = 'fetchLogs'|'db'|'mainDom'|'replacer'|'provider'|'sendChat';
 const pluginPermissionDescs: PluginPermissionDesc[] = ['fetchLogs', 'db', 'mainDom', 'replacer', 'provider', 'sendChat'];
+const trustedBuiltInPlugins = new Set<string>();
 
 // Plugin names are free text (the //@name directive), so `${name}_${desc}` keys
 // can collide — both across permissions and with a legacy name-only entry that
@@ -688,6 +689,13 @@ const isPermissionResolved = async (
 }
 
 const getPluginPermission = async (pluginName: string, permissionDesc: PluginPermissionDesc, reconfirm: boolean|'periodically' = false) => {
+    // Built-ins are reviewed code assets shipped with the application. Their
+    // hash is covered by the app build, and prompting as if they were mutable
+    // user-installed scripts would make their providers disappear on first
+    // launch until a modal is accepted.
+    if (trustedBuiltInPlugins.has(pluginName)) {
+        return true
+    }
     await ensurePluginPermissionStateLoaded()
 
     // Recomputed (not captured) so a periodic reconfirm reflects the latest
@@ -1551,6 +1559,10 @@ export async function executePluginV3(plugin:RisuPlugin){
     if(alreadyRunning){
         console.log(`[RisuAI Plugin: ${plugin.name}] Plugin is already running. Skipping load.`);
         return;
+    }
+
+    if (plugin.builtIn && plugin.name === 'pagefold' && Object.isFrozen(plugin)) {
+        trustedBuiltInPlugins.add(plugin.name)
     }
 
     const iframe = document.createElement('iframe');

@@ -2,7 +2,7 @@ import { changeFullscreen, checkNullish } from "./util"
 import { installDynamicViewportHeight } from "./viewportHeight"
 import { v4 as uuidv4 } from 'uuid';
 import { get } from "svelte/store";
-import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset } from "./storage/database.svelte";
+import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset, type Database } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState } from "./stores.svelte";
@@ -33,6 +33,23 @@ import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { isChatStub, purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
+import { openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
+
+const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
+
+async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
+    LoadingStatusState.text = "Opening SQL Database..."
+    const canonical = await openStandaloneSql(decoded, {
+        beforeMigrate: async () => {
+            const existing = await forageStorage.getItem(SQL_MIGRATION_BACKUP_PATH) as unknown as Uint8Array
+            if (checkNullish(existing)) {
+                await forageStorage.setItem(SQL_MIGRATION_BACKUP_PATH, source)
+            }
+        },
+    })
+    setPatchSyncBaseline(safeStructuredClone(canonical.database))
+    setDatabase(canonical.database)
+}
 
 /**
  * Loads the application data.
@@ -46,36 +63,41 @@ export async function loadData() {
             {
                 await forageStorage.Init()
 
-                LoadingStatusState.text = "Loading Local Save File..."
-                let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
-                LoadingStatusState.text = "Decoding Local Save File..."
-                if (checkNullish(gotStorage)) {
-                    createdFreshDatabase = true
-                    gotStorage = encodeRisuSaveLegacy({})
-                    await forageStorage.setItem('database/database.bin', gotStorage)
-                }
-                try {
-                    const decoded = await decodeRisuSave(gotStorage)
-                    setPatchSyncBaseline(safeStructuredClone(decoded))
-                    console.log(decoded)
-                    setDatabase(decoded)
-                } catch (error) {
-                    console.error(error)
-                    const backups = await getDbBackups()
-                    let backupLoaded = false
-                    for (const backup of backups) {
-                        try {
-                            LoadingStatusState.text = `Reading Backup File ${backup}...`
-                            const backupData: Uint8Array = await forageStorage.getItem(`database/dbbackup-${backup}.bin`) as unknown as Uint8Array
-                            const backupDecoded = await decodeRisuSave(backupData)
-                            setPatchSyncBaseline(safeStructuredClone(backupDecoded))
-                            setDatabase(backupDecoded)
-                            backupLoaded = true
-                            break
-                        } catch (error) { }
+                LoadingStatusState.text = "Opening SQL Database..."
+                const existingSql = await openExistingStandaloneSql()
+                if (existingSql) {
+                    setPatchSyncBaseline(safeStructuredClone(existingSql.database))
+                    setDatabase(existingSql.database)
+                } else {
+                    LoadingStatusState.text = "Loading Local Save File..."
+                    let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
+                    LoadingStatusState.text = "Decoding Local Save File..."
+                    if (checkNullish(gotStorage)) {
+                        createdFreshDatabase = true
+                        gotStorage = encodeRisuSaveLegacy({})
+                        await forageStorage.setItem('database/database.bin', gotStorage)
                     }
-                    if (!backupLoaded) {
-                        throw "Forage: Your save file is corrupted"
+                    try {
+                        const decoded = await decodeRisuSave(gotStorage)
+                        console.log(decoded)
+                        await activateCanonicalDatabase(decoded, gotStorage)
+                    } catch (error) {
+                        console.error(error)
+                        const backups = await getDbBackups()
+                        let backupLoaded = false
+                        for (const backup of backups) {
+                            try {
+                                LoadingStatusState.text = `Reading Backup File ${backup}...`
+                                const backupData: Uint8Array = await forageStorage.getItem(`database/dbbackup-${backup}.bin`) as unknown as Uint8Array
+                                const backupDecoded = await decodeRisuSave(backupData)
+                                await activateCanonicalDatabase(backupDecoded, backupData)
+                                backupLoaded = true
+                                break
+                            } catch (error) { }
+                        }
+                        if (!backupLoaded) {
+                            throw "Forage: Your save file is corrupted"
+                        }
                     }
                 }
 
