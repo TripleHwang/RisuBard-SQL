@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASE_ARTIFACT_PREFIX: RisuBard-Standalone
+  RELEASE_DISPLAY_NAME: RisuBard Standalone
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,6 +32,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          PACKAGE_VERSION="$(node -p \"require('./package.json').version\")"
+          test "$GITHUB_REF_NAME" = "v$PACKAGE_VERSION"
+
+      - name: Verify standalone release contract
+        run: pnpm check:standalone-release
+
+      - name: Run compatibility tests
+        run: pnpm test:compat
+
       - name: Build
         run: pnpm build
         env:
@@ -43,6 +60,7 @@ jobs:
             packages/risubard-core/
             src/ts/risubard/
             package.json
+            standalone-release.json
             pnpm-lock.yaml
             pnpm-workspace.yaml
             update.sh
@@ -205,7 +223,7 @@ jobs:
           cd scripts/portable
           GCC_DIR="$(dirname "$(which gcc)")"
           "$GCC_DIR/windres" launcher.rc -O coff -o launcher.res
-          gcc -municode -O2 -o ../../portable/RisuBard.exe launcher.c launcher.res -lshell32
+          gcc -municode -O2 -o ../../portable/RisuBard-Standalone.exe launcher.c launcher.res -lshell32
           rm -f launcher.res icon.ico
 
       - name: Create macOS app bundle
@@ -213,7 +231,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          APP="portable/RisuBard.app"
+          APP="portable/RisuBard-Standalone.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           ICONSET="$(mktemp -d)/AppIcon.iconset"
           mkdir -p "$ICONSET"
@@ -232,11 +250,11 @@ jobs:
           <plist version="1.0">
           <dict>
               <key>CFBundleExecutable</key>
-              <string>RisuBard</string>
+              <string>RisuBard-Standalone</string>
               <key>CFBundleName</key>
-              <string>RisuBard</string>
+              <string>${RELEASE_DISPLAY_NAME}</string>
               <key>CFBundleIdentifier</key>
-              <string>com.risubard</string>
+              <string>local.risubard.standalone</string>
               <key>CFBundleVersion</key>
               <string>${VERSION}</string>
               <key>CFBundleShortVersionString</key>
@@ -250,13 +268,13 @@ jobs:
           </dict>
           </plist>
           PLIST
-          cat > "$APP/Contents/MacOS/RisuBard" << 'LAUNCHER'
+          cat > "$APP/Contents/MacOS/RisuBard-Standalone" << 'LAUNCHER'
           #!/bin/bash
           PORTABLE_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
           cd "$PORTABLE_DIR"
           PORT="${PORT:-6001}"
           if [ ! -f "bin/node" ]; then
-              osascript -e 'display dialog "RisuBard.app must remain inside the RisuBard portable folder." buttons {"OK"} default button 1 with icon stop'
+              osascript -e 'display dialog "RisuBard-Standalone.app must remain inside the standalone portable folder." buttons {"OK"} default button 1 with icon stop'
               exit 1
           fi
           (sleep 2 && open "http://localhost:$PORT") &
@@ -312,7 +330,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          NAME="RisuBard-v${VERSION}-win-x64"
+          NAME="${RELEASE_ARTIFACT_PREFIX}-v${VERSION}-win-x64"
           cd portable
           7z a -tzip "../${NAME}.zip" .
 
@@ -321,7 +339,7 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          NAME="RisuBard-v${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}"
+          NAME="${RELEASE_ARTIFACT_PREFIX}-v${VERSION}-${{ matrix.platform }}-${{ matrix.arch }}"
           mv portable "$NAME"
           tar -czf "${NAME}.tar.gz" "$NAME"
           rm -rf "$NAME"
@@ -330,7 +348,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: portable-${{ matrix.platform }}-${{ matrix.arch }}
-          path: RisuBard-*
+          path: ${{ env.RELEASE_ARTIFACT_PREFIX }}-*
           retention-days: 1
 
   release:
@@ -348,7 +366,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          name: "RisuBard ${{ github.ref_name }}"
+          name: "${{ env.RELEASE_DISPLAY_NAME }} ${{ github.ref_name }}"
           generate_release_notes: true
           draft: true
-          files: RisuBard-*
+          files: ${{ env.RELEASE_ARTIFACT_PREFIX }}-*

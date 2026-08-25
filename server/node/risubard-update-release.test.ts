@@ -25,18 +25,23 @@ const languageSources = ['en.ts', 'ko.ts', 'zh-Hant.ts'].map(name =>
     fileURLToPath(new URL(`../../src/lang/${name}`, import.meta.url))
 )
 
-describe('RisuBard release updater target', () => {
-    test('checks and downloads releases from rpaddict/RisuBard', () => {
+describe('standalone release updater target', () => {
+    test('requires an explicitly configured standalone release repository', () => {
         const server = readFileSync(serverSource, 'utf8')
         const updater = readFileSync(updaterSource, 'utf8')
         const sourceUpdater = readFileSync(sourceUpdaterSource, 'utf8')
 
-        expect(server).toContain("const GITHUB_REPO = 'rpaddict/RisuBard';")
+        expect(server).toContain('RISU_UPDATE_REPOSITORY')
         expect(server).toContain(
             'https://api.github.com/repos/${GITHUB_REPO}/releases/latest'
         )
-        expect(updater).toContain("const REPO = 'rpaddict/RisuBard';")
-        expect(sourceUpdater).toContain('REPO="rpaddict/RisuBard"')
+        expect(server).toContain("'RisuBard-Standalone'")
+        expect(updater).toContain('RISU_UPDATE_REPOSITORY')
+        expect(updater).toContain("'RisuBard-Standalone'")
+        expect(sourceUpdater).toContain('RISU_UPDATE_REPOSITORY')
+        expect(server).not.toContain("const GITHUB_REPO = 'rpaddict/RisuBard';")
+        expect(updater).not.toContain("const REPO = 'rpaddict/RisuBard';")
+        expect(sourceUpdater).not.toContain('REPO="rpaddict/RisuBard"')
     })
 
     test('does not expose inherited upstream public statistics', () => {

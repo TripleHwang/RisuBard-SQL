@@ -1,22 +1,18 @@
-# Project and container names are kept as historical 'risuai-nodeonly' so existing
-# v1.5.x users transition without port/container collisions. Brand identity lives
-# in the image path, README, and in-app UI — these compose internals are infra
-# identifiers and stay stable on purpose.
-name: risuai-nodeonly
+# Neutral local identifiers keep this fork independent of the upstream registry.
+# Change them deliberately if this is deployed beside an existing installation.
+name: risubard-standalone
 
 services:
-  risuai:
-    container_name: risuai-nodeonly
-    image: ghcr.io/rpaddict/risubard:latest
+  risubard:
+    container_name: risubard-standalone
+    build: .
+    image: risubard-standalone:local
     restart: always
     ports:
       - 6001:6001
     volumes:
-      - risuai-save:/app/save
+      - risubard-standalone-save:/app/save
 
 volumes:
-  risuai-save:
-    # Explicit name preserves the existing volume from v1.5.0 (project name was 'risuai-nodeonly').
-    # Without this, the new project name 'risubard' would prefix the volume as
-    # 'risubard_risuai-save', creating an empty save folder for existing users.
-    name: risuai-nodeonly_risuai-save
+  risubard-standalone-save:
+    name: risubard-standalone-save

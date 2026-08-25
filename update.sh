@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="rpaddict/RisuBard"
+REPO="${RISU_UPDATE_REPOSITORY:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 info()  { printf '\033[1;34m[INFO]\033[0m  %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m  %s\n' "$*"; }
 error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*"; exit 1; }
+
+[ -n "$REPO" ] || error "Self-update is not configured. Set RISU_UPDATE_REPOSITORY to the owner/repository that publishes this standalone build."
 
 # ── Check current version ─────────────────────────────────────────────────────
 

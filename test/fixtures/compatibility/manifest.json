@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "id": "synthetic-upstream-compatible-v1",
+      "source": "Generated from the documented legacy RisuAI backup format; safe to track because it contains no user data.",
+      "seed": {
+        "characterCount": 2,
+        "chatsPerCharacter": 2,
+        "messagesPerChat": 3,
+        "includeAssets": true
+      },
+      "expected": {
+        "characterCount": 2,
+        "chatCountPerCharacter": 2,
+        "messageCountPerChat": 3,
+        "assetCount": 2,
+        "personaCount": 1
+      }
+    }
+  ]
+}

@@ -54,6 +54,7 @@ dist.zip
 !/scripts/check-public-boundary.mjs
 !/scripts/check-public-boundary.test.ts
 !/scripts/check-brand-boundary.test.ts
+!/scripts/check-standalone-release.mjs
 .env
 /server/node/ssl/certificate
 /bin/
@@ -62,3 +63,6 @@ dist.zip
 # Due to Cargo.lock makes the project build fail, we ignore it
 Cargo.lock
 test/fixtures/
+!test/fixtures/
+!test/fixtures/compatibility/
+!test/fixtures/compatibility/manifest.json

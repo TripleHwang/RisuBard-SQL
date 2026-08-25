@@ -1,6 +1,8 @@
 name: PR Check
 
 on:
+  push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
@@ -57,3 +59,6 @@ jobs:
 
       - name: Run compatibility tests
         run: pnpm test:compat
+
+      - name: Verify standalone release contract
+        run: pnpm check:standalone-release

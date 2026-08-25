@@ -1,0 +1,8 @@
+{
+  "displayName": "RisuBard Standalone",
+  "artifactPrefix": "RisuBard-Standalone",
+  "macBundleIdentifier": "local.risubard.standalone",
+  "updateRepositoryEnvironmentVariable": "RISU_UPDATE_REPOSITORY",
+  "updateUrlEnvironmentVariable": "RISU_UPDATE_URL",
+  "status": "Choose final branding, repository, signing identity, and update channel before public distribution."
+}

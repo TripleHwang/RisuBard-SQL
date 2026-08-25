@@ -13,7 +13,11 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const REPO = 'rpaddict/RisuBard';
+// A standalone build must be pointed at the fork that owns its releases.
+// Do not fall back to the upstream repository: its artifacts may carry a
+// different schema, bundled code, or security policy.
+const REPO = (process.env.RISU_UPDATE_REPOSITORY || '').trim();
+const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuBard-Standalone';
 const ROOT = path.resolve(__dirname, '..');
 
 const isWin = process.platform === 'win32';
@@ -206,6 +210,9 @@ function areDirectoriesEquivalent(a, b) {
 }
 
 async function main() {
+    if (!REPO) {
+        error('Self-update is not configured. Set RISU_UPDATE_REPOSITORY to the owner/repository that publishes this standalone build.');
+    }
     const current = getCurrentVersion();
     log(`Current version: ${current}`);
     log('Checking for updates...');
@@ -224,7 +231,7 @@ async function main() {
     log(`New version available: ${latest}`);
 
     const suffix = getPlatformSuffix();
-    const asset = (release.assets || []).find(a => a.name.includes(suffix));
+    const asset = (release.assets || []).find(a => a.name === `${RELEASE_ARTIFACT_PREFIX}-v${latest.replace(/^v/i, '')}-${suffix}.${isWin ? 'zip' : 'tar.gz'}`);
     if (!asset) {
         error(`No portable package found for ${suffix}. Download manually from:\n  ${release.html_url}`);
     }
