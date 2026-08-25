@@ -19,7 +19,7 @@ export interface SqlBootstrapOptions {
 
 /**
  * Select the canonical database without changing the object shape consumed by
- * PocketRisu/RisuBard code. A legacy snapshot is imported only when SQL is
+ * existing Risu database code. A legacy snapshot is imported only when SQL is
  * empty. The source is left usable when opening, migration, or verification
  * fails, which makes the transition recoverable.
  */

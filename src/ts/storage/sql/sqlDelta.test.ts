@@ -31,7 +31,7 @@ function database() {
 }
 
 describe("SQL delta commits", () => {
-  it("does not write an unchanged PocketRisu-compatible graph", () => {
+  it("does not write an unchanged upstream-compatible graph", () => {
     const before = database();
     const after = structuredClone(before);
     expect(buildSqlDeltaCommit(before, after, 3)).toBeNull();

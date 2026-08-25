@@ -13,6 +13,8 @@ const legacyTokens = [
     {
         value: ['pocket', 'risu'].join(''),
         contentExceptions: new Set([
+            // Legal attribution must preserve the upstream project's name.
+            'NOTICE.md',
             'README.en.md',
             'README.md',
         ]),

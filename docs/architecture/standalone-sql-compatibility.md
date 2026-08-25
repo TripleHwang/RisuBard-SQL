@@ -3,8 +3,8 @@
 ## Product boundary
 
 This repository is an independent, standalone Risu-family application derived
-from PocketRisu through RisuBard 0.8.11. It has its own SQL file and can run
-without a separate PocketRisu or RisuBard installation. Source and license
+from the upstream application through RisuBard 0.8.11. It has its own SQL file
+and can run without a separate upstream or RisuBard installation. Source and license
 attribution remain intact.
 
 The public compatibility boundary is the existing RisuBard `Database` object,

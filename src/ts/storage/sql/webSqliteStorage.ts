@@ -222,7 +222,7 @@ export class WebSqliteStorage implements ISqlStorage {
       "chat_id = ? AND message_id = ?",
       [chatId, messageId],
     ) ?? {}) as Message;
-    // PocketRisu historically names the stable message identifier `chatId`.
+      // Upstream historically names the stable message identifier `chatId`.
     // It is normalized into the SQL primary key, then restored at the public
     // object boundary so plugins and delta commits observe the exact shape.
     message.chatId = messageId;
