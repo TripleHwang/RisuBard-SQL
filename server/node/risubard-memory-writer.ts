@@ -343,12 +343,13 @@ export function parseMemoryWriterDraft(output: string): MemoryWriterDraft {
                 candidate.targetDocumentId,
                 `canonicalUpdateCandidates[${index}].targetDocumentId`
             )
-        if ((candidate.action === 'create' && targetDocumentId !== null)
-            || (candidate.action === 'update' && targetDocumentId === null)) {
-            throw new Error(
-                `canonicalUpdateCandidates[${index}].targetDocumentId does not match action`
-            )
-        }
+        // Some structured-output providers validate these fields independently
+        // and can still return a contradictory pair after the repair attempt.
+        // The target identity is authoritative: downstream target resolution can
+        // safely fall back to a create when an update ID no longer exists.
+        const action: 'create' | 'update' = targetDocumentId === null
+            ? 'create'
+            : 'update'
         if (typeof candidate.confidence !== 'number'
             || !Number.isFinite(candidate.confidence)
             || candidate.confidence < 0
@@ -359,7 +360,7 @@ export function parseMemoryWriterDraft(output: string): MemoryWriterDraft {
             type: candidate.type as typeof canonicalTypes[number],
             title: text(candidate.title, `canonicalUpdateCandidates[${index}].title`),
             reason: text(candidate.reason, `canonicalUpdateCandidates[${index}].reason`),
-            action: candidate.action as 'create' | 'update',
+            action,
             targetDocumentId,
             confidence: candidate.confidence,
         }
