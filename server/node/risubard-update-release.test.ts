@@ -35,9 +35,9 @@ describe('standalone release updater target', () => {
         expect(server).toContain(
             'https://api.github.com/repos/${GITHUB_REPO}/releases/latest'
         )
-    expect(server).toContain("'RisuBard-SQL'")
+    expect(server).toContain("'RisuVault'")
         expect(updater).toContain('RISU_UPDATE_REPOSITORY')
-    expect(updater).toContain("'RisuBard-SQL'")
+    expect(updater).toContain("'RisuVault'")
         expect(sourceUpdater).toContain('RISU_UPDATE_REPOSITORY')
         expect(server).not.toContain("const GITHUB_REPO = 'rpaddict/RisuBard';")
         expect(updater).not.toContain("const REPO = 'rpaddict/RisuBard';")

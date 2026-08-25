@@ -1,8 +1,8 @@
 {
-  "displayName": "RisuBard SQL",
-  "artifactPrefix": "RisuBard-SQL",
-  "macBundleIdentifier": "io.github.triplehwang.risubard-sql",
-  "repository": "TripleHwang/RisuBard-SQL",
+  "displayName": "RisuVault",
+  "artifactPrefix": "RisuVault",
+  "macBundleIdentifier": "io.github.triplehwang.risuvault",
+  "repository": "TripleHwang/RisuVault",
   "updateRepositoryEnvironmentVariable": "RISU_UPDATE_REPOSITORY",
   "updateUrlEnvironmentVariable": "RISU_UPDATE_URL",
   "status": "Standalone repository and update channel assigned; release signing is optional and must be configured with repository secrets."

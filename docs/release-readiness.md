@@ -1,13 +1,13 @@
 # Standalone release readiness
 
-This fork is intentionally not coupled to the upstream release channel. Official builds use `TripleHwang/RisuBard-SQL` and never download upstream release artifacts.
+This fork is intentionally not coupled to the upstream release channel. Official builds use `TripleHwang/RisuVault` and never download upstream release artifacts.
 
 The release identity is fixed as follows:
 
-- `RISU_UPDATE_REPOSITORY` defaults to `TripleHwang/RisuBard-SQL` and can be overridden by downstream builds.
+- `RISU_UPDATE_REPOSITORY` defaults to `TripleHwang/RisuVault` and can be overridden by downstream builds.
 - `RISU_UPDATE_URL=https://…` can supply a compatible GitHub Release API response for update checks.
-- `RISU_RELEASE_ARTIFACT_PREFIX` defaults to `RisuBard-SQL` and must match release asset names.
-- The display name is `RisuBard SQL` and the macOS identifier is `io.github.triplehwang.risubard-sql`. Signing and notarization remain optional release-owner policies.
+- `RISU_RELEASE_ARTIFACT_PREFIX` defaults to `RisuVault` and must match release asset names.
+- The display name is `RisuVault` and the macOS identifier is `io.github.triplehwang.risuvault`. Signing and notarization remain optional release-owner policies.
 
 The release workflow refuses tags that do not equal `v` plus `package.json`'s version. It runs the standalone release-contract check and the compatibility suite before creating draft artifacts. Draft releases require a human review and explicit publication.
 

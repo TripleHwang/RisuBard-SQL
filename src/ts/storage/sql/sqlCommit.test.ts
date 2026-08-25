@@ -7,7 +7,7 @@ import {
   hasSqlCommitChanges,
 } from "./sqlCommit";
 
-describe("RisuBard SQL row commits", () => {
+describe("RisuVault SQL row commits", () => {
   it("splits legacy snapshots into character, chat and message rows", () => {
     const database = {
       username: "User",

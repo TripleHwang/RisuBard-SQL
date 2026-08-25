@@ -998,12 +998,12 @@ function stopTunnel() {
 // ── Update check ─────────────────────────────────────────────────────────────
 // Standalone builds never inherit the upstream channel. The default points to
 // this fork and remains overrideable for downstream distributions.
-const GITHUB_REPO = (process.env.RISU_UPDATE_REPOSITORY || 'TripleHwang/RisuBard-SQL').trim();
+const GITHUB_REPO = (process.env.RISU_UPDATE_REPOSITORY || 'TripleHwang/RisuVault').trim();
 const UPDATE_CHECK_DISABLED = process.env.RISU_UPDATE_CHECK === 'false'
     || (!GITHUB_REPO && !process.env.RISU_UPDATE_URL);
 const UPDATE_CHECK_URL = process.env.RISU_UPDATE_URL
     || (GITHUB_REPO ? `https://api.github.com/repos/${GITHUB_REPO}/releases/latest` : '');
-const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuBard-SQL';
+const RELEASE_ARTIFACT_PREFIX = process.env.RISU_RELEASE_ARTIFACT_PREFIX || 'RisuVault';
 
 // Re-read on each call so non-portable updates (docker/git pull) without a
 // process restart don't keep reporting the old version to the update worker.
@@ -1381,7 +1381,7 @@ async function fetchLatestRelease() {
         const res = await fetch(UPDATE_CHECK_URL, {
             headers: {
                 Accept: 'application/vnd.github+json',
-                'User-Agent': 'RisuBard-Updater',
+                'User-Agent': 'RisuVault-Updater',
             },
         });
         if (res.status === 404) return null;
@@ -5816,7 +5816,7 @@ app.put('/api/backup/server/path', async (req, res, next) => {
         const resolved = path.resolve(next);
         if (isManagedBackupPath(resolved)) {
             return res.status(400).json({
-                error: 'Backup path cannot be inside RisuBard app files. Choose a separate folder such as data/backups.',
+                error: 'Backup path cannot be inside RisuVault app files. Choose a separate folder such as data/backups.',
             });
         }
         // Ensure parent exists / target is writable. Create the dir if missing.

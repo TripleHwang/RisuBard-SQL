@@ -184,7 +184,7 @@
                             aprilFoolsPage = 0
                             aprilFools = false
                         }}>
-                            RisuBard
+                            RisuVault
                         </a>
                     </p>
 

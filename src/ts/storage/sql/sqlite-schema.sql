@@ -1,4 +1,4 @@
--- RisuBard SQL relational schema, derived from Haejeok RisuAI b6251.
+-- RisuVault relational schema, derived from Haejeok RisuAI b6251.
 -- Business JSON is permitted only in
 -- plugin_custom_storage; all other nested values use typed node rows.
 PRAGMA journal_mode = WAL;

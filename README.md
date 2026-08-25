@@ -11,15 +11,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TripleHwang/RisuBard-SQL/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/TripleHwang/RisuBard-SQL?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/TripleHwang/RisuVault/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/TripleHwang/RisuVault?display_name=tag&sort=semver"></a>
   <a href="LICENSE"><img alt="라이선스: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
 </p>
 
 <p align="center">
-  <strong><a href="https://github.com/TripleHwang/RisuBard-SQL/releases">다운로드</a></strong> ·
+  <strong><a href="https://github.com/TripleHwang/RisuVault/releases">다운로드</a></strong> ·
   <a href="docs/ko/install.md">설치</a> ·
   <a href="docs/ko/migration.md">RisuAI에서 이전</a> ·
-  <a href="https://github.com/TripleHwang/RisuBard-SQL/issues">이슈</a>
+  <a href="https://github.com/TripleHwang/RisuVault/issues">이슈</a>
 </p>
 
 > **프로젝트 계보:** RisuBard는 [PocketRisu](https://github.com/PocketRisu/PocketRisu)를 포크하여 개발한 프로젝트입니다.
@@ -113,16 +113,16 @@ RisuBard는 세 가지 책임을 분리합니다.
 
 포터블 패키지는 RisuBard를 실행하는 가장 간단한 방법이며 Node.js나 Docker가 필요하지 않습니다.
 
-1. [GitHub Releases](https://github.com/TripleHwang/RisuBard-SQL/releases)를 엽니다.
+1. [GitHub Releases](https://github.com/TripleHwang/RisuVault/releases)를 엽니다.
 2. 운영체제에 맞는 패키지를 내려받아 압축을 풉니다.
 3. RisuBard를 실행하고 `http://localhost:6001`을 엽니다.
 
 | 플랫폼 | 패키지 | 실행 |
 | --- | --- | --- |
-| Windows x64 | `RisuBard-SQL-vX.Y.Z-win-x64.zip` | `RisuBard-SQL.exe` 더블클릭 |
-| Linux x64 | `RisuBard-SQL-vX.Y.Z-linux-x64.tar.gz` | `./start.sh` 실행 |
-| Linux ARM64 | `RisuBard-SQL-vX.Y.Z-linux-arm64.tar.gz` | `./start.sh` 실행 |
-| macOS Apple Silicon | `RisuBard-SQL-vX.Y.Z-macos-arm64.tar.gz` | `RisuBard-SQL.app` 열기 |
+| Windows x64 | `RisuVault-vX.Y.Z-win-x64.zip` | `RisuVault.exe` 더블클릭 |
+| Linux x64 | `RisuVault-vX.Y.Z-linux-x64.tar.gz` | `./start.sh` 실행 |
+| Linux ARM64 | `RisuVault-vX.Y.Z-linux-arm64.tar.gz` | `./start.sh` 실행 |
+| macOS Apple Silicon | `RisuVault-vX.Y.Z-macos-arm64.tar.gz` | `RisuVault.app` 열기 |
 
 Docker, 소스 빌드, 원격 접속, 업데이트와 플랫폼별 요구사항은 [전체 설치 가이드](docs/ko/install.md)를 참고하세요.
 
@@ -160,7 +160,7 @@ RisuBard는 사용자가 관리하는 환경에서 실행되며 사용자 데이
 
 ## 프로젝트 상태
 
-RisuBard SQL은 활발하게 개발 중입니다. 중요한 데이터를 이전하기 전에 최신 백업을 만들고, 저장 또는 호환성에 영향을 주는 변경은 [릴리스 노트](https://github.com/TripleHwang/RisuBard-SQL/releases)에서 확인하세요.
+RisuVault는 활발하게 개발 중입니다. 중요한 데이터를 이전하기 전에 최신 백업을 만들고, 저장 또는 호환성에 영향을 주는 변경은 [릴리스 노트](https://github.com/TripleHwang/RisuVault/releases)에서 확인하세요.
 
 저장소는 Svelte·TypeScript 검사, 브라우저·서버 단위 테스트, 호환성 왕복 테스트와 프로덕션 빌드로 릴리스를 검증합니다.
 

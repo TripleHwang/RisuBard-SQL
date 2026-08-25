@@ -11,8 +11,8 @@ const requirements = [
   ['server update repository opt-in', sources.server, 'RISU_UPDATE_REPOSITORY'],
   ['portable updater repository opt-in', sources.updater, 'RISU_UPDATE_REPOSITORY'],
   ['source updater repository opt-in', sources.sourceUpdater, 'RISU_UPDATE_REPOSITORY'],
-  ['standalone artifact prefix', sources.release, 'RisuBard-SQL'],
-  ['standalone repository', sources.release, 'RisuBard-SQL'],
+  ['standalone artifact prefix', sources.release, 'RisuVault'],
+  ['standalone repository', sources.release, 'RisuVault'],
   ['tag/version release gate', sources.release, 'Verify tag matches package version'],
 ]
 
