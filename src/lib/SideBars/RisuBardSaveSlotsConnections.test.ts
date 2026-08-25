@@ -170,12 +170,14 @@ describe('chat file save slot connections', () => {
         )
     })
 
-    test('loads into a new chat and finalizes its wiki only after persistence', () => {
-        expect(chatScreenSource).toContain('const destinationChatId = v4()')
+    test('replaces the current chat and finalizes its wiki only after persistence', () => {
+        expect(chatScreenSource).toContain('const destinationChatId = currentChat.id')
         expect(chatScreenSource).toContain('destinationChatId,')
         expect(chatScreenSource).toContain('loadedChat.id = destinationChatId')
-        expect(chatScreenSource).toContain('character.chats.unshift(loadedChat)')
-        expect(chatScreenSource).toContain('changeChatTo(0)')
+        expect(chatScreenSource).toContain('character.chats[chatIdx] = loadedChat')
+        expect(chatScreenSource).toContain('character.chats[chatIdx] = currentChat')
+        expect(chatScreenSource).toContain('changeChatTo(chatIdx)')
+        expect(chatScreenSource).not.toContain('character.chats.unshift(loadedChat)')
         expect(chatScreenSource).toMatch(
             /prepareMemorySaveLoad[\s\S]*requestImmediateSave[\s\S]*action: 'finalize'/
         )

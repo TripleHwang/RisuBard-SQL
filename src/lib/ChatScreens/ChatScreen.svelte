@@ -87,7 +87,7 @@
         if(currentChat.isStreaming){
             throw new Error('응답 생성이 끝난 뒤 저장 파일을 불러와 주세요.')
         }
-        const destinationChatId = v4()
+        const destinationChatId = currentChat.id
         const prepared = await prepareMemorySaveLoad({
             characterId: character.chaId,
             saveId,
@@ -97,11 +97,10 @@
         })
         const loadedChat = prepared.chat
         loadedChat.id = destinationChatId
-        loadedChat.name = `${loadedChat.name} (Load)`
         loadedChat.isStreaming = false
         delete loadedChat.activeStreamingDisplayOptimizationMode
         delete loadedChat._placeholder
-        character.chats.unshift(loadedChat)
+        character.chats[chatIdx] = loadedChat
         character.chats = character.chats
         try {
             await requestImmediateSave({
@@ -110,10 +109,7 @@
             })
         }
         catch(error){
-            character.chats.splice(
-                character.chats.indexOf(loadedChat),
-                1
-            )
+            character.chats[chatIdx] = currentChat
             character.chats = character.chats
             await completeMemoryWikiFork({
                 characterId: character.chaId,
@@ -137,7 +133,7 @@
             fetchImpl: fetch,
             createAuth: () => forageStorage.createAuth(),
         })
-        changeChatTo(0)
+        changeChatTo(chatIdx)
         saveSlotsOpen = false
         notifySuccess('스토리 불러오기 완료', { duration: 3000 })
     }

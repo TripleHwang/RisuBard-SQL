@@ -118,7 +118,7 @@ describe('RisuBardSaveSlotsDialog', () => {
         )!.click()
 
         await vi.waitFor(() => expect(mocks.alertConfirm).toHaveBeenCalledWith(
-            '이 저장 파일을 새 채팅으로 불러올까요?'
+            '저장하지 않은 채팅은 사라집니다. 불러올까요?'
         ))
         await vi.waitFor(() => expect(onLoad).toHaveBeenCalledWith('save-1'))
     })
