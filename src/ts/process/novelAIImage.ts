@@ -1,5 +1,6 @@
 export const NOVEL_AI_IMAGE_MODELS = [
     'nai-diffusion-5-full',
+    'nai-diffusion-5-curated',
     'nai-diffusion-4-5-full',
     'nai-diffusion-4-5-curated',
     'nai-diffusion-4-full',
@@ -9,7 +10,7 @@ export const NOVEL_AI_IMAGE_MODELS = [
     'nai-diffusion-2',
 ] as const
 
-const isNovelAIImageV5 = (model: string) => model === 'nai-diffusion-5-full'
+const isNovelAIImageV5 = (model: string) => model === 'nai-diffusion-5-full' || model === 'nai-diffusion-5-curated'
 
 export const supportsNovelAIImageNoiseSchedule = (model: string) => !isNovelAIImageV5(model)
 

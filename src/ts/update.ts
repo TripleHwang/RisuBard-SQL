@@ -32,7 +32,7 @@ export const updatePopupStore = writable<UpdateInfo | null>(null)
 /** Self-update progress — non-null while an update is running */
 export const selfUpdateProgressStore = writable<SelfUpdateProgress | null>(null)
 
-export async function checkRisuUpdate(): Promise<UpdateInfo | null> {
+export async function checkRisuUpdate(options: { showPopup?: boolean } = {}): Promise<UpdateInfo | null> {
     try {
         const lang = encodeURIComponent(DBState.db?.language || '')
         const res = await fetch(`/api/update-check?lang=${lang}`)
@@ -40,7 +40,7 @@ export async function checkRisuUpdate(): Promise<UpdateInfo | null> {
         const data: UpdateInfo = await res.json()
         updateInfoStore.set(data)
 
-        if (data.hasUpdate) {
+        if (data.hasUpdate && options.showPopup !== false) {
             showUpdatePopupOnce(data)
         }
 

@@ -55,6 +55,8 @@ dist.zip
 !/scripts/check-public-boundary.test.ts
 !/scripts/check-brand-boundary.test.ts
 !/scripts/check-standalone-release.mjs
+!/scripts/generate-update-manifest.mjs
+!/scripts/generate-update-manifest.test.ts
 .env
 /server/node/ssl/certificate
 /bin/

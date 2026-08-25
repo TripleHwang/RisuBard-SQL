@@ -33,6 +33,16 @@ export interface RisuModule{
     customModuleToggle?:string
     mcp?:MCPModule
     icon?:string
+    /** Optional Haejeok module-folder association. Kept even when this
+     * standalone build does not expose the folder-management UI. */
+    folderId?: string
+}
+
+/** Portable folder metadata used by recent Haejeok saves. */
+export interface ModuleFolder {
+    id: string
+    name: string
+    color: string
 }
 
 export async function exportModule(module:RisuModule, arg:{

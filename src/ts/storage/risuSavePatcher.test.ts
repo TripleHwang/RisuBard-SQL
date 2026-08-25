@@ -12,8 +12,89 @@ vi.mock('./chatStorage', () => ({
 }))
 vi.mock('../globalApi.svelte', () => ({ forageStorage: { realStorage: null } }))
 
-const { diffArrayWithIdGuard, RisuSavePatcher } = await import('./risuSave')
+const { diffArrayWithIdGuard, RisuSaveDecoder, RisuSaveEncoder, RisuSavePatcher } = await import('./risuSave')
 const { compare } = await import('fast-json-patch')
+
+function compatibilitySaveBlock(type: number, name: string, value: unknown): Uint8Array {
+    const nameBytes = new TextEncoder().encode(name)
+    const content = new TextEncoder().encode(JSON.stringify(value))
+    const block = new Uint8Array(2 + 1 + nameBytes.length + 4 + content.length)
+    block[0] = type
+    block[1] = 0
+    block[2] = nameBytes.length
+    block.set(nameBytes, 3)
+    new DataView(block.buffer).setUint32(3 + nameBytes.length, content.length, true)
+    block.set(content, 3 + nameBytes.length + 4)
+    return block
+}
+
+function compatibilitySave(...blocks: Uint8Array[]): Uint8Array {
+    const header = new TextEncoder().encode('RISUSAVE\0')
+    const result = new Uint8Array(header.length + blocks.reduce((size, block) => size + block.length, 0))
+    result.set(header)
+    let offset = header.length
+    for (const block of blocks) {
+        result.set(block, offset)
+        offset += block.length
+    }
+    return result
+}
+
+describe('Haejeok save compatibility fields', () => {
+    const loadout = {
+        id: 'loadout-1', name: 'Recent setup', lastUsed: 1, favorite: true,
+        characterIds: ['character-1'], modules: ['module-1'],
+        globalVariables: { scene: 'night' }, presetName: 'Default', personaId: 'persona-1',
+    }
+
+    test('imports the legacy dedicated LOADOUTS block instead of dropping it', async () => {
+        const source = compatibilitySave(
+            compatibilitySaveBlock(1, 'root', { username: 'compat' }),
+            compatibilitySaveBlock(4, 'preset', [{ id: 'preset-1', name: 'Default' }]),
+            compatibilitySaveBlock(10, 'loadouts', [loadout]),
+        )
+
+        const decoded = await new RisuSaveDecoder().decode(source)
+        expect(decoded.loadouts).toEqual([loadout])
+    })
+
+    test('round-trips recent root, character, module, and chat fields', async () => {
+        const source = {
+            botPresets: [{ id: 'preset-1', name: 'Default' }],
+            botPresetsId: 0,
+            modules: [{ id: 'module-1', name: 'Module', description: '', folderId: 'folder-1' }],
+            moduleFolders: [{ id: 'folder-1', name: 'Folder', color: '#123456' }],
+            loadouts: [loadout],
+            customSidebarItems: [{ id: 'sidebar-1', type: 'loadout', subType: 'quick', label: 'Quick' }],
+            lastLoadedLoadoutName: 'Recent setup',
+            plugins: [], pluginCustomStorage: {},
+            characters: [{
+                chaId: 'character-1', name: 'Character', chats: [{
+                    id: 'chat-1', name: 'Chat', message: [],
+                    useLocallySetGlobalVariables: true, GLGlobalVariables: { scene: 'night' },
+                }],
+                additionalAssetFolders: [{ id: 'asset-folder-1', name: 'Assets' }],
+                additionalAssetFolderAssignments: { Portrait: 'asset-folder-1' },
+            }],
+        } as any
+
+        const encoder = new RisuSaveEncoder()
+        await encoder.init(source)
+        const encoded = encoder.encode()
+        expect(encoded).not.toBeNull()
+        const decoded = await new RisuSaveDecoder().decode(new Uint8Array(encoded!))
+
+        expect(decoded.moduleFolders).toEqual(source.moduleFolders)
+        expect(decoded.loadouts).toEqual(source.loadouts)
+        expect(decoded.customSidebarItems).toEqual(source.customSidebarItems)
+        expect(decoded.lastLoadedLoadoutName).toBe(source.lastLoadedLoadoutName)
+        expect(decoded.modules[0].folderId).toBe('folder-1')
+        expect(decoded.characters[0].additionalAssetFolders).toEqual(source.characters[0].additionalAssetFolders)
+        expect(decoded.characters[0].additionalAssetFolderAssignments).toEqual(source.characters[0].additionalAssetFolderAssignments)
+        expect(decoded.characters[0].chats[0].useLocallySetGlobalVariables).toBe(true)
+        expect(decoded.characters[0].chats[0].GLGlobalVariables).toEqual({ scene: 'night' })
+    })
+})
 
 // ──────────────────────────────────────────────────────────────────────────
 // diffArrayWithIdGuard — direct tests on the structural-vs-elementwise pivot.

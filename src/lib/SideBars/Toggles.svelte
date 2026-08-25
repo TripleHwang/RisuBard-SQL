@@ -17,6 +17,7 @@
     import OptionInput from "../UI/GUI/OptionInput.svelte";
     import TextAreaInput from '../UI/GUI/TextAreaInput.svelte'
     import TextInput from "../UI/GUI/TextInput.svelte";
+    import { getGlobalChatVar, isLocallyHandledGlobalChatVar, removeLocallyHandledGlobalChatVar, setGlobalChatVar } from "src/ts/parser/chatVar.svelte";
 
     interface Props {
         chara?: character
@@ -102,7 +103,7 @@
         const saved = currentChat?.savedToggleValues
         if (!saved) return false
         const fullKey = `toggle_${key}`
-        const current = DBState.db.globalChatVariables[fullKey] ?? undefined
+        const current = getGlobalChatVar(fullKey)
         const savedVal = saved[fullKey] ?? undefined
         if (current === savedVal) return false
         const norm = (v: string | undefined) => v ?? ''
@@ -141,10 +142,40 @@
         }, [])
     })
 
+    const getGlobalChatVarValue = (key: string) => {
+        const value = getGlobalChatVar(key)
+        return value === 'null' ? '' : value
+    }
+
 </script>
 
 {#snippet sep()}
     <div class="w-full mt-0.5 -mb-1.5 border-t border-darkborderc/20"></div>
+{/snippet}
+
+{#snippet toggleName(toggle: sidebarToggle)}
+    <span>{toggle.value}</span>
+    {#if isLocallyHandledGlobalChatVar(`toggle_${toggle.key}`)}
+        <button
+            type="button"
+            class="ml-1 text-xs opacity-70 hover:opacity-100"
+            title={language.localToggleReset}
+            aria-label={language.localToggleReset}
+            onclick={() => removeLocallyHandledGlobalChatVar(`toggle_${toggle.key}`)}
+        >📌</button>
+    {/if}
+{/snippet}
+
+{#snippet localToggleMode()}
+    {#if currentChat}
+        <div class="w-full flex gap-2 mt-3 items-center justify-between min-h-10 rounded-md px-1 border-t border-darkborderc/30 pt-2">
+            <span class="min-w-0 break-words">{language.localToggles}</span>
+            <ShSwitch
+                checked={!!currentChat.useLocallySetGlobalVariables}
+                onCheckedChange={(checked) => { currentChat.useLocallySetGlobalVariables = checked }}
+            />
+        </div>
+    {/if}
 {/snippet}
 
 {#snippet toggles(items: sidebarToggle[], reverse: boolean = false)}
@@ -161,8 +192,8 @@
             </ShAccordion>
         {:else if toggle.type === 'select'}
             <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
-                <span class="min-w-0 break-words">{toggle.value}</span>
-                <SelectInput className="w-32 shrink-0" bind:value={DBState.db.globalChatVariables[`toggle_${toggle.key}`]}>
+                <span class="min-w-0 break-words">{@render toggleName(toggle)}</span>
+                <SelectInput className="w-32 shrink-0" value={getGlobalChatVarValue(`toggle_${toggle.key}`)} onchange={(e) => setGlobalChatVar(`toggle_${toggle.key}`, e.currentTarget.value)}>
                     {#each toggle.options as option, i}
                         <OptionInput value={i.toString()}>{option}</OptionInput>
                     {/each}
@@ -170,13 +201,16 @@
             </div>
         {:else if toggle.type === 'text'}
             <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
-                <span class="min-w-0 break-words">{toggle.value}</span>
-                <TextInput className="w-32 shrink-0" bind:value={DBState.db.globalChatVariables[`toggle_${toggle.key}`]} />
+                <span class="min-w-0 break-words">{@render toggleName(toggle)}</span>
+                <TextInput className="w-32 shrink-0" value={getGlobalChatVarValue(`toggle_${toggle.key}`)} onchange={(e) => setGlobalChatVar(`toggle_${toggle.key}`, e.currentTarget.value)} />
             </div>
         {:else if toggle.type === 'textarea'}
             <div class="w-full flex gap-2 mt-2 items-start justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
-                <span class="min-w-0 break-words mt-1.5">{toggle.value}</span>
-                <TextAreaInput className="w-32 shrink-0" height='20' bind:value={DBState.db.globalChatVariables[`toggle_${toggle.key}`]} />
+                <span class="min-w-0 break-words mt-1.5">{@render toggleName(toggle)}</span>
+                <TextAreaInput className="w-32 shrink-0" height='20' value={getGlobalChatVarValue(`toggle_${toggle.key}`)} onchange={(e) => {
+                    if(!e) return
+                    setGlobalChatVar(`toggle_${toggle.key}`, e.currentTarget instanceof HTMLDivElement ? e.currentTarget.innerText : e.currentTarget.value)
+                }} />
             </div>
         {:else if toggle.type === 'caption'}
             <div class="w-full mt-1 text-xs text-textcolor2">
@@ -197,9 +231,9 @@
                 <span class="min-w-0 break-words">{toggle.value}</span>
                 <ShSwitch
                     className="shrink-0"
-                    checked={DBState.db.globalChatVariables[`toggle_${toggle.key}`] === '1'}
+                    checked={getGlobalChatVarValue(`toggle_${toggle.key}`) === '1'}
                     onCheckedChange={(checked) => {
-                        DBState.db.globalChatVariables[`toggle_${toggle.key}`] = checked ? '1' : '0'
+                        setGlobalChatVar(`toggle_${toggle.key}`, checked ? '1' : '0')
                     }}
                 />
             </div>
@@ -253,6 +287,7 @@
             {@render sep()}
         {/if}
         {@render toggles(groupedToggles, true)}
+        {@render localToggleMode()}
         {#if chara && DBState.db.hypaV3}
             <div class="w-full flex mt-2 items-center justify-between gap-2 min-h-10 rounded-md px-1">
                 <span class="flex items-center gap-1">
@@ -282,6 +317,7 @@
         {/if}
     {/if}
     {@render toggles(groupedToggles)}
+    {@render localToggleMode()}
     {#if DBState.db.hypaV3}
         <div class="w-full flex mt-2 items-center justify-between gap-2 min-h-10 rounded-md px-1">
             <span class="flex items-center gap-1">

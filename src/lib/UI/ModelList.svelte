@@ -4,9 +4,10 @@
     import { getHordeModels } from "src/ts/horde/getModels";
     import { language } from "src/lang";
     import { getModelInfo, getModelList } from 'src/ts/model/modellist';
-    import { ArrowLeft, ChevronRight, TriangleAlert } from "@lucide/svelte";
+    import { ArrowLeft, ChevronRight, Search, Star, TriangleAlert } from "@lucide/svelte";
     import ShButton from "./GUI/ShButton.svelte";
     import ShSwitch from "./GUI/ShSwitch.svelte";
+    import { modelFavoritesStore } from 'src/ts/model/modelFavorites.svelte';
 
     interface Props {
         value?: string;
@@ -27,6 +28,8 @@
     let showUnrec = $state(false)
     let activeTab = $state<'base' | 'plugin'>('base')
     let expandedGroups = $state<Set<string>>(new Set())
+    let search = $state('')
+    let showFavoritesOnly = $state(false)
 
     function changeModel(name:string){
         value = name
@@ -39,7 +42,10 @@
         expandedGroups = next
     }
     function notExcluded(id:string){
-        return !excludesPrefix || !id.startsWith(excludesPrefix)
+        const info = getModelInfo(id)
+        const needle = search.trim().toLowerCase()
+        const searchMatches = !needle || [id, info.name, info.fullName, info.shortName].some((text) => text?.toLowerCase().includes(needle))
+        return (!excludesPrefix || !id.startsWith(excludesPrefix)) && searchMatches && (!showFavoritesOnly || modelFavoritesStore.isFavorite(id))
     }
 
     let recProviders = $derived(getModelList({ recommendedOnly: true, groupedByProvider: true }))
@@ -47,10 +53,14 @@
     let providers = $derived(getModelList({ recommendedOnly: !showUnrec, groupedByProvider: true }))
     let pluginModels = $derived(providers.find(g => g.providerName === 'Plugins')?.models ?? [])
     let hasPlugins = $derived(pluginModels.length > 0)
+    let favoriteModels = $derived(getModelList({ recommendedOnly: false, groupedByProvider: false })
+        .filter((model, index, models) => modelFavoritesStore.isFavorite(model.id) && models.findIndex((candidate) => candidate.id === model.id) === index)
+        .filter((model) => notExcluded(model.id)))
 </script>
 
 {#snippet modelRow(id:string, name:string, unrec:boolean)}
-    <button class="shrink-0 w-full flex items-center gap-1 text-left px-3 py-1.5 text-sm hover:bg-selected rounded" onclick={() => changeModel(id)}>
+    <div class="shrink-0 w-full flex items-center gap-1 text-left px-3 py-1.5 text-sm hover:bg-selected rounded">
+    <button class="min-w-0 flex-1 flex items-center gap-1 text-left" onclick={() => changeModel(id)}>
         {#if showUnrec}
             <span class="shrink-0 w-4 flex items-center justify-center">
                 {#if unrec}<TriangleAlert size={12} class="text-amber-500" />{/if}
@@ -58,6 +68,10 @@
         {/if}
         <span class="truncate">{name}</span>
     </button>
+    <button class={`shrink-0 p-1 rounded hover:bg-darkbutton${modelFavoritesStore.isFavorite(id) ? ' text-amber-400' : ''}`} onclick={() => modelFavoritesStore.toggle(id)} title="Toggle favorite">
+        <Star size={14} fill={modelFavoritesStore.isFavorite(id) ? 'currentColor' : 'none'} />
+    </button>
+    </div>
 {/snippet}
 
 {#snippet groupHeader(key:string, label:string, unrec:boolean)}
@@ -115,6 +129,16 @@
                 <h1 class="font-bold text-xl flex-1">{language.model}</h1>
             </div>
 
+            <div class="shrink-0 flex gap-2 mb-2">
+                <label class="relative flex-1">
+                    <Search size={15} class="absolute left-2 top-2.5 text-textcolor2" />
+                    <input class="w-full pl-8 pr-2 py-2 rounded border border-selected bg-darkbutton text-sm" bind:value={search} placeholder="Search models" />
+                </label>
+                <button class="px-2 rounded border border-selected" class:bg-selected={showFavoritesOnly} onclick={() => showFavoritesOnly = !showFavoritesOnly} title="Favorites only">
+                    <Star size={16} fill={showFavoritesOnly ? 'currentColor' : 'none'} />
+                </button>
+            </div>
+
             {#if hasPlugins}
                 <div class="shrink-0 flex w-full rounded-md border border-selected mb-2">
                     <button class="p-1.5 flex-1 text-sm" class:bg-selected={activeTab === 'base'} onclick={() => { activeTab = 'base' }}>{language.modelTabBuiltin}</button>
@@ -130,13 +154,20 @@
                         {@render modelRow(model.id, model.name, false)}
                     {/each}
                 {:else}
+                    {#if !showFavoritesOnly && favoriteModels.length > 0}
+                        <div class="text-xs font-medium text-textcolor2 px-3 pt-1">Favorites</div>
+                        {#each favoriteModels as model}
+                            {@render modelRow(model.id, model.name, !recIds.has(model.id))}
+                        {/each}
+                        <div class="border-t border-selected my-1"></div>
+                    {/if}
                     {@render providerList(providers)}
 
                     {#if DBState?.db.customModels?.length > 0}
                         {@render groupHeader('__custom', language.customModels, false)}
                         {#if expandedGroups.has('__custom')}
                             <div class="pl-4 flex flex-col">
-                                {#each DBState.db.customModels as model}
+                                {#each DBState.db.customModels.filter((model) => notExcluded(model.id)) as model}
                                     {@render modelRow(model.id, model.name ?? "Unnamed", false)}
                                 {/each}
                             </div>

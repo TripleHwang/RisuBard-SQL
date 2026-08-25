@@ -10,6 +10,7 @@
     import PluginStorageViewer from './PluginStorageViewer.svelte'
     import RequestLogs from './RequestLogs.svelte'
     import UsageStats from './UsageStats.svelte'
+    import SystemUpdate from './SystemUpdate.svelte'
     import { SystemSubmenuIndex } from 'src/ts/stores.svelte'
     import { Collapsible, Tooltip } from 'bits-ui'
     import {
@@ -371,6 +372,7 @@
         { label: language.requestLogsTab, value: 3 },
         { label: language.usageTab, value: 4 },
         { label: language.pluginStorageTab, value: 5 },
+        { label: language.systemUpdateTab, value: 6 },
     ]} bind:selected={$SystemSubmenuIndex} />
 
     {#if $SystemSubmenuIndex === 0}
@@ -622,5 +624,7 @@
     <UsageStats />
     {:else if $SystemSubmenuIndex === 5}
     <PluginStorageViewer />
+    {:else if $SystemSubmenuIndex === 6}
+    <SystemUpdate />
     {/if}
 </SettingPage>

@@ -57,6 +57,7 @@ export const SystemTab = {
     RequestLogs: 3 as const,
     Usage: 4 as const,
     PluginStorage: 5 as const,
+    Updates: 6 as const,
 } as const;
 
 export type SystemTabValue = (typeof SystemTab)[keyof typeof SystemTab];
