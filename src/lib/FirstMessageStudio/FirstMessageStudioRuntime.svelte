@@ -5,6 +5,7 @@
 <script lang="ts">
     import DOMPurify from 'dompurify'
     import { untrack } from 'svelte'
+    import { getCurrentLocale } from 'src/lang'
     import {
         applyStudioOption,
         backStudioRuntime,
@@ -15,6 +16,7 @@
         resetStudioRuntime,
         resolveStudioLocale,
         setStudioInput,
+        toFirstMessageStudioLocale,
         type FirstMessageStudioProject,
         type FirstMessageStudioRuntime,
     } from 'src/ts/firstMessageStudio'
@@ -28,12 +30,13 @@
 
     let { project, variables = {}, preview = false, onChange }: Props = $props()
     const scopeId = `fmstudio-${++studioScopeCounter}`
-    let runtime = $state(untrack(() => createStudioRuntime(project, variables)))
+    const appLocale = toFirstMessageStudioLocale(getCurrentLocale())
+    let runtime = $state(untrack(() => createStudioRuntime(project, variables, appLocale)))
     let projectSignature = $state('')
     let validationError = $state('')
     let stage = $derived(project.stages.find((candidate) => candidate.id === runtime.stageId) ?? project.stages[0])
     let stageIndex = $derived(Math.max(0, project.stages.findIndex((candidate) => candidate.id === runtime.stageId)))
-    let locale = $derived(resolveStudioLocale(runtime.variables))
+    let locale = $derived(resolveStudioLocale(runtime.variables, runtime.locale))
     let scopedCss = $derived(createScopedStudioCss(scopeId, project.customCss))
     let customHtml = $derived(DOMPurify.sanitize(
         interpolateStudioTemplate(project.customHtml, runtime.variables),
@@ -43,7 +46,22 @@
     $effect(() => {
         const nextSignature = JSON.stringify(project)
         if (projectSignature && projectSignature !== nextSignature) {
-            runtime = createStudioRuntime(project, variables)
+            const nextRuntime = createStudioRuntime(project, variables, appLocale)
+            if (preview && project.stages.some((candidate) => candidate.id === runtime.stageId)) {
+                const nextVariables = { ...nextRuntime.variables, ...runtime.variables }
+                if (project.stageVariable) nextVariables[project.stageVariable] = runtime.stageId
+                runtime = {
+                    ...runtime,
+                    variables: nextVariables,
+                    inputs: { ...nextRuntime.inputs, ...runtime.inputs },
+                    history: runtime.history.filter((id) => project.stages.some((candidate) => candidate.id === id)),
+                    stageVariable: project.stageVariable,
+                    stageIndexById: nextRuntime.stageIndexById,
+                    locale: appLocale,
+                }
+            } else {
+                runtime = nextRuntime
+            }
             validationError = ''
         }
         projectSignature = nextSignature
@@ -167,11 +185,13 @@
         {/if}
     </div>
 
-    {#if project.appearance.showNavigation}
+    {#if project.appearance.showNavigation || preview}
         <footer class="window-actions">
-            <button type="button" data-studio-back onclick={goBack} disabled={runtime.history.length === 0 || runtime.completed}>
-                {locale === 'ko' ? '이전' : locale === 'ja' ? '戻る' : 'Back'}
-            </button>
+            {#if project.appearance.showNavigation}
+                <button type="button" data-studio-back onclick={goBack} disabled={runtime.history.length === 0 || runtime.completed}>
+                    {locale === 'ko' ? '이전' : locale === 'ja' ? '戻る' : 'Back'}
+                </button>
+            {/if}
             {#if preview}
                 <button type="button" data-studio-reset onclick={reset}>
                     {locale === 'ko' ? '처음부터' : locale === 'ja' ? '最初から' : 'Reset'}

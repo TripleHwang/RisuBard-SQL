@@ -7,6 +7,7 @@ import {
     localizeStudioText,
     normalizeFirstMessageStudioProject,
     resetStudioRuntime,
+    resolveStudioLocale,
     setStudioInput,
 } from './firstMessageStudio'
 
@@ -61,6 +62,8 @@ describe('first message studio engine', () => {
     it('localizes reusable text values', () => {
         expect(localizeStudioText({ ko: '한국어', ja: '日本語', en: 'English' }, 'ja')).toBe('日本語')
         expect(localizeStudioText('Same', 'en')).toBe('Same')
+        expect(resolveStudioLocale({}, 'en')).toBe('en')
+        expect(resolveStudioLocale({ cv_lang: '2' }, 'en')).toBe('ja')
     })
 
     it('applies variable assignments and follows screen branches', () => {

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { mount, unmount } from 'svelte'
 import { normalizeFirstMessageStudioProject, type FirstMessageStudioRuntime as RuntimeState } from 'src/ts/firstMessageStudio'
 import FirstMessageStudioRuntime from './FirstMessageStudioRuntime.svelte'
@@ -30,10 +30,13 @@ function clickOption(id: string) {
 }
 
 describe('FirstMessageStudioRuntime', () => {
+    beforeEach(() => localStorage.setItem('risu-lang', 'ko'))
+
     afterEach(async () => {
         if (mounted) await unmount(mounted)
         mounted = undefined
         document.body.replaceChildren()
+        localStorage.clear()
     })
 
     test('renders generic progress and follows choices', async () => {
@@ -75,5 +78,16 @@ describe('FirstMessageStudioRuntime', () => {
         expect(runtime.dataset.studioSkin).toBe('glass')
         expect(runtime.style.getPropertyValue('--studio-columns')).toBe('1')
         expect(document.body.querySelector('[data-studio-back]')).toBeNull()
+        expect(document.body.querySelector('[data-studio-reset]')).not.toBeNull()
+    })
+
+    test('uses the global app language when the project has no explicit language variable', () => {
+        localStorage.setItem('risu-lang', 'en')
+        const project = projectFixture()
+        project.stages[0].title = { ko: '방향', ja: '方向', en: 'Route in English' }
+        mounted = mount(FirstMessageStudioRuntime, { target: document.body, props: { project } })
+
+        expect(document.body.textContent).toContain('Route in English')
+        expect(document.body.textContent).not.toContain('방향')
     })
 })

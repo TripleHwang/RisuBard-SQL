@@ -38,7 +38,7 @@ import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
 import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
-import { resolveChatModelBinding, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
+import { resolveChatModelBinding, resolveRequestModelBindingTarget, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import {
@@ -424,7 +424,11 @@ export async function requestChatDataMain(arg:requestDataArgument, model:ModelMo
     // db.aiModel / db.seperateModels. Skipped when a staticModel (fallback retry)
     // is forced — fallbacks are classic model ids.
     if(!arg.staticModel){
-        const currentChat = arg.modelBindingTarget ?? getCurrentChat()
+        const currentChat = resolveRequestModelBindingTarget(
+            arg.modelBindingTarget,
+            arg.realChatId,
+            getCurrentChat(),
+        )
         const binding = resolveChatModelBinding(currentChat, model, arg.moduleId)
         if(binding.kind === 'modelPreset'){
             return requestModelPreset(targ, applyPromptPresetParams(binding.preset, currentChat, model), abortSignal, model)
