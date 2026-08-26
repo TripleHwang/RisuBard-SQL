@@ -142,6 +142,7 @@ describe('importCharXStream', () => {
       expect(Object.keys(result.assets)).toEqual(['a.png', 'nested/b.png']);
       expect(new Set(Object.values(result.assets)).size).toBe(1);
       expect(published).toHaveLength(1);
+      expect(new Set(Object.values(result.assets))).toEqual(new Set(published.map((entry) => entry.key)));
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
