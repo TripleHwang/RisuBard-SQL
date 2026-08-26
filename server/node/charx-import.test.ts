@@ -155,13 +155,14 @@ describe('importCharXStream', () => {
 
   test('ignores directory entries and reports progress while streaming', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
-    const archive = zipSync({ 'nested/': new Uint8Array(), 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'nested/a.png': strToU8('x') });
+    const archive = zipSync({ 'nested/': [new Uint8Array(), { level: 0 }], 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'nested/a.png': strToU8('x') });
     const progress: any[] = [];
     try {
       const result = await importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {}, onProgress: (p: any) => progress.push(p) });
       expect(result.assets['nested/a.png']).toMatch(/^assets\/[a-f0-9]{64}\.png$/);
       expect(progress.length).toBeGreaterThan(1);
       expect(progress.at(-1).compressedBytes).toBe(archive.length);
+      expect(await (await import('node:fs/promises')).readdir(stagingRoot)).toEqual([]);
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
@@ -262,6 +263,28 @@ describe('importCharXStream', () => {
     forged[centralOffset + 46] = 'z'.charCodeAt(0);
     try {
       await expect(importCharXStream(chunks(forged), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('rejects a decodable stored payload whose bytes no longer match the validated CRC', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0;
+    const corrupt = zipWithDescriptors(false); const view = new DataView(corrupt.buffer, corrupt.byteOffset, corrupt.byteLength);
+    let central = view.getUint32(corrupt.length - 6, true);
+    central += 46 + view.getUint16(central + 28, true) + view.getUint16(central + 30, true) + view.getUint16(central + 32, true);
+    const localOffset = view.getUint32(central + 42, true); const nameLength = view.getUint16(localOffset + 26, true);
+    corrupt[localOffset + 30 + nameLength] ^= 1;
+    try {
+      await expect(importCharXStream(chunks(corrupt), { stagingRoot, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      expect(published).toBe(0);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('rejects a non-empty directory before extraction or publishing', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0;
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'dir/': strToU8('not-empty') });
+    try {
+      await expect(importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      expect(published).toBe(0);
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 

@@ -6,6 +6,12 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index++) { let value = index; for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (0xedb88320 & -(value & 1)); table[index] = value >>> 0; }
+  return table;
+})();
+
 const DEFAULT_CHARX_LIMITS = Object.freeze({
   compressedBytes: 256 * 1024 * 1024,
   decompressedBytes: 2 * 1024 * 1024 * 1024,
@@ -60,6 +66,7 @@ function readExact(fd, position, length) {
 }
 function u16(b, at) { return b[at] | (b[at + 1] << 8); }
 function u32(b, at) { return b[at] + b[at + 1] * 0x100 + b[at + 2] * 0x10000 + b[at + 3] * 0x1000000; }
+function crc32Update(crc, bytes) { for (const byte of bytes) crc = (CRC32_TABLE[(crc ^ byte) & 255] ^ (crc >>> 8)) >>> 0; return crc; }
 function zipName(bytes) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC'); }
   catch { throw invalid('Invalid UTF-8 ZIP entry name'); }
@@ -80,6 +87,7 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryLimit) {
     if ((flags & 1) || (method !== 0 && method !== 8) || diskStart || end > eocdOffset || compressedSize === 0xffffffff || originalSize === 0xffffffff || localOffset >= centralOffset) throw invalid('Unsupported or invalid ZIP entry');
     const nameBytes = readExact(fd, at + 46, nameLength); const name = zipName(nameBytes);
     if (names.has(name)) throw invalid('Duplicate archive entry name'); names.add(name);
+    if (name.endsWith('/') && (compressedSize || originalSize)) throw invalid('Directory entries must be empty');
     const local = readExact(fd, localOffset, 30);
     if (u32(local, 0) !== 0x04034b50 || u16(local, 6) !== flags || u16(local, 8) !== method) throw invalid('ZIP local header mismatch');
     const localNameLength = u16(local, 26), localExtraLength = u16(local, 28);
@@ -131,6 +139,7 @@ async function importCharXStream(source, options) {
   const zipTail = new Uint8Array(65557); let zipTailLength = 0;
   let currentError;
   let active = new Set();
+  let extractingEntry;
 
   const checkAbort = () => { if (signal && signal.aborted) throw aborted(); if (currentError) throw currentError; };
   const closeAsset = (state) => {
@@ -146,30 +155,46 @@ async function importCharXStream(source, options) {
     try {
       checkAbort();
       const name = validateName(file.name, seen);
+      if (!extractingEntry || extractingEntry.name !== name) throw invalid('ZIP extraction metadata mismatch');
       const advertised = Number(file.originalSize) || 0;
       advertisedTotal += advertised;
       if (advertisedTotal > limits.decompressedBytes) throw limit('Archive exceeds decompressed limit');
       if (file.size && file.size > limits.decompressedBytes) throw limit('Archive entry exceeds decompressed limit');
       entryCount++;
       if (entryCount > limits.entries) throw limit('Archive has too many entries');
-      if (file.name.endsWith('/')) return;
+      if (file.name.endsWith('/')) {
+        const state = { crc: 0xffffffff, expectedCrc: extractingEntry.crc };
+        active.add(state);
+        file.ondata = (err, data, final) => {
+          try {
+            if (err) throw invalid('Unsupported or corrupt ZIP entry');
+            checkAbort(); state.crc = crc32Update(state.crc, data); decompressed += data.length;
+            if (decompressed > limits.decompressedBytes) throw limit('Archive exceeds decompressed limit');
+            if (final) { if (((state.crc ^ 0xffffffff) >>> 0) !== state.expectedCrc) throw invalid('ZIP entry CRC mismatch'); active.delete(state); }
+          } catch (e) { currentError = normalizeError(e, invalid('Unable to extract archive entry')); }
+        };
+        file.start(); return;
+      }
       const rootCard = name === 'card.json';
       const rootModule = name === 'module.risum';
       if (rootCard && advertised > limits.cardBytes) throw limit('card.json exceeds limit');
       if (rootModule && advertised > limits.moduleBytes) throw limit('module.risum exceeds limit');
       if (!rootCard && !rootModule && !name.endsWith('.json') && advertised > limits.assetBytes) {
         excludedFiles.push(name); warnings.push(`Excluded oversized asset: ${name}`);
-        file.ondata = (err, data) => {
+        let crc = 0xffffffff;
+        file.ondata = (err, data, final) => {
           if (err) { currentError = invalid('Unsupported or corrupt ZIP entry'); return; }
+          crc = crc32Update(crc, data);
           decompressed += data.length;
           if (decompressed > limits.decompressedBytes) currentError = limit('Archive exceeds decompressed limit');
+          if (final && ((crc ^ 0xffffffff) >>> 0) !== extractingEntry.crc) currentError = invalid('ZIP entry CRC mismatch');
         };
         file.start(); return;
       }
       if (rootCard && ++cardCount > 1) throw invalid('Archive must contain exactly one card.json');
       if (rootModule && ++moduleCount > 1) throw invalid('Archive may contain only one module.risum');
       const ignored = (!rootCard && !rootModule && name.endsWith('.json'));
-      const state = { name, kind: rootCard ? 'card' : rootModule ? 'module' : ignored ? 'ignored' : 'asset', size: 0, chunks: [], excluded: false, fd: undefined, sourcePath: undefined, hash: undefined };
+      const state = { name, kind: rootCard ? 'card' : rootModule ? 'module' : ignored ? 'ignored' : 'asset', size: 0, chunks: [], excluded: false, fd: undefined, sourcePath: undefined, hash: undefined, crc: 0xffffffff, expectedCrc: extractingEntry.crc };
       if (state.kind === 'asset') {
         state.sourcePath = path.join(ownedDir, `asset-${randomBytes(16).toString('hex')}`);
         state.fd = fs.openSync(state.sourcePath, 'wx');
@@ -182,6 +207,7 @@ async function importCharXStream(source, options) {
           checkAbort();
           decompressed += data.length;
           if (decompressed > limits.decompressedBytes) throw limit('Archive exceeds decompressed limit');
+          state.crc = crc32Update(state.crc, data);
           state.size += data.length;
           if (state.kind === 'card') {
             if (state.size > limits.cardBytes) throw limit('card.json exceeds limit');
@@ -202,7 +228,7 @@ async function importCharXStream(source, options) {
               state.hash.update(data);
             }
           }
-          if (final) { active.delete(state); if (state.kind === 'asset') closeAsset(state); else if (state.kind === 'card') cards.push(state.chunks); else if (state.kind === 'module') modules.push(state.chunks); }
+          if (final) { if (((state.crc ^ 0xffffffff) >>> 0) !== state.expectedCrc) throw invalid('ZIP entry CRC mismatch'); active.delete(state); if (state.kind === 'asset') closeAsset(state); else if (state.kind === 'card') cards.push(state.chunks); else if (state.kind === 'module') modules.push(state.chunks); }
         } catch (e) { currentError = normalizeError(e, invalid('Unable to extract archive entry')); }
       };
       file.start();
@@ -241,15 +267,18 @@ async function importCharXStream(source, options) {
     try {
       for (const entry of entries) {
         checkAbort();
+        extractingEntry = entry;
         const header = readExact(extractFd, entry.localOffset, entry.headerLength);
         header[6] &= ~8; header.writeUInt32LE(entry.crc, 14); header.writeUInt32LE(entry.compressedSize, 18); header.writeUInt32LE(entry.originalSize, 22);
-        unzip.push(header, false);
+        // Unzip waits for one byte past a zero-length local header before delivering its final empty chunk.
+        unzip.push(entry.compressedSize ? header : Buffer.concat([header, Buffer.from([0])]), false);
         for (let position = entry.dataOffset, remaining = entry.compressedSize; remaining;) {
           const length = Math.min(remaining, 64 * 1024);
           unzip.push(readExact(extractFd, position, length), false);
           position += length; remaining -= length; checkAbort();
         }
       }
+      extractingEntry = undefined;
       unzip.push(new Uint8Array(0), true);
     } catch (e) { throw currentError || normalizeError(e, invalid('Invalid or unsupported ZIP archive')); } finally { fs.closeSync(extractFd); }
     checkAbort();
