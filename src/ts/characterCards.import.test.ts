@@ -7,8 +7,8 @@ const validCard = (assets: any[] = []) => ({
 })
 
 const state = vi.hoisted(() => ({
-    events: [] as string[], alerts: [] as string[], doneCalls: 0, importerCalls: 0,
-    completion: Promise.resolve(), isNodeServer: false, selectedFiles: null as File[] | null,
+    events: [] as string[], alerts: [] as string[], waitAlerts: [] as string[], doneCalls: 0, importerCalls: 0,
+    completion: Promise.resolve(), localCardData: JSON.stringify({ spec: 'not-v3', data: {} }), isNodeServer: false, selectedFiles: null as File[] | null,
     importCharX: vi.fn(), readModule: vi.fn(), pin: vi.fn(),
     db: { statics: { imports: 0 }, characters: [] as any[] },
 }))
@@ -17,7 +17,7 @@ vi.mock('./platform', () => ({ get isNodeServer() { return state.isNodeServer } 
 vi.mock('./alert', () => ({
     alertCardExport: vi.fn(), alertConfirm: vi.fn(),
     alertError: vi.fn((error) => state.alerts.push(String(error))), alertInput: vi.fn(),
-    alertStore: { set: vi.fn((alert) => state.alerts.push(alert.msg)) },
+    alertStore: { set: vi.fn((alert) => state.waitAlerts.push(alert.msg)) },
     alertTOS: vi.fn(), alertWait: vi.fn(), notifyError: vi.fn((message) => state.events.push(`notify:${message}`)), notifySuccess: vi.fn(),
 }))
 vi.mock('./storage/database.svelte', () => ({
@@ -28,7 +28,7 @@ vi.mock('./process/processzip', () => ({
     CharXImporter: class {
         alertInfo = false; assets = {}; cardData: string | undefined; moduleData: Uint8Array | undefined
         constructor() { state.importerCalls += 1 }
-        async parse() { state.completion = new Promise<void>((resolve) => setTimeout(() => { this.cardData = JSON.stringify({ spec: 'not-v3', data: {} }); state.events.push('assets-5/5'); resolve() }, 0)) }
+        async parse() { state.completion = new Promise<void>((resolve) => setTimeout(() => { this.cardData = state.localCardData; state.events.push('assets-5/5'); resolve() }, 0)) }
         async done() { state.doneCalls += 1; await state.completion }
     },
     CharXSkippableChecker: vi.fn(), CharXWriter: class {},
@@ -52,8 +52,8 @@ import { importCharacter, importCharacterProcess } from './characterCards'
 
 describe('CharX import completion', () => {
     beforeEach(() => {
-        state.events = []; state.alerts = []; state.doneCalls = 0; state.importerCalls = 0; state.completion = Promise.resolve()
-        state.isNodeServer = false; state.selectedFiles = null; state.db.statics.imports = 0; state.db.characters = []
+        state.events = []; state.alerts = []; state.waitAlerts = []; state.doneCalls = 0; state.importerCalls = 0; state.completion = Promise.resolve()
+        state.localCardData = JSON.stringify({ spec: 'not-v3', data: {} }); state.isNodeServer = false; state.selectedFiles = null; state.db.statics.imports = 0; state.db.characters = []
         state.pin.mockReset(); state.importCharX.mockReset(); state.readModule.mockReset()
     })
 
@@ -63,6 +63,7 @@ describe('CharX import completion', () => {
         expect(state.doneCalls).toBe(1)
         expect(state.events).toEqual(['assets-5/5'])
         expect(state.alerts).toContain('invalid-data')
+        expect(state.waitAlerts).toEqual(['Loading... (Reading)'])
     })
 })
 
@@ -72,8 +73,8 @@ describe('Node-assisted CharX import', () => {
     })
 
     beforeEach(() => {
-        state.events = []; state.alerts = []; state.doneCalls = 0; state.importerCalls = 0; state.completion = Promise.resolve()
-        state.db.statics.imports = 0; state.db.characters = []; state.pin.mockReset(); state.readModule.mockReset(); state.importCharX.mockReset()
+        state.events = []; state.alerts = []; state.waitAlerts = []; state.doneCalls = 0; state.importerCalls = 0; state.completion = Promise.resolve()
+        state.localCardData = JSON.stringify(validCard()); state.db.statics.imports = 0; state.db.characters = []; state.pin.mockReset(); state.readModule.mockReset(); state.importCharX.mockReset()
         state.isNodeServer = true
         state.importCharX.mockResolvedValue(serverResult())
     })
@@ -105,6 +106,7 @@ describe('Node-assisted CharX import', () => {
         await importCharacterProcess({ name: 'realm.charx', data: new Uint8Array() })
         expect(state.importCharX).not.toHaveBeenCalled()
         expect(state.importerCalls).toBe(1)
+        expect(state.waitAlerts).toEqual(['Loading... (Reading)'])
     })
 
     test('propagates a server rejection without local fallback', async () => {
@@ -150,7 +152,7 @@ describe('Node-assisted CharX import', () => {
             return serverResult({ excludedFiles: ['large.png'], warnings: ['asset skipped'] })
         })
         await importCharacterProcess({ name: 'realm.charx', data: new Uint8Array() })
-        expect(state.alerts).toEqual(expect.arrayContaining(['Uploading CharX…', 'Processing CharX on server…', 'Finalizing character…']))
+        expect(state.waitAlerts).toEqual(['Uploading CharX…', 'Processing CharX on server…', 'Finalizing character…'])
         expect(state.events).toEqual(['notify:large.png\nasset skipped'])
     })
 
@@ -158,5 +160,6 @@ describe('Node-assisted CharX import', () => {
         await importCharacterProcess({ name, data: new Uint8Array() })
         expect(state.importCharX).not.toHaveBeenCalled()
         expect(state.importerCalls).toBe(1)
+        expect(state.waitAlerts).toEqual(['Loading... (Reading)'])
     })
 })

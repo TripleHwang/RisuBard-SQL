@@ -90,8 +90,9 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
         let moduleData: Uint8Array | undefined
         let assets: Record<string, string>
         let serverWarnings: string[] = []
+        const isServerCharX = isNodeServer && fileName.endsWith('.charx')
 
-        if(isNodeServer && fileName.endsWith('.charx')){
+        if(isServerCharX){
             if(f.data instanceof ReadableStream){
                 throw new Error('Node CharX import requires a file or byte buffer')
             }
@@ -140,10 +141,12 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
                 lorebook = md.lorebook
             }
         }
-        alertStore.set({
-            type: 'wait',
-            msg: 'Finalizing character…'
-        })
+        if(isServerCharX){
+            alertStore.set({
+                type: 'wait',
+                msg: 'Finalizing character…'
+            })
+        }
         let v = await importCharacterCardSpec(card, undefined, 'normal', assets, lorebook, f.returnCharacter)
         if(serverWarnings.length > 0){
             notifyError([...new Set(serverWarnings)].join('\n'))
