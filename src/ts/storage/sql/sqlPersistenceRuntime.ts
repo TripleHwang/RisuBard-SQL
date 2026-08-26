@@ -9,6 +9,7 @@ let activeStorage: ISqlStorage | null = null
 let activeDatabase: Database | null = null
 let compatibilityTimer: ReturnType<typeof setTimeout> | undefined
 let compatibilityAuditScheduled = false
+let compatibilityRecurrenceTimer: ReturnType<typeof setTimeout> | undefined
 let metadataRuntimeStarted = false
 type CompatibilityBaseline = {
     roots: Map<string, string>; plugins: Map<string, string>; presets: Map<string, string>
@@ -158,6 +159,16 @@ export function scheduleSqlCompatibilityAudit(run?: () => Promise<void> | void):
     }
 }
 
+/** Own the recurring compatibility scan so repeated metadata startup cannot multiply it. */
+export function startSqlCompatibilityAuditLoop(run: () => Promise<void> | void): void {
+    if (compatibilityRecurrenceTimer !== undefined) return
+    const repeat = () => {
+        scheduleSqlCompatibilityAudit(run)
+        compatibilityRecurrenceTimer = setTimeout(repeat, 5_000)
+    }
+    repeat()
+}
+
 function fingerprint(value: unknown): string {
     try { return JSON.stringify(value, (key, item) => key === 'message' ? undefined : item) ?? 'undefined' }
     catch { return String(value) }
@@ -226,7 +237,9 @@ export function startSqlMetadataPersistence(
 
 export function resetSqlPersistenceRuntimeForTesting(): void {
     if (compatibilityTimer !== undefined) clearTimeout(compatibilityTimer)
+    if (compatibilityRecurrenceTimer !== undefined) clearTimeout(compatibilityRecurrenceTimer)
     compatibilityTimer = undefined
+    compatibilityRecurrenceTimer = undefined
     compatibilityAuditScheduled = false
     metadataRuntimeStarted = false
     compatibilityBaseline = null

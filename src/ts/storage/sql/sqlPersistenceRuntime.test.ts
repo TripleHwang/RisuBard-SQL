@@ -10,6 +10,7 @@ import {
     initializeSqlCompatibilityBaseline,
     markSqlMessageDirty,
     startSqlMetadataPersistence,
+    startSqlCompatibilityAuditLoop,
     resetSqlPersistenceRuntimeForTesting,
     scheduleSqlCompatibilityAudit,
 } from './sqlPersistenceRuntime'
@@ -120,5 +121,17 @@ describe('SQL persistence runtime', () => {
         database.theme = 'light'; auditSqlCompatibilityDatabase(database)
         await flushSqlDirtyChanges()
         expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ root: { upserts: [{ key: 'theme', value: 'light' }], deletes: [] } }))
+    })
+
+    it('owns one cancelable compatibility recurrence across repeated startup', async () => {
+        vi.useFakeTimers()
+        const audit = vi.fn()
+        startSqlCompatibilityAuditLoop(audit)
+        startSqlCompatibilityAuditLoop(audit)
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(audit).toHaveBeenCalledTimes(1)
+        resetSqlPersistenceRuntimeForTesting()
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(audit).toHaveBeenCalledTimes(1)
     })
 })

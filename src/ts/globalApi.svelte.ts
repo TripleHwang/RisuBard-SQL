@@ -33,7 +33,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, scheduleSqlCompatibilityAudit, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
+import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 
 export const forageStorage = new AutoStorage()
 
@@ -1198,9 +1198,8 @@ export async function startMetadataPersistence() {
     const audit = () => {
         const db = getDatabase()
         auditSqlCompatibilityDatabase(db)
-        setTimeout(() => scheduleSqlCompatibilityAudit(audit), 5_000)
     }
-    scheduleSqlCompatibilityAudit(audit)
+    startSqlCompatibilityAuditLoop(audit)
 }
 
 /**
