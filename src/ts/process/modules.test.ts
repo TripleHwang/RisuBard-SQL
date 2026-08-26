@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
     saveAsset: vi.fn<(data: Uint8Array) => Promise<string>>(async () => 'single-write'),
     setItems: vi.fn<(entries: Array<{ key: string; value: Uint8Array }>) => Promise<void>>(async () => undefined),
     importRisum: vi.fn(),
+    alertClear: vi.fn(),
+    alertError: vi.fn(),
     selectedNativeFile: null as File | null,
     isNodeServer: false,
     database: {
@@ -25,9 +27,9 @@ vi.mock('src/lang', () => ({
     language: { errors: { noData: 'no data' } },
 }))
 vi.mock('../alert', () => ({
-    alertClear: vi.fn(),
+    alertClear: mocks.alertClear,
     alertConfirm: vi.fn(),
-    alertError: vi.fn(),
+    alertError: mocks.alertError,
     alertModuleSelect: vi.fn(),
     alertNormal: vi.fn(),
     alertStore: { set: vi.fn() },
@@ -193,6 +195,18 @@ describe('importModule risum file routing', () => {
         expect(read).not.toHaveBeenCalled()
         expect(mocks.importRisum).not.toHaveBeenCalled()
         expect(mocks.database.current.modules).toHaveLength(0)
+    })
+
+    it('clears Node upload loading state before showing an import failure', async () => {
+        mocks.isNodeServer = true
+        mocks.selectedNativeFile = new File(['archive'], 'broken.risum')
+        mocks.importRisum.mockRejectedValue(new Error('server failed'))
+
+        await importModule()
+
+        expect(mocks.alertError).toHaveBeenCalledTimes(1)
+        expect(mocks.alertClear).toHaveBeenCalledTimes(1)
+        expect(mocks.alertClear.mock.invocationCallOrder[0]).toBeLessThan(mocks.alertError.mock.invocationCallOrder[0])
     })
 })
 

@@ -96,7 +96,7 @@ function createRisumImportHandler(deps) {
       const source = (async function* () {
         for await (const chunk of req) {
           if (controller.signal.aborted) break;
-          received += chunk.length; progress('upload', received, knownBytes || received);
+          received += chunk.length; progress('spooling', received, knownBytes || received);
           yield chunk;
         }
       })();
@@ -107,7 +107,7 @@ function createRisumImportHandler(deps) {
         stagingRoot, prefix: 'risum-upload-', filename: 'archive.risum', maxBytes: limits.compressedBytes,
         diskHeadroomBytes: limits.diskHeadroomBytes, getAvailableBytes, signal: controller.signal,
       });
-      progress('upload', staged.bytes, knownBytes || staged.bytes, true);
+      progress('spooling', staged.bytes, knownBytes || staged.bytes, true);
       const result = await importFile({ archivePath: staged.filePath, stagingRoot, publishAssets, limits, signal: controller.signal, getAvailableBytes,
         onProgress: update => progress(update && update.phase || 'validate', Number(update && update.completed), Number(update && update.total), update && update.terminal === true),
       });

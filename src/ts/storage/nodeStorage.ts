@@ -102,7 +102,7 @@ export interface ServerRisumImportResult {
 
 export type ServerRisumImportProgress =
     | { phase: 'uploading', loaded: number, total: number }
-    | { phase: 'validate' | 'assets' | 'publish', completed: number, total: number }
+    | { phase: 'spooling' | 'validate' | 'assets' | 'publish', completed: number, total: number }
 
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 50
@@ -748,7 +748,7 @@ export class NodeStorage{
             let serverError: string | null = null
             const handleMessage = (msg: any) => {
                 if (msg?.type === 'progress' &&
-                    (msg.phase === 'validate' || msg.phase === 'assets' || msg.phase === 'publish') &&
+                    (msg.phase === 'spooling' || msg.phase === 'validate' || msg.phase === 'assets' || msg.phase === 'publish') &&
                     typeof msg.completed === 'number' && typeof msg.total === 'number') {
                     onProgress?.({ phase: msg.phase, completed: msg.completed, total: msg.total })
                 } else if (msg?.type === 'done' && msg.result?.module) {

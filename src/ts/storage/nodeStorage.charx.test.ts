@@ -159,14 +159,15 @@ describe('NodeStorage.importRisum', () => {
         expect(arrayBuffer).not.toHaveBeenCalled()
 
         xhr.emitUpload(5, 10)
-        xhr.emitResponse('{"type":"progress","phase":"validate","completed":1,')
-        xhr.emitResponse('"total":2}\n{"type":"done","result":{"module":{"type":"risuModule","id":"old"},"assets":1}}')
+        xhr.emitResponse('{"type":"progress","phase":"spooling","completed":1,')
+        xhr.emitResponse('"total":2}\n{"type":"progress","phase":"validate","completed":2,"total":2}\n{"type":"done","result":{"module":{"type":"risuModule","id":"old"},"assets":1}}')
         xhr.finish()
 
         await expect(promise).resolves.toMatchObject({ module: { id: 'old' }, assets: 1 })
         expect(progress).toEqual([
             { phase: 'uploading', loaded: 5, total: 10 },
-            { phase: 'validate', completed: 1, total: 2 },
+            { phase: 'spooling', completed: 1, total: 2 },
+            { phase: 'validate', completed: 2, total: 2 },
         ])
     })
 

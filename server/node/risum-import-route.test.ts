@@ -74,6 +74,7 @@ describe('createRisumImportHandler', () => {
         expect(response.status).toBe(200)
         expect(events).toContainEqual(expect.objectContaining({ type: 'done', result: expect.objectContaining({ module: expect.any(Object) }) }))
         expect(events).toContainEqual(expect.objectContaining({ type: 'progress' }))
+        expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'spooling', completed: 3, total: 3 }))
         expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'validate', completed: 1, total: 1 }))
         expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'assets', completed: 2, total: 3 }))
         expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'publish', completed: 1, total: 1 }))

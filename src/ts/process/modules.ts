@@ -349,6 +349,7 @@ export async function importModule(){
     const db = getDatabase()
     if(extension === 'risum'){
         if(isNodeServer){
+            let failed = false
             try {
                 await withSaverScope('import', async () => {
                     alertWait('Loading... (Uploading Module…)')
@@ -367,10 +368,12 @@ export async function importModule(){
                     notifySuccess(language.successImport)
                 })
             } catch (error) {
+                failed = true
+                alertClear()
                 console.error(error)
                 alertError(language.errors.noData)
             } finally {
-                alertClear()
+                if(!failed) alertClear()
             }
             return
         }
