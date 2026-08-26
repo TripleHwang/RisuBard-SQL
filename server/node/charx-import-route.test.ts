@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import express from 'express'
+import { rateLimit } from 'express-rate-limit'
 import http from 'node:http'
 
 const { createCharXImportHandler } = require('./charx-import-route.cjs')
@@ -34,7 +35,13 @@ function makeApp(overrides: Partial<HandlerDeps> = {}) {
         ...dependencyOverrides,
     }
     const app = express()
-    app.post('/api/charx/import', createCharXImportHandler(deps))
+    app.post('/api/charx/import', rateLimit({
+        windowMs: 60 * 1000,
+        max: 1000,
+        standardHeaders: true,
+        legacyHeaders: false,
+        validate: { xForwardedForHeader: false },
+    }), createCharXImportHandler(deps))
     const server = http.createServer(serverOptions, app)
     servers.push(server)
     return { server, calls, deps }

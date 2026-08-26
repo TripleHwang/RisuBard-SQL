@@ -1567,6 +1567,17 @@ const loginRouteLimiter = rateLimit({
     validate: { xForwardedForHeader: false }
 });
 
+// CharX imports can stream and extract large archives, so cap them separately
+// from login attempts without throttling other authenticated storage traffic.
+const charxImportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many CharX import requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
 function isHex(str) {
     return hexRegex.test(str.toUpperCase().trim()) || str === '__password';
 }
@@ -4286,7 +4297,7 @@ app.get('/api/backup/export', async (req, res, next) => {
     }
 });
 
-app.post('/api/charx/import', createCharXImportHandler({
+app.post('/api/charx/import', charxImportLimiter, createCharXImportHandler({
     checkAuth,
     checkActiveSession,
     beginImport: () => {
