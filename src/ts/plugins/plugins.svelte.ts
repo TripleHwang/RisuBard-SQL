@@ -15,6 +15,8 @@ import { runPluginUpdate } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 
 export const customProviderStore = writable([] as string[])
+export const pluginLoadingStore = writable(false)
+export const pluginReadyStore = writable(false)
 
 interface ProviderPlugin {
     name: string
@@ -453,6 +455,9 @@ export async function importPlugin(code:string|null = null, argu:{
 let pluginTranslator = false
 
 export async function loadPlugins() {
+    pluginLoadingStore.set(true)
+    pluginReadyStore.set(false)
+    try {
     console.log('Loading plugins...')
     let db = getDatabase()
 
@@ -478,6 +483,10 @@ export async function loadPlugins() {
 
     await loadV2Plugin(pluginV2)
     await loadV3Plugins(pluginV3)
+    } finally {
+        pluginLoadingStore.set(false)
+        pluginReadyStore.set(true)
+    }
 }
 
 export type PluginV2ProviderArgument = {
@@ -564,11 +573,15 @@ export const getV2PluginAPIs = () => {
             }
         },
         getChar: () => {
-            return getCurrentCharacter({ snapshot: true })
+            const character = getCurrentCharacter({ snapshot: true }) as any
+            return character?.detailsLoaded === false ? null : character
         },
         setChar: (char: any) => {
             const db = getDatabase()
             const charid = get(selectedCharID)
+            if ((db.characters[charid] as any)?.detailsLoaded === false) {
+                throw new Error('Character details are still loading')
+            }
             db.characters[charid] = char
             setDatabaseLite(db)
         },

@@ -129,7 +129,18 @@ export async function openExistingStandaloneSql(
     console.error("Could not open existing standalone SQL database", error);
     pendingSqlStorage = null;
     if (storage?.backendKind === "server-sql" && "loadRecoverySnapshot" in storage) {
-      if (httpStatus(error) === 404) {
+      const status = httpStatus(error);
+      if (status === 404) {
+        return {
+          database: {} as Database,
+          storage: null,
+          usingSql: false,
+          migrated: false,
+          mode: "unsupported",
+          error,
+        };
+      }
+      if (status === undefined || status < 500 || status > 599) {
         return {
           database: {} as Database,
           storage: null,

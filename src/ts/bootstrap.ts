@@ -21,7 +21,7 @@ import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
     forageStorage,
-    saveDb,
+    saveDb, startMetadataPersistence,
     setPatchSyncBaseline,
     getDbBackups,
     getUncleanables,
@@ -67,7 +67,11 @@ export function scheduleAfterFirstPaint(task: () => void | Promise<void>, timeou
 }
 
 async function loadDeferredModules(): Promise<void> {
-    await loadPlugins()
+    try {
+        await loadPlugins()
+    } catch (error) {
+        console.error(error)
+    }
     registerModelDynamic()
     moduleUpdate()
 }
@@ -231,7 +235,8 @@ export async function loadData() {
             selectedCharID.set(-1)
             startObserveDom()
             if (startupMode !== 'metadata-first') assignIds()
-            saveDb({ metadataOnly: startupMode === 'metadata-first' })
+            if (startupMode === 'metadata-first') startMetadataPersistence()
+            else saveDb()
             scheduleAfterFirstPaint(() => loadDeferredModules())
             scheduleAfterFirstPaint(() => cleanChunks(), 5_000)
             scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))
@@ -262,6 +267,7 @@ const ignorableBrowserErrors = new Set([
     'ResizeObserver loop completed with undelivered notifications.',
     'ResizeObserver loop limit exceeded',
 ])
+let errorHandlingStarted = false
 
 function isIgnorableBrowserError(error: unknown): boolean {
     const message = typeof error === 'string'
@@ -273,6 +279,8 @@ function isIgnorableBrowserError(error: unknown): boolean {
 }
 
 function updateErrorHandling() {
+    if (errorHandlingStarted) return
+    errorHandlingStarted = true
     const errorHandler = (event: ErrorEvent) => {
         const error = event.error ?? event.message
         if (!error) return

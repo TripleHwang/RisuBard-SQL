@@ -13,14 +13,15 @@ describe('startup scheduling and degraded recovery', () => {
         expect(interactive).toBeGreaterThan(-1)
         expect(mark).toBeGreaterThan(interactive)
         expect(plugins).toBeGreaterThan(mark)
-        expect(source).toMatch(/await loadPlugins\(\)[\s\S]*registerModelDynamic\(\)[\s\S]*moduleUpdate\(\)/)
+        expect(source).toMatch(/await loadPlugins\(\)[\s\S]*catch[\s\S]*registerModelDynamic\(\)[\s\S]*moduleUpdate\(\)/)
         expect(source).toContain('scheduleAfterFirstPaint(() => cleanChunks(), 5_000)')
         expect(source).toContain('scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))')
         expect(source).toContain('scheduleAfterFirstPaint(() => initModelJobRecovery())')
     })
 
     it('keeps metadata-first bootstrap from immediately serializing character summaries', () => {
-        expect(source).toContain("saveDb({ metadataOnly: startupMode === 'metadata-first' })")
+        expect(source).toContain("startMetadataPersistence()")
+        expect(source).not.toContain("saveDb({ metadataOnly: startupMode === 'metadata-first' })")
     })
 
     it('labels snapshot recovery as degraded instead of silently loading a local snapshot', () => {

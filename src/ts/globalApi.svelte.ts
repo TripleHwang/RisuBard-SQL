@@ -1186,6 +1186,11 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
     }
 }
 
+/** Installs reactive persistence without encoding metadata-only SQL summaries. */
+export async function startMetadataPersistence() {
+    return saveDb({ metadataOnly: true })
+}
+
 /**
  * Retrieves the database backups.
  * 

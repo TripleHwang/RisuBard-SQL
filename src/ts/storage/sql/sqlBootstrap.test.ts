@@ -23,7 +23,7 @@ describe("standalone SQL bootstrap", () => {
     const storage = {
       ...fakeStorage([]),
       backendKind: "server-sql" as const,
-      init: vi.fn(async () => { throw new Error("SQL bootstrap failed (503)"); }),
+      init: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (503)"), { status: 503 }); }),
       loadBootstrap: vi.fn(),
       loadRecoverySnapshot: vi.fn(),
       loadCharacterHydration: vi.fn(),
@@ -53,6 +53,19 @@ describe("standalone SQL bootstrap", () => {
 
     expect(result).toMatchObject({ usingSql: false, mode: "unsupported" });
     expect(result?.recoveryStorage).toBeUndefined();
+    expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not recover snapshots for authentication failures", async () => {
+    setActiveSqlStorageForTesting(null);
+    const storage = {
+      ...fakeStorage([]), backendKind: "server-sql" as const,
+      init: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (401)"), { status: 401 }); }),
+      loadBootstrap: vi.fn(), loadRecoverySnapshot: vi.fn(), loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn(),
+    } as unknown as SqlBootstrapStorage;
+
+    const result = await openExistingStandaloneSql(storage);
+    expect(result).toMatchObject({ mode: "unsupported", usingSql: false });
     expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
   });
 
