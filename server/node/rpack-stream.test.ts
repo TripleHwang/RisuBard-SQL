@@ -44,8 +44,10 @@ describe('decodeRPackRangeToFile', () => {
   it('decodes an exact non-aligned source range', async () => {
     const { decodeRPackRangeToFile } = await import(streamModule)
     const decoded = Buffer.from(Array.from({ length: 40 }, (_, value) => value + 10)); const { sourcePath, targetPath } = await fixture(decoded)
-    await decodeRPackRangeToFile({ sourcePath, targetPath, start: 7, length: 19, chunkBytes: 3, maxOutputBytes: 19 })
+    const observed: Buffer[] = []
+    await decodeRPackRangeToFile({ sourcePath, targetPath, start: 7, length: 19, chunkBytes: 3, maxOutputBytes: 19, onChunk: ({ decodedChunk }: any) => observed.push(Buffer.from(decodedChunk)) })
     expect(await readFile(targetPath)).toEqual(decoded.subarray(7, 26))
+    expect(Buffer.concat(observed)).toEqual(decoded.subarray(7, 26))
   })
 
   it('completes each chunk when the source returns partial reads', async () => {

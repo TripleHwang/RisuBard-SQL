@@ -81,9 +81,9 @@ async function decodeRPackRangeToFile(options) {
       const chunk = Buffer.allocUnsafe(size);
       await readExact(source, chunk, position, signal);
       for (let index = 0; index < chunk.length; index++) chunk[index] = RPACK_DECODE_MAP[chunk[index]];
-      await writeAll(target, chunk, signal);
       position += size; remaining -= size; bytes += size;
-      onChunk({ bytes: size, totalBytes: bytes, remainingBytes: remaining });
+      onChunk({ bytes: size, totalBytes: bytes, remainingBytes: remaining, decodedChunk: chunk });
+      await writeAll(target, chunk, signal);
     }
     checkAbort(signal);
     await withAbort(target.sync(), signal);

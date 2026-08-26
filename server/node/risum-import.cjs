@@ -36,8 +36,9 @@ function normalize(error) {
   if (error instanceof RisumImportError) return error;
   if (error && error.code === 'IMPORT_ABORTED') return aborted();
   if (error && error.code === 'IMPORT_LIMIT_EXCEEDED') return limit(error.message);
+  if (error && error.code === 'INVALID_IMPORT_INPUT') return invalid(error.message);
   if (error && error.code === 'ENOSPC') return noSpace();
-  return invalid(error && error.message ? error.message : 'Unable to import risum');
+  return error || invalid('Unable to import risum');
 }
 
 async function readExactly(handle, position, length, archiveSize, signal) {
@@ -82,11 +83,16 @@ async function importRisumFile({ archivePath, stagingRoot, publishAssets, limits
     const metadataLength = uint32(header.subarray(2));
     if (metadataLength > limits.metadataBytes) throw limit('Risum metadata exceeds limit');
     let position = 6; const metadataEnd = safeAdd(position, metadataLength); if (metadataEnd > stat.size) throw invalid('Truncated risum metadata');
+    let decodedBytes = 0; let metadataDecoded = 0;
     const metadataPath = path.join(ownedDir, 'metadata.json'); checkSpace(getAvailableBytes, limits, 'metadata', metadataLength);
-    await decodeRPackRangeToFile({ sourcePath: archivePath, start: position, length: metadataLength, targetPath: metadataPath, chunkBytes: limits.ioChunkBytes, maxOutputBytes: limits.metadataBytes, signal });
+    await decodeRPackRangeToFile({ sourcePath: archivePath, start: position, length: metadataLength, targetPath: metadataPath, chunkBytes: limits.ioChunkBytes, maxOutputBytes: limits.metadataBytes, signal, onChunk: ({ bytes }) => {
+      checkAbort(signal); metadataDecoded = safeAdd(metadataDecoded, bytes); if (metadataDecoded > limits.metadataBytes) throw limit('Risum metadata exceeds limit');
+      decodedBytes = safeAdd(decodedBytes, bytes); if (decodedBytes > limits.decodedBytes) throw limit('Risum decoded data exceeds limit');
+      checkSpace(getAvailableBytes, limits, 'metadata-chunk', bytes);
+    } });
     position = metadataEnd;
     const module = validModule(strictJson(await fsp.readFile(metadataPath)));
-    let decodedBytes = metadataLength; let records = 0; let completed = 0; const entries = []; const keys = new Set(); const assetKeys = [];
+    let records = 0; let completed = 0; const entries = []; const keys = new Set(); const assetKeys = [];
     onProgress({ phase: 'validate', completed, total: module.assets.length });
     for (;;) {
       checkAbort(signal);
@@ -99,15 +105,14 @@ async function importRisumFile({ archivePath, stagingRoot, publishAssets, limits
       if (length > limits.assetDecodedBytes) throw limit('Risum asset exceeds limit');
       if (safeAdd(decodedBytes, length) > limits.decodedBytes) throw limit('Risum decoded data exceeds limit');
       checkSpace(getAvailableBytes, limits, 'asset', length);
-      const targetPath = path.join(ownedDir, `asset-${records}.decoded`); const hash = createHash('sha256');
-      await decodeRPackRangeToFile({ sourcePath: archivePath, start: position, length, targetPath, chunkBytes: limits.ioChunkBytes, maxOutputBytes: limits.assetDecodedBytes, signal });
-      // The RPack decoder owns the bounded writes; hash the staged bytes in chunks afterwards.
-      const asset = await fsp.open(targetPath, fs.constants.O_RDONLY); try {
-        const chunk = Buffer.allocUnsafe(limits.ioChunkBytes); let offset = 0;
-        while (offset < length) { checkAbort(signal); const { bytesRead } = await asset.read(chunk, 0, Math.min(chunk.length, length - offset), offset); if (!bytesRead) throw invalid('Truncated decoded asset'); hash.update(chunk.subarray(0, bytesRead)); offset += bytesRead; }
-      } finally { await asset.close(); }
+      const targetPath = path.join(ownedDir, `asset-${records}.decoded`); const hash = createHash('sha256'); let assetDecoded = 0;
+      await decodeRPackRangeToFile({ sourcePath: archivePath, start: position, length, targetPath, chunkBytes: limits.ioChunkBytes, maxOutputBytes: limits.assetDecodedBytes, signal, onChunk: ({ bytes, decodedChunk }) => {
+        checkAbort(signal); assetDecoded = safeAdd(assetDecoded, bytes); if (assetDecoded > limits.assetDecodedBytes) throw limit('Risum asset exceeds limit');
+        decodedBytes = safeAdd(decodedBytes, bytes); if (decodedBytes > limits.decodedBytes) throw limit('Risum decoded data exceeds limit');
+        checkSpace(getAvailableBytes, limits, 'asset-chunk', bytes); hash.update(decodedChunk);
+      } });
       const key = `assets/${hash.digest('hex')}.png`; assetKeys.push(key); if (!keys.has(key)) { keys.add(key); entries.push({ key, sourcePath: targetPath }); }
-      position = nextPosition; decodedBytes = safeAdd(decodedBytes, length); completed += 1; onProgress({ phase: 'assets', completed, total: module.assets.length });
+      position = nextPosition; completed += 1; onProgress({ phase: 'assets', completed, total: module.assets.length });
     }
     if (position !== stat.size) throw invalid('Unexpected trailing risum data');
     if (records !== module.assets.length) throw invalid('Risum asset record count does not match metadata');
