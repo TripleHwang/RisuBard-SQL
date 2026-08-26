@@ -31,4 +31,12 @@ describe('data import parallelism connections', () => {
         const route = server.slice(server.indexOf("app.post('/api/charx/import'"), server.indexOf('// ── Server-side backup endpoints'))
         expect(route).not.toMatch(/charx[\s\S]{0,1500}Buffer\.concat\(chunks\)/i)
     })
+
+    it('keeps the risum stream out of raw-body buffering and wires file-backed publication', () => {
+        expect(server).toContain("req.path === '/api/backup/import' || req.path === '/api/charx/import' || req.path === '/api/risum/import'")
+        expect(server).toContain("app.post('/api/risum/import'")
+        const route = server.slice(server.indexOf("app.post('/api/risum/import'"), server.indexOf('// Pre-flight check: auth + size + disk space'))
+        expect(route).toContain('kvSetManyFromFilesAsync')
+        expect(route).not.toMatch(/risum[\s\S]{0,1600}Buffer\.concat\(chunks\)/i)
+    })
 })
