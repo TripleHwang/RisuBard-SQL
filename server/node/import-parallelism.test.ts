@@ -15,13 +15,14 @@ describe('data import parallelism connections', () => {
         expect(server).not.toContain('stagedKvEntries.push({ key: storageKey, value: Buffer.from(storageValue) })')
     })
 
-    it('decompresses uploaded save-folder ZIPs through the worker-thread fflate API', () => {
+    it('spools uploaded save-folder ZIPs and delegates bounded extraction', () => {
         const route = server.slice(
             server.indexOf("app.post('/api/migrate/save-folder/upload'"),
             server.indexOf("app.post('/api/migrate/save-folder/cleanup/scan'"),
         )
-        expect(route).toContain('fflate.unzip(')
-        expect(route).not.toContain('unzipSync')
+        expect(route).toContain('spoolSourceToOwnedFile')
+        expect(route).toContain('importSaveFolderZip')
+        expect(route).not.toMatch(/Buffer\.concat\(chunks\)|fflate\.unzip\(/)
     })
 
     it('keeps the CharX stream out of raw-body buffering and wires file-backed publication', () => {

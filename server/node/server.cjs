@@ -24,7 +24,7 @@ const getVips = () => {
     }
     return _vipsPromise
 }
-const { kvGet, kvSet, kvSetMany, kvSetManyFromFilesAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvDel, kvList,
+const { kvGet, kvSet, kvSetMany, kvSetManyFromFilesAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvReplaceAllFromFilesAsync, kvDel, kvList,
         kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvGetMetadata, kvCopyValue,
         gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
@@ -53,6 +53,8 @@ const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs'
 const { createCharXImportHandler } = require('./charx-import-route.cjs');
 const { importRisumFile, DEFAULT_RISUM_LIMITS } = require('./risum-import.cjs');
 const { createRisumImportHandler } = require('./risum-import-route.cjs');
+const { spoolSourceToOwnedFile } = require('./import-stream.cjs');
+const { importSaveFolderZip, DEFAULT_SAVE_FOLDER_ZIP_LIMITS } = require('./save-folder-zip-import.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -5271,6 +5273,16 @@ async function replaceWithLegacySaveEntries(entries) {
     return { imported: entries.length };
 }
 
+async function replaceWithLegacySaveFileEntries(entries) {
+    await flushPendingDb();
+    maybeCollectUnreferencedObjects();
+    invalidateDbCache();
+    await kvReplaceAllFromFilesAsync(entries);
+    relationalSql.reset();
+    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
+    return { imported: entries.length };
+}
+
 async function importHexFilesFromDir(dirPath) {
     const { hexFiles, hasDatabase } = scanHexFilesInDir(dirPath);
     if (hexFiles.length === 0) return { imported: 0 };
@@ -5367,54 +5379,38 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
     const prevRequestTimeout = req.socket.server?.requestTimeout;
     if (req.socket.server) req.socket.server.requestTimeout = 0;
 
+    const controller = new AbortController();
+    let staged;
+    const writeEvent = event => { if (!res.writableEnded && !res.destroyed) res.write(JSON.stringify(event) + '\n'); };
+    // IncomingMessage emits close after a normal fully-read request too; only
+    // treat it as cancellation while the request was actually interrupted.
+    const onRequestClose = () => { if (req.aborted || !req.complete) controller.abort(); };
+    const onResponseClose = () => { if (!res.writableEnded) controller.abort(); };
+    let heartbeat;
     try {
-        const chunks = [];
-        let totalSize = 0;
-        for await (const chunk of req) {
-            totalSize += chunk.length;
-            if (BACKUP_IMPORT_MAX_BYTES > 0 && totalSize > BACKUP_IMPORT_MAX_BYTES) {
-                res.status(413).json({ error: 'Zip file exceeds max allowed size' });
-                return;
-            }
-            chunks.push(chunk);
+        const contentLength = Number(req.headers['content-length']);
+        if (Number.isFinite(contentLength) && contentLength > DEFAULT_SAVE_FOLDER_ZIP_LIMITS.compressedBytes) {
+            return res.status(413).json({ error: 'Zip file exceeds max allowed size', code: 'SAVE_FOLDER_ZIP_LIMIT_EXCEEDED' });
         }
-        const zipBuffer = Buffer.concat(chunks);
-
-        const fflate = require('fflate');
-        let unzipped;
-        try {
-            unzipped = await new Promise((resolve, reject) => {
-                fflate.unzip(new Uint8Array(zipBuffer), (error, data) => {
-                    if (error) reject(error);
-                    else resolve(data);
-                });
-            });
-        } catch {
-            res.status(400).json({ error: 'Invalid or corrupted zip file' });
-            return;
-        }
-
-        const entries = [];
-        for (const [entryPath, data] of Object.entries(unzipped)) {
-            if (data.length === 0) continue;
-            const basename = path.basename(entryPath);
-            if (!hexRegex.test(basename)) continue;
-            try {
-                const key = Buffer.from(basename, 'hex').toString('utf-8');
-                entries.push({ key, value: Buffer.from(data) });
-            } catch { /* invalid hex filename */ }
-        }
-
-        if (entries.length === 0) {
-            res.status(400).json({ error: 'No compatible hex files found in zip' });
-            return;
-        }
-
-        const result = await importHexEntries(entries);
-        res.json({ ok: true, imported: result.imported });
+        req.once('aborted', () => controller.abort()); req.once('close', onRequestClose); res.once('close', onResponseClose);
+        res.status(200).set({ 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' }); res.flushHeaders();
+        heartbeat = setInterval(() => writeEvent({ type: 'heartbeat' }), 5000);
+        let received = 0;
+        const source = (async function* () { for await (const chunk of req) { received += chunk.length; writeEvent({ type: 'progress', phase: 'spooling', completed: received, total: Number.isFinite(contentLength) ? contentLength : received }); yield chunk; } })();
+        staged = await spoolSourceToOwnedFile(source, { stagingRoot: path.join(savePath, 'save-folder-imports'), prefix: 'upload-', filename: 'archive.zip', maxBytes: DEFAULT_SAVE_FOLDER_ZIP_LIMITS.compressedBytes, diskHeadroomBytes: DEFAULT_SAVE_FOLDER_ZIP_LIMITS.diskHeadroomBytes, signal: controller.signal,
+            getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); } });
+        const result = await importSaveFolderZip({ archivePath: staged.filePath, stagingRoot: path.join(savePath, 'save-folder-imports'), signal: controller.signal,
+            getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); },
+            replaceAllFromFiles: replaceWithLegacySaveFileEntries,
+            onProgress: progress => writeEvent({ type: 'progress', ...progress }), });
+        writeEvent({ type: 'done', result }); res.end();
     } catch (error) {
-        res.status(400).json({ error: error.message || 'Import failed' });
+        const status = Number.isInteger(error?.status) ? error.status : 400;
+        const event = { type: 'error', code: error?.code || 'SAVE_FOLDER_IMPORT_FAILED', status, message: error?.message || 'Import failed' };
+        if (res.headersSent) { writeEvent(event); if (!res.writableEnded) res.end(); } else res.status(status).json({ error: event.message, code: event.code });
     } finally {
+        if (heartbeat) clearInterval(heartbeat); req.removeListener('close', onRequestClose); res.removeListener('close', onResponseClose);
+        if (staged?.ownedDir) await fs.rm(staged.ownedDir, { recursive: true, force: true }).catch(() => {});
         importInProgress = false;
         if (req.socket.server && prevRequestTimeout !== undefined) {
             req.socket.server.requestTimeout = prevRequestTimeout;

@@ -1019,7 +1019,15 @@ export class NodeStorage{
                     return
                 }
                 try {
-                    resolve(JSON.parse(xhr.responseText))
+                    // Large save-folder imports use NDJSON so the server can
+                    // report extraction progress without retaining the ZIP in
+                    // browser memory.  Keep the public method result stable.
+                    const events = xhr.responseText.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+                    const failure = events.find(event => event.type === 'error')
+                    if (failure) throw new Error(failure.message || 'zip import failed')
+                    const done = events.find(event => event.type === 'done')
+                    if (!done?.result) throw new Error('zip import did not complete')
+                    resolve({ ok: true, imported: done.result.imported })
                 } catch (error) {
                     reject(error)
                 }
