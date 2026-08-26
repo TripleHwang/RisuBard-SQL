@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import express from 'express'
+import http from 'node:http'
+import { rateLimit } from 'express-rate-limit'
 
 const server = readFileSync(new URL('./server.cjs', import.meta.url), 'utf8')
 
@@ -40,5 +43,44 @@ describe('route rate limiting', () => {
         expect(chatMiddleware).toBeGreaterThan(chatLimiter)
         expect(jsonParser).toBeGreaterThan(chatMiddleware)
         expect(server).toContain("app.post('/api/chat-content/:chaId/:chatIndex', async")
+    })
+
+    it('limits legacy raw save imports before body parsing', () => {
+        const limiter = server.indexOf('const legacySaveImportLimiter = rateLimit({')
+        const backupMiddleware = server.indexOf("app.use('/api/backup/import', legacySaveImportLimiter)")
+        const saveFolderMiddleware = server.indexOf("app.use('/api/migrate/save-folder/upload', legacySaveImportLimiter)")
+        const jsonParser = server.indexOf("app.use(express.json({ limit: '100mb' }))")
+        expect(limiter).toBeGreaterThanOrEqual(0)
+        expect(backupMiddleware).toBeGreaterThan(limiter)
+        expect(saveFolderMiddleware).toBeGreaterThan(backupMiddleware)
+        expect(jsonParser).toBeGreaterThan(saveFolderMiddleware)
+        expect(server).toContain("skip: (req) => req.method !== 'POST' || req.path !== '/',")
+        expect(server).not.toContain("app.use('/api/backup/import/prepare', legacySaveImportLimiter)")
+        expect(server).toContain("app.post('/api/backup/import', async")
+        expect(server).toContain("app.post('/api/migrate/save-folder/upload', async")
+    })
+
+    it('does not charge backup prepare requests against the exact upload limit', async () => {
+        const app = express()
+        const limiter = rateLimit({
+            windowMs: 60_000,
+            max: 1,
+            validate: { xForwardedForHeader: false },
+            skip: (req) => req.method !== 'POST' || req.path !== '/',
+        })
+        app.use('/api/backup/import', limiter)
+        app.post('/api/backup/import/prepare', (_req, res) => res.sendStatus(200))
+        app.post('/api/backup/import', (_req, res) => res.sendStatus(200))
+        const listener = http.createServer(app)
+        await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', resolve))
+        try {
+            const port = (listener.address() as { port: number }).port
+            const request = (path: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST' })
+            expect((await request('/api/backup/import/prepare')).status).toBe(200)
+            expect((await request('/api/backup/import')).status).toBe(200)
+            expect((await request('/api/backup/import')).status).toBe(429)
+        } finally {
+            await new Promise<void>((resolve) => listener.close(() => resolve()))
+        }
     })
 })
