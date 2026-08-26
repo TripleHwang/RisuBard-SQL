@@ -1,6 +1,7 @@
 import { describe, test, expect, vi } from 'vitest'
 
 const activeStorage = vi.hoisted(() => ({ current: null as any }))
+const runtimeState = vi.hoisted(() => ({ database: { characters: [] as any[], selectedChatId: null as string | null }, selectedIndex: 0, generating: new Set<string>(), hydrating: new Set<string>(), flush: vi.fn(async () => undefined) }))
 
 // Stub out the heavy reactive modules so loading chatStorage.ts doesn't trigger
 // unrelated $effect chains that fail in a stripped-down test environment.
@@ -8,16 +9,18 @@ const activeStorage = vi.hoisted(() => ({ current: null as any }))
 // the chat-data-loss tests below exercise the real intent.
 vi.mock('../globalApi.svelte', () => ({ forageStorage: { realStorage: null } }))
 vi.mock('./database.svelte', () => ({
-    getDatabase: () => ({ characters: [] }),
+    getDatabase: () => runtimeState.database,
     isChatStub: (chat: any) => chat
         && chat._stub === true
         && !Array.isArray(chat.message),
 }))
 vi.mock('./sql/sqlBootstrap', () => ({ getActiveSqlStorage: () => activeStorage.current }))
-vi.mock('./sql/sqlPersistenceRuntime', () => ({ flushSqlDirtyChanges: async () => undefined }))
-vi.mock('../process/generationState', () => ({ isChatGenerating: () => false }))
+vi.mock('./sql/sqlPersistenceRuntime', () => ({ flushSqlDirtyChanges: runtimeState.flush, markSqlChatDirty: vi.fn() }))
+vi.mock('../process/generationState', () => ({ isChatGenerating: (id: string) => runtimeState.generating.has(id) }))
+vi.mock('./hydrationState', () => ({ beginHydration: () => undefined, beginHydrationApply: () => undefined, endHydration: () => undefined, endHydrationApply: () => undefined, isHydrationActive: (key: string) => runtimeState.hydrating.has(key) }))
+vi.mock('../stores.svelte', () => ({ selectedCharID: { subscribe: (run: (value: number) => void) => { run(runtimeState.selectedIndex); return () => undefined } } }))
 
-const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage } = await import('./chatStorage')
+const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage, touchHydratedChat, evictHydratedChats, resetChatHydrationCacheForTesting } = await import('./chatStorage')
 type Chat = any
 type ChatStub = any
 
@@ -228,7 +231,7 @@ describe('ChatHydrationCache', () => {
 
         await cache.touch('char-a', 'chat-1')
         await cache.touch('char-a', 'chat-2')
-        await cache.touch('char-b', 'chat-3', { activeChatId: 'chat-3' })
+        await cache.touch('char-b', 'chat-3', { getActiveKey: () => 'char-b/chat-3' })
 
         expect(cache.ids()).toEqual(['char-a/chat-2', 'char-b/chat-3'])
     })
@@ -247,20 +250,20 @@ describe('ChatHydrationCache', () => {
         const cache = new ChatHydrationCache({ maxChats: 1, flush })
         await cache.touch('char-a', 'chat-1')
 
-        await expect(cache.touch('char-a', 'chat-2', { activeChatId: 'chat-2' })).rejects.toThrow('offline')
+        await expect(cache.touch('char-a', 'chat-2', { getActiveKey: () => 'char-a/chat-2' })).rejects.toThrow('offline')
         expect(cache.ids()).toEqual(['char-a/chat-1'])
     })
 
     test('re-evaluates the eviction candidate after an await reorders the LRU', async () => {
         let release!: () => void
-        const flush = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+        const flush = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve })).mockResolvedValue(undefined)
         const evicted: string[] = []
         const cache = new ChatHydrationCache({ maxChats: 2, flush, onEvict: key => evicted.push(key) })
         await cache.touch('char-a', 'chat-1')
         await cache.touch('char-a', 'chat-2')
 
         const third = cache.touch('char-a', 'chat-3')
-        await Promise.resolve()
+        await vi.waitFor(() => expect(flush).toHaveBeenCalledOnce())
         await cache.touch('char-a', 'chat-1')
         release()
         await third
@@ -275,7 +278,7 @@ describe('ChatHydrationCache', () => {
         await cache.touch('char-a', 'chat-1')
         await cache.touch('char-a', 'chat-2')
         await cache.touch('char-a', 'chat-3', {
-            activeChatId: 'chat-1',
+            getActiveKey: () => 'char-a/chat-1',
             isProtected: key => key === 'char-a/chat-2',
         })
 
@@ -289,6 +292,34 @@ describe('ChatHydrationCache', () => {
         await cache.touch('char-a', 'chat-1', { chat } as any)
 
         expect(Object.values(cache as any).flatMap((value: any) => value instanceof Map ? [...value.values()] : [])).not.toContain(chat)
+    })
+
+    test('uses the active-key callback after flush when selection changes', async () => {
+        let release!: () => void
+        let active = 'char-a/chat-3'
+        const flush = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve })).mockResolvedValue(undefined)
+        const evicted: string[] = []
+        const cache = new ChatHydrationCache({ maxChats: 2, flush, onEvict: key => evicted.push(key) })
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+        const third = cache.touch('char-a', 'chat-3', { getActiveKey: () => active })
+        await vi.waitFor(() => expect(flush).toHaveBeenCalledOnce())
+        active = 'char-a/chat-1'
+        release()
+        await third
+
+        expect(evicted).toEqual(['char-a/chat-2'])
+    })
+
+    test('prunes a missing resident key before choosing an eviction candidate', async () => {
+        const flush = vi.fn().mockResolvedValue(undefined)
+        const cache = new ChatHydrationCache({ maxChats: 2, flush, isResident: key => key !== 'char-a/chat-1' })
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+        await cache.touch('char-a', 'chat-3')
+
+        expect(cache.ids()).toEqual(['char-a/chat-2', 'char-a/chat-3'])
+        expect(flush).not.toHaveBeenCalled()
     })
 })
 
@@ -306,5 +337,97 @@ describe('hydrateRecentChatPage', () => {
         expect(loadChatMessageReversePage).toHaveBeenCalledWith('chat-1', undefined, 40)
         expect(hydrated?.message.map((message: any) => message.chatId)).toEqual(['m-39', 'm-40'])
         expect((hydrated as any)._sqlWindow).toMatchObject({ hasOlder: true, total: 41 })
+    })
+})
+
+describe('runtime hydrated-chat eviction', () => {
+    const runtimeChat = (id: string, extras: any = {}) => blankChat({
+        id, message: [{ chatId: `${id}-message`, data: 'body' }], messagesLoaded: true,
+        messagesFullyLoaded: false, _sqlWindow: { hasOlder: true }, note: `${id}-note`,
+        localLore: [{ key: id }], modules: [`${id}-module`], customMetadata: { id }, ...extras,
+    })
+    const character = (id: string, chat: any) => ({ chaId: id, chatPage: 0, chats: [chat] })
+
+    test('re-finds a stable ID after flush and replaces only its message body', async () => {
+        resetChatHydrationCacheForTesting()
+        runtimeState.flush.mockClear()
+        const first = runtimeChat('chat-1')
+        const second = runtimeChat('chat-2')
+        const third = runtimeChat('chat-3')
+        runtimeState.database.characters = [character('char-1', first), character('char-2', second), character('char-3', third)]
+        runtimeState.selectedIndex = 2
+
+        await touchHydratedChat('char-1', runtimeState.database.characters[0].chats, 0)
+        await touchHydratedChat('char-2', runtimeState.database.characters[1].chats, 0)
+        const replacement = runtimeChat('chat-1', { name: 'replacement', customMetadata: { fresh: true } })
+        const originalFlush = runtimeState.flush.getMockImplementation()!
+        runtimeState.flush.mockImplementationOnce(async () => {
+            runtimeState.database.characters[0].chats[0] = replacement
+            await originalFlush()
+        })
+        await touchHydratedChat('char-3', runtimeState.database.characters[2].chats, 0)
+
+        const evicted = runtimeState.database.characters[0].chats[0]
+        expect(evicted).not.toBe(replacement)
+        expect(evicted).toMatchObject({ id: 'chat-1', name: 'replacement', customMetadata: { fresh: true }, note: 'chat-1-note', modules: ['chat-1-module'], message: [], _placeholder: true, messagesLoaded: false })
+        expect(evicted.localLore).toEqual([{ key: 'chat-1' }])
+        expect('_sqlWindow' in evicted).toBe(false)
+        expect(runtimeState.flush).toHaveBeenCalledOnce()
+    })
+
+    test('uses the globally selected character as active across characters', async () => {
+        resetChatHydrationCacheForTesting()
+        const active = runtimeChat('chat-active')
+        const other = runtimeChat('chat-other')
+        runtimeState.database.characters = [character('char-active', active), character('char-other', other)]
+        runtimeState.selectedIndex = 0
+        await touchHydratedChat('char-active', runtimeState.database.characters[0].chats, 0)
+        await touchHydratedChat('char-other', runtimeState.database.characters[1].chats, 0)
+
+        await evictHydratedChats()
+
+        expect(runtimeState.database.characters[0].chats[0]._placeholder).not.toBe(true)
+        expect(runtimeState.database.characters[1].chats[0]).toMatchObject({ _placeholder: true, message: [] })
+    })
+
+    test('does not evict a chat with any reboot job object', async () => {
+        resetChatHydrationCacheForTesting()
+        const job = runtimeChat('chat-job', { risuBardWikiReboot: { status: 'failed' } })
+        const safe = runtimeChat('chat-safe')
+        const third = runtimeChat('chat-third')
+        runtimeState.database.characters = [character('char-job', job), character('char-safe', safe), character('char-third', third)]
+        runtimeState.selectedIndex = 2
+        await touchHydratedChat('char-job', runtimeState.database.characters[0].chats, 0)
+        await touchHydratedChat('char-safe', runtimeState.database.characters[1].chats, 0)
+        await touchHydratedChat('char-third', runtimeState.database.characters[2].chats, 0)
+
+        expect(runtimeState.database.characters[0].chats[0]._placeholder).not.toBe(true)
+        expect(runtimeState.database.characters[1].chats[0]).toMatchObject({ _placeholder: true, message: [] })
+    })
+
+    test('protects streaming, generating, hydrating, and full-history chats', async () => {
+        const cases: Array<[string, any, () => void]> = [
+            ['streaming', { isStreaming: true }, () => undefined],
+            ['generating', {}, () => runtimeState.generating.add('chat-protected')],
+            ['hydrating', {}, () => runtimeState.hydrating.add('char-protected/chat-protected')],
+            ['full history', { fullHistoryOperation: true }, () => undefined],
+        ]
+        for (const [_name, extras, prepare] of cases) {
+            resetChatHydrationCacheForTesting()
+            runtimeState.generating.clear()
+            runtimeState.hydrating.clear()
+            const protectedChat = runtimeChat('chat-protected', extras)
+            const safe = runtimeChat('chat-safe')
+            const third = runtimeChat('chat-third')
+            runtimeState.database.characters = [character('char-protected', protectedChat), character('char-safe', safe), character('char-third', third)]
+            runtimeState.selectedIndex = 2
+            prepare()
+            await touchHydratedChat('char-protected', runtimeState.database.characters[0].chats, 0)
+            await touchHydratedChat('char-safe', runtimeState.database.characters[1].chats, 0)
+            await touchHydratedChat('char-third', runtimeState.database.characters[2].chats, 0)
+
+            expect(runtimeState.database.characters[0].chats[0]._placeholder).not.toBe(true)
+            expect(runtimeState.database.characters[1].chats[0]._placeholder).toBe(true)
+        }
     })
 })

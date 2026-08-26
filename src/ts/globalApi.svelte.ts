@@ -12,7 +12,7 @@ import { hasher } from "./parser/parser.svelte";
 import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
-import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, chatToStub, classifyChat } from "./storage/chatStorage";
+import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, touchHydratedChat, chatToStub, classifyChat } from "./storage/chatStorage";
 import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
@@ -2819,6 +2819,7 @@ export function changeChatTo(IdOrIndex: string | number) {
                 if(!cancelled) loadingOverlayStore.set({ active: false, text: '', onCancel: null })
             })
         } else {
+            void touchHydratedChat(char.chaId, char.chats, index)
             loadTogglesFromChat(newChat)
         }
     }
