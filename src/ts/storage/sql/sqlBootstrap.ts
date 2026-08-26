@@ -49,14 +49,31 @@ export async function selectCanonicalDatabase(
     }
 
     await options.beforeMigrate?.();
-    const imported = await storage.replaceDatabase(
-      safeStructuredClone(legacyDatabase),
-    );
+    const migrated = safeStructuredClone(legacyDatabase);
+    const imported = await storage.replaceDatabase(migrated);
     if (!imported) throw new Error("SQL storage rejected the legacy database");
 
-    const verified = storage.backendKind === "server-sql" && "loadRecoverySnapshot" in storage
-      ? await (storage as SqlBootstrapStorage).loadRecoverySnapshot()
-      : await storage.loadDatabase({ shallow: false });
+    if (storage.backendKind === "server-sql" && "loadBootstrap" in storage) {
+      // A server snapshot contains every message and extension node. Re-reading
+      // it just to verify a successful atomic replace doubles the migration
+      // cost (and can be substantially larger than the imported save). The
+      // commit has already acknowledged its new revision; confirm that the
+      // lightweight bootstrap observes that revision, then keep the exact
+      // graph we just imported for this first runtime.
+      const importedRevision = storage.getRevision();
+      const bootstrap = await (storage as SqlBootstrapStorage).loadBootstrap();
+      if (bootstrap.status !== "ready" || bootstrap.revision !== importedRevision) {
+        throw new Error("SQL migration could not be verified by bootstrap");
+      }
+      return {
+        database: migrated,
+        storage,
+        usingSql: true,
+        migrated: true,
+      };
+    }
+
+    const verified = await storage.loadDatabase({ shallow: false });
     if (verified?.status !== "ready" || !verified.database) {
       throw new Error("SQL migration could not be verified by reloading it");
     }

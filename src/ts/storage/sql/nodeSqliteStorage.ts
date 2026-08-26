@@ -389,9 +389,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     if (commit.replaceAll) {
       statements.push(
         { sql: "DELETE FROM system_settings", bind: [] },
-        { sql: "DELETE FROM plugin_custom_storage", bind: [] },
         { sql: "DELETE FROM characters", bind: [] },
-        { sql: "DELETE FROM bot_presets", bind: [] },
       );
     }
     await applySqliteCommit(commit, (sql, bind = []) => {

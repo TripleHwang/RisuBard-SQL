@@ -251,6 +251,18 @@ describe('server relational SQLite', () => {
     storage.close()
   })
 
+  it('reuses prepared statements only within an individual commit', () => {
+    const source = readFileSync('server/node/relational-sqlite.cjs', 'utf8')
+    const commitStart = source.indexOf('function commit(payload)')
+    const commitSource = source.slice(commitStart, source.indexOf('function checkpoint()', commitStart))
+
+    expect(commitSource).toContain('const preparedStatements = new Map()')
+    expect(commitSource).toContain('preparedStatements.get(sql)')
+    expect(commitSource).toContain('preparedStatements.set(sql, prepared)')
+    expect(commitSource).toContain('preparedForCommit(entry.sql).run(...bind)')
+    expect(commitSource).not.toContain('database.prepare(entry.sql).run(...bind)')
+  })
+
   it('rejects DDL, metadata writes, comments and stacked statements', () => {
     expect(() => statementTable('DROP TABLE messages')).toThrow()
     expect(() => statementTable('UPDATE system_storage_meta SET revision = 9')).toThrow()

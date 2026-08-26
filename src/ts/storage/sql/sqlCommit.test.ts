@@ -108,6 +108,20 @@ describe("RisuVault SQL row commits", () => {
     ]);
   });
 
+  it("clears replace-all plugin and preset storage once", async () => {
+    const commit = createEmptySqlCommit(1);
+    commit.replaceAll = true;
+    commit.pluginStorage = { upserts: [], deletes: [], clear: true };
+    const statements: { sql: string; bind: unknown[] }[] = [];
+
+    await applySqliteCommit(commit, (sql, bind = []) => {
+      statements.push({ sql, bind });
+    });
+
+    expect(statements.filter(({ sql }) => sql === "DELETE FROM plugin_custom_storage")).toHaveLength(1);
+    expect(statements.filter(({ sql }) => sql === "DELETE FROM bot_presets")).toHaveLength(1);
+  });
+
   it("deletes only explicitly named character rows", async () => {
     const commit = createEmptySqlCommit(1);
     commit.characterDeletes = ["character-removed"];

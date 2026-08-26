@@ -404,7 +404,6 @@ export class WebSqliteStorage implements ISqlStorage {
       this.validatePresetCommit(commit);
       if (commit.replaceAll) {
         this.run("DELETE FROM system_settings");
-        this.run("DELETE FROM plugin_custom_storage");
         this.run("DELETE FROM characters");
       }
       await applySqliteCommit(commit, (sql, bind = []) => this.run(sql, bind));

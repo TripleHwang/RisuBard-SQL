@@ -225,7 +225,7 @@ export async function applySqliteCommit(
   }
 
   if (commit.pluginStorage) {
-    if (commit.pluginStorage.clear)
+    if (commit.pluginStorage.clear && !commit.replaceAll)
       await execute("DELETE FROM plugin_custom_storage");
     for (const key of commit.pluginStorage.deletes)
       await execute("DELETE FROM plugin_custom_storage WHERE key = ?", [key]);

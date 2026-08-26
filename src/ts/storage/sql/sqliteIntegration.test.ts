@@ -78,6 +78,15 @@ describe("SQLite relational integration", () => {
       .get("pagefold.config.v1") as { value: string };
     expect(JSON.parse(plugin.value)).toEqual({ provider: "google" });
 
+    const replacement = {
+      ...source,
+      pluginCustomStorage: { "only-new": { provider: "local" } },
+    };
+    await applySqliteCommit(buildSqlReplaceCommit(replacement, 1), execute);
+    expect(
+      sqlite.prepare("SELECT key FROM plugin_custom_storage ORDER BY key").all(),
+    ).toEqual([{ key: "only-new" }]);
+
     const edit = createEmptySqlCommit(1, "message");
     edit.messages.push({
       id: "message-1",

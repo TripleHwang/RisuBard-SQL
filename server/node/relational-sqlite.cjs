@@ -473,6 +473,18 @@ function createRelationalSqlite(options) {
         const statements = Array.isArray(payload?.statements) ? payload.statements : [];
         if (statements.length > 250_000) throw new Error('SQL commit is too large');
         const baseRevision = Number(payload?.baseRevision);
+        // Migration commits contain many identically-shaped row inserts. Keep
+        // the cache transaction-local so statements never outlive a rollback
+        // or database reopen.
+        const preparedStatements = new Map();
+        const preparedForCommit = (sql) => {
+            let prepared = preparedStatements.get(sql);
+            if (!prepared) {
+                prepared = database.prepare(sql);
+                preparedStatements.set(sql, prepared);
+            }
+            return prepared;
+        };
         database.exec('BEGIN IMMEDIATE');
         try {
             const currentRevision = revision();
@@ -485,7 +497,7 @@ function createRelationalSqlite(options) {
             for (const entry of statements) {
                 statementTable(entry?.sql);
                 const bind = Array.isArray(entry?.bind) ? entry.bind : [];
-                database.prepare(entry.sql).run(...bind);
+                preparedForCommit(entry.sql).run(...bind);
             }
             const nextRevision = currentRevision + 1;
             database.prepare(

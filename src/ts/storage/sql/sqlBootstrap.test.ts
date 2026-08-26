@@ -144,23 +144,65 @@ describe("standalone SQL bootstrap", () => {
     });
   });
 
-  it("uses explicit snapshot recovery only to verify a Node migration", async () => {
-    const legacy = { characters: [], username: "legacy" } as any;
-    const verified = { characters: [], username: "legacy" } as any;
+  it("verifies a Node migration through lightweight bootstrap and retains the imported graph", async () => {
+    const legacy = {
+      username: "legacy",
+      characters: [{ chaId: "character-1", chats: [{ id: "chat-1", message: [{ chatId: "message-1", data: "kept" }] }] }],
+    } as any;
     const storage = {
       ...fakeStorage([{ status: "empty", revision: 0, database: null }]),
       backendKind: "server-sql" as const,
-      loadBootstrap: vi.fn(),
-      loadRecoverySnapshot: vi.fn(async () => ({ status: "ready" as const, revision: 1, database: verified })),
+      getRevision: vi.fn(() => 1),
+      loadBootstrap: vi.fn(async () => ({
+        status: "ready" as const,
+        revision: 1,
+        settings: {},
+        pluginCustomStorage: {},
+        botPresets: [],
+        characters: [],
+        selectedCharacterId: null,
+        selectedChatId: null,
+      })),
+      loadRecoverySnapshot: vi.fn(),
       loadCharacterHydration: vi.fn(),
       loadChatMessageReversePage: vi.fn(),
     } as unknown as SqlBootstrapStorage;
 
     const result = await selectCanonicalDatabase(storage, legacy);
 
-    expect(storage.loadRecoverySnapshot).toHaveBeenCalledOnce();
+    expect(storage.loadBootstrap).toHaveBeenCalledOnce();
+    expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
     expect(storage.loadDatabase).toHaveBeenCalledOnce();
-    expect(result.database).toBe(verified);
+    expect(storage.replaceDatabase).toHaveBeenCalledWith(result.database);
+    expect(result.database).toEqual(legacy);
+    expect(result.database).not.toBe(legacy);
+    expect(result.database.characters[0].chaId).toBe("character-1");
+    expect(result.database.characters[0].chats[0].message[0]).toMatchObject({
+      chatId: "message-1", data: "kept",
+    });
+  });
+
+  it("falls back to the legacy source when Node bootstrap does not confirm the committed revision", async () => {
+    const legacy = { characters: [], username: "legacy" } as any;
+    const storage = {
+      ...fakeStorage([{ status: "empty", revision: 0, database: null }]),
+      backendKind: "server-sql" as const,
+      getRevision: vi.fn(() => 1),
+      loadBootstrap: vi.fn(async () => ({
+        status: "ready" as const,
+        revision: 2,
+        settings: {}, pluginCustomStorage: {}, botPresets: [], characters: [],
+        selectedCharacterId: null, selectedChatId: null,
+      })),
+      loadRecoverySnapshot: vi.fn(),
+      loadCharacterHydration: vi.fn(),
+      loadChatMessageReversePage: vi.fn(),
+    } as unknown as SqlBootstrapStorage;
+
+    const result = await selectCanonicalDatabase(storage, legacy);
+
+    expect(result).toMatchObject({ database: legacy, usingSql: false, migrated: false });
+    expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
   });
 
   it("preserves the source snapshot when migration verification fails", async () => {
