@@ -30,6 +30,8 @@ function makeApp(overrides: Record<string, any> = {}) {
         importRisumFile: async (_options: any) => {
             calls.push('import')
             _options.onProgress({ phase: 'validate', completed: 1, total: 1 })
+            _options.onProgress({ phase: 'assets', completed: 2, total: 3 })
+            _options.onProgress({ phase: 'publish', completed: 1, total: 1 })
             return { module: { type: 'risuModule' }, assets: 0, decodedBytes: 3 }
         },
         publishAssets: async () => calls.push('publish'),
@@ -72,6 +74,9 @@ describe('createRisumImportHandler', () => {
         expect(response.status).toBe(200)
         expect(events).toContainEqual(expect.objectContaining({ type: 'done', result: expect.objectContaining({ module: expect.any(Object) }) }))
         expect(events).toContainEqual(expect.objectContaining({ type: 'progress' }))
+        expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'validate', completed: 1, total: 1 }))
+        expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'assets', completed: 2, total: 3 }))
+        expect(events).toContainEqual(expect.objectContaining({ type: 'progress', phase: 'publish', completed: 1, total: 1 }))
         expect(calls.filter(call => call === 'begin')).toHaveLength(1)
         expect(calls.filter(call => call === 'end')).toHaveLength(1)
         expect(calls).toEqual(expect.arrayContaining(['spool', 'import', 'cleanup']))

@@ -132,3 +132,62 @@ describe('NodeStorage.importCharX', () => {
         await expect(aborted.promise).rejects.toThrow('CharX import request aborted')
     })
 })
+
+describe('NodeStorage.importRisum', () => {
+    const originalXhr = globalThis.XMLHttpRequest
+
+    afterEach(() => {
+        globalThis.XMLHttpRequest = originalXhr
+        FakeXhr.instances = []
+    })
+
+    it('sends the original File and streams fragmented phase progress plus the completed module', async () => {
+        globalThis.XMLHttpRequest = FakeXhr as unknown as typeof XMLHttpRequest
+        const storage = new NodeStorage()
+        vi.spyOn(storage, 'createAuth').mockResolvedValue('test-auth')
+        const file = new File(['raw risum archive'], 'Pack.RISUM')
+        const arrayBuffer = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('must not read File'))
+        const progress: unknown[] = []
+        const promise = storage.importRisum(file, value => progress.push(value))
+        await Promise.resolve()
+        const xhr = FakeXhr.instances[0]
+
+        expect(xhr.url).toBe('/api/risum/import')
+        expect(xhr.headers['content-type']).toBe('application/x-risu-module')
+        expect(xhr.headers['risu-auth']).toBe('test-auth')
+        expect(xhr.sentBody).toBe(file)
+        expect(arrayBuffer).not.toHaveBeenCalled()
+
+        xhr.emitUpload(5, 10)
+        xhr.emitResponse('{"type":"progress","phase":"validate","completed":1,')
+        xhr.emitResponse('"total":2}\n{"type":"done","result":{"module":{"type":"risuModule","id":"old"},"assets":1}}')
+        xhr.finish()
+
+        await expect(promise).resolves.toMatchObject({ module: { id: 'old' }, assets: 1 })
+        expect(progress).toEqual([
+            { phase: 'uploading', loaded: 5, total: 10 },
+            { phase: 'validate', completed: 1, total: 2 },
+        ])
+    })
+
+    it('rejects server errors, missing done events, network failures, and aborts', async () => {
+        globalThis.XMLHttpRequest = FakeXhr as unknown as typeof XMLHttpRequest
+        const begin = () => {
+            const storage = new NodeStorage()
+            vi.spyOn(storage, 'createAuth').mockResolvedValue('test-auth')
+            return { promise: storage.importRisum(new File(['x'], 'x.risum')), xhr: () => FakeXhr.instances.at(-1)! }
+        }
+        const server = begin(); await Promise.resolve()
+        server.xhr().emitResponse('{"type":"error","message":"bad risum"}\n'); server.xhr().finish()
+        await expect(server.promise).rejects.toThrow('bad risum')
+
+        const missing = begin(); await Promise.resolve(); missing.xhr().finish()
+        await expect(missing.promise).rejects.toThrow('Risum import: no result received')
+
+        const network = begin(); await Promise.resolve(); network.xhr().onerror?.()
+        await expect(network.promise).rejects.toThrow('Risum import request failed')
+
+        const aborted = begin(); await Promise.resolve(); aborted.xhr().onabort?.()
+        await expect(aborted.promise).rejects.toThrow('Risum import request aborted')
+    })
+})

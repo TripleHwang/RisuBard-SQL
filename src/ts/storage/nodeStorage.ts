@@ -7,6 +7,7 @@
 // /api/login, /api/token/refresh)
 import { language } from "src/lang"
 import type { CharacterCardV3 } from '@risuai/ccardlib'
+import type { RisuModule } from '../process/modules'
 import { alertInput, waitAlert, notifyError } from "../alert"
 import { decodeRisuSave, encodeRisuSaveLegacy } from "./risuSave"
 import { normalizeChat, type Chat, type Message } from "./database.svelte"
@@ -92,6 +93,16 @@ export interface ServerCharXImportResult {
 export type ServerCharXImportProgress =
     | { phase: 'uploading', loaded: number, total: number }
     | { phase: 'processing', completed: number, total: number }
+
+export interface ServerRisumImportResult {
+    module: RisuModule
+    assets: number
+    decodedBytes?: number
+}
+
+export type ServerRisumImportProgress =
+    | { phase: 'uploading', loaded: number, total: number }
+    | { phase: 'validate' | 'assets' | 'publish', completed: number, total: number }
 
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 50
@@ -711,6 +722,78 @@ export class NodeStorage{
                 else reject(new Error('CharX import: no result received'))
             }
 
+            xhr.send(file)
+        })
+    }
+
+    /** Upload a .risum File as-is so Node can parse it on disk without a browser-sized ArrayBuffer. */
+    async importRisum(
+        file: File,
+        onProgress?: (progress: ServerRisumImportProgress) => void,
+    ): Promise<ServerRisumImportResult> {
+        const authHeader = await this.createAuth()
+
+        return await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest()
+            xhr.open('POST', '/api/risum/import')
+            xhr.setRequestHeader('content-type', 'application/x-risu-module')
+            xhr.setRequestHeader('accept', 'application/x-ndjson')
+            xhr.setRequestHeader('risu-auth', authHeader)
+            xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
+            if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
+
+            let parsedIndex = 0
+            let leftover = ''
+            let result: ServerRisumImportResult | null = null
+            let serverError: string | null = null
+            const handleMessage = (msg: any) => {
+                if (msg?.type === 'progress' &&
+                    (msg.phase === 'validate' || msg.phase === 'assets' || msg.phase === 'publish') &&
+                    typeof msg.completed === 'number' && typeof msg.total === 'number') {
+                    onProgress?.({ phase: msg.phase, completed: msg.completed, total: msg.total })
+                } else if (msg?.type === 'done' && msg.result?.module) {
+                    result = msg.result as ServerRisumImportResult
+                } else if (msg?.type === 'error') {
+                    serverError = typeof msg.message === 'string' ? msg.message : 'Risum import failed'
+                }
+            }
+            const drainNdjson = (final = false) => {
+                const text = xhr.responseText
+                if (text.length > parsedIndex) { leftover += text.slice(parsedIndex); parsedIndex = text.length }
+                const lines = leftover.split('\n')
+                leftover = lines.pop() ?? ''
+                for (const line of lines) {
+                    if (!line) continue
+                    try { handleMessage(JSON.parse(line)) } catch { /* malformed event */ }
+                }
+                if (final && leftover.trim()) {
+                    try { handleMessage(JSON.parse(leftover)) } catch { /* malformed final event */ }
+                    leftover = ''
+                }
+            }
+
+            xhr.upload.onprogress = event => {
+                if (event.lengthComputable) onProgress?.({ phase: 'uploading', loaded: event.loaded, total: event.total })
+            }
+            xhr.onprogress = () => drainNdjson()
+            xhr.onerror = () => reject(new Error('Risum import request failed'))
+            xhr.onabort = () => reject(new Error('Risum import request aborted'))
+            xhr.onload = () => {
+                if (xhr.status < 200 || xhr.status >= 300) {
+                    let message = `Risum import error: ${xhr.status}`
+                    try {
+                        const body = JSON.parse(xhr.responseText)
+                        if (typeof body?.error === 'string') message = body.error
+                        else if (typeof body?.message === 'string') message = body.message
+                    } catch { /* non-JSON error body */ }
+                    reject(new Error(message))
+                    return
+                }
+                drainNdjson(true)
+                if (serverError) reject(new Error(serverError))
+                else if (result) resolve(result)
+                else reject(new Error('Risum import: no result received'))
+            }
             xhr.send(file)
         })
     }

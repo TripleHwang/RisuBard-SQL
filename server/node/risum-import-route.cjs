@@ -90,7 +90,7 @@ function createRisumImportHandler(deps) {
         lastCompleted = Math.max(lastCompleted, Number.isFinite(completed) ? Math.max(0, completed) : 0);
         lastTotal = Math.max(lastTotal, Number.isFinite(total) ? Math.max(0, total) : 0, lastCompleted);
         if (!terminal && now - lastAt < 200) return;
-        lastAt = now; writeEvent({ type: 'progress', completed: lastCompleted, total: lastTotal });
+        lastAt = now; writeEvent({ type: 'progress', phase, completed: lastCompleted, total: lastTotal });
       };
       let received = 0;
       const source = (async function* () {
