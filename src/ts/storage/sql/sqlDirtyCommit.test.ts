@@ -180,6 +180,41 @@ describe("row-scoped SQL dirty commits", () => {
     });
   });
 
+  it("moves active selection while deleting a marked preset without rewriting order", () => {
+    const db = fixtureDatabaseWithMessages(0);
+    db.botPresets = [{ id: "preset-b", name: "B" }];
+    db.botPresetsId = 0;
+    const dirty = cleanDirty();
+    dirty.presetIds = ["preset-a"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
+      upserts: [], deletes: ["preset-a"], activeId: "preset-b",
+    });
+  });
+
+  it("clears active selection while deleting the last marked preset", () => {
+    const db = fixtureDatabaseWithMessages(0);
+    db.botPresets = [];
+    const dirty = cleanDirty();
+    dirty.presetIds = ["preset-a"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
+      upserts: [], deletes: ["preset-a"], activeId: null,
+    });
+  });
+
+  it("preserves the current active selection while deleting a non-active marked preset", () => {
+    const db = fixtureDatabaseWithMessages(0);
+    db.botPresets = [{ id: "preset-a", name: "A" }];
+    db.botPresetsId = 0;
+    const dirty = cleanDirty();
+    dirty.presetIds = ["preset-b"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
+      upserts: [], deletes: ["preset-b"], activeId: "preset-a",
+    });
+  });
+
   it("never emits a deletion manifest for an incomplete message window", () => {
     const db = fixtureDatabaseWithMessages(5);
     const chat = db.characters[0].chats[0];

@@ -190,11 +190,14 @@ export function buildSqlDirtyCommit(
     const deletes = dirty.presetIds.filter((id) => !presets.some((preset) => preset.id === id));
     const ids = presets.map((preset) => preset.id).filter((id): id is string => Boolean(id));
     const activeIndex = Math.max(0, Math.min(Number(database.botPresetsId) || 0, ids.length - 1));
+    const activeSelectionChanged = deletes.length > 0;
     commit.presets = {
       upserts,
       deletes,
       ...(presetListDirty ? { order: ids, manifest: true } : {}),
-      ...(presetListDirty || presetActiveDirty ? { activeId: ids[activeIndex] ?? null } : {}),
+      ...(presetListDirty || presetActiveDirty || activeSelectionChanged
+        ? { activeId: ids[activeIndex] ?? null }
+        : {}),
     };
   }
 
