@@ -1,4 +1,4 @@
-import { NodeStorage, type PatchItemResult, type ExportBackupOptions } from "./nodeStorage"
+import { NodeStorage, type PatchItemResult, type ExportBackupOptions, type ServerCharXImportProgress, type ServerCharXImportResult } from "./nodeStorage"
 
 export class AutoStorage{
     isAccount:boolean = false
@@ -59,6 +59,11 @@ export class AutoStorage{
     async importBackup(file: Blob, onProgress?: (loaded: number, total: number) => void) {
         await this.Init()
         return this.realStorage.importBackup(file, onProgress)
+    }
+
+    async importCharX(file: Blob, onProgress?: (progress: ServerCharXImportProgress) => void): Promise<ServerCharXImportResult> {
+        await this.Init()
+        return this.realStorage.importCharX(file, onProgress)
     }
 
     async patchItem(key: string, patchData: { patch: any[], expectedHash: string }): Promise<PatchItemResult> {
