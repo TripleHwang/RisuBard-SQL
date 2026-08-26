@@ -23,4 +23,12 @@ describe('data import parallelism connections', () => {
         expect(route).toContain('fflate.unzip(')
         expect(route).not.toContain('unzipSync')
     })
+
+    it('keeps the CharX stream out of raw-body buffering and wires file-backed publication', () => {
+        expect(server).toContain("req.path === '/api/backup/import' || req.path === '/api/charx/import'")
+        expect(server).toContain("app.post('/api/charx/import'")
+        expect(server).toContain('kvSetManyFromFilesAsync')
+        const route = server.slice(server.indexOf("app.post('/api/charx/import'"), server.indexOf('// ── Server-side backup endpoints'))
+        expect(route).not.toMatch(/charx[\s\S]{0,1500}Buffer\.concat\(chunks\)/i)
+    })
 })

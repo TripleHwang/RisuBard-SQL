@@ -1,0 +1,187 @@
+'use strict';
+
+const { DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
+
+// Node's requestTimeout is a Server-wide deadline for receiving request bodies;
+// req.setTimeout() only changes the socket idle timer. There is no per-request
+// requestTimeout override, so keep this escape hatch as narrow as possible:
+// only while the CharX request body is still being received. The reference count
+// makes overlapping handlers safe, and the conditional restore preserves a
+// concurrent server configuration change. New connections during this small
+// window inherit no request-body deadline (but retain their socket idle timeout);
+// avoiding that requires a separate listener/proxy for large uploads.
+const requestTimeoutOverrides = new WeakMap();
+
+function suspendRequestTimeout(req) {
+  const server = req.socket && req.socket.server;
+  if (!server || typeof server.requestTimeout !== 'number' || server.requestTimeout === 0) return () => {};
+
+  let override = requestTimeoutOverrides.get(server);
+  if (!override) {
+    override = { original: server.requestTimeout, count: 0 };
+    requestTimeoutOverrides.set(server, override);
+    server.requestTimeout = 0;
+  }
+  override.count++;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    override.count--;
+    if (override.count !== 0) return;
+    requestTimeoutOverrides.delete(server);
+    // Do not replace a timeout selected by another part of the server while
+    // this upload was active. A matching zero is still ours to restore.
+    if (server.requestTimeout === 0) server.requestTimeout = override.original;
+  };
+}
+
+function safeMessage(error) {
+  switch (error && error.code) {
+    case 'CHARX_LIMIT_EXCEEDED': return 'CharX archive exceeds the allowed limit';
+    case 'INSUFFICIENT_STORAGE': return 'Insufficient disk space for CharX import';
+    case 'IMPORT_ABORTED': return 'CharX import aborted';
+    case 'INVALID_CHARX': return 'Invalid CharX archive';
+    default: return 'Unable to import CharX archive';
+  }
+}
+
+function createCharXImportHandler(deps) {
+  const {
+    checkAuth,
+    checkActiveSession,
+    beginImport,
+    endImport,
+    importCharXStream,
+    publishAssets,
+    stagingRoot,
+    getAvailableBytes,
+    limits = DEFAULT_CHARX_LIMITS,
+    heartbeatMs = 5000,
+    logger = console,
+  } = deps;
+
+  return async function charxImportHandler(req, res) {
+    if (!await checkAuth(req, res)) return;
+    if (!checkActiveSession(req, res)) return;
+
+    let acquired = false;
+    let heartbeatTimer = null;
+    let previousSocketTimeout;
+    let restoreRequestTimeout = () => {};
+    let responseStarted = false;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    const onRequestClose = () => { if (!req.complete) abort(); };
+    const onResponseClose = () => { if (!res.writableEnded) abort(); };
+    const contentLength = Number(req.headers['content-length'] ?? '0');
+
+    const writeJsonError = (status, code, message) => {
+      if (!res.headersSent) res.status(status).json({ error: message, code });
+    };
+    const writeEvent = event => {
+      if (!res.writableEnded) res.write(JSON.stringify(event) + '\n');
+    };
+
+    try {
+      if (!beginImport()) {
+        writeJsonError(409, 'IMPORT_IN_PROGRESS', 'Another import is already in progress');
+        return;
+      }
+      acquired = true;
+
+      const contentType = String(req.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase();
+      if (contentType !== 'application/x-risu-charx') {
+        writeJsonError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Unsupported CharX content-type');
+        return;
+      }
+      if (Number.isFinite(contentLength) && contentLength > limits.compressedBytes) {
+        writeJsonError(413, 'CHARX_LIMIT_EXCEEDED', 'CharX archive exceeds the allowed limit');
+        return;
+      }
+      if (getAvailableBytes) {
+        let available;
+        try { available = getAvailableBytes({ phase: 'preflight', needed: Math.max(0, contentLength || 0) }); }
+        catch (error) { throw error; }
+        if (!Number.isFinite(available) || available < Math.max(0, contentLength || 0) + limits.diskHeadroomBytes) {
+          writeJsonError(507, 'INSUFFICIENT_STORAGE', 'Insufficient disk space for CharX import');
+          return;
+        }
+      }
+
+      previousSocketTimeout = req.socket.timeout;
+      req.socket.setTimeout(0);
+      req.socket.setKeepAlive(true);
+      restoreRequestTimeout = suspendRequestTimeout(req);
+      req.once('aborted', abort);
+      req.once('close', onRequestClose);
+      // The server-wide body deadline is no longer needed after the upload is
+      // complete; restore it before archive extraction and asset publishing.
+      req.once('end', restoreRequestTimeout);
+      res.once('close', onResponseClose);
+
+      res.status(200);
+      res.setHeader('content-type', 'application/x-ndjson');
+      res.setHeader('cache-control', 'no-cache, no-transform');
+      res.setHeader('x-accel-buffering', 'no');
+      res.flushHeaders();
+      responseStarted = true;
+      heartbeatTimer = setInterval(() => writeEvent({ type: 'heartbeat' }), Math.max(100, heartbeatMs));
+      let lastProgressAt = 0;
+      let lastCompleted = 0;
+      let lastTotal = contentLength > 0 ? contentLength : 0;
+      let lastProgressPhase = 'uploading';
+      const result = await importCharXStream(req, {
+        stagingRoot,
+        publishAssets,
+        limits,
+        expectedCompressedBytes: Number.isFinite(contentLength) ? contentLength : 0,
+        getAvailableBytes,
+        signal: controller.signal,
+        onProgress: progress => {
+          const now = Date.now();
+          const phase = progress && progress.phase === 'extracting' ? 'extracting' : 'uploading';
+          if (phase !== lastProgressPhase) {
+            lastProgressPhase = phase;
+            lastProgressAt = 0;
+            lastCompleted = 0;
+            lastTotal = 0;
+          }
+          const completed = phase === 'extracting' ? Number(progress.completed) : Number(progress && progress.compressedBytes);
+          const total = phase === 'extracting' ? Number(progress.total) : contentLength;
+          lastCompleted = Math.max(lastCompleted, Number.isFinite(completed) ? Math.max(0, completed) : 0);
+          lastTotal = Math.max(lastTotal, Number.isFinite(total) ? Math.max(0, total) : 0, lastCompleted);
+          const finalExtractionProgress = phase === 'extracting' && progress.terminal === true;
+          if (!finalExtractionProgress && now - lastProgressAt < 200) return;
+          lastProgressAt = now;
+          writeEvent({ type: 'progress', completed: lastCompleted, total: lastTotal });
+        },
+      });
+      writeEvent({ type: 'done', result });
+      res.end();
+    } catch (error) {
+      const status = error && error.code === 'ENOSPC' ? 507 : (Number.isInteger(error && error.status) ? error.status : 500);
+      const code = error && error.code === 'ENOSPC' ? 'INSUFFICIENT_STORAGE' : (error && error.code) || 'CHARX_IMPORT_FAILED';
+      const message = safeMessage(error && error.code === 'ENOSPC' ? { code: 'INSUFFICIENT_STORAGE' } : error);
+      if (responseStarted || res.headersSent) {
+        writeEvent({ type: 'error', code, status, message });
+        if (!res.writableEnded) res.end();
+      } else {
+        writeJsonError(status, code, message);
+      }
+      if (status >= 500 && code !== 'IMPORT_ABORTED') logger.warn?.('[CharX import] failed', code);
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      req.removeListener('aborted', abort);
+      req.removeListener('close', onRequestClose);
+      req.removeListener('end', restoreRequestTimeout);
+      res.removeListener('close', onResponseClose);
+      restoreRequestTimeout();
+      if (req.socket) req.socket.setTimeout(previousSocketTimeout || 0);
+      if (acquired) endImport();
+    }
+  };
+}
+
+module.exports = { createCharXImportHandler };

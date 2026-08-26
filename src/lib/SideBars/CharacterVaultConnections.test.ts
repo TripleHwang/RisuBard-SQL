@@ -107,7 +107,7 @@ describe('Character Vault sidebar integration', () => {
 
     test('pins successful CharX imports at the bottom of quick access', () => {
         const cards = source('src/ts/characterCards.ts')
-        const charxStart = cards.indexOf("if(f.name.endsWith('charx')")
+        const charxStart = cards.indexOf("if(fileName.endsWith('.charx') || fileName.endsWith('.jpg') || fileName.endsWith('.jpeg'))")
         const pngStart = cards.indexOf("if(!f.name.endsWith('png')", charxStart)
         const charxImport = cards.slice(charxStart, pngStart)
         expect(cards).toContain("import { pinCharacterVaultQuickAccess } from './characterVault'")

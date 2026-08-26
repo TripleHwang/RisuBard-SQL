@@ -9,4 +9,9 @@ describe('route rate limiting', () => {
         expect(server).not.toContain('authenticatedRouteLimiter')
         expect(server).not.toMatch(/app\.use\([^\n]*rateLimit/)
     })
+
+    it('uses a dedicated limiter for expensive CharX imports', () => {
+        expect(server).toContain('const charxImportLimiter = rateLimit({')
+        expect(server).toMatch(/app\.post\('\/api\/charx\/import', charxImportLimiter, createCharXImportHandler\(/)
+    })
 })

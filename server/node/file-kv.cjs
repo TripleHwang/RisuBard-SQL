@@ -146,12 +146,44 @@ function createFileKv(options = {}) {
     }
     const objectWriteConcurrency = options.objectWriteConcurrency
         ?? Math.min(8, Math.max(1, (os.availableParallelism?.() ?? os.cpus().length) - 1));
+    const manifestWriter = options.manifestWriter ?? (next => atomicWriteJson(dataRoot, MANIFEST_PATH, next, {
+        validate: value => value?.schemaVersion === 1 && typeof value?.entries === 'object',
+    }));
+    let manifestCommitTail = Promise.resolve();
+    const inFlightManifests = new Set();
+
+    async function commitManifest(next) {
+        inFlightManifests.add(next);
+        try {
+            await manifestWriter(next);
+            manifest = next;
+        } finally {
+            inFlightManifests.delete(next);
+        }
+    }
+
+    function queueManifestCommit(commit) {
+        const queued = manifestCommitTail.then(commit);
+        manifestCommitTail = queued.catch(() => {});
+        return queued;
+    }
 
     function saveManifest() {
-        manifest.updatedAt = Date.now();
         atomicWriteJson(dataRoot, MANIFEST_PATH, manifest, {
             validate: value => value?.schemaVersion === 1 && typeof value?.entries === 'object',
         });
+    }
+
+    // A synchronous mutation can run while a staged-file writer is awaiting I/O.
+    // Apply it to both the live manifest and every in-flight staged snapshot so a
+    // later staged publish cannot overwrite the synchronous write with stale data.
+    function mutateManifest(mutate) {
+        const targets = new Set([manifest, ...inFlightManifests]);
+        for (const target of targets) {
+            mutate(target);
+            target.updatedAt = Date.now();
+        }
+        saveManifest();
     }
 
     function kvGet(key) {
@@ -168,8 +200,8 @@ function createFileKv(options = {}) {
         const data = Buffer.isBuffer(value) ? value : Buffer.from(value);
         const hash = digest(data);
         writeObject(dataRoot, hash, data);
-        manifest.entries[key] = { object: hash, size: data.length, updatedAt: Date.now() };
-        saveManifest();
+        const entry = { object: hash, size: data.length, updatedAt: Date.now() };
+        mutateManifest(target => { target.entries[key] = entry; });
     }
 
     function prepareEntries(entries) {
@@ -197,58 +229,72 @@ function createFileKv(options = {}) {
         });
     }
 
+    async function kvSetManyFromFilesAsync(entries) {
+        const prepared = await prepareFileEntriesAsync(entries);
+        if (!entries.length) return;
+        await queueManifestCommit(async () => {
+            const next = { schemaVersion: 1, updatedAt: Date.now(), entries: { ...manifest.entries } };
+            for (const [key, entry] of prepared) next.entries[key] = entry;
+            await commitManifest(next);
+        });
+    }
+
     function kvSetMany(entries) {
-        for (const [key, entry] of prepareEntries(entries)) manifest.entries[key] = entry;
-        if (entries.length) saveManifest();
+        const prepared = prepareEntries(entries);
+        if (prepared.length) mutateManifest(target => {
+            for (const [key, entry] of prepared) target.entries[key] = entry;
+        });
     }
 
     function kvReplacePrefixes(entries, prefixes) {
-        const next = { ...manifest.entries };
-        for (const key of Object.keys(next)) {
-            if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
-        }
-        for (const [key, entry] of prepareEntries(entries)) next[key] = entry;
-        manifest.entries = next;
-        saveManifest();
+        const prepared = prepareEntries(entries);
+        mutateManifest(target => {
+            const next = { ...target.entries };
+            for (const key of Object.keys(next)) {
+                if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
+            }
+            for (const [key, entry] of prepared) next[key] = entry;
+            target.entries = next;
+        });
     }
 
     function kvReplaceAll(entries) {
-        manifest.entries = Object.fromEntries(prepareEntries(entries));
-        saveManifest();
+        const prepared = Object.fromEntries(prepareEntries(entries));
+        mutateManifest(target => { target.entries = { ...prepared }; });
     }
 
     async function kvReplacePrefixesAsync(entries, prefixes) {
         const prepared = await prepareEntriesAsync(entries);
-        const next = { ...manifest.entries };
-        for (const key of Object.keys(next)) {
-            if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
-        }
-        for (const [key, entry] of prepared) next[key] = entry;
-        manifest.entries = next;
-        saveManifest();
+        mutateManifest(target => {
+            const next = { ...target.entries };
+            for (const key of Object.keys(next)) {
+                if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
+            }
+            for (const [key, entry] of prepared) next[key] = entry;
+            target.entries = next;
+        });
     }
 
     async function kvReplacePrefixesFromFilesAsync(entries, prefixes) {
         const prepared = await prepareFileEntriesAsync(entries);
-        const next = { ...manifest.entries };
-        for (const key of Object.keys(next)) {
-            if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
-        }
-        for (const [key, entry] of prepared) next[key] = entry;
-        manifest.entries = next;
-        saveManifest();
+        mutateManifest(target => {
+            const next = { ...target.entries };
+            for (const key of Object.keys(next)) {
+                if (prefixes.some(prefix => key === prefix || key.startsWith(prefix))) delete next[key];
+            }
+            for (const [key, entry] of prepared) next[key] = entry;
+            target.entries = next;
+        });
     }
 
     async function kvReplaceAllAsync(entries) {
         const prepared = await prepareEntriesAsync(entries);
-        manifest.entries = Object.fromEntries(prepared);
-        saveManifest();
+        mutateManifest(target => { target.entries = Object.fromEntries(prepared); });
     }
 
     function kvDel(key) {
-        if (!(key in manifest.entries)) return;
-        delete manifest.entries[key];
-        saveManifest();
+        if (!(key in manifest.entries) && ![...inFlightManifests].some(target => key in target.entries)) return;
+        mutateManifest(target => { delete target.entries[key]; });
     }
 
     function kvSize(key) {
@@ -262,19 +308,18 @@ function createFileKv(options = {}) {
     function kvCopyValue(source, destination) {
         const entry = manifest.entries[source];
         if (!entry) return;
-        manifest.entries[destination] = { ...entry, updatedAt: Date.now() };
-        saveManifest();
+        const copied = { ...entry, updatedAt: Date.now() };
+        mutateManifest(target => { target.entries[destination] = copied; });
     }
 
     function kvDelPrefix(prefix) {
-        let changed = false;
-        for (const key of Object.keys(manifest.entries)) {
-            if (key.startsWith(prefix)) {
-                delete manifest.entries[key];
-                changed = true;
+        const changed = [manifest, ...inFlightManifests]
+            .some(target => Object.keys(target.entries).some(key => key.startsWith(prefix)));
+        if (changed) mutateManifest(target => {
+            for (const key of Object.keys(target.entries)) {
+                if (key.startsWith(prefix)) delete target.entries[key];
             }
-        }
-        if (changed) saveManifest();
+        });
     }
 
     function kvList(prefix = '') {
@@ -349,16 +394,19 @@ function createFileKv(options = {}) {
         const files = fs.readdirSync(dataRoot, { withFileTypes: true })
             .filter(entry => entry.isFile() && /^[a-fA-F0-9]+$/.test(entry.name) && entry.name.length % 2 === 0);
         let imported = 0;
+        const importedEntries = [];
         for (const entry of files) {
             const key = Buffer.from(entry.name, 'hex').toString('utf8');
             if (!key || key in manifest.entries) continue;
             const data = fs.readFileSync(path.join(dataRoot, entry.name));
             const hash = digest(data);
             writeObject(dataRoot, hash, data);
-            manifest.entries[key] = { object: hash, size: data.length, updatedAt: fs.statSync(path.join(dataRoot, entry.name)).mtimeMs };
+            importedEntries.push([key, { object: hash, size: data.length, updatedAt: fs.statSync(path.join(dataRoot, entry.name)).mtimeMs }]);
             imported += 1;
         }
-        if (imported) saveManifest();
+        if (imported) mutateManifest(target => {
+            for (const [key, entry] of importedEntries) target.entries[key] = entry;
+        });
         atomicWriteJson(dataRoot, HEX_MIGRATION_MARKER, { schemaVersion: 1, imported, completedAt: Date.now() });
     }
 
@@ -368,6 +416,7 @@ function createFileKv(options = {}) {
         kvGet,
         kvSet,
         kvSetMany,
+        kvSetManyFromFilesAsync,
         kvReplacePrefixes,
         kvReplacePrefixesAsync,
         kvReplacePrefixesFromFilesAsync,
