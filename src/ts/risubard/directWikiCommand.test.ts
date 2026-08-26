@@ -28,6 +28,95 @@ const documents: WikiDocument[] = [{
 }]
 
 describe('direct wiki command', () => {
+    test('repairs a truncated plan before applying any operation, at most once', async () => {
+        const saveDocument = vi.fn(async () => ({ id: 'character.existing', title: '기존 인물', relativePath: 'characters/existing.md' }))
+        const requestModel = vi.fn(async () => {
+            expect(saveDocument).not.toHaveBeenCalled()
+            return {
+                type: 'success', finishReason: requestModel.mock.calls.length === 1 ? 'length' : 'stop',
+                result: JSON.stringify({ schemaVersion: 1, operations: [{
+                    action: 'upsert', targetDocumentId: 'character.existing', type: 'character',
+                    title: '기존 인물', markdown: '## 기존 인물\n\n완전한 문서.', reason: '갱신',
+                }] }),
+            }
+        })
+        await executeDirectWikiCommand({ instruction: '갱신해.', documents, currentMessages: [], maxTokens: 12000,
+            requestModel, saveDocument, trashDocument: vi.fn(), retractEvent: vi.fn() })
+        expect(requestModel).toHaveBeenCalledTimes(2)
+        expect(saveDocument).toHaveBeenCalledTimes(1)
+    })
+
+    test('applies an H2 merge result wrapped in provider thinking and JSON fences', async () => {
+        const saveDocument = vi.fn(async (input) => ({
+            id: input.documentId, title: input.title,
+            relativePath: 'characters/existing.md',
+        }))
+        const trashDocument = vi.fn()
+        const operations = [{
+            action: 'upsert', targetDocumentId: 'character.existing',
+            type: 'character', title: '기존 인물',
+            markdown: '## 기존 인물\n\n### 현재 상태\n병합된 설정.',
+            reason: '동일 인물 병합',
+        }, {
+            action: 'trash', targetDocumentId: 'concept.crawler',
+            type: null, title: null, markdown: null,
+            reason: '병합된 중복 문서 제거',
+        }]
+
+        const result = await executeDirectWikiCommand({
+            instruction: '동일한 인물은 묶고 중복 문서는 지워줘.',
+            documents, currentMessages: [], maxTokens: 12_000,
+            requestModel: async () => ({
+                type: 'success',
+                result: '<think>{"draft":true}</think>\n```json\n'
+                    + JSON.stringify({ schemaVersion: 1, operations }) + '\n```',
+            }),
+            saveDocument, trashDocument, retractEvent: vi.fn(),
+        })
+
+        expect(result.failed).toEqual([])
+        expect(result.applied.map((operation) => operation.action)).toEqual(['upsert', 'trash'])
+        expect(saveDocument).toHaveBeenCalledWith(expect.objectContaining({
+            documentId: 'character.existing', expectedContentHash: 'hash-existing',
+            markdown: operations[0].markdown,
+        }))
+        expect(trashDocument).toHaveBeenCalledWith('concept.crawler')
+    })
+
+    test('accepts the H2 title requested by the administrator prompt', async () => {
+        const result = await executeDirectWikiCommand({
+            instruction: '기존 인물을 갱신해.', documents, currentMessages: [], maxTokens: 12_000,
+            requestModel: async () => ({
+                type: 'success',
+                result: JSON.stringify({ schemaVersion: 1, operations: [{
+                    action: 'upsert', targetDocumentId: 'character.existing',
+                    type: 'character', title: '기존 인물', markdown: '## 기존 인물\n\n갱신.',
+                    reason: '요청 반영',
+                }] }),
+            }),
+            saveDocument: async (input) => ({
+                id: 'character.existing', title: input.title, relativePath: 'characters/existing.md',
+            }),
+            trashDocument: vi.fn(), retractEvent: vi.fn(),
+        })
+        expect(result.applied).toHaveLength(1)
+    })
+
+    test.each(['잘 정리했습니다.', '{}\n{}', '{"schemaVersion":1,"operations":['])
+    ('keeps all documents unchanged and explains malformed output: %s', async (output) => {
+        const saveDocument = vi.fn()
+        const trashDocument = vi.fn()
+        const retractEvent = vi.fn()
+        await expect(executeDirectWikiCommand({
+            instruction: '중복 문서를 정리해.', documents, currentMessages: [], maxTokens: 12_000,
+            requestModel: async () => ({ type: 'success', result: output }),
+            saveDocument, trashDocument, retractEvent,
+        })).rejects.toThrow(/JSON.*위키 문서는 변경하지 않았습니다/)
+        expect(saveDocument).not.toHaveBeenCalled()
+        expect(trashDocument).not.toHaveBeenCalled()
+        expect(retractEvent).not.toHaveBeenCalled()
+    })
+
     test('does not inherit the general chat JSON extraction path', async () => {
         let submitted: DirectWikiModelCall | undefined
         await executeDirectWikiCommand({

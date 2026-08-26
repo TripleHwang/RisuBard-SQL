@@ -2852,6 +2852,8 @@ export const languageKorean = {
   risuBardAdditionalSearchLimit: "후보 부족 시 추가 검색 한도",
   risuBardCanonicalTargetLimit: "분석 1회당 자동 정본 대상 한도",
   risuBardCanonicalWritingStyle: "정본 집필 문체",
+  risuBardWikiWritingLanguage: "위키 작성 언어",
+  risuBardWikiLanguageGlobal: "공통 설정 사용",
   risuBardCanonicalStyleStandard: "표준",
   risuBardCanonicalStyleConcise: "간결",
   risuBardCanonicalStyleUltraConcise: "초압축",

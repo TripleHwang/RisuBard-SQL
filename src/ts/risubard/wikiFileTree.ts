@@ -7,6 +7,23 @@ export interface WikiTreeDocumentInput {
     type: MarkdownWikiDocumentType
     status?: 'active' | 'superseded' | 'retracted'
     created?: string
+    updated?: string
+}
+
+export function getRecentlyUpdatedWikiDocumentIds(
+    documents: readonly WikiTreeDocumentInput[]
+): Set<string> {
+    const dated = documents
+        .filter((document) => document.status !== 'retracted')
+        .map((document) => ({ document, timestamp: Date.parse(document.updated ?? '') }))
+        .filter(({ timestamp }) => Number.isFinite(timestamp))
+    // Canonical pages are written separately after the analysis event is saved.
+    const latestEvent = dated.reduce((latest, { document, timestamp }) =>
+        document.type === 'event' ? Math.max(latest, timestamp) : latest, -Infinity)
+    const since = Number.isFinite(latestEvent) ? latestEvent
+        : dated.reduce((latest, { timestamp }) => Math.max(latest, timestamp), -Infinity)
+    return new Set(dated.filter(({ timestamp }) => timestamp >= since)
+        .map(({ document }) => document.id))
 }
 
 export type WikiFileTreeNode = {

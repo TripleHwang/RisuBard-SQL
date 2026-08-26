@@ -1,3 +1,5 @@
+import { buildWikiWritingLanguageGuard, normalizeWikiWritingLanguage, type WikiWritingLanguage } from './wikiWritingLanguage'
+
 export const RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT = 12_000
 export const RISUBARD_ADDITIONAL_SEARCH_LIMIT_DEFAULT = 1
 export const RISUBARD_CANONICAL_TARGET_LIMIT_DEFAULT = 8
@@ -25,6 +27,7 @@ export interface RisuBardChatSettings {
     risuBardResponseExcludeUserMessages?: boolean
     risuBardCanonicalWritingStyle?: RisuBardCanonicalWritingStyle
     risuBardCanonicalCustomStyle?: string
+    risuBardWikiWritingLanguage?: WikiWritingLanguage
 }
 
 export interface ResolvedRisuBardChatSettings {
@@ -40,6 +43,7 @@ export interface ResolvedRisuBardChatSettings {
     risuBardResponseExcludeUserMessages: boolean
     risuBardCanonicalWritingStyle: RisuBardCanonicalWritingStyle
     risuBardCanonicalCustomStyle: string
+    risuBardWikiWritingLanguage: WikiWritingLanguage
 }
 
 function boundedInteger(
@@ -92,6 +96,7 @@ export function resolveRisuBardChatSettings(
         risuBardCanonicalCustomStyle: normalizeRisuBardCanonicalCustomStyle(
             value('risuBardCanonicalCustomStyle')
         ),
+        risuBardWikiWritingLanguage: normalizeWikiWritingLanguage(value('risuBardWikiWritingLanguage')),
     }
 }
 
@@ -165,10 +170,17 @@ const CONCISE_CANONICAL_STYLE = [
 
 function resolveRisuBardWritingStyleInstruction(
     style: unknown,
-    customStyle: unknown
+    customStyle: unknown,
+    language: WikiWritingLanguage = 'ko'
 ): string {
     const normalizedStyle = normalizeRisuBardCanonicalWritingStyle(style)
     const normalizedCustom = normalizeRisuBardCanonicalCustomStyle(customStyle)
+    if (language === 'en') {
+        if (normalizedStyle === 'custom' && normalizedCustom) return `User style preference: ${normalizedCustom}`
+        if (normalizedStyle === 'standard') return 'Use natural, complete short sentences without unnecessary embellishment or repetition.'
+        if (normalizedStyle === 'ultra-concise') return 'Use telegraphic sentences and stable field labels, one atomic fact per line. Explicitly preserve subjects, objects, negation, time and character knowledge boundaries. Do not invent abbreviations.'
+        return 'Remove decorative prose and repeated facts. Use one sentence per fact. Preserve subjects, objects, negation, time and character knowledge boundaries. Do not invent abbreviations.'
+    }
     const styleInstruction = normalizedStyle === 'standard'
         ? '자연스럽고 완결된 짧은 문장을 사용하되 불필요한 수식과 반복을 피한다.'
         : normalizedStyle === 'ultra-concise'
@@ -181,8 +193,17 @@ function resolveRisuBardWritingStyleInstruction(
 
 export function buildRisuBardEventWritingPolicy(
     style: unknown,
-    customStyle: unknown
+    customStyle: unknown,
+    language: WikiWritingLanguage = 'ko'
 ): string {
+    if (language === 'en') return [
+        '## Canonical writing policy',
+        resolveRisuBardWritingStyleInstruction(style, customStyle, language),
+        'When compressing, do not invent action targets or locations, turn temporal order into causation, or cross character knowledge boundaries at the time of an event.',
+        'Preserve observed puzzle elements, order, spatial layout, pairings, blanks, mechanism positions and attempt outcomes. Separate observations from inferred rules or solutions; retain unresolved clues as open continuity.',
+        'Style affects expression only; it cannot change fact selection, evidence, structure or safety rules.',
+        buildWikiWritingLanguageGuard(language),
+    ].join('\n')
     return [
         '## 정본 집필 정책',
         '사건 이야기 요약과 정본 Markdown 본문은 한국어로 작성한다.',
@@ -190,15 +211,25 @@ export function buildRisuBardEventWritingPolicy(
         '압축할 때도 원문에 없는 행동 대상이나 장소를 보충하지 않는다. 시간적 선후를 인과로 바꾸지 않는다. 사건 당시 인물별 지식 경계를 유지한다.',
         '퍼즐, 암호, 의식, 조합 장치나 규칙 기반 단서는 관찰된 요소, 순서, 공간 배치, 짝, 빈칸, 장치 위치와 시도 결과를 보존한다. 확정 관찰과 추론한 규칙·정답을 분리하고 미해결 부분은 연속성으로 남긴다.',
         '이 문체 정책은 표현 형식에만 적용하며 사실 선택, 근거, 구조 및 안전 규칙을 변경하지 않는다.',
+        buildWikiWritingLanguageGuard(language),
     ].join('\n')
 }
 
 export function buildRisuBardCanonicalWritingPolicy(
     style: unknown,
-    customStyle: unknown
+    customStyle: unknown,
+    language: WikiWritingLanguage = 'ko'
 ): string {
+    if (language === 'en') return [
+        buildRisuBardEventWritingPolicy(style, customStyle, language),
+        'Character canon prioritizes current state, relationships, knowledge, goals, possessions and constraints.',
+        'Every character document must include a `### Story History` section with at most 16 chronological bullets for causally necessary turning points.',
+        'Merge older consecutive turning points into larger causal units when necessary; do not accumulate a turn-by-turn action log.',
+        'Link corresponding event documents with exact [[event document titles]]. Preserve unrelated established facts.',
+        'When new facts replace old ones, do not present both states as current. Keep detailed history in event documents instead of duplicating it in character canon.',
+    ].join('\n')
     return [
-        buildRisuBardEventWritingPolicy(style, customStyle),
+        buildRisuBardEventWritingPolicy(style, customStyle, language),
         '캐릭터 정본은 현재 상태, 관계, 지식, 목표, 소지품과 제약을 우선한다.',
         '모든 캐릭터 정본에는 `### 작중 행적` 절을 두고, 인과에 필요한 전환점만 시간순으로 최대 16개 글머리표에 압축한다.',
         '새 전환점으로 16개를 넘으면 오래된 연속 전환점을 더 큰 인과 단위로 합치며 턴별 행동 기록을 누적하지 않는다.',

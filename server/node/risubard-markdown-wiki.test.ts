@@ -16,6 +16,54 @@ afterEach(async () => {
 })
 
 describe('Markdown narrative wiki', () => {
+    test('can append the first summary to an English event with only a title', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const scope = { characterId: 'character', chatId: 'chat', sourceMessageIds: ['empty'], writingLanguage: 'en' as const }
+        await wiki.saveConfirmedTurn({ ...scope, markdown: '## Discovery' })
+        const saved = await wiki.saveConfirmedTurn({ ...scope, append: true,
+            markdown: '## Discovery\n\n### Story Summary\n\n- Alice found a clue.',
+        })
+        expect(saved.content).toContain('### Additional Analysis')
+        expect(saved.content).not.toMatch(/[가-힣]/)
+    })
+
+    test('keeps automatic related and additional-analysis headings in English', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const scope = { characterId: 'character', chatId: 'chat', sourceMessageIds: ['turn-en'] }
+        await wiki.saveManualDocument({ ...scope, type: 'character',
+            title: 'Alice', markdown: '## Alice\n\nA traveler.',
+        })
+        const canon = await wiki.saveCanonicalDocument({ ...scope, type: 'location',
+            title: 'Station', markdown: '## Station\n\nAlice arrived here.', writingLanguage: 'en',
+        })
+        expect(canon.content).toContain('### Related Documents\n\n- [[Alice]]')
+        const event = await wiki.saveConfirmedTurn({ ...scope, writingLanguage: 'en',
+            markdown: '## Arrival\n\n### Story Summary\n\n- Alice arrived at Station.',
+        })
+        expect(event.content).toContain('### Related Documents')
+        const appended = await wiki.saveConfirmedTurn({ ...scope, append: true, writingLanguage: 'en',
+            markdown: '## Arrival\n\n### Story Summary\n\n- Alice found a key.',
+        })
+        expect(appended.content).toContain('### Additional Analysis')
+        expect(canon.content + appended.content).not.toMatch(/[가-힣]/)
+        const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
+        expect(await fs.readFile(workspace.indexFile, 'utf8')).toContain('## Narrative Wiki')
+        const updated = await wiki.saveCanonicalDocument({ ...scope, documentId: canon.id,
+            type: 'location', title: 'Station', writingLanguage: 'en',
+            markdown: '## Station\n\n### 작중 행적\n\n- Alice arrived.\n\n### 관련 문서\n\n- [[Alice]]',
+        })
+        expect(updated.content).toContain('### Story History')
+        expect(updated.content).toContain('### Related Documents')
+        expect(updated.content).not.toMatch(/[가-힣]/)
+        await expect(wiki.saveConfirmedTurn({ ...scope, append: true, writingLanguage: 'ko',
+            markdown: '## 도착\n\n### 이야기 요약\n\n- 열쇠를 찾았다.',
+        })).rejects.toThrow('language')
+    })
+
     test('persists and undoes every canonical change beyond the old source and receipt limits', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)

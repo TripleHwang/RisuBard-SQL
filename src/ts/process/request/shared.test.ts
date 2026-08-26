@@ -52,6 +52,21 @@ describe('collectStreamingText', () => {
         const stream = streamOf([])
         expect(await collectStreamingText(stream)).toBe('')
     })
+
+    test('releases its reader after completion', async () => {
+        const stream = streamOf([{ '0': 'answer' }])
+        await collectStreamingText(stream)
+        expect(stream.locked).toBe(false)
+    })
+
+    test('releases its reader while preserving a transport error', async () => {
+        const failure = new Error('connection lost')
+        const stream = new ReadableStream<{ [key: string]: string }>({
+            start(controller) { controller.error(failure) },
+        })
+        await expect(collectStreamingText(stream)).rejects.toBe(failure)
+        expect(stream.locked).toBe(false)
+    })
 })
 
 describe('applyParameters reasoning capability modifiers', () => {

@@ -674,7 +674,7 @@ describe('streamGoogleChatRequest', () => {
             sseResponse([
                 'data: {"candidates":[{"content":{"parts":[{"text":"He"}],"role":"model"}}]}\n\n',
                 'data: {"candidates":[{"content":{"parts":[{"text":"llo"}],"role":"model"}}]}\n\n',
-                'data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}\n\n',
+                'data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":12,"thoughtsTokenCount":8}}\n\n',
             ]),
         )
         const deltas: string[] = []
@@ -691,7 +691,7 @@ describe('streamGoogleChatRequest', () => {
         }
         expect(deltas.join('')).toBe('Hello')
         expect(finishReason).toBe('STOP')
-        expect(usage).toEqual({ promptTokens: 3, completionTokens: 1, totalTokens: 4 })
+        expect(usage).toEqual({ promptTokens: 3, completionTokens: 1, totalTokens: 12, reasoningTokens: 8 })
         expect(calls[0].url).toBe('https://demo.test/v1beta/models/gemini-demo:streamGenerateContent?alt=sse')
         expect(calls[0].headers.Accept).toBe('text/event-stream')
     })
@@ -1329,5 +1329,17 @@ describe('context caching wiring', () => {
             { apiKey: 'k' },
         )
         expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 2, totalTokens: 12, cachedTokens: 7 })
+    })
+
+    test.each([0, 824])('preserves thoughts-only usage without requiring visible thoughts (%s)', async (thoughtsTokenCount) => {
+        const { fetchImpl } = captureFetch(jsonResponse({
+            candidates: [{ content: { parts: [{ text: 'ok' }], role: 'model' } }],
+            usageMetadata: { thoughtsTokenCount },
+        }))
+        const result = await sendGoogleChatRequest(
+            makePreset(), { messages: messagesWithSystem, fetchImpl }, { apiKey: 'k' },
+        )
+        expect(result.usage).toEqual({ reasoningTokens: thoughtsTokenCount })
+        expect(result.reasoning).toBeUndefined()
     })
 })

@@ -114,9 +114,10 @@ describe('chat file save slot connections', () => {
         const disclosureStart = source.indexOf('data-chat-list-disclosure')
         const currentSection = source.slice(currentStart, disclosureStart)
 
-        expect(currentSection).toContain('data-current-chat-label')
-        expect(currentSection).toContain('language.currentChatLabel')
+        expect(currentSection).not.toContain('data-current-chat-label')
+        expect(currentSection).not.toContain('language.currentChatLabel')
         expect(currentSection).toContain('data-current-chat-title')
+        expect(currentSection).toContain('activeChat?.name ?? language.newChat')
         expect(currentSection).not.toContain('data-chat-list-toggle')
         expect(currentSection).not.toContain('ChevronRightIcon')
         expect(source).toContain('data-chat-list-disclosure')

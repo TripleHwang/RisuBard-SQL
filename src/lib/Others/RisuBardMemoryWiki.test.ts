@@ -104,6 +104,7 @@ vi.mock('src/ts/stores.svelte', () => ({
 }))
 
 import RisuBardMemoryWiki from './RisuBardMemoryWiki.svelte'
+import RisuBardMemoryWikiHelp from './RisuBardMemoryWikiHelp.svelte'
 
 let mounted: ReturnType<typeof mount> | undefined
 
@@ -179,6 +180,8 @@ describe('RisuBardMemoryWiki', () => {
             '현재 메모리를 살펴보고 명시적인 작가 변경을 준비할 수 있습니다.'
         )
         expect(helpButton?.previousElementSibling?.tagName).toBe('STRONG')
+        expect(helpButton?.textContent?.trim()).toBe('사용 가이드')
+        expect(helpButton?.getAttribute('aria-label')).toBe('사용 가이드')
 
         helpButton?.click()
         await vi.waitFor(() => {
@@ -188,6 +191,51 @@ describe('RisuBardMemoryWiki', () => {
             expect(help?.textContent).toContain('문서 편집과 안전장치')
             expect(help?.textContent).toContain('위키 관리자 명령')
             expect(help?.textContent).toContain('컨텍스트 정책')
+        })
+        expect(document.querySelector('[role="dialog"]')?.textContent)
+            .toContain('BardWiki 사용 가이드')
+        document.querySelector<HTMLButtonElement>('[aria-label="사용 가이드 닫기"]')!.click()
+        await vi.waitFor(() => {
+            expect(document.querySelector('[data-memory-help-content]')).toBeNull()
+        })
+    })
+
+    test('introduces usage and concept before the essential settings', async () => {
+        mounted = mount(RisuBardMemoryWikiHelp, {
+            target: document.body,
+            props: { open: true },
+        })
+        await vi.waitFor(() => {
+            const help = document.querySelector('[data-memory-help-content]')
+            expect([...help!.querySelectorAll('h2')].slice(0, 3)
+                .map((heading) => heading.textContent))
+                .toEqual(['빠른 시작', 'BardWiki의 컨셉', '먼저 확인할 핵심 설정'])
+            expect(help?.textContent).toContain('현재 챗 설정')
+            expect(help?.textContent).toContain('전역값 사용')
+        })
+    })
+
+    test('explains response history, analysis history and wiki writing language separately', async () => {
+        mounted = mount(RisuBardMemoryWikiHelp, {
+            target: document.body,
+            props: { open: true },
+        })
+        await vi.waitFor(() => {
+            const help = document.querySelector('[data-memory-help-content]')
+            const text = help?.textContent ?? ''
+            for (const setting of [
+                'LLM에 전달할 최근 채팅 내역', '응답 최근 메시지',
+                '위키 분석 최근 원문', '분석 최근 메시지',
+                '과거 사용자 메시지 제외', '위키 작성 언어',
+                '위키 조회 토큰 목표', '위키 조회 토큰 절대 상한',
+                'AI 분석 토큰 상한', '정본 대상 한도', '정본 집필 문체',
+            ]) expect(text).toContain(setting)
+            expect(text).toContain('왕복 턴 수가 아니라 메시지 수')
+            expect(text).toContain('현재 사용자 요청도 이 개수에 포함')
+            expect(text).toContain('기본값은 각각 12개')
+            expect(text).toContain('UI·대화 언어와 독립적')
+            expect(text).toContain('기존 문서는 자동 번역되지 않습니다')
+            expect(text).toContain('리부트는 시작할 때 선택한 언어를 유지')
         })
     })
 
@@ -569,8 +617,12 @@ describe('RisuBardMemoryWiki', () => {
         expect(story.querySelector('[data-memory-icon="scroll"]')).not.toBeNull()
         expect(actions.querySelector('[data-memory-view="replace"]')).toBeNull()
         expect(settings.querySelector('[data-solar-icon="settings"]')).not.toBeNull()
-        expect(source).toMatch(/\.force-update-button\s*\{[^}]*width:\s*52px[^}]*height:\s*52px/s)
-        expect(source).toMatch(/\.dock-views\s*\{[^}]*height:\s*52px[^}]*padding:\s*0\s+\.48rem/s)
+        expect(forceUpdate.querySelector('span')?.textContent?.trim())
+            .toBe(forceUpdate.getAttribute('aria-label'))
+        expect(source).toMatch(/\.dock-views \.force-update-button,\s*\.dock-views \.reboot-button,\s*\.dock-views \.reboot-cancel-button\s*\{[^}]*height:\s*2\.25rem/s)
+        expect(source).toMatch(/\.force-update-button img\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s)
+        expect(source).toMatch(/\.dock-views \.force-update-button span,\s*\.dock-views \.reboot-button span/)
+        expect(source).toMatch(/\.dock-views\s*\{[^}]*min-height:\s*52px[^}]*padding:\s*\.45rem\s+\.48rem/s)
         expect(source).toMatch(/\.dock-identity strong\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
         expect(source).toMatch(/\.settings-popover\s*\{[^}]*background:\s*var\(--risu-theme-bgcolor\)/s)
         expect(source).toMatch(/\.dock-view-actions\s*\{[^}]*margin-left:\s*auto/s)

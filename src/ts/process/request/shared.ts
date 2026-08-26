@@ -153,20 +153,23 @@ export async function collectStreamingText(stream: ReadableStream<{ [key: string
     const reader = stream.getReader()
     let lastChunk = ''
 
-    while (true) {
-        const { done, value } = await reader.read()
-        if (value) {
-            const firstKey = Object.keys(value)[0]
-            if (firstKey) {
-                lastChunk = value[firstKey] ?? lastChunk
+    try {
+        while (true) {
+            const { done, value } = await reader.read()
+            if (value) {
+                const firstKey = Object.keys(value)[0]
+                if (firstKey) {
+                    lastChunk = value[firstKey] ?? lastChunk
+                }
+            }
+            if (done) {
+                break
             }
         }
-        if (done) {
-            break
-        }
+        return lastChunk
+    } finally {
+        reader.releaseLock()
     }
-
-    return lastChunk
 }
 
 export function applyParameters(

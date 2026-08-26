@@ -1,13 +1,14 @@
 interface ResizeOptions {
     start: () => ((dx: number, dy: number) => void) | undefined
     reset: () => void
+    end?: () => void
 }
 
 /** Shared pointer capture and keyboard controls for local editor resize handles. */
 export function resizeHandle(node: HTMLElement, options: ResizeOptions) {
     const host = node.ownerDocument.defaultView!
     let drag: { id: number; x: number; y: number; move: (dx: number, dy: number) => void } | undefined
-    function finish() {
+    function finish(commit = true) {
         const id = drag?.id
         drag = undefined
         delete node.dataset.resizing
@@ -15,6 +16,7 @@ export function resizeHandle(node: HTMLElement, options: ResizeOptions) {
         host.removeEventListener('pointerup', up, true)
         host.removeEventListener('pointercancel', up, true)
         if (id !== undefined && node.hasPointerCapture?.(id)) node.releasePointerCapture(id)
+        if (commit && id !== undefined) options.end?.()
     }
     function down(event: PointerEvent) {
         if (event.button !== 0 || drag) return
@@ -37,7 +39,7 @@ export function resizeHandle(node: HTMLElement, options: ResizeOptions) {
     function up(event: PointerEvent) {
         if (drag?.id === event.pointerId) finish()
     }
-    function reset() { finish(); options.reset() }
+    function reset() { finish(false); options.reset(); options.end?.() }
     function key(event: KeyboardEvent) {
         if (event.key === 'Home') { event.preventDefault(); reset(); return }
         const step = event.shiftKey ? 48 : 16
@@ -45,7 +47,8 @@ export function resizeHandle(node: HTMLElement, options: ResizeOptions) {
         if (!delta) return
         event.preventDefault()
         event.stopPropagation()
-        options.start()?.(delta[0], delta[1])
+        const applyDelta = options.start()
+        if (applyDelta) { applyDelta(delta[0], delta[1]); options.end?.() }
     }
     node.addEventListener('pointerdown', down)
     node.addEventListener('lostpointercapture', up)

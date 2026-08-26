@@ -19,7 +19,7 @@ function storySection(content: string): string[] {
     const lines = content.replace(/\r\n/g, '\n').split('\n')
     let headingLevel = 0
     const heading = lines.findIndex((line) => {
-        const match = /^(#{2,3})\s+(이야기 요약|확정된 사건)\s*$/.exec(
+        const match = /^(#{2,3})\s+(이야기 요약|확정된 사건|Story Summary|Established Events)\s*$/i.exec(
             line.trim()
         )
         if (!match) return false

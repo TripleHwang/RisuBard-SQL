@@ -29,7 +29,7 @@
         type CanonicalMarkdownWikiDocumentType,
         type NarrativeMemoryWikiMarkdown,
     } from 'src/ts/risubard/memoryWiki'
-    import { buildWikiFileTree } from 'src/ts/risubard/wikiFileTree'
+    import { buildWikiFileTree, getRecentlyUpdatedWikiDocumentIds } from 'src/ts/risubard/wikiFileTree'
     import { publishRisuBardMemoryActivity } from 'src/ts/risubard/memoryActivity'
     import { copyWikiDocumentToLorebook } from 'src/ts/risubard/wikiLorebookCopy'
     import { normalizeMemoryWikiTreeHeight } from 'src/ts/risubard/memoryWikiLayout'
@@ -93,6 +93,7 @@
     })
 
     let tree = $derived(buildWikiFileTree(documents))
+    let recentlyUpdatedIds = $derived(getRecentlyUpdatedWikiDocumentIds(documents))
     let selected = $derived(
         documents.find((document) => document.id === selectedId) ?? null
     )
@@ -521,7 +522,8 @@
                                 >
                                     {#if child.readOnly}<FileLock2Icon size={13} />
                                     {:else}<FileIcon size={13} />{/if}
-                                    <span>{child.title}</span>
+                                    <span class="document-title">{child.title}</span>
+                                    {@render recentUpdateBadge(child.documentId)}
                                 </button>
                             {/if}
                         {/each}
@@ -539,11 +541,19 @@
                     oncontextmenu={(event) => openContextMenu(event, node.documentId)}
                     aria-label={node.title}
                 >
-                    <FileIcon size={13} /><span>{node.title}</span>
+                    <FileIcon size={13} /><span class="document-title">{node.title}</span>
+                    {@render recentUpdateBadge(node.documentId)}
                 </button>
             {/if}
         {/each}
     </nav>
+
+    {#snippet recentUpdateBadge(documentId: string)}
+        {#if recentlyUpdatedIds.has(documentId)}
+            <span class="recent-update-badge" data-wiki-recent-update
+                title="최근 분석 이후 갱신된 문서" aria-label="최근 갱신">New</span>
+        {/if}
+    {/snippet}
 
     <button
         type="button"
@@ -721,7 +731,8 @@
     .folder-row.locked { opacity: .72; }
     .folder-children { margin-left: .7rem; padding-left: .35rem; border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, var(--risu-theme-darkborderc)); }
     .root-file:hover, .folder-children button:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
-    .root-file span, .folder-children span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .document-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recent-update-badge { flex: 0 0 auto; margin-left: auto; padding: .12rem .32rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 45%, transparent); border-radius: .25rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 18%, transparent); font-size: .6rem; font-weight: 700; line-height: 1.2; white-space: nowrap; }
     .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, var(--color-bgcolor)); }
     .editor-header { min-width: 0; border-bottom: 1px solid var(--risu-theme-darkborderc); }
     .editor-title-row { min-width: 0; padding: .65rem .75rem; }

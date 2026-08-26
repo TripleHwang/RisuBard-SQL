@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { get_encoding } from '@dqbd/tiktoken'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { ModelOutputError } from '../../packages/risubard-core/src/modelResponse'
 import type {
     MemoryAnalysisInput,
     MemoryAnalysisModelRequest,
@@ -40,6 +41,46 @@ afterEach(async () => {
 })
 
 describe('memory analysis runner', () => {
+    test.each([false, true])('keeps English through analysis, rewrite and saves (reboot=%s)', async (reboot) => {
+        const systems: string[] = []
+        const saveConfirmedTurn = vi.fn(async (input) => input)
+        const saveCanonicalDocument = vi.fn(async (input) => input)
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() }, nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                saveConfirmedTurn, saveCanonicalDocument,
+            }, onError: vi.fn(),
+            analyze: async (request) => {
+                systems.push(request.system)
+                if (request.format === 'canonical-batch') return canonicalBatch('## Alice\n\n### Story History\n\n- Arrived.')
+                return JSON.stringify({
+                    schemaVersion: 1,
+                    ...(reboot ? { turns: [{ assistantMessageId: 'turn-en', title: 'Arrival', establishedEvents: ['Alice arrived.'] }] }
+                        : { title: 'Arrival', establishedEvents: ['Alice arrived.'] }),
+                    stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [],
+                    canonicalUpdateCandidates: [{ type: 'character', title: 'Alice', reason: 'A traveler arrived.',
+                        action: 'create', targetDocumentId: null, confidence: 1 }],
+                })
+            },
+        })
+        await runner.run({
+            characterId: 'character', chatId: 'chat', wikiWritingLanguage: 'en',
+            messages: [{ messageId: 'turn-en', role: 'assistant', content: 'Alice arrived.' }],
+            ...(reboot ? { rebootTurns: [{ assistantMessageId: 'turn-en', sourceMessageIds: ['turn-en'] }] } : {}),
+            wikiPromptGuide: { analysis: 'Write in Korean.', canonicalRewrite: 'Write in Korean.' },
+        })
+        expect(systems).toHaveLength(2)
+        for (const system of systems) {
+            expect(system).not.toMatch(/[가-힣]/)
+            expect(system.lastIndexOf('Output language: English')).toBeGreaterThan(system.indexOf('Write in Korean.'))
+        }
+        expect(saveConfirmedTurn).toHaveBeenCalledWith(expect.objectContaining({
+            writingLanguage: 'en', markdown: expect.stringContaining('### Story Summary'),
+        }))
+        expect(saveCanonicalDocument).toHaveBeenCalledWith(expect.objectContaining({ writingLanguage: 'en' }))
+    })
+
     test('fits initial character registration within the minimum analysis token budget', async () => {
         const analyze = vi.fn(async (_request: MemoryAnalysisModelRequest) => JSON.stringify({
             schemaVersion: 1, title: '동료 소개', establishedEvents: [],
@@ -74,7 +115,7 @@ describe('memory analysis runner', () => {
         }
     })
 
-    test('retries a malformed reboot batch with its explicit field contract', async () => {
+    test.each(['ko', 'en'] as const)('retries a malformed reboot batch with its explicit field contract (%s)', async (wikiWritingLanguage) => {
         const formats: Array<string | undefined> = []
         const sessions: Array<string | undefined> = []
         const systems: string[] = []
@@ -161,6 +202,7 @@ describe('memory analysis runner', () => {
         })
         const result = await runner.run({
             characterId: 'character', chatId: 'reboot-job',
+            wikiWritingLanguage,
             modelSessionChatId: 'original-chat',
             messages: [
                 { messageId: 'u1', role: 'user', content: '검을 놓친다.' },
@@ -188,6 +230,10 @@ describe('memory analysis runner', () => {
         expect(systems[1]).toContain(
             'Unexpected reboot batch draft field: establishedEvents'
         )
+        if (wikiWritingLanguage === 'en') {
+            expect(systems.join('\n')).not.toMatch(/[가-힣]/)
+            expect(systems.every((system) => system.includes('Output language: English'))).toBe(true)
+        }
         expect(savedEvents).toEqual([['u1', 'a1'], ['u2', 'a2']])
         expect(saveCanonicalDocument).toHaveBeenCalledOnce()
         expect(result.canonicalReceipt?.eventIds).toEqual(['event.a1', 'event.a2'])
@@ -344,8 +390,47 @@ describe('memory analysis runner', () => {
             chatId: 'chat-1',
             sourceMessageIds: ['user-1', 'assistant-1'],
             markdown: '## 다리의 붕괴\n\n### 이야기 요약\n\n- 다리가 무너졌다.',
+            writingLanguage: 'ko',
         })
         expect(applyDelta).not.toHaveBeenCalled()
+    })
+
+    test.each(['truncated', 'malformed', 'incomplete', 'incomplete-single', 'provider'] as const)('bounds failed canonical batch recovery: %s', async (failure) => {
+        const saveConfirmedTurn = vi.fn(async () => undefined)
+        const recordTurnReceipt = vi.fn(async (input) => ({ ...input, eventIds: [], recordedAt: 'now' }))
+        const saveCanonicalDocument = vi.fn(async (input) => ({ ...input, id: `character.${input.title}`, contentHash: 'hash', relativePath: `${input.title}.md` }))
+        const batchSizes: number[] = []
+        const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) => {
+            if (request.format === 'memory-draft') return JSON.stringify({
+                schemaVersion: 1, title: 'Arrival', establishedEvents: ['A and B arrived.'],
+                stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [],
+                canonicalUpdateCandidates: ['A', 'B'].map((title) => ({ type: 'character', title, reason: 'Arrived', action: 'create', targetDocumentId: null, confidence: 0.99 })),
+            })
+            const { targets } = JSON.parse(request.input)
+            batchSizes.push(targets.length)
+            expect(saveCanonicalDocument).not.toHaveBeenCalled()
+            if (targets.length > 1) {
+                if (failure === 'provider') throw new Error('Authentication failed')
+                if (failure === 'truncated') throw new ModelOutputError('truncated')
+                if (failure === 'incomplete') return canonicalBatch('## A\n\nArrived.')
+                return 'not JSON'
+            }
+            if (failure === 'incomplete-single') return canonicalBatch()
+            return canonicalBatch(`## ${targets[0].target.title}\n\nArrived.`)
+        })
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() }, nativeV2Analysis: true,
+            markdownWikiService: { inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                loadDocuments: vi.fn(async () => []), saveConfirmedTurn, saveCanonicalDocument,
+                snapshotBeforeTurn: vi.fn(async () => ({ snapshotId: 'before', canonicalCount: 0 })), recordTurnReceipt },
+            onError: vi.fn(), analyze,
+        })
+        await runner.run({ characterId: 'character', chatId: 'chat', messages: [{ messageId: 'assistant-1', role: 'assistant', content: 'A and B arrived.' }] })
+        expect(batchSizes).toEqual(failure === 'provider' ? [2] : [2, 1, 1])
+        expect(saveConfirmedTurn).toHaveBeenCalledOnce()
+        const failed = failure === 'provider' || failure === 'incomplete-single'
+        expect(saveCanonicalDocument).toHaveBeenCalledTimes(failed ? 0 : 2)
+        expect(recordTurnReceipt.mock.calls[0][0].warnings).toHaveLength(failed ? 1 : 0)
     })
 
     test('retries a schema-invalid memory draft with validation feedback', async () => {
@@ -498,6 +583,7 @@ describe('memory analysis runner', () => {
             title: '라비안', sourceMessageIds: ['user-2', 'assistant-2'],
             markdown: '# 라비안\n\n현재 케사리아에 있다.',
             expectedContentHash: 'hash-old', reviewStatus: 'reviewed',
+            writingLanguage: 'ko',
         })
     })
 
@@ -702,6 +788,7 @@ describe('memory analysis runner', () => {
             title: '현재 장면', sourceMessageIds: ['assistant-1'],
             markdown: '# 현재 장면\n\n성문 앞에 도착했다.',
             reviewStatus: 'reviewed',
+            writingLanguage: 'ko',
         })
     })
 

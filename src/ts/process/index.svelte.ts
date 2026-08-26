@@ -9,6 +9,7 @@ import { parseChatML } from "../parser/chatML";
 import { loadLoreBookV3Prompt } from "./lorebook.svelte";
 import { findCharacterbyId, getAuthorNoteDefaultText, getPersonaPrompt, getUserName, isLastCharPunctuation, trimUntilPunctuation, parseToggleSyntax, prebuiltAssetCommand } from "../util";
 import { requestChatData } from "./request/request";
+import { getPartialPresetStreamText } from './request/presetStreamPump';
 import { stableDiff } from "./stableDiff";
 import { processScript, processScriptFull, risuChatParser } from "./scripts";
 import { getGlobalChatVar } from "../parser/chatVar.svelte";
@@ -171,6 +172,7 @@ async function confirmProjectedNarrativeTurn(input: {
             },
             canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
             canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+            wikiWritingLanguage: settings.risuBardWikiWritingLanguage,
             ...(compiledWikiPromptGuide ? {
                 wikiPromptGuide: {
                     analysis: compiledWikiPromptGuide.analysis,
@@ -483,6 +485,7 @@ async function runWikiReboot(
                 },
                 canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
                 canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+                wikiWritingLanguage: job.writingLanguage ?? 'ko',
                 ...(compiledWikiPromptGuide ? {
                     wikiPromptGuide: {
                         analysis: compiledWikiPromptGuide.analysis,
@@ -536,6 +539,7 @@ export async function startCurrentWikiReboot(
     current.chat.risuBardWikiReboot = createWikiRebootJob({
         jobId,
         stagingChatId: `reboot-${jobId}`,
+        writingLanguage: resolvedRisuBardSettings(current.chat).risuBardWikiWritingLanguage,
         batchSize,
         targetAssistantMessageIds: turns.map((turn) =>
             turn.assistantMessageId
@@ -2668,6 +2672,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         try {
             while(streamAborted === false){
                 let readed: ReadableStreamReadResult<{ [key: string]: string }>
+                let readFailure: unknown
                 try {
                     readed = await reader.read()
                 }
@@ -2676,7 +2681,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         streamAborted = true
                         break
                     }
-                    throw error
+                    const partial = getPartialPresetStreamText(error)
+                    if (partial === undefined) throw error
+                    readed = { done: false, value: { "0": partial } }
+                    readFailure = error
                 }
                 if(readed.value){
                     receivedStreamingResult = true
@@ -2700,6 +2708,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         DBState.db.characters[selectedChar].reloadKeys += 1
                     }
                 }
+                // Render the last received snapshot, but do not run successful
+                // turn completion / automatic wiki analysis for a failed stream.
+                if (readFailure) throw readFailure
                 if(readed.done){
                     break
                 }

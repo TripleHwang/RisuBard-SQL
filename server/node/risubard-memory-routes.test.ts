@@ -49,6 +49,12 @@ describe('RisuBard memory routes', () => {
             sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
             markdown: '# 사건\n\n새 사건.',
         } },
+        { route: 'wiki/save', method: 'saveMarkdownWikiTurn', extra: {
+            sourceMessageIds: ['turn-en'], markdown: '## Arrival\n\n### Story Summary\n\n- Alice arrived.', writingLanguage: 'en',
+        } },
+        { route: 'wiki/document/save', method: 'saveCanonicalWikiDocument', extra: {
+            sourceMessageIds: ['turn-en'], type: 'character', title: 'Alice', markdown: '## Alice\n\nA traveler.', writingLanguage: 'en',
+        } },
         { route: 'wiki/document/save', method: 'saveCanonicalWikiDocument', extra: {
             sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
             type: 'character', title: '인물', markdown: '# 인물\n\n새 상태.',

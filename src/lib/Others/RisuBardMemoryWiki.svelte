@@ -1,7 +1,6 @@
 <script lang="ts">
     import {
         BookOpenIcon,
-        CircleHelpIcon,
         CheckCircle2Icon,
         Clock3Icon,
         LoaderCircleIcon,
@@ -500,10 +499,10 @@
                     type="button"
                     class="dock-help"
                     data-memory-help
-                    aria-label="리스바드 메모리 도움말"
-                    title="리스바드 메모리 도움말"
+                    aria-label="사용 가이드"
+                    title="BardWiki 사용 가이드"
                     onclick={() => helpOpen = true}
-                ><CircleHelpIcon size={15} /></button>
+                >사용 가이드</button>
             </div>
             </div>
             <button class="dock-close" type="button" aria-label="BardWiki 닫기" onclick={() => open = false}>
@@ -997,19 +996,22 @@
         align-items: center;
         gap: .55rem;
     }
-    .dock-title-row { display: flex; min-width: 0; align-items: center; gap: .28rem; }
+    .dock-title-row { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: .35rem .5rem; }
     .dock-identity strong { font-family: var(--risu-font-family); font-size: .84rem; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; white-space: nowrap; }
     .dock-help {
         display: inline-grid;
         flex: 0 0 auto;
-        width: 1.6rem;
-        height: 1.6rem;
+        min-height: 1.75rem;
         place-items: center;
-        padding: 0;
-        border: 1px solid transparent;
-        border-radius: 999px;
-        color: var(--risu-theme-textcolor2);
-        background: transparent;
+        padding: .2rem .55rem;
+        border: 1px solid var(--risu-theme-darkborderc);
+        border-radius: .35rem;
+        color: var(--risu-theme-textcolor);
+        background: color-mix(in srgb, var(--risu-theme-primary) 8%, var(--risu-theme-darkbg));
+        font-size: .75rem;
+        font-weight: 600;
+        line-height: 1.2;
+        white-space: nowrap;
         cursor: pointer;
     }
     .dock-help:hover,
@@ -1030,7 +1032,7 @@
         color: var(--risu-theme-primary);
         background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent);
     }
-    .dock-views { display: flex; width: 100%; height: 52px; align-items: center; gap: .75rem; padding: 0 .48rem; border-radius: .58rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
+    .dock-views { display: flex; flex-wrap: wrap; width: 100%; min-height: 52px; align-items: center; gap: .45rem; padding: .45rem .48rem; border-radius: .58rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
     .dock-view-actions { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; margin-left: auto; }
     .dock-views button, .dock-views summary, .dock-close {
         display: inline-flex;
@@ -1049,19 +1051,23 @@
         list-style: none;
     }
     .dock-views button, .dock-views summary { width: 2.35rem; min-height: 2.25rem; padding: .35rem; }
-    .dock-views .force-update-button { position: relative; flex: 0 0 52px; width: 52px; height: 52px; min-height: 52px; padding: 2px; overflow: hidden; border-color: color-mix(in srgb, var(--risu-theme-primary) 42%, var(--risu-theme-darkborderc)); border-radius: .72rem; background: color-mix(in srgb, var(--risu-theme-primary) 13%, var(--risu-theme-darkbg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--risu-theme-primary) 10%, transparent), 0 .22rem .6rem color-mix(in srgb, var(--color-shadow) 16%, transparent); }
+    .dock-views .force-update-button,
     .dock-views .reboot-button,
     .dock-views .reboot-cancel-button {
+        flex: 0 0 auto;
         width: auto;
         min-width: 5.7rem;
+        height: 2.25rem;
         padding-inline: .72rem;
+        font-size: .75rem;
         border-color: color-mix(in srgb, var(--risu-theme-primary) 32%, var(--risu-theme-darkborderc));
     }
+    .dock-views .force-update-button { justify-content: flex-start; gap: .4rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 13%, var(--risu-theme-darkbg)); }
     .dock-views .reboot-cancel-button {
         min-width: auto;
         color: var(--risu-theme-draculared);
     }
-    .force-update-button img { display: block; width: 46px; height: 46px; object-fit: contain; image-rendering: auto; }
+    .force-update-button img { display: block; flex: 0 0 auto; width: 24px; height: 24px; object-fit: contain; image-rendering: auto; }
     .force-update-hover { display: none !important; }
     .force-update-button:hover:not(:disabled) .force-update-idle,
     .force-update-button.running .force-update-idle { display: none; }
@@ -1069,6 +1075,7 @@
     .force-update-button.running .force-update-hover { display: block !important; }
     .dock-view-actions svg { display: block; width: 22px; height: 22px; fill: currentColor; }
     .dock-views button span, .dock-views summary span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .dock-views .force-update-button span,
     .dock-views .reboot-button span,
     .dock-views .reboot-cancel-button span {
         position: static;

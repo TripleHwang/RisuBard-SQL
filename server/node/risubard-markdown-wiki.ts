@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
 import { inquireMarkdownDocuments } from './risubard-markdown-inquiry'
+import { detectWikiWritingLanguage, localizeWikiHeadings, normalizeWikiWritingLanguage, wikiWritingHeadings, type WikiWritingLanguage } from '../../src/ts/risubard/wikiWritingLanguage'
 
 export interface MarkdownWikiDocument {
     id: string
@@ -152,7 +153,8 @@ function linksFrom(content: string): string[] {
 function appendKnownDocumentLinks(
     content: string,
     documents: readonly MarkdownWikiDocument[],
-    selfId: string
+    selfId: string,
+    writingLanguage: WikiWritingLanguage = 'ko'
 ): string {
     const existingTargets = new Set(linksFrom(content).map((value) =>
         value.split('|')[0]?.split('#')[0]?.normalize('NFKC')
@@ -174,13 +176,14 @@ function appendKnownDocumentLinks(
     if (related.length === 0) return content
     const bullets = related.map((document) => `- [[${document.title}]]`)
         .join('\n')
-    if (/^###\s+관련 문서\s*$/m.test(content)) {
+    const heading = `### ${wikiWritingHeadings[normalizeWikiWritingLanguage(writingLanguage)].related}`
+    if (/^###\s+(관련 문서|Related Documents)\s*$/mi.test(content)) {
         return content.replace(
-            /^###\s+관련 문서\s*$/m,
-            (heading) => `${heading}\n\n${bullets}`
+            /^###\s+(관련 문서|Related Documents)\s*$/mi,
+            () => `${heading}\n\n${bullets}`
         )
     }
-    return `${content}\n\n### 관련 문서\n\n${bullets}`
+    return `${content}\n\n${heading}\n\n${bullets}`
 }
 
 function removeCharacterEventLinksFromRelatedDocuments(
@@ -198,7 +201,7 @@ function removeCharacterEventLinksFromRelatedDocuments(
         if (heading) {
             if (heading[1].length <= 3) {
                 inRelatedDocuments = heading[1].length === 3
-                    && heading[2].normalize('NFKC').trim() === '관련 문서'
+                    && /^(관련 문서|Related Documents)$/i.test(heading[2].normalize('NFKC').trim())
             }
             return true
         }
@@ -209,7 +212,7 @@ function removeCharacterEventLinksFromRelatedDocuments(
             .toLocaleLowerCase().trim())
     })
     const relatedHeading = filtered.findIndex((line) =>
-        /^###\s+관련 문서\s*$/.test(line))
+        /^###\s+(관련 문서|Related Documents)\s*$/i.test(line))
     if (relatedHeading >= 0) {
         const nextSection = filtered.findIndex((line, index) =>
             index > relatedHeading && /^#{1,3}\s+\S/.test(line))
@@ -543,17 +546,23 @@ export function createMarkdownNarrativeWiki(
 
     const rebuildIndex = async (
         characterId: string,
-        chatId: string
+        chatId: string,
+        writingLanguage?: WikiWritingLanguage
     ): Promise<void> => {
         const workspace = workspaceFor(characterId, chatId)
         const documents = await refreshDocuments(characterId, chatId)
+        const indexLanguage = writingLanguage ?? (
+            documents.some((document) => /^###\s+(Story Summary|Story History|Related Documents)\s*$/mi.test(document.content))
+                && !documents.some((document) => /^###\s+이야기 요약\s*$/m.test(document.content))
+                ? 'en' : 'ko'
+        )
         const index = [
             '---',
             'type: narrative_wiki_index',
             'status: active',
             '---',
             '',
-            '## 서사 위키',
+            indexLanguage === 'en' ? '## Narrative Wiki' : '## 서사 위키',
             '',
             ...documents.map((item) =>
                 `- [[${item.relativePath.replace(/\.md$/, '')}|${item.title}]]`
@@ -986,6 +995,7 @@ export function createMarkdownNarrativeWiki(
             sourceMessageIds: string[]
             markdown: string
             append?: boolean
+            writingLanguage?: WikiWritingLanguage
         }): Promise<MarkdownWikiDocument> {
             const sourceMessageIds = input.sourceMessageIds.map((id) =>
                 required(id, 'sourceMessageId')
@@ -1006,24 +1016,32 @@ export function createMarkdownNarrativeWiki(
             const file = `turn-${suffix}.md`
             const operationTime = now().toISOString()
             const existingEvent = input.append
-                ? (await loadDocuments(input.characterId, input.chatId))
+                ? knownDocuments
                     .find((document) => document.id === `event.${suffix}`)
                 : undefined
+            const previousLanguage = existingEvent ? detectWikiWritingLanguage(existingEvent.content) : undefined
+            const writingLanguage = normalizeWikiWritingLanguage(input.writingLanguage
+                ?? previousLanguage ?? detectWikiWritingLanguage(normalized.content))
+            normalized = normalizeMarkdown(localizeWikiHeadings(normalized.content, writingLanguage))
             if (existingEvent?.type === 'event') {
+                if (previousLanguage && writingLanguage !== previousLanguage) {
+                    throw new Error('Wiki writing language differs from the existing event; reboot the wiki to change its language.')
+                }
                 const addition = normalized.content.replace(
                     /^##\s+[^\r\n]+\r?\n*/,
                     ''
                 ).trim()
                 normalized = normalizeMarkdown([
                     existingEvent.content,
-                    '### 추가 분석',
+                    `### ${wikiWritingHeadings[writingLanguage].additional}`,
                     addition,
                 ].filter(Boolean).join('\n\n'))
             }
             normalized = normalizeMarkdown(appendKnownDocumentLinks(
                 normalized.content,
                 knownDocuments,
-                `event.${suffix}`
+                `event.${suffix}`,
+                writingLanguage
             ))
             const prepared = prepareDocument({
                 id: `event.${suffix}`,
@@ -1044,7 +1062,7 @@ export function createMarkdownNarrativeWiki(
                 join(workspace.eventsDirectory, file),
                 prepared.contents
             )
-            await rebuildIndex(input.characterId, input.chatId)
+            await rebuildIndex(input.characterId, input.chatId, writingLanguage)
             return prepared.document
         },
 
@@ -1058,6 +1076,7 @@ export function createMarkdownNarrativeWiki(
             markdown: string
             expectedContentHash?: string
             reviewStatus?: 'unreviewed' | 'reviewed'
+            writingLanguage?: WikiWritingLanguage
         }): Promise<MarkdownWikiDocument> {
             const title = required(input.title, 'Title').trim().slice(0, 160)
             const incomingSources = input.sourceMessageIds.map((id) =>
@@ -1134,6 +1153,9 @@ export function createMarkdownNarrativeWiki(
                 )
             }
             let normalized = normalizeMarkdown(input.markdown)
+            const writingLanguage = normalizeWikiWritingLanguage(input.writingLanguage
+                ?? detectWikiWritingLanguage(normalized.content))
+            normalized = normalizeMarkdown(localizeWikiHeadings(normalized.content, writingLanguage))
             if (input.type === 'character') {
                 normalized = normalizeMarkdown(
                     removeCharacterEventLinksFromRelatedDocuments(
@@ -1147,7 +1169,8 @@ export function createMarkdownNarrativeWiki(
                 input.type === 'character'
                     ? documents.filter((document) => document.type !== 'event')
                     : documents,
-                id
+                id,
+                writingLanguage
             ))
             const prepared = prepareDocument({
                 id,
@@ -1170,7 +1193,7 @@ export function createMarkdownNarrativeWiki(
                     : existing?.contextMode ?? 'auto',
             })
             await writeAtomically(fileSystem, file, prepared.contents)
-            await rebuildIndex(input.characterId, input.chatId)
+            await rebuildIndex(input.characterId, input.chatId, writingLanguage)
             return prepared.document
         },
 

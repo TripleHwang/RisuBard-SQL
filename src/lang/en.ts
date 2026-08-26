@@ -2646,6 +2646,8 @@ export const languageEnglish = {
     risuBardAdditionalSearchLimit: "Additional search limit when candidates are insufficient",
     risuBardCanonicalTargetLimit: "Automatic canonical targets per analysis",
     risuBardCanonicalWritingStyle: "Canonical writing style",
+    risuBardWikiWritingLanguage: "Wiki writing language",
+    risuBardWikiLanguageGlobal: "Use common setting",
     risuBardCanonicalStyleStandard: "Standard",
     risuBardCanonicalStyleConcise: "Concise",
     risuBardCanonicalStyleUltraConcise: "Ultra concise",

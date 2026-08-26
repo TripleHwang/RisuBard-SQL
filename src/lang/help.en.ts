@@ -418,7 +418,9 @@ export const helpEn = {
         risuBardResponseRecentMessages:
             "Maximum number of recent messages referenced when generating a new response. The current user request counts toward this limit.",
         risuBardCanonicalWritingStyle:
-            "Korean writing style used by chat event summaries and canonical Markdown. Concise is the default.",
+            "Writing style for event summaries and canonical Markdown, independent of wiki writing language. Concise is the default.",
+        risuBardWikiWritingLanguage:
+            "Language for event analysis, summaries and entire canonical bodies, independent of UI and conversation language. Current-chat settings can override this default. Takes priority over language requests in custom style and Wiki Guides. Existing titles, links, names and evidence quotations are preserved. Existing documents are not automatically translated; select a language and reboot to rebuild the entire wiki. Reboot keeps its starting language. Additional analysis cannot append to an event in another language.",
         risuBardCanonicalCustomStyle:
             "Controls style and expression only. Fact selection, evidence, structure, and safety rules take priority. Limited to 1,000 characters.",
         risuBardAnalysisTokenLimit:

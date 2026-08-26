@@ -2,12 +2,12 @@
     import { onDestroy, onMount } from "svelte";
     import { v4 } from "uuid";
     import Sortable from 'sortablejs/modular/sortable.core.esm.js';
-    import { DownloadIcon, PencilIcon, HardDriveUploadIcon, MenuIcon, TrashIcon, SplitIcon, FolderPlusIcon, BookmarkCheckIcon, PackageIcon, CopyIcon, PlusIcon } from "@lucide/svelte";
+    import { DownloadIcon, PencilIcon, HardDriveUploadIcon, MenuIcon, TrashIcon, SplitIcon, FolderPlusIcon, BookmarkCheckIcon, PackageIcon, CopyIcon, PlusIcon, MergeIcon, EllipsisIcon } from "@lucide/svelte";
 
     import type { Chat, ChatFolder, character } from "src/ts/storage/database.svelte";
     import { newChatModelDefaults } from "src/ts/storage/database.svelte";
     import { ensureChatHydrated } from "src/ts/storage/chatStorage";
-    import { DBState, ReloadGUIPointer } from 'src/ts/stores.svelte';
+    import { DBState, ReloadGUIPointer, SizeStore } from 'src/ts/stores.svelte';
     import { selectedCharID, chatDeselected } from "src/ts/stores.svelte";
 
     import CheckInput from "../UI/GUI/CheckInput.svelte";
@@ -28,6 +28,16 @@
     import { changeChatTo, createChatCopyName, requestImmediateSave } from "src/ts/globalApi.svelte";
     import { forageStorage } from "src/ts/globalApi.svelte";
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork";
+    import { mergeCharacterChats } from "src/ts/risubard/chatMerge";
+    import { doingChat, isAnyGenerating } from "src/ts/process/generationState";
+    import { isWikiGenerating } from "src/ts/risubard/wikiGenerationState";
+    import ChatMergeDialog from "./ChatMergeDialog.svelte";
+    import ShDropdownMenu from '../UI/GUI/ShDropdownMenu.svelte';
+    import ShDropdownMenuTrigger from '../UI/GUI/ShDropdownMenuTrigger.svelte';
+    import ShDropdownMenuContent from '../UI/GUI/ShDropdownMenuContent.svelte';
+    import ShDropdownMenuItem from '../UI/GUI/ShDropdownMenuItem.svelte';
+    import SidebarResizeHandle from './SidebarResizeHandle.svelte';
+    import { normalizeChatListHeight } from 'src/ts/gui/sidebarLayout';
 
     interface Props {
         chara: character;
@@ -55,7 +65,39 @@
     let sorted = $state(0)
     let opened = 0
     let chatListExpanded = $state(false)
+    const chatListHeight = $derived(normalizeChatListHeight(DBState.db.chatListHeight, $SizeStore.h))
     const activeChat = $derived(chara.chats[chara.chatPage])
+    let mergeOpen = $state(false)
+
+    async function loadMergeChat(id: string): Promise<Chat> {
+        const index = chara.chats.findIndex(chat => chat.id === id)
+        const chat = await ensureChatHydrated(chara.chats, index, chara.chaId)
+        if (!chat || chat._placeholder) throw new Error('챗 데이터를 불러오지 못했습니다.')
+        return $state.snapshot(chat)
+    }
+
+    async function mergeChats(ids: string[], name: string): Promise<void> {
+        const targetCharacter = chara
+        const merged = await mergeCharacterChats(targetCharacter, ids, name, {
+            hydrate: async (id) => {
+                if ($doingChat || $isAnyGenerating || $isWikiGenerating) {
+                    throw new Error('진행 중인 생성 작업이 끝난 뒤 병합해 주세요.')
+                }
+                const index = targetCharacter.chats.findIndex(chat => chat.id === id)
+                return ensureChatHydrated(targetCharacter.chats, index, targetCharacter.chaId)
+            },
+            snapshot: (chat) => $state.snapshot(chat),
+            save: async () => {
+                const pending = requestImmediateSave({ forceFullWrite: true, flushServer: true, rejectOnFailure: true })
+                if (!pending) throw new Error('저장 기능이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.')
+                await pending
+            },
+        })
+        if (chara === targetCharacter && DBState.db.characters[$selectedCharID]?.chaId === targetCharacter.chaId) {
+            changeChatTo(merged.id!)
+        }
+        notifySuccess('합본 챗을 만들었습니다. Memory Wiki에서 위키 리부트를 실행해 주세요.')
+    }
 
     function createNewChat(): void {
         const newChat = {
@@ -304,9 +346,12 @@
         })
     })
 </script>
+{#if mergeOpen}
+    <ChatMergeDialog open={mergeOpen} chats={chara.chats} loadChat={loadMergeChat}
+        onMerge={mergeChats} onOpenChange={(open) => { mergeOpen = open }} />
+{/if}
 <div class="flex flex-col w-full">
     <section data-current-chat-section class="border-b border-darkborderc pb-2">
-        <div data-current-chat-label class="text-[11px] text-textcolor2 px-1">{language.currentChatLabel}</div>
         <div data-chat-file-header class="flex min-h-10 items-center gap-1">
             <div data-current-chat-title class="flex min-w-0 grow items-center px-1.5 py-2 text-textcolor">
                 <span class="truncate font-semibold">{activeChat?.name ?? language.newChat}</span>
@@ -316,33 +361,27 @@
 
     <div data-chat-list-disclosure class="mt-2">
     <ShAccordion bind:open={chatListExpanded} name={language.sidebarChatListLabel} class="w-full">
-        <div data-chat-list-toolbar class="flex items-center gap-0.5 border-b border-darkborderc py-1.5">
-            <ShButton data-sidebar-new-chat variant="ghost" size="icon-sm" aria-label={language.newChat} title={language.newChat} onclick={createNewChat}>
+        <div data-chat-list-toolbar class="grid grid-cols-8 items-center gap-0.5 border-b border-darkborderc py-1.5">
+            <ShButton data-sidebar-new-chat variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label={language.newChat} title={language.newChat} onclick={createNewChat}>
                 <PlusIcon size={18} />
             </ShButton>
-            <ShButton variant="ghost" size="icon-sm" aria-label={language.edit} title={language.edit} onclick={() => void renameCurrentChat()}>
+            <ShButton data-chat-rename variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label={language.edit} title={language.edit} onclick={() => void renameCurrentChat()}>
                 <PencilIcon size={18} />
             </ShButton>
-            <ShButton variant="ghost" size="icon-sm" aria-label={language.copy} title={language.copy} onclick={() => { if(activeChat) void copyChatWithMemory(activeChat) }}>
+            <ShButton data-chat-copy variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label={language.copy} title={language.copy} onclick={() => { if(activeChat) void copyChatWithMemory(activeChat) }}>
                 <CopyIcon size={18} />
             </ShButton>
-            <ShButton variant="destructive" size="icon-sm" aria-label={language.remove} title={language.remove} onclick={() => void deleteCurrentChat()}>
-                <TrashIcon size={18} />
+            <ShButton data-chat-merge variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="챗 이어 붙이기" title="챗 이어 붙이기"
+                disabled={chara.chats.length < 2 || $doingChat || $isAnyGenerating || $isWikiGenerating} onclick={() => { mergeOpen = true }}>
+                <MergeIcon size={18} />
             </ShButton>
-            <ShButton variant="ghost" size="icon-sm" aria-label={language.download} title={language.download} onclick={exportAllChats}>
-                <DownloadIcon size={18} />
-            </ShButton>
-            <ShButton variant="ghost" size="icon-sm" aria-label={language.import} title={language.import} onclick={importChat}>
-                <HardDriveUploadIcon size={18} />
-            </ShButton>
-            <span class="mx-1 h-4 w-px bg-darkborderc"></span>
-            <ShButton variant="ghost" size="icon-sm" aria-label="Branches" title="Branches" onclick={() => { alertStore.set({ type: 'branches', msg: '' }) }}>
+            <ShButton data-chat-branch variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="챗 분할 (브랜치)" title="챗 분할 (브랜치)" onclick={() => { alertStore.set({ type: 'branches', msg: '' }) }}>
                 <SplitIcon size={18} />
             </ShButton>
-            <ShButton variant="ghost" size="icon-sm" aria-label="Bookmarks" title="Bookmarks" onclick={() => { $bookmarkListOpen = true }}>
-                <BookmarkCheckIcon size={18} />
+            <ShButton data-chat-delete variant="destructive" size="icon-sm" className="min-w-0 w-full" aria-label={language.remove} title={language.remove} onclick={() => void deleteCurrentChat()}>
+                <TrashIcon size={18} />
             </ShButton>
-            <ShButton variant="ghost" size="icon-sm" className="ml-auto" aria-label="New folder" title="New folder" onclick={() => {
+            <ShButton data-chat-new-folder variant="ghost" size="icon-sm" className="min-w-0 w-full" aria-label="새 폴더" title="새 폴더" onclick={() => {
                 chara.chatFolders ??= []
                 chara.chatFolders.unshift({
                     id: v4(),
@@ -354,10 +393,21 @@
             }}>
                 <FolderPlusIcon size={18} />
             </ShButton>
+            <ShDropdownMenu>
+                <ShDropdownMenuTrigger data-chat-more aria-label="챗 목록 더 보기" title="더 보기"
+                    class="risu-button-lift flex h-8 min-w-0 w-full items-center justify-center rounded-md text-textcolor hover:bg-selected/30 focus-visible:outline-2 focus-visible:outline-borderc">
+                    <EllipsisIcon size={18} />
+                </ShDropdownMenuTrigger>
+                <ShDropdownMenuContent align="end">
+                    <ShDropdownMenuItem onSelect={exportAllChats}><DownloadIcon size={16} />다운로드</ShDropdownMenuItem>
+                    <ShDropdownMenuItem onSelect={importChat}><HardDriveUploadIcon size={16} />임포트</ShDropdownMenuItem>
+                    <ShDropdownMenuItem onSelect={() => { $bookmarkListOpen = true }}><BookmarkCheckIcon size={16} />북마크</ShDropdownMenuItem>
+                </ShDropdownMenuContent>
+            </ShDropdownMenu>
         </div>
 
         {#key sorted}
-        <div class="flex flex-col mt-1 overflow-y-auto max-h-80" bind:this={listEle}>
+        <div data-chat-list-scroll class="chat-list-scroll flex flex-col mt-1 overflow-y-auto overflow-x-hidden" bind:this={listEle} style:height={`${chatListHeight}px`}>
         <!-- folder div -->
         <div class="flex flex-col" bind:this={folderEles}>
             <!-- chat folder -->
@@ -475,6 +525,7 @@
         </div>
     </div>
     {/key}
+    <SidebarResizeHandle axis="height" target={listEle} />
     </ShAccordion>
     </div>
 
@@ -502,3 +553,10 @@
         {/if}
     </div>
 </div>
+
+<style>
+    .chat-list-scroll { scrollbar-gutter: stable; scrollbar-width: thin; overscroll-behavior-y: contain; scrollbar-color: color-mix(in srgb, var(--color-textcolor2) 40%, transparent) transparent; }
+    .chat-list-scroll::-webkit-scrollbar { width: 6px; }
+    .chat-list-scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--color-textcolor2) 40%, transparent); border-radius: 999px; }
+    .chat-list-scroll :global([data-chat-list-row]) { flex-shrink: 0; }
+</style>

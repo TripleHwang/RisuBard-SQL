@@ -868,6 +868,7 @@ export function setDatabase(data:Database){
     )
     data.risuBardInquiryTargetTokenBudget = chatInquiryTokenBudget.target
     data.risuBardInquiryMaximumTokenBudget = chatInquiryTokenBudget.maximum
+    data.risuBardWikiWritingLanguage = data.risuBardWikiWritingLanguage === 'en' ? 'en' : 'ko'
     data.risuBardCanonicalWritingStyle = normalizeRisuBardCanonicalWritingStyle(
         data.risuBardCanonicalWritingStyle
     )
@@ -1515,6 +1516,9 @@ export interface Database{
     useInstructPrompt:boolean
     textAreaSize:number
     sideBarSize:number
+    /** Global layout preferences shared across characters and chats. */
+    characterSidebarWidth?: number
+    chatListHeight?: number
     risuBardMemoryDialogSize?: {
         width: number
         height: number
@@ -1542,6 +1546,7 @@ export interface Database{
     risuBardInquiryMaximumTokenBudget?: number
     risuBardCanonicalWritingStyle?: import('../risubard/risuBardSettings').RisuBardCanonicalWritingStyle
     risuBardCanonicalCustomStyle?: string
+    risuBardWikiWritingLanguage?: import('../risubard/wikiWritingLanguage').WikiWritingLanguage
     risuBardWikiPromptPresets?: WikiPromptPreset[]
     risuBardChatWikiPromptPresetId?: string
     textAreaTextSize:number

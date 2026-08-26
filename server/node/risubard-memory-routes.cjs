@@ -493,10 +493,10 @@ function registerRisuBardMemoryRoutes(app, options) {
                 'sourceMessageIds',
                 'markdown',
             ]
-            const optionalKeys = req.body?.append === undefined
-                ? []
-                : ['append']
+            const optionalKeys = ['append', 'writingLanguage']
+                .filter((key) => req.body?.[key] !== undefined)
             if (!hasExactKeys(req.body, [...keys, ...optionalKeys])
+                || (req.body.writingLanguage !== undefined && !['ko', 'en'].includes(req.body.writingLanguage))
                 || !hasBoundedId(req.body.characterId)
                 || !hasBoundedId(req.body.chatId)
                 || !Array.isArray(req.body.sourceMessageIds)
@@ -531,12 +531,13 @@ function registerRisuBardMemoryRoutes(app, options) {
                     'markdown',
                 ]
                 const optionalKeys = [
-                    'documentId', 'expectedContentHash', 'reviewStatus',
+                    'documentId', 'expectedContentHash', 'reviewStatus', 'writingLanguage',
                 ].filter((key) => req.body?.[key] !== undefined)
                 const validShape = hasExactKeys(req.body, [
                     ...keys, ...optionalKeys,
                 ])
                 if (!validShape
+                    || (req.body.writingLanguage !== undefined && !['ko', 'en'].includes(req.body.writingLanguage))
                     || !hasBoundedId(req.body.characterId)
                     || !hasBoundedId(req.body.chatId)
                     || (req.body.documentId !== undefined

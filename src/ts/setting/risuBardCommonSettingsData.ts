@@ -3,6 +3,18 @@ import { normalizeRisuBardCanonicalCustomStyle } from '../risubard/risuBardSetti
 
 export const risuBardCommonSettingsItems: SettingItem[] = [
     {
+        id: 'risubard.common.wikiWritingLanguage',
+        type: 'select',
+        labelKey: 'risuBardWikiWritingLanguage',
+        helpKey: 'risuBardWikiWritingLanguage',
+        bindKey: 'risuBardWikiWritingLanguage',
+        options: { selectOptions: [
+            { value: 'ko', label: '한국어' },
+            { value: 'en', label: 'English' },
+        ] },
+        keywords: ['wiki', 'language', 'English', '위키', '언어', '영어'],
+    },
+    {
         id: 'risubard.common.showSaveLoadShortcuts',
         type: 'check',
         labelKey: 'risuBardShowSaveLoadShortcuts',

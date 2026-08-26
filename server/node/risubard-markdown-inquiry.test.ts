@@ -151,7 +151,8 @@ describe('progressive Markdown inquiry', () => {
         expect(result.metrics.selectedTokens).toBeLessThanOrEqual(2_000)
     })
 
-    test('answers chronology intent from the compressed character history', () => {
+    test.each(['## 작중 행적', '### 작중 행적', '### Story History'])(
+        'answers chronology intent from the compressed character history (%s)', (historyHeading) => {
         const result = inquireMarkdownDocuments({
             currentInput: '프로도의 모험과 작중 행적을 순서대로 나열해 줘.',
             documents: [
@@ -161,7 +162,7 @@ describe('progressive Markdown inquiry', () => {
                     content: [
                         '# 프로도',
                         '',
-                        '## 작중 행적',
+                        historyHeading,
                         '',
                         '- [[샤이어 출발]]: 샘과 함께 고향을 떠났다.',
                         '- [[반지원정대 결성]]: 반지를 파괴할 책임을 맡았다.',
@@ -181,7 +182,7 @@ describe('progressive Markdown inquiry', () => {
         expect(result.sources.map((source) => source.id)).toEqual([
             'narrative-memory:wiki:characters/frodo.md',
         ])
-        expect(result.sources[0]?.content).toContain('## 작중 행적')
+        expect(result.sources[0]?.content).toContain(historyHeading)
     })
 
     test('reserves linked event evidence for past causal analysis', () => {

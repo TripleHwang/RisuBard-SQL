@@ -72,6 +72,32 @@ afterEach(async () => {
 })
 
 describe('RisuBardWikiEditor', () => {
+    it('shows recent update badges on the right of root and folder pages without changing their selection', async () => {
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: {
+                characterId: 'character', chatId: 'chat',
+                documents: [
+                    ...documents,
+                    { ...documents[0], id: 'scene', title: '현재 장면', type: 'scene',
+                        relativePath: 'current-scene.md', updated: '2026-08-08T00:01:02Z' },
+                    { ...documents[0], id: 'new-character', title: '새 인물',
+                        updated: '2026-08-08T00:01:04Z', relativePath: 'characters/new.md' },
+                ],
+            },
+        })
+        await tick()
+        const badges = [...document.querySelectorAll('[data-wiki-recent-update]')]
+        expect(badges.map((badge) => badge.parentElement?.getAttribute('aria-label')))
+            .toEqual(['현재 장면', '새 인물 ', '전투 읽기 전용'])
+        expect(badges.every((badge) => badge.textContent === 'New'
+            && badge === badge.parentElement?.lastElementChild)).toBe(true)
+        badges[0].parentElement!.click()
+        await tick()
+        expect(document.querySelector<HTMLInputElement>('[aria-label="항목 이름"]')?.value)
+            .toBe('현재 장면')
+    })
+
     it('collapses action labels instead of wrapping the toolbar at narrow widths', async () => {
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {

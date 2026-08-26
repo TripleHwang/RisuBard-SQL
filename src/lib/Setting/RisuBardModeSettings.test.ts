@@ -98,6 +98,10 @@ describe('RisuBard mode settings', () => {
             ? readFileSync(settingsDataPath, 'utf8')
             : ''
         expect(settingsData).toContain("bindKey: 'risuBardCanonicalWritingStyle'")
+        expect(settingsData).toContain("bindKey: 'risuBardWikiWritingLanguage'")
+        expect(databaseSource).toContain('data.risuBardWikiWritingLanguage ===')
+        expect(processSource).toContain('wikiWritingLanguage: settings.risuBardWikiWritingLanguage')
+        expect(processSource).toContain("wikiWritingLanguage: job.writingLanguage ?? 'ko'")
         expect(settingsData).toContain("value: 'standard'")
         expect(settingsData).toContain("value: 'concise'")
         expect(settingsData).toContain("value: 'ultra-concise'")

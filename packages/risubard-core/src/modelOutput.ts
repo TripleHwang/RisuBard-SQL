@@ -42,7 +42,16 @@ function jsonObjectCandidates(value: string): unknown[] {
 }
 
 export function stripModelReasoning(value: string): string {
-    return value.replace(/<Thoughts>[\s\S]*?<\/Thoughts>/gi, '')
+    let remaining = value
+    while (true) {
+        // Strip only leading provider wrappers, never tags quoted inside JSON
+        // document content. An unfinished reasoning block has no final answer.
+        const reasoning = remaining.match(
+            /^\s*<(Thoughts|think)>[\s\S]*?(?:<\/\1>|$)/i
+        )
+        if (!reasoning) return remaining
+        remaining = remaining.slice(reasoning[0].length)
+    }
 }
 
 export function parseSingleJsonObject(value: string): unknown {

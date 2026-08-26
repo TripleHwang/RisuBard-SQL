@@ -15,6 +15,17 @@ const evidence = [{
 }]
 
 describe('Markdown wiki writer', () => {
+    test('repairs a truncated Markdown document and isolates general-chat extraction', async () => {
+        const requestModel = vi.fn(async () => ({
+            type: 'success', result: '## 라비안\n\n기록.',
+            finishReason: requestModel.mock.calls.length === 1 ? 'max_tokens' : 'end_turn',
+        }))
+        await expect(requestMarkdownWikiDraft({ type: 'character', title: '라비안', instruction: '갱신해.', evidence, requestModel }))
+            .resolves.toBe('## 라비안\n\n기록.')
+        expect(requestModel).toHaveBeenCalledTimes(2)
+        expect(requestModel).toHaveBeenLastCalledWith(expect.objectContaining({ extractJson: '' }), 'memory')
+    })
+
     test('supports every canonical page type as an existing workbench target', async () => {
         await expect(requestMarkdownWikiDraft({
             type: 'faction',
@@ -77,7 +88,7 @@ describe('Markdown wiki writer', () => {
         expect(submitted?.formated[0].content).toContain('beginning with one ## title')
     })
 
-    test('stores only after an explicit authenticated approval', async () => {
+    test.each([undefined, 'ko', 'en'] as const)('stores only after an explicit authenticated approval (language=%s)', async (writingLanguage) => {
         const fetchImpl = vi.fn(async (
             path: RequestInfo | URL,
             init?: RequestInit
@@ -91,6 +102,7 @@ describe('Markdown wiki writer', () => {
                 title: '라비안',
                 sourceMessageIds: ['user-1', 'assistant-1'],
                 reviewStatus: 'unreviewed',
+                ...(writingLanguage ? { writingLanguage } : {}),
             })
             return new Response(JSON.stringify({
                 id: 'character.lavian',
@@ -116,6 +128,7 @@ describe('Markdown wiki writer', () => {
             sourceMessageIds: ['user-1', 'assistant-1'],
             markdown: '# 라비안\n\n현재 상태.',
             reviewStatus: 'unreviewed',
+            writingLanguage,
             fetchImpl,
             createAuth: async () => 'jwt',
         })).resolves.toMatchObject({

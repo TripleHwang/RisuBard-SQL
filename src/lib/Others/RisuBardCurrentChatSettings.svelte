@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { language } from 'src/lang'
     import type { Chat } from 'src/ts/storage/database.svelte'
     import type { RisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
     import { resolveRisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
@@ -68,6 +69,15 @@
             onchange={(event) => setValue('risuBardCanonicalWritingStyle', (event.currentTarget as HTMLSelectElement).value as RisuBardChatSettings['risuBardCanonicalWritingStyle'])}>
             <option value="concise">간결</option><option value="standard">표준</option>
             <option value="ultra-concise">초간결</option><option value="custom">사용자 지정</option>
+        </select>
+    </label>
+    <label>
+        <span>{language.risuBardWikiWritingLanguage}</span>
+        <select value={chat?.risuBardSettings?.risuBardWikiWritingLanguage ?? ''}
+            onchange={(event) => setValue('risuBardWikiWritingLanguage',
+                (event.currentTarget.value || undefined) as RisuBardChatSettings['risuBardWikiWritingLanguage'])}>
+            <option value="">{language.risuBardWikiLanguageGlobal} ({global.risuBardWikiWritingLanguage === 'en' ? 'English' : '한국어'})</option>
+            <option value="ko">한국어</option><option value="en">English</option>
         </select>
     </label>
     {#if settings.risuBardCanonicalWritingStyle === 'custom'}

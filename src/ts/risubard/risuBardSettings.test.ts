@@ -7,6 +7,7 @@ import {
     RISUBARD_INQUIRY_MAXIMUM_TOKEN_BUDGET_DEFAULT,
     RISUBARD_INQUIRY_TARGET_TOKEN_BUDGET_DEFAULT,
     buildRisuBardCanonicalWritingPolicy,
+    buildRisuBardEventWritingPolicy,
     normalizeRisuBardAnalysisTokenLimit,
     normalizeRisuBardAdditionalSearchLimit,
     normalizeRisuBardCanonicalCustomStyle,
@@ -17,6 +18,28 @@ import {
 } from './risuBardSettings'
 
 describe('RisuBard analysis settings', () => {
+    test('defaults wiki language to Korean and resolves a chat language independently', () => {
+        expect(resolveRisuBardChatSettings({}).risuBardWikiWritingLanguage).toBe('ko')
+        expect(resolveRisuBardChatSettings({ risuBardWikiWritingLanguage: 'en' })
+            .risuBardWikiWritingLanguage).toBe('en')
+        expect(resolveRisuBardChatSettings({ risuBardWikiWritingLanguage: 'en' }, {
+            risuBardWikiWritingLanguage: 'ko',
+        }).risuBardWikiWritingLanguage).toBe('ko')
+    })
+
+    test.each(['standard', 'concise', 'ultra-concise', 'custom'])(
+        'uses only English built-in writing instructions for %s', (style) => {
+            const event = buildRisuBardEventWritingPolicy(style, 'Use short sentences.', 'en')
+            const canon = buildRisuBardCanonicalWritingPolicy(style, 'Use short sentences.', 'en')
+            expect(event).toContain('English')
+            expect(canon).toContain('### Story History')
+            expect(canon).toContain('16')
+            expect(canon).toContain('entire body')
+            expect(canon).toContain('existing document titles')
+            expect(event + canon).not.toMatch(/[가-힣]/)
+        }
+    )
+
     test('uses conservative defaults for missing and invalid values', () => {
         expect(normalizeRisuBardAnalysisTokenLimit(undefined))
             .toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)

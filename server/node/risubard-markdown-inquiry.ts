@@ -436,7 +436,7 @@ export function inquireMarkdownDocuments(
     const pastIntent = hasPastIntent(input.currentInput)
     const currentIntent = /(?:현재|지금|최신|상태|current|now|latest|status|現在|今)/i
         .test(input.currentInput)
-    const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline)/i
+    const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline|story\s+history)/i
         .test(input.currentInput)
     const historicalEvidenceIntent = hasHistoricalEvidenceIntent(
         input.currentInput
@@ -446,7 +446,7 @@ export function inquireMarkdownDocuments(
         chronologyIntent
             ? eligibleDocuments.filter((document) =>
                 document.type === 'character'
-                && /^##\s+작중\s*행적\s*$/m.test(document.content)
+                && /^#{2,3}\s+(작중\s*행적|Story History)\s*$/mi.test(document.content)
                 && normalizedQuery.includes(normalized(document.title)))
                 .map((document) => document.id)
             : []

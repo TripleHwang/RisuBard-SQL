@@ -424,13 +424,24 @@ describe('stored response memory analysis', () => {
         expect(onError).not.toHaveBeenCalled()
     })
 
-    test('retries once when structured memory output is not one JSON object', async () => {
+    test.each([
+        { result: '분석 결과를 만들지 못했습니다.' },
+        { result: JSON.stringify({ schemaVersion: 1, title: '변화 없음', establishedEvents: [], stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [], canonicalUpdateCandidates: [] }), finishReason: 'length' },
+        { result: '<think>unfinished reasoning', finishReason: 'stop' },
+        { result: 'not JSON', repeat: true, expectedAttempts: 2 },
+        { result: '', finishReason: 'SAFETY', expectedAttempts: 1 },
+        { result: 'not JSON', noRetry: true, expectedAttempts: 1 },
+        { result: 'not JSON', toolExecuted: true, expectedAttempts: 1 },
+    ])('bounds structured-output recovery without replaying writes: %j', async (firstResponse) => {
         const requestModel = vi.fn(async (
             request: MemoryAnalysisModelCall
         ) => ({
             type: 'success' as const,
-            result: requestModel.mock.calls.length === 1
-                ? '분석 결과를 만들지 못했습니다.'
+            noRetry: firstResponse.noRetry,
+            toolExecuted: firstResponse.toolExecuted,
+            finishReason: requestModel.mock.calls.length === 1 ? firstResponse.finishReason : 'stop',
+            result: requestModel.mock.calls.length === 1 || firstResponse.repeat
+                ? firstResponse.result
                 : JSON.stringify({
                     schemaVersion: 1,
                     title: '변화 없음',
@@ -499,7 +510,7 @@ describe('stored response memory analysis', () => {
             nativeV2Analysis: true,
         })
 
-        await expect(analysis.run({
+        const operation = analysis.run({
             characterId: 'character',
             chatId: 'chat',
             messages: [{
@@ -507,10 +518,14 @@ describe('stored response memory analysis', () => {
                 role: 'assistant',
                 content: '아무 변화도 없었다.',
             }],
-        })).resolves.toMatchObject({ facts: [], events: [] })
-        expect(requestModel).toHaveBeenCalledTimes(2)
-        expect(requestModel.mock.calls[1][0].formated[0].content)
-            .toContain('previous response')
+        })
+        if (firstResponse.expectedAttempts) await expect(operation).rejects.toThrow()
+        else await expect(operation).resolves.toMatchObject({ facts: [], events: [] })
+        expect(requestModel).toHaveBeenCalledTimes(firstResponse.expectedAttempts ?? 2)
+        for (const [request] of requestModel.mock.calls) expect(request.extractJson).toBe('')
+        if (requestModel.mock.calls.length > 1) {
+            expect(requestModel.mock.calls[1][0].formated[0].content).toContain('previous response')
+        }
     })
 
     test('does not prepare or store a v1 snapshot for native v2 analysis', async () => {

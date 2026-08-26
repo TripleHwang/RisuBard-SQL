@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import { StreamFlushThrottle, pumpPresetStream, type StreamChunkController } from './presetStreamPump'
+import { StreamFlushThrottle, pumpPresetStream, getPartialPresetStreamText, type StreamChunkController } from './presetStreamPump'
 import type { AdapterChatStreamDelta } from 'src/ts/preset/adapter'
 
 // --- StreamFlushThrottle (pure, injected clock) -----------------------------
@@ -27,6 +27,13 @@ function makeThrottle(initialDesiredSize: number | null = 1) {
 }
 
 describe('StreamFlushThrottle', () => {
+    test('a refusal delta cannot be cleared by a later stop marker', async () => {
+        const controller = makeController()
+        await pumpPresetStream(genOf({ finishReason: 'refusal' }, { finishReason: 'stop' }), controller, {
+            intervalMs: 50, formatReasoning: passthroughReasoning,
+        })
+        expect(controller.errored).toMatchObject({ reason: 'blocked', retryable: false })
+    })
     test('flushes the first delta immediately regardless of clock', () => {
         const h = makeThrottle()
         h.append('a')
@@ -128,6 +135,212 @@ async function* genOf(
 const passthroughReasoning = (t: string) => t
 
 describe('pumpPresetStream', () => {
+    test('recovers the cumulative answer after a real slow-consumer stream discards its queue on error', async () => {
+        const failure = new Error('connection lost')
+        const originalKeys = Object.getOwnPropertyNames(failure)
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => { release = resolve })
+        async function* interrupted(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+            yield { textDelta: 'a', raw: null }
+            await gate
+            yield { textDelta: 'b', raw: null }
+            throw failure
+        }
+        let done!: Promise<void>
+        const stream = new ReadableStream<{ [key: string]: string }>({
+            start(controller) {
+                done = pumpPresetStream(interrupted(), controller, {
+                    intervalMs: 50, formatReasoning: passthroughReasoning,
+                })
+                return done
+            },
+        })
+        const reader = stream.getReader()
+        try {
+            expect(await reader.read()).toEqual({ done: false, value: { '0': 'a' } })
+            release()
+            await done
+            // Unlike a fake controller, error() drops the unread 'ab' snapshot.
+            await expect(reader.read()).rejects.toBe(failure)
+            expect(getPartialPresetStreamText).toBeTypeOf('function')
+            expect(getPartialPresetStreamText(failure)).toBe('ab')
+            expect(Object.getOwnPropertyNames(failure)).toEqual(originalKeys)
+        } finally {
+            release()
+            reader.releaseLock()
+        }
+    })
+
+    test('preserves the display snapshot without adding content to primitive failure diagnostics', async () => {
+        const controller = makeController()
+        async function* interrupted(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+            yield { textDelta: 'answer ', reasoningDelta: 'private reasoning', raw: null }
+            throw 'private provider content'
+        }
+        await pumpPresetStream(interrupted(), controller, { intervalMs: 50, formatReasoning: (text) => `<Thoughts>${text}</Thoughts>` })
+        expect(controller.errored).toBeInstanceOf(Error)
+        expect((controller.errored as Error).message).not.toContain('private')
+        expect(getPartialPresetStreamText(controller.errored)).toBe('<Thoughts>private reasoning</Thoughts>answer ')
+        expect(JSON.stringify(controller.errored)).not.toContain('answer')
+        expect(getPartialPresetStreamText('private provider content')).toBeUndefined()
+        expect(getPartialPresetStreamText(null)).toBeUndefined()
+    })
+
+    test.each([
+        { reasoningDelta: 'private reasoning' },
+        { textDelta: '<think>private reasoning</think>' },
+        { textDelta: 'blocked partial', finishReason: 'content_filter' },
+    ])('does not recover empty, reasoning-only or blocked output (%j)', async (delta) => {
+        const controller = makeController()
+        await pumpPresetStream(genOf(delta), controller, { intervalMs: 50, formatReasoning: passthroughReasoning })
+        expect(controller.errored).toBeInstanceOf(Error)
+        expect(getPartialPresetStreamText).toBeTypeOf('function')
+        expect(getPartialPresetStreamText(controller.errored)).toBeUndefined()
+    })
+
+    test.each(['onDelta', 'onFinish'] as const)('isolates a throwing %s observer from delivery', async (observer) => {
+        const controller = makeController()
+        const onDelta = vi.fn(() => { if (observer === 'onDelta') throw new Error('status unavailable') })
+        const onFinish = vi.fn((..._args: unknown[]) => { if (observer === 'onFinish') throw new Error('status unavailable') })
+        await expect(pumpPresetStream(genOf({ textDelta: 'answer', usage: { completionTokens: 3 } }), controller, {
+            intervalMs: 50, formatReasoning: passthroughReasoning, onDelta, onFinish,
+        })).resolves.toBeUndefined()
+        expect(controller.enqueued.at(-1)).toEqual({ '0': 'answer' })
+        expect(controller.closed).toBe(true)
+        expect(controller.errored).toBeUndefined()
+        expect(onFinish).toHaveBeenCalledTimes(1)
+        expect(onFinish.mock.calls[0]).toEqual(['done', { completionTokens: 3 }, undefined])
+    })
+
+    test('isolates a throwing error observer and finalizes failure once', async () => {
+        const controller = makeController()
+        const failure = new Error('connection lost')
+        const onFinish = vi.fn()
+        async function* exploding(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+            yield { textDelta: 'partial', raw: null }
+            throw failure
+        }
+        await expect(pumpPresetStream(exploding(), controller, {
+            intervalMs: 50, formatReasoning: passthroughReasoning, onFinish,
+            onError: () => { throw new Error('logger unavailable') },
+        })).resolves.toBeUndefined()
+        expect(controller.errored).toBe(failure)
+        expect(controller.enqueued.at(-1)).toEqual({ '0': 'partial' })
+        expect(onFinish).toHaveBeenCalledOnce()
+        expect(onFinish.mock.calls[0][0]).toBe('failed')
+    })
+
+    test.each([
+        [],
+        [{ textDelta: '  ' }],
+        [{ reasoningDelta: 'private reasoning', usage: { completionTokens: 7 } }],
+        [{ textDelta: '<think>private reasoning</think>' }],
+    ].map((deltas) => ({ deltas })))('rejects a stream with no final answer ($deltas)', async ({ deltas }) => {
+        const controller = makeController()
+        const onFinish = vi.fn()
+        await pumpPresetStream(genOf(...deltas), controller, {
+            intervalMs: 50, formatReasoning: passthroughReasoning, onFinish,
+        })
+        expect(controller.closed).toBe(false)
+        expect(controller.errored).toMatchObject({ name: 'ModelOutputError', reason: 'empty' })
+        expect((controller.errored as Error).message).not.toContain('private reasoning')
+        expect(onFinish).toHaveBeenCalledOnce()
+        expect(onFinish.mock.calls[0][0]).toBe('failed')
+    })
+
+    test('keeps useful limited output and reports merged usage and finish reason', async () => {
+        const controller = makeController()
+        const onFinish = vi.fn()
+        await pumpPresetStream(genOf(
+            { usage: { promptTokens: 20 } },
+            { textDelta: 'partial answer' },
+            { finishReason: 'length', usage: { completionTokens: 8 } },
+            { usage: { reasoningTokens: 2 } },
+        ), controller, { intervalMs: 50, formatReasoning: passthroughReasoning, onFinish })
+        expect(controller.closed).toBe(true)
+        expect(controller.enqueued.at(-1)).toEqual({ '0': 'partial answer' })
+        expect(onFinish).toHaveBeenCalledExactlyOnceWith('done', {
+            promptTokens: 20, completionTokens: 8, reasoningTokens: 2,
+        }, 'length')
+    })
+
+    test('flushes pending partial text before reporting a transport failure', async () => {
+        const controller = makeController(0)
+        async function* exploding(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+            yield { textDelta: 'partial', raw: null }
+            throw new Error('connection lost')
+        }
+        await pumpPresetStream(exploding(), controller, { intervalMs: 50, formatReasoning: passthroughReasoning })
+        expect(controller.enqueued.at(-1)).toEqual({ '0': 'partial' })
+        expect(controller.errored).toBeInstanceOf(Error)
+    })
+
+    test('handles trailing enqueue failures without an uncaught timer or double finish', async () => {
+        vi.useFakeTimers()
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => { release = resolve })
+        try {
+            const controller = makeController()
+            const onFinish = vi.fn()
+            const failure = new Error('controller closed')
+            async function* paused(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+                yield { textDelta: 'a', raw: null }
+                yield { textDelta: 'b', raw: null }
+                await gate
+            }
+            const done = pumpPresetStream(paused(), controller, {
+                intervalMs: 50, formatReasoning: passthroughReasoning, onFinish,
+            })
+            await vi.advanceTimersByTimeAsync(1)
+            controller.enqueue = () => { throw failure }
+            await expect(vi.advanceTimersByTimeAsync(60)).resolves.toBe(vi)
+            expect(vi.getTimerCount()).toBe(0)
+            expect(controller.errored).toBe(failure)
+            expect(onFinish).toHaveBeenCalledOnce()
+            release()
+            await done
+            expect(onFinish).toHaveBeenCalledOnce()
+        } finally {
+            release()
+            vi.useRealTimers()
+        }
+    })
+
+    test('cancels a paused backpressured stream without leaving a timer or emitting later text', async () => {
+        vi.useFakeTimers()
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => { release = resolve })
+        try {
+            const abort = new AbortController()
+            const controller = makeController(0)
+            const onFinish = vi.fn()
+            async function* paused(): AsyncGenerator<AdapterChatStreamDelta, void, void> {
+                yield { textDelta: 'a', raw: null }
+                await gate
+                yield { textDelta: 'must not appear', raw: null }
+            }
+            const done = pumpPresetStream(paused(), controller, {
+                intervalMs: 50, formatReasoning: passthroughReasoning, onFinish, abortSignal: abort.signal,
+            })
+            await vi.advanceTimersByTimeAsync(1)
+            expect(vi.getTimerCount()).toBe(1)
+            abort.abort()
+            await vi.advanceTimersByTimeAsync(1)
+            expect(vi.getTimerCount()).toBe(0)
+            expect(controller.errored).toMatchObject({ name: 'AbortError' })
+            expect(getPartialPresetStreamText).toBeTypeOf('function')
+            expect(getPartialPresetStreamText(controller.errored)).toBe('a')
+            expect(onFinish).toHaveBeenCalledOnce()
+            release()
+            await done
+            expect(controller.enqueued.some((chunk) => chunk['0'].includes('must not appear'))).toBe(false)
+            expect(onFinish).toHaveBeenCalledOnce()
+        } finally {
+            release()
+            vi.useRealTimers()
+        }
+    })
+
     test('pumps deltas through and closes, leaking no timer', async () => {
         vi.useFakeTimers()
         try {
@@ -275,7 +488,7 @@ describe('pumpPresetStream', () => {
                 { intervalMs: 50, formatReasoning: passthroughReasoning, onFinish },
             )
             expect(onFinish).toHaveBeenCalledTimes(1)
-            expect(onFinish).toHaveBeenCalledWith('done', { completionTokens: 7 })
+            expect(onFinish).toHaveBeenCalledWith('done', { completionTokens: 7 }, undefined)
         } finally {
             vi.useRealTimers()
         }

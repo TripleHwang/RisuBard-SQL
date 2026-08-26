@@ -1,4 +1,6 @@
 import { invokeBrowserFetch } from './browserFetch'
+import { modelOutputRepairInstruction, runValidatedModelRequest, type ModelResponse } from '../../../packages/risubard-core/src/modelResponse'
+import type { WikiWritingLanguage } from './wikiWritingLanguage'
 
 export type CanonicalWikiDocumentType = 'character' | 'location' | 'scene'
     | 'faction' | 'item' | 'concept' | 'other'
@@ -23,14 +25,12 @@ export interface MarkdownWikiWriterModelCall {
     maxTokens: 4_096
     temperature: 0
     bias: Record<string, never>
+    extractJson: ''
     logSource: 'memory'
     logPurpose: 'bardwiki-canonical-update'
 }
 
-interface WriterModelResponse {
-    type: string
-    result: unknown
-}
+interface WriterModelResponse extends ModelResponse {}
 
 export interface SavedCanonicalWikiDocument {
     id: string
@@ -110,7 +110,7 @@ export async function requestMarkdownWikiDraft(input: {
         || input.evidence.length > 8) {
         throw new Error('Wiki draft requires a valid target and 1-8 sources')
     }
-    const response = await input.requestModel({
+    const modelCall: MarkdownWikiWriterModelCall = {
         formated: [{
             role: 'system',
             content: [
@@ -144,13 +144,21 @@ export async function requestMarkdownWikiDraft(input: {
         maxTokens: 4_096,
         temperature: 0,
         bias: {},
+        extractJson: '',
         logSource: 'memory',
         logPurpose: 'bardwiki-canonical-update',
-    }, 'memory')
-    if (response.type !== 'success' || typeof response.result !== 'string') {
-        throw new Error('Wiki draft model request failed')
     }
-    return normalizeDraft(response.result)
+    return runValidatedModelRequest({
+        request: (feedback) => input.requestModel({
+            ...modelCall,
+            formated: modelCall.formated.map((message) => ({
+                ...message,
+                content: message.content + (feedback && message.role === 'system'
+                    ? `\n\n${modelOutputRepairInstruction(feedback)}` : ''),
+            })),
+        }, 'memory'),
+        parse: normalizeDraft,
+    })
 }
 
 export async function requestIsolatedMarkdownWikiBatchDrafts(input: {
@@ -196,6 +204,7 @@ export async function saveCanonicalWikiDocument(input: {
     title: string
     sourceMessageIds: string[]
     markdown: string
+    writingLanguage?: WikiWritingLanguage
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
 }): Promise<SavedCanonicalWikiDocument> {
@@ -217,6 +226,7 @@ export async function saveCanonicalWikiDocument(input: {
         title: required(input.title, 'Wiki title', 160),
         sourceMessageIds: input.sourceMessageIds,
         markdown: normalizeDraft(input.markdown),
+        ...(input.writingLanguage ? { writingLanguage: input.writingLanguage } : {}),
     }
     const response = await invokeBrowserFetch(
         input.fetchImpl,

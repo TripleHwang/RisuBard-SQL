@@ -120,6 +120,112 @@ function captureFetch(response: Response | (() => Response)): {
 }
 
 describe('sendAnthropicChatRequest (non-stream)', () => {
+    test('per-call controls override preset and custom body when thinking is disabled', async () => {
+        const preset = makePreset({
+            profileSnapshot: resolveSnapshot(loadBundledRegistry(), 'anthropic:sonnet-45'),
+            userValues: { temperature: 0.7, max_tokens: 100 },
+            customBody: { temperature: 0.9, max_tokens: 200, thinking: { type: 'disabled' } },
+            additionalParamsText: 'temperature=0.8\nmax_tokens=300',
+        })
+        const original = structuredClone(preset)
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+
+        await sendAnthropicChatRequest(preset, {
+            messages: messagesWithSystem, temperature: 0, maxOutputTokens: 8192, fetchImpl,
+        }, { apiKey: 'sk' })
+
+        expect(calls[0].body).toMatchObject({
+            temperature: 0, max_tokens: 8192, thinking: { type: 'disabled' },
+        })
+        expect(preset).toEqual(original)
+    })
+
+    test('keeps manual thinking enabled with a valid budget under the explicit output cap', async () => {
+        const preset = makePreset({
+            profileSnapshot: resolveSnapshot(loadBundledRegistry(), 'anthropic:sonnet-45'),
+            customBody: { temperature: 0.7, max_tokens: 8192, thinking: { type: 'enabled', budget_tokens: 4096 } },
+        })
+        const original = structuredClone(preset)
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+
+        await sendAnthropicChatRequest(preset, {
+            messages: messagesWithSystem, temperature: 0, maxOutputTokens: 2048, fetchImpl,
+        }, { apiKey: 'sk' })
+
+        expect(calls[0].body).toMatchObject({ max_tokens: 2048, thinking: { type: 'enabled', budget_tokens: 1024 } })
+        expect(calls[0].body).not.toHaveProperty('temperature')
+        expect(preset).toEqual(original)
+    })
+
+    test.each([1024, 3072])('preserves an already compatible manual thinking budget of %i', async (budget) => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+        await sendAnthropicChatRequest(makePreset({
+            customBody: { thinking: { type: 'enabled', budget_tokens: budget } },
+        }), { messages: messagesWithSystem, maxOutputTokens: 4096, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body).toMatchObject({ max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: budget } })
+    })
+
+    test.each([[8192, 4096], [1025, 1024]])(
+        'reserves answer tokens under cap %i while keeping at least the minimum thinking budget', async (cap, budget) => {
+            const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+            await sendAnthropicChatRequest(makePreset({
+                customBody: { thinking: { type: 'enabled', budget_tokens: 16384 } },
+            }), { messages: messagesWithSystem, maxOutputTokens: cap, fetchImpl }, { apiKey: 'sk' })
+            expect(calls[0].body).toMatchObject({
+                max_tokens: cap, thinking: { type: 'enabled', budget_tokens: budget },
+            })
+        },
+    )
+
+    test('rejects an output cap too small for manual thinking before sending a request', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+        await expect(sendAnthropicChatRequest(makePreset({
+            customBody: { thinking: { type: 'enabled', budget_tokens: 4096 } },
+        }), { messages: messagesWithSystem, maxOutputTokens: 1024, fetchImpl }, { apiKey: 'sk' }))
+            .rejects.toMatchObject({ kind: 'invalid-request', retryable: false })
+        expect(calls).toHaveLength(0)
+    })
+
+    test('retains adaptive thinking without adding incompatible temperature', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+        await sendAnthropicChatRequest(makePreset({
+            profileSnapshot: resolveSnapshot(loadBundledRegistry(), 'anthropic:sonnet-46'),
+            customBody: { temperature: 0.7 },
+        }), { messages: messagesWithSystem, temperature: 0, maxOutputTokens: 2048, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body).toMatchObject({ max_tokens: 2048, thinking: { type: 'adaptive' } })
+        expect(calls[0].body).not.toHaveProperty('temperature')
+    })
+
+    test('does not add temperature to profiles that omit its schema even with thinking disabled', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+        await sendAnthropicChatRequest(makePreset({
+            profileSnapshot: resolveSnapshot(loadBundledRegistry(), 'anthropic:opus-47'),
+            customBody: { thinking: { type: 'disabled' } },
+        }), { messages: messagesWithSystem, temperature: 0, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body).not.toHaveProperty('temperature')
+        expect(calls[0].body.thinking).toEqual({ type: 'disabled' })
+    })
+
+    test('leaves existing sampling and thinking untouched without per-call controls', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ content: [] }))
+        await sendAnthropicChatRequest(makePreset({
+            customBody: { temperature: 1, max_tokens: 8192, thinking: { type: 'enabled', budget_tokens: 4096 } },
+        }), { messages: messagesWithSystem, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body).toEqual({
+            temperature: 1, max_tokens: 8192, thinking: { type: 'enabled', budget_tokens: 4096 },
+            model: 'claude-demo', system: 'You are kind.', stream: false,
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'Hi' }] }],
+        })
+    })
+
+    test('applies per-call token controls to streaming requests too', async () => {
+        const { fetchImpl, calls } = captureFetch(sseResponse(['event: message_stop\ndata: {}\n\n']))
+        for await (const _ of streamAnthropicChatRequest(makePreset(), {
+            messages: messagesWithSystem, maxOutputTokens: 2048, fetchImpl,
+        }, { apiKey: 'sk' })) { /* drain */ }
+        expect(calls[0].body).toMatchObject({ stream: true, max_tokens: 2048 })
+    })
+
     test('separates system messages, wraps content as text blocks, and sets x-api-key + anthropic-version', async () => {
         const { fetchImpl, calls } = captureFetch(
             jsonResponse({

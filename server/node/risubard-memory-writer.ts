@@ -3,6 +3,8 @@ import {
 } from '../../packages/risubard-core/src/modelOutput'
 import skillInstructions from '../../src/ts/risubard/skills/bardwiki-memory-writer/SKILL.md?raw'
 import eventSchemaReference from '../../src/ts/risubard/skills/bardwiki-memory-writer/references/event-schema.md?raw'
+import englishContract from '../../src/ts/risubard/skills/bardwiki-memory-writer/references/english-contract.md?raw'
+import { normalizeWikiWritingLanguage, wikiWritingHeadings, type WikiWritingLanguage } from '../../src/ts/risubard/wikiWritingLanguage'
 
 const itemString = { type: 'string', minLength: 1, maxLength: 500 }
 const canonicalTypes = [
@@ -171,6 +173,10 @@ export const memoryWriterSystemPrompt = [
     '제목이 다르더라도 의미상 같은 문서라면 update를 선택할 수 있다. confidence는 0 이상 1 이하의 수다.',
     '반드시 제공된 JSON Schema에 맞는 JSON 객체 하나만 반환하라. Markdown, YAML, 코드 펜스, 해설을 반환하지 마라.',
 ].join('\n\n')
+
+export function buildMemoryWriterSystemPrompt(language: WikiWritingLanguage): string {
+    return language === 'en' ? englishContract.trim() : memoryWriterSystemPrompt
+}
 
 export interface MemoryWriterDraft {
     schemaVersion: 1
@@ -510,10 +516,10 @@ export function hasMemoryWriterContent(draft: MemoryWriterDraft): boolean {
         + draft.openContinuity.length > 0
 }
 
-export function serializeMemoryWriterDraft(draft: MemoryWriterDraft): string {
+export function serializeMemoryWriterDraft(draft: MemoryWriterDraft, language: WikiWritingLanguage = 'ko'): string {
     const lines = [`## ${draft.title}`]
     if (draft.establishedEvents.length > 0) {
-        lines.push('', '### 이야기 요약', '')
+        lines.push('', `### ${wikiWritingHeadings[normalizeWikiWritingLanguage(language)].summary}`, '')
         lines.push(...draft.establishedEvents.map((item) =>
             item.startsWith('- ') ? item : `- ${item}`
         ))

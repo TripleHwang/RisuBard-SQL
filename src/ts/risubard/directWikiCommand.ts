@@ -1,4 +1,5 @@
 import { parseSingleJsonObject } from '../../../packages/risubard-core/src/modelOutput'
+import { ModelOutputError, modelOutputRepairInstruction, runValidatedModelRequest, type ModelResponse } from '../../../packages/risubard-core/src/modelResponse'
 import type { NarrativeMemoryWikiMarkdown } from './memoryWiki'
 
 type WikiDocument = NarrativeMemoryWikiMarkdown['documents'][number]
@@ -25,10 +26,7 @@ export interface DirectWikiModelCall {
     logPurpose: 'bardwiki-admin'
 }
 
-export interface DirectWikiModelResponse {
-    type: string
-    result: unknown
-}
+export interface DirectWikiModelResponse extends ModelResponse {}
 
 interface DirectWikiOperation {
     action: 'upsert' | 'trash' | 'retract-event'
@@ -125,7 +123,16 @@ function text(value: unknown, maximum: number): string | null {
 }
 
 function parseOperations(output: string): DirectWikiOperation[] {
-    const parsed = parseSingleJsonObject(output)
+    let parsed: unknown
+    try {
+        parsed = parseSingleJsonObject(output)
+    }
+    catch {
+        throw new Error(
+            'AI가 완전한 JSON 명령 하나를 반환하지 않았습니다. 위키 문서는 변경하지 않았습니다. '
+            + '작업 모델의 최대 출력 토큰을 확인하거나, 정리할 문서를 나누어 다시 요청해 주세요.'
+        )
+    }
     if (!isRecord(parsed)
         || !exactKeys(parsed, ['schemaVersion', 'operations'])
         || parsed.schemaVersion !== 1
@@ -152,7 +159,7 @@ function parseOperations(output: string): DirectWikiOperation[] {
         }
         if (action === 'upsert') {
             if (!canonicalTypes.includes(type as CanonicalType)
-                || !title || !markdown || !/^#\s+\S/m.test(markdown)) {
+                || !title || !markdown || !/^#{1,2}[\t ]+\S/m.test(markdown)) {
                 throw new Error(`직접 위키 갱신 ${index + 1}이 불완전합니다.`)
             }
         }
@@ -263,7 +270,7 @@ export async function executeDirectWikiCommand(input: {
     const maxTokens = Number.isSafeInteger(input.maxTokens)
         ? Math.max(2_048, Math.min(32_768, input.maxTokens))
         : 12_000
-    const response = await input.requestModel({
+    const modelCall: DirectWikiModelCall = {
         formated: [{
             role: 'system',
             content: [
@@ -297,16 +304,23 @@ export async function executeDirectWikiCommand(input: {
         schema: directWikiCommandSchema,
         logSource: 'memory',
         logPurpose: 'bardwiki-admin',
-    })
-    if (response.type !== 'success' || typeof response.result !== 'string') {
-        const reason = typeof response.result === 'string'
-            ? response.result.trim().slice(0, 512)
-            : ''
-        throw new Error(reason
-            ? `직접 위키 명령 모델 요청 실패: ${reason}`
-            : '직접 위키 명령 모델 요청에 실패했습니다.')
     }
-    const operations = parseOperations(response.result)
+    const operations = await runValidatedModelRequest({
+        request: (feedback) => input.requestModel({
+            ...modelCall,
+            formated: modelCall.formated.map((message) => ({
+                ...message,
+                content: message.content + (feedback && message.role === 'system'
+                    ? `\n\n${modelOutputRepairInstruction(feedback)}` : ''),
+            })),
+        }),
+        parse: parseOperations,
+    }).catch((error) => {
+        if (error instanceof ModelOutputError && error.validationHint) {
+            error.message = error.validationHint
+        }
+        throw error
+    })
     const byId = new Map(input.documents.map((document) => [
         document.id,
         document,

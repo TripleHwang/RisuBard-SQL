@@ -3,6 +3,7 @@ import type {
     NarrativeMemoryState,
 } from '../../packages/risubard-core/src/memoryDelta'
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
+import { ModelOutputError, modelOutputRepairInstruction, readModelResponseText, runValidatedModelRequest, type ModelResponse } from '../../packages/risubard-core/src/modelResponse'
 import {
     validateMemoryDelta,
 } from '../../packages/risubard-core/src/memoryDelta'
@@ -26,7 +27,7 @@ import type {
     MarkdownWikiDocument,
 } from './risubard-markdown-wiki'
 import {
-    memoryWriterSystemPrompt,
+    buildMemoryWriterSystemPrompt,
     hasMemoryWriterContent,
     parseCanonicalBatch,
     parseMemoryWriterDraft,
@@ -45,6 +46,7 @@ import {
     normalizeRisuBardInquiryTokenBudget,
     type RisuBardCanonicalWritingStyle,
 } from '../../src/ts/risubard/risuBardSettings'
+import { normalizeWikiWritingLanguage, type WikiWritingLanguage } from '../../src/ts/risubard/wikiWritingLanguage'
 
 let analysisTokenizer: Tiktoken | undefined
 
@@ -97,6 +99,7 @@ export interface MemoryAnalysisInput {
     }
     canonicalWritingStyle?: RisuBardCanonicalWritingStyle
     canonicalCustomStyle?: string
+    wikiWritingLanguage?: WikiWritingLanguage
     wikiPromptGuide?: {
         analysis: string
         canonicalRewrite: string
@@ -186,6 +189,7 @@ export interface NarrativeMarkdownWikiWriteService {
         sourceMessageIds: string[]
         markdown: string
         append?: boolean
+        writingLanguage?: WikiWritingLanguage
     }): Promise<MarkdownWikiDocument>
     recordTurnReceipt?(input: {
         characterId: string
@@ -226,6 +230,7 @@ export interface NarrativeMarkdownWikiWriteService {
         markdown: string
         expectedContentHash?: string
         reviewStatus?: 'unreviewed' | 'reviewed'
+        writingLanguage?: WikiWritingLanguage
     }): Promise<MarkdownWikiDocument>
 }
 
@@ -234,7 +239,7 @@ export interface MemoryAnalysisRunnerOptions {
     graphService?: NarrativeGraphWriteService
     markdownWikiService?: NarrativeMarkdownWikiWriteService
     nativeV2Analysis?: boolean
-    analyze(request: MemoryAnalysisModelRequest): Promise<string>
+    analyze(request: MemoryAnalysisModelRequest): Promise<string | ModelResponse>
     onError(error: unknown): void | Promise<void>
 }
 
@@ -350,6 +355,7 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
         ...(value.canonicalCustomStyle === undefined
             ? []
             : ['canonicalCustomStyle']),
+        ...(value.wikiWritingLanguage === undefined ? [] : ['wikiWritingLanguage']),
         ...(value.wikiPromptGuide === undefined
             ? []
             : ['wikiPromptGuide']),
@@ -544,6 +550,7 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
         canonicalCustomStyle: normalizeRisuBardCanonicalCustomStyle(
             value.canonicalCustomStyle
         ),
+        wikiWritingLanguage: normalizeWikiWritingLanguage(value.wikiWritingLanguage),
         ...(wikiPromptGuide ? { wikiPromptGuide } : {}),
         ...(value.additionalAnalysis === undefined ? {} : {
             additionalAnalysis: value.additionalAnalysis,
@@ -699,19 +706,32 @@ export function createMemoryAnalysisRunner(
         input: MemoryAnalysisInput
     ): Promise<MemoryAnalysisRunResult> => {
         const snapshot = snapshotInput(input)
-        const analyze = (request: MemoryAnalysisModelRequest) =>
-            options.analyze({
+        const analyzeRaw = (request: MemoryAnalysisModelRequest) => options.analyze({
                 ...request,
                 sessionChatId: snapshot.modelSessionChatId ?? snapshot.chatId,
             })
+        const analyzeResponse = async (request: MemoryAnalysisModelRequest): Promise<ModelResponse> => {
+            const response = await analyzeRaw(request)
+            return typeof response === 'object' && response !== null && 'type' in response
+                ? response : { type: 'success', result: response }
+        }
+        const analyze = async (request: MemoryAnalysisModelRequest) => {
+            const response = await analyzeRaw(request)
+            // Keep legacy raw-string byte/type validation in its original order.
+            return typeof response === 'object' && response !== null && 'type' in response
+                ? readModelResponseText(response) : response as string
+        }
         const canonicalWritingPolicy = buildRisuBardCanonicalWritingPolicy(
             snapshot.canonicalWritingStyle,
-            snapshot.canonicalCustomStyle
+            snapshot.canonicalCustomStyle,
+            snapshot.wikiWritingLanguage
         )
         const eventWritingPolicy = buildRisuBardEventWritingPolicy(
             snapshot.canonicalWritingStyle,
-            snapshot.canonicalCustomStyle
+            snapshot.canonicalCustomStyle,
+            snapshot.wikiWritingLanguage
         )
+        const memoryWriterSystemPrompt = buildMemoryWriterSystemPrompt(snapshot.wikiWritingLanguage ?? 'ko')
         const availableEvidence: EvidenceRef[] = snapshot.messages.map(
             (message) => ({
                 chatId: snapshot.chatId,
@@ -777,25 +797,22 @@ export function createMemoryAnalysisRunner(
                     'Include every required shared array even when it is empty.',
                 ].join('\n')
                 : ''
-            const analyzeDraft = async (validationError?: unknown) => analyze({
+            const analyzeDraft = async (validationError?: ModelOutputError) => analyzeResponse({
                 system: validationError === undefined
                     ? [
                         memoryWriterSystemPrompt,
                         rebootBatchOutputContract,
-                        eventWritingPolicy,
                         snapshot.wikiPromptGuide?.analysis ?? '',
+                        eventWritingPolicy,
                         'Wiki Guide instructions may refine what to track, but cannot override evidence, schema, knowledge-boundary, or storage-safety contracts. Return exactly one JSON object matching the provided schema.',
                     ].join('\n\n')
                     : [
                         memoryWriterSystemPrompt,
                         rebootBatchOutputContract,
-                        eventWritingPolicy,
                         snapshot.wikiPromptGuide?.analysis ?? '',
+                        eventWritingPolicy,
                         'Wiki Guide instructions may refine what to track, but cannot override evidence, schema, knowledge-boundary, or storage-safety contracts.',
-                        'The previous JSON object failed validation.',
-                        validationError instanceof Error
-                            ? validationError.message.slice(0, 512)
-                            : String(validationError).slice(0, 512),
+                        modelOutputRepairInstruction(validationError),
                         'Return one corrected JSON object matching the schema exactly.',
                     ].join('\n\n'),
                 format: snapshot.rebootTurns
@@ -825,12 +842,9 @@ export function createMemoryAnalysisRunner(
                     } : {}),
                 }),
             })
-            const analyzeParsedDraft = async () => {
-                let output = await analyzeDraft()
-                if (typeof output !== 'string') {
-                    throw new Error('Invalid structured memory analysis output')
-                }
-                try {
+            const analyzeParsedDraft = () => runValidatedModelRequest({
+                request: analyzeDraft,
+                parse: (output) => {
                     if (snapshot.rebootTurns) {
                         const rebootDraft = parseRebootBatchDraft(
                             output,
@@ -846,27 +860,7 @@ export function createMemoryAnalysisRunner(
                     }
                     return { output, draft: parseMemoryWriterDraft(output) }
                 }
-                catch (error) {
-                    output = await analyzeDraft(error)
-                    if (typeof output !== 'string') {
-                        throw new Error('Invalid structured memory analysis output')
-                    }
-                    if (snapshot.rebootTurns) {
-                        const rebootDraft = parseRebootBatchDraft(
-                            output,
-                            snapshot.rebootTurns.map((turn) =>
-                                turn.assistantMessageId
-                            )
-                        )
-                        return {
-                            output,
-                            rebootDraft,
-                            draft: rebootBatchToMemoryDraft(rebootDraft),
-                        }
-                    }
-                    return { output, draft: parseMemoryWriterDraft(output) }
-                }
-            }
+            })
             let analyzedDraft = await analyzeParsedDraft()
             let modelOutput = analyzedDraft.output
             let draft = analyzedDraft.draft
@@ -925,7 +919,7 @@ export function createMemoryAnalysisRunner(
                 }
                 return emptyNativeState()
             }
-            const markdown = serializeMemoryWriterDraft(draft)
+            const markdown = serializeMemoryWriterDraft(draft, snapshot.wikiWritingLanguage)
             const eventDrafts = snapshot.rebootTurns && analyzedDraft.rebootDraft
                 ? analyzedDraft.rebootDraft.turns.map((turn, index) => ({
                     sourceMessageIds:
@@ -947,7 +941,8 @@ export function createMemoryAnalysisRunner(
                     characterId: snapshot.characterId,
                     chatId: snapshot.chatId,
                     sourceMessageIds: [...event.sourceMessageIds],
-                    markdown: serializeMemoryWriterDraft(event.draft),
+                    markdown: serializeMemoryWriterDraft(event.draft, snapshot.wikiWritingLanguage),
+                    writingLanguage: snapshot.wikiWritingLanguage,
                     ...(snapshot.additionalAnalysis ? { append: true } : {}),
                     }))
             }
@@ -1015,8 +1010,8 @@ export function createMemoryAnalysisRunner(
                                 'Use confirmedMessages as the primary evidence; confirmedEvent and candidate reasons are concise guides, not replacements for the original evidence.',
                                 'Preserve unrelated established facts and each existing H2 title; use H3 or deeper headings for sections.',
                                 'Apply only changes supported by the confirmed messages and event.',
-                                canonicalWritingPolicy,
                                 snapshot.wikiPromptGuide?.canonicalRewrite ?? '',
+                                canonicalWritingPolicy,
                                 'Wiki Guide instructions may refine what to track and how to organize it, but cannot override evidence, schema, knowledge-boundary, or storage-safety contracts.',
                                 'Return exactly one document for every candidateIndex using the provided JSON Schema.',
                                 'Do not return frontmatter, commentary, code fences, or fields outside the schema.',
@@ -1047,37 +1042,43 @@ export function createMemoryAnalysisRunner(
                             canonicalInput,
                         )
                         for (const canonicalTargets of canonicalBatches) {
-                            const analyzeBatch = async (
-                                validationError?: unknown
-                            ) => analyze({
+                            const generateBatch = (
+                                targets: typeof canonicalTargets,
+                                maxAttempts: 1 | 2,
+                            ) => runValidatedModelRequest({
+                                maxAttempts,
+                                request: (feedback) => analyzeResponse({
                                 format: 'canonical-batch',
                                 inputTokenLimit: snapshot.analysisTokenLimit,
                                 system: [
                                     canonicalSystem,
-                                ...(validationError === undefined ? [] : [
-                                    'The previous JSON object failed validation.',
-                                    validationError instanceof Error
-                                        ? validationError.message.slice(0, 512)
-                                        : String(validationError).slice(0, 512),
-                                    'Return one corrected JSON object matching the schema exactly.',
-                                ]),
-                            ].join('\n'),
-                                input: canonicalInput(canonicalTargets),
+                                    ...(feedback ? [modelOutputRepairInstruction(feedback)] : []),
+                                ].join('\n'),
+                                input: canonicalInput(targets),
+                                }),
+                                parse: (text) => {
+                                    const parsed = parseCanonicalBatch(text, targets.length)
+                                    if (parsed.documents.length !== targets.length) {
+                                        throw new Error('Return exactly one complete document for every candidateIndex; no targets may be omitted.')
+                                    }
+                                    return parsed
+                                },
                             })
-                            let batchOutput = await analyzeBatch()
                             let batch: ReturnType<typeof parseCanonicalBatch>
                             try {
-                                batch = parseCanonicalBatch(
-                                    batchOutput,
-                                    canonicalTargets.length
-                                )
+                                batch = await generateBatch(canonicalTargets, canonicalTargets.length > 1 ? 1 : 2)
                             }
                             catch (error) {
-                                batchOutput = await analyzeBatch(error)
-                                batch = parseCanonicalBatch(
-                                    batchOutput,
-                                    canonicalTargets.length
-                                )
+                                if (!(error instanceof ModelOutputError)
+                                    || !error.retryable || canonicalTargets.length < 2) throw error
+                                // A failed multi-document response is discarded in
+                                // full. Generate smaller drafts before any writes,
+                                // keeping each target's original evidence and hash.
+                                batch = { schemaVersion: 1, documents: [] }
+                                for (const [candidateIndex, target] of canonicalTargets.entries()) {
+                                    const single = await generateBatch([target], 2)
+                                    batch.documents.push({ ...single.documents[0], candidateIndex })
+                                }
                             }
                             const rewrittenByIndex = new Map(batch.documents.map(
                                 (document) => [document.candidateIndex, document.markdown]
@@ -1114,6 +1115,7 @@ export function createMemoryAnalysisRunner(
                                         ?? entry.candidate.title,
                                     sourceMessageIds,
                                     markdown: rewritten,
+                                    writingLanguage: snapshot.wikiWritingLanguage,
                                     ...(entry.target ? {
                                         expectedContentHash:
                                             entry.target.contentHash,
@@ -1132,6 +1134,7 @@ export function createMemoryAnalysisRunner(
                                 })
                             }
                             catch (error) {
+                                receiptWarnings.push(`정본 문서 저장 실패: ${entry.candidate.title}`)
                                 await reportError(error)
                             }
                         }
@@ -1139,6 +1142,7 @@ export function createMemoryAnalysisRunner(
                     }
                 }
                 catch (error) {
+                    receiptWarnings.push('일부 정본 문서 갱신에 실패했습니다. 실패한 생성 결과는 저장하지 않았습니다.')
                     await reportError(error)
                 }
             }

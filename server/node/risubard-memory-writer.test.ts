@@ -9,9 +9,25 @@ import {
     parseCanonicalBatch,
     parseRebootBatchDraft,
     serializeMemoryWriterDraft,
+    buildMemoryWriterSystemPrompt,
 } from './risubard-memory-writer'
 
 describe('BardWiki memory writer skill', () => {
+    test('provides an English recording contract and deterministic English headings', () => {
+        const prompt = buildMemoryWriterSystemPrompt('en')
+        expect(prompt).toContain('canonicalUpdateCandidates')
+        expect(prompt).toContain('characterKnowledge')
+        expect(prompt).not.toMatch(/[가-힣]/)
+        const draft = parseMemoryWriterDraft(JSON.stringify({
+            schemaVersion: 1, title: 'Arrival', establishedEvents: ['Alice arrived.'],
+            stateChanges: [], characterKnowledge: [], persistentFacts: [],
+            openContinuity: [], canonicalUpdateCandidates: [],
+        }))
+        expect(serializeMemoryWriterDraft(draft, 'en')).toBe(
+            '## Arrival\n\n### Story Summary\n\n- Alice arrived.'
+        )
+    })
+
     test('loads the project-owned skill and its hard recording rules', () => {
         expect(memoryWriterSystemPrompt).toContain('bardwiki-memory-writer')
         expect(memoryWriterSystemPrompt).toContain('사용자 지시문은 사건의 근거가 아니다')

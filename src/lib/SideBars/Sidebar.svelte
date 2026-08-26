@@ -22,7 +22,7 @@
 
   } from "../../ts/stores.svelte";
     import { setDatabase } from "../../ts/storage/database.svelte";
-    import { DBState } from 'src/ts/stores.svelte';
+    import { DBState, SizeStore } from 'src/ts/stores.svelte';
     import BarIcon from "./BarIcon.svelte";
     import SidebarIndicator from "./SidebarIndicator.svelte";
     import {
@@ -53,6 +53,8 @@
     import SideChatList from "./SideChatList.svelte";
 
   import { sideBarSize } from "src/ts/gui/guisize";
+  import { normalizeCharacterSidebarWidth } from 'src/ts/gui/sidebarLayout';
+  import SidebarResizeHandle from './SidebarResizeHandle.svelte';
   import DevTool from "./DevTool.svelte";
     import QuickSettingsGui from "../Others/QuickSettingsGUI.svelte";
   import PluginDefinedIcon from "../Others/PluginDefinedIcon.svelte";
@@ -82,6 +84,14 @@
   let menuMode = $state(0);
   let devTool = $state(false)
   let characterManageOpen = $state(false)
+  let sidebarElement = $state<HTMLDivElement>()
+  const sidebarMaxWidth = $derived(Math.max(0, ($SizeStore.w || window.innerWidth)
+    - ($DynamicGUI ? 128 : 440)))
+  const sidebarWidth = $derived(
+    $selectedCharID >= 0 && Number.isFinite(DBState.db.characterSidebarWidth)
+      ? `${normalizeCharacterSidebarWidth(DBState.db.characterSidebarWidth, sidebarMaxWidth)}px`
+      : `min(${24 + 4 * $sideBarSize}rem, ${sidebarMaxWidth}px)`
+  )
   $effect(() => {
     if ($selectedCharID < 0) characterManageOpen = false
   })
@@ -1125,19 +1135,13 @@
 </div>
 {/if}
 <div
-  class="setting-area h-full max-xs:relative flex-col overflow-y-auto overflow-x-hidden bg-darkbg pt-2 pb-6 text-textcolor max-h-full"
+  bind:this={sidebarElement}
+  data-character-sidebar
+  class="setting-area relative h-full min-w-0 shrink-0 flex-col bg-darkbg text-textcolor max-h-full"
+  style:width={sidebarWidth}
+  style:--sidebar-size={sidebarWidth}
   class:risu-sidebar={!$sideBarClosing}
-  class:w-96={$sideBarSize === 0}
-  class:w-110={$sideBarSize === 1}
-  class:w-124={$sideBarSize === 2}
-  class:w-138={$sideBarSize === 3}
   class:risu-sidebar-close={$sideBarClosing}
-  class:min-w-96={!$DynamicGUI && $sideBarSize === 0}
-  class:min-w-110={!$DynamicGUI && $sideBarSize === 1}
-  class:min-w-124={!$DynamicGUI && $sideBarSize === 2}
-  class:min-w-138={!$DynamicGUI && $sideBarSize === 3}
-  class:px-2={$DynamicGUI}
-  class:px-4={!$DynamicGUI}
   class:dynamic-sidebar={$DynamicGUI}
   class:hidden={hidden}
   class:flex={!hidden}
@@ -1148,6 +1152,8 @@
     }
   }}
 >
+  <div data-character-sidebar-scroll class="min-h-0 min-w-0 w-full flex-1 overflow-y-auto overflow-x-hidden pt-2 pb-6"
+    class:px-2={$DynamicGUI} class:px-4={!$DynamicGUI}>
   <button
     class="flex w-full justify-end text-textcolor"
     onclick={async () => {
@@ -1282,6 +1288,10 @@
       {/if}
     {/if}
   {/if}
+  </div>
+  {#if $selectedCharID >= 0}
+    <SidebarResizeHandle axis="width" target={sidebarElement} maxWidth={sidebarMaxWidth} />
+  {/if}
 </div>
 
 {#if $DynamicGUI}
@@ -1328,6 +1338,10 @@
 </ShDialog>
 
 <style>
+  [data-character-config-navigation] :global(.character-toolbar-button) {
+    min-width: 0;
+    flex: 0 1 2.25rem;
+  }
   .editMode {
     min-width: 6rem;
   }

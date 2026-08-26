@@ -242,7 +242,7 @@ export const displaySizeSettingsItems: SettingItem[] = [
         labelKey: 'sideBarSize',
         helpKey: 'sideBarSize',
         getValue: (db) => String(db.sideBarSize),
-        setValue: (db, v) => { db.sideBarSize = Number(v); },
+        setValue: (db, v) => { db.sideBarSize = Number(v); delete db.characterSidebarWidth; },
         onChange: () => updateGuisize(),
         options: {
             selectOptions: [

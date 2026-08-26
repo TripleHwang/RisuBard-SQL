@@ -4,7 +4,7 @@ import { DBState } from 'src/ts/stores.svelte'
 import { updateTextThemeAndCSS } from 'src/ts/gui/colorscheme'
 import { saveImage } from 'src/ts/storage/database.svelte'
 import { selectSingleFile } from 'src/ts/util'
-import { displayThemeSettingsItems } from 'src/ts/setting/displaySettingsData.svelte'
+import { displayThemeSettingsItems, displaySizeSettingsItems } from 'src/ts/setting/displaySettingsData.svelte'
 import NullableTextColorToggle from './NullableTextColorToggle.svelte'
 import CustomBackgroundToggle from './CustomBackgroundToggle.svelte'
 
@@ -29,6 +29,13 @@ afterEach(async () => {
 })
 
 describe('chat surface setting updates', () => {
+    test('choosing a sidebar size preset clears the manually resized width', () => {
+        DBState.db.characterSidebarWidth = 520
+        const setting = displaySizeSettingsItems.find(item => item.id === 'display.sideBarSize')!
+        setting.setValue(DBState.db, '1')
+        expect(DBState.db.sideBarSize).toBe(1)
+        expect(DBState.db.characterSidebarWidth).toBeUndefined()
+    })
     test('refreshes contrast immediately after changing the backdrop color', async () => {
         mounted = mount(NullableTextColorToggle, {
             target: document.body,
