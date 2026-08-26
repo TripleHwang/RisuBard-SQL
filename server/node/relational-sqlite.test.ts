@@ -27,6 +27,14 @@ describe('server relational SQLite', () => {
       message: [],
       messagesLoaded: false,
     })
+    expect(result.botPresets).toEqual([
+      { name: 'First', id: 'preset-1' },
+      { name: 'Second', id: 'preset-2' },
+    ])
+    expect(JSON.parse(JSON.stringify(result.pluginCustomStorage))).toEqual({
+      'pagefold.config.v1': { provider: 'google' },
+      ['__proto__']: { safelyStored: true },
+    })
     expect(JSON.stringify(result)).not.toContain('message_extension_nodes')
   })
 
@@ -146,6 +154,10 @@ function seededReaderStorage() {
     statements: [
       { sql: 'INSERT INTO system_settings (key, domain, value_type) VALUES (?, ?, ?)', bind: ['theme', 'database', 'string'] },
       { sql: 'INSERT INTO setting_extension_nodes (setting_key, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['theme', 0, null, 0, null, 'string', 'dark'] },
+      { sql: 'INSERT INTO bot_presets (preset_id, position, name, image, api_type, ai_model, data, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['preset-2', 1, 'Second', '', '', '', JSON.stringify({ id: 'incorrect-id', name: 'Second' }), 'hash-2'] },
+      { sql: 'INSERT INTO bot_presets (preset_id, position, name, image, api_type, ai_model, data, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['preset-1', 0, 'First', '', '', '', JSON.stringify({ name: 'First' }), 'hash-1'] },
+      { sql: 'INSERT INTO plugin_custom_storage (key, value) VALUES (?, ?)', bind: ['pagefold.config.v1', JSON.stringify({ provider: 'google' })] },
+      { sql: 'INSERT INTO plugin_custom_storage (key, value) VALUES (?, ?)', bind: ['__proto__', JSON.stringify({ safelyStored: true })] },
       { sql: 'INSERT INTO characters (id, position, kind, name) VALUES (?, ?, ?, ?)', bind: ['character-1', 0, 'character', 'Alice'] },
       node('character_extension_nodes', 'character_id', 'character-1', {}),
       { sql: 'INSERT INTO character_extension_nodes (character_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['character-1', 1, 0, 0, 'greeting', 'string', 'Hello'] },

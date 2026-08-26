@@ -172,6 +172,14 @@ function createRelationalSqlite(options) {
         return rows.length ? rebuildRelationalValue(rows) : undefined;
     }
 
+    function parseCanonicalJson(value, description) {
+        try {
+            return JSON.parse(String(value));
+        } catch (error) {
+            throw new Error(`Invalid canonical JSON in ${description}`, { cause: error });
+        }
+    }
+
     function loadChatSummaryRows(characterId) {
         const where = characterId === undefined ? '' : 'WHERE c.character_id = ?';
         const rows = database.prepare(
@@ -214,6 +222,26 @@ function createRelationalSqlite(options) {
             const settings = Object.fromEntries(settingRows.map((row) => [
                 row.key, readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]),
             ]));
+            const botPresets = database.prepare(
+                'SELECT preset_id, data FROM bot_presets ORDER BY position',
+            ).all().map((row) => {
+                const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
+                if (!preset || typeof preset !== 'object' || Array.isArray(preset)) {
+                    throw new Error(`Invalid canonical bot preset data for ${row.preset_id}`);
+                }
+                return { ...preset, id: row.preset_id };
+            });
+            const pluginCustomStorage = Object.create(null);
+            for (const row of database.prepare(
+                'SELECT key, value FROM plugin_custom_storage ORDER BY key',
+            ).all()) {
+                Object.defineProperty(pluginCustomStorage, row.key, {
+                    value: parseCanonicalJson(row.value, `plugin custom storage ${row.key}`),
+                    enumerable: true,
+                    configurable: true,
+                    writable: true,
+                });
+            }
             const chatsByCharacter = new Map();
             for (const row of loadChatSummaryRows()) {
                 const chats = chatsByCharacter.get(row.character_id) || [];
@@ -236,7 +264,7 @@ function createRelationalSqlite(options) {
             const initialized = database.prepare('SELECT initialized FROM system_storage_meta WHERE singleton = 1').get();
             return {
                 status: Number(initialized?.initialized) === 1 ? 'ready' : 'empty',
-                revision: revision(), settings, pluginCustomStorage: {}, botPresets: [], characters,
+                revision: revision(), settings, pluginCustomStorage, botPresets, characters,
                 selectedCharacterId: null, selectedChatId: null,
             };
         });
