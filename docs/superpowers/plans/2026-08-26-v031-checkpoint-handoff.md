@@ -101,6 +101,13 @@ Focused suites were run after each slice. Most recent reported gates include:
 
 These are slice-level results. They do not replace the fresh checkpoint/full-suite run described below.
 
+Fresh checkpoint verification on commit `ea8f6f7` plus the preceding implementation HEAD:
+
+- `pnpm check`: passed, 0 errors and 0 warnings.
+- Focused server regression set: 9 files, 115 tests passed.
+- Focused client/runtime regression set: 10 files, 95 tests passed.
+- Full build/test/compat/server/release gates were not run for this checkpoint and remain mandatory below.
+
 ## Remaining work
 
 ### 1. Finish Large Import Tasks 9-10
