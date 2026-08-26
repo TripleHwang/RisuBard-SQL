@@ -41,9 +41,9 @@ function crc32(bytes: Uint8Array) {
 }
 function u16le(value: number) { const out = new Uint8Array(2); new DataView(out.buffer).setUint16(0, value, true); return out; }
 function u32le(value: number) { const out = new Uint8Array(4); new DataView(out.buffer).setUint32(0, value, true); return out; }
-function zipWithDescriptors(signed: boolean) {
+function zipWithDescriptors(signed: boolean, assetText = 'pixels') {
   const records: Uint8Array[] = [], central: Uint8Array[] = []; let offset = 0;
-  for (const [name, text] of [['card.json', '{"spec":"chara_card_v3"}'], ['a.png', 'pixels']] as const) {
+  for (const [name, text] of [['card.json', '{"spec":"chara_card_v3"}'], ['a.png', assetText]] as const) {
     const nameBytes = strToU8(name), data = strToU8(text), crc = crc32(data);
     // Bit 3 means the local CRC and sizes are intentionally unknown until the data descriptor.
     const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(0), u32le(0), u32le(0), u16le(nameBytes.length), u16le(0), nameBytes, data, ...(signed ? [Buffer.from([0x50, 0x4b, 0x07, 0x08])] : []), u32le(crc), u32le(data.length), u32le(data.length)]);
@@ -275,6 +275,16 @@ describe('importCharXStream', () => {
       expect(readSpy.mock.calls.some((call) => call[4] === descriptorAt && call[3] === 4)).toBe(true);
       expect(readSpy.mock.calls.some((call) => call[4] === descriptorAt + 4 && call[3] === (signed ? 12 : 8))).toBe(true);
     } finally { readSpy.mockRestore(); await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('does not mistake a stored payload collision for an unsigned data descriptor', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); const payload = Buffer.alloc(64, 65); let published = Buffer.alloc(0);
+    // At byte 20, this has descriptor-shaped compressed/original sizes but a deliberately wrong CRC.
+    payload.writeUInt32LE(20, 24); payload.writeUInt32LE(20, 28);
+    try {
+      await expect(importCharXStream(chunks(zipWithDescriptors(false, payload.toString('latin1')), 64), { stagingRoot, publishAssets: async (entries: any[]) => { published = await readFile(entries[0].sourcePath); } })).resolves.toMatchObject({ assets: { 'a.png': expect.any(String) } });
+      expect(published).toEqual(payload);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
   test('rejects duplicate normalized central names before their unchanged local headers diverge', async () => {

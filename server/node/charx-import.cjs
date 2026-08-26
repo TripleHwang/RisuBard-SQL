@@ -6,6 +6,12 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < table.length; index++) { let value = index; for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (0xedb88320 & -(value & 1)); table[index] = value >>> 0; }
+  return table;
+})();
+
 const DEFAULT_CHARX_LIMITS = Object.freeze({
   compressedBytes: 256 * 1024 * 1024,
   decompressedBytes: 2 * 1024 * 1024 * 1024,
@@ -60,6 +66,8 @@ function readExact(fd, position, length) {
 }
 function u16(b, at) { return b[at] | (b[at + 1] << 8); }
 function u32(b, at) { return b[at] + b[at + 1] * 0x100 + b[at + 2] * 0x10000 + b[at + 3] * 0x1000000; }
+function crc32Byte(crc, byte) { return (CRC32_TABLE[(crc ^ byte) & 255] ^ (crc >>> 8)) >>> 0; }
+function crc32Update(crc, bytes) { for (const byte of bytes) crc = crc32Byte(crc, byte); return crc; }
 function zipName(bytes) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC'); }
   catch { throw invalid('Invalid UTF-8 ZIP entry name'); }
@@ -97,19 +105,21 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
 }
 
 function normalizeUnsignedDescriptorsForUnzip() {
-  let pending = Buffer.alloc(0), phase = 'header', remaining = 0, descriptor = false, unknownCompressed = 0;
+  let pending = Buffer.alloc(0), phase = 'header', remaining = 0, descriptor = false, unknownCompressed = 0, unknownCrc = 0xffffffff, unknownMethod = 0;
   const emitUnknown = (output) => {
+    let candidateCrc = unknownCrc;
     for (let at = 0; at + 12 <= pending.length; at++) {
-      const signed = at + 16 <= pending.length && u32(pending, at) === 0x08074b50 && u32(pending, at + 8) === unknownCompressed + at;
-      const unsigned = u32(pending, at + 4) === unknownCompressed + at;
-      if (!signed && !unsigned) continue;
-      if (at) { output.push(pending.subarray(0, at)); unknownCompressed += at; }
+      const size = unknownCompressed + at;
+      const signed = at + 16 <= pending.length && u32(pending, at) === 0x08074b50 && u32(pending, at + 8) === size && (unknownMethod !== 0 || (u32(pending, at + 4) === (candidateCrc ^ 0xffffffff) >>> 0 && u32(pending, at + 12) === size));
+      const unsigned = u32(pending, at + 4) === size && (unknownMethod !== 0 || (u32(pending, at) === (candidateCrc ^ 0xffffffff) >>> 0 && u32(pending, at + 8) === size));
+      if (!signed && !unsigned) { candidateCrc = crc32Byte(candidateCrc, pending[at]); continue; }
+      if (at) { const data = pending.subarray(0, at); output.push(data); unknownCompressed += at; unknownCrc = crc32Update(unknownCrc, data); }
       if (unsigned) output.push(Buffer.from([0x50, 0x4b, 0x07, 0x08]));
       const length = signed ? 16 : 12;
       output.push(pending.subarray(at, at + length)); pending = pending.subarray(at + length); phase = 'header'; return true;
     }
     const keep = Math.min(15, pending.length);
-    if (pending.length > keep) { const data = pending.subarray(0, pending.length - keep); output.push(data); unknownCompressed += data.length; pending = pending.subarray(pending.length - keep); }
+    if (pending.length > keep) { const data = pending.subarray(0, pending.length - keep); output.push(data); unknownCompressed += data.length; unknownCrc = crc32Update(unknownCrc, data); pending = pending.subarray(pending.length - keep); }
     return false;
   };
   return (chunk, final) => {
@@ -134,9 +144,9 @@ function normalizeUnsignedDescriptorsForUnzip() {
         const headerLength = 30 + u16(pending, 26) + u16(pending, 28);
         if (pending.length < headerLength) break;
         const header = pending.subarray(0, headerLength);
-        descriptor = !!(u16(header, 6) & 8); remaining = u32(header, 18);
+        descriptor = !!(u16(header, 6) & 8); remaining = u32(header, 18); unknownMethod = u16(header, 8);
         output.push(header); pending = pending.subarray(headerLength);
-        if (descriptor && !remaining) { unknownCompressed = 0; phase = 'unknown'; } else phase = 'data';
+        if (descriptor && !remaining) { unknownCompressed = 0; unknownCrc = 0xffffffff; phase = 'unknown'; } else phase = 'data';
       }
     }
     if (final && pending.length) output.push(pending);
