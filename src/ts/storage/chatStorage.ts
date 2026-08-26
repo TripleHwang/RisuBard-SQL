@@ -114,7 +114,9 @@ type ChatHydrationCacheOptions = {
     /** Receives a stable key only; cache ownership must never retain Chat objects. */
     onEvict?: (key: string) => unknown | Promise<unknown>
     /** Persist victim metadata before its body is released. */
-    prepareEviction?: (key: string) => boolean | void | Promise<boolean | void>
+    prepareEviction?: (key: string) => unknown | Promise<unknown>
+    /** Validates the stable slot still contains the body prepared before await. */
+    isEvictionCurrent?: (key: string, token: unknown) => boolean
     /** Missing slots are stale cache IDs, not protected residents. */
     isResident?: (key: string) => boolean
 }
@@ -154,12 +156,13 @@ export class ChatHydrationCache {
     private async flushCandidate(options: ChatEvictionOptions): Promise<string | null> {
         let candidate = this.evictionCandidate(options)
         while (candidate) {
-            if (await this.options.prepareEviction?.(candidate) === false) return null
+            const token = await this.options.prepareEviction?.(candidate)
+            if (token === false) return null
             await this.options.flush()
             // Selection/reordering can pick another victim while persistence
             // is in flight. Mark and flush that new stable ID before release.
             const current = this.evictionCandidate(options)
-            if (current === candidate) return candidate
+            if (current === candidate && (!this.options.isEvictionCurrent || this.options.isEvictionCurrent(candidate, token))) return candidate
             candidate = current
         }
         return null
@@ -186,11 +189,19 @@ export class ChatHydrationCache {
         // and the observable LRU order remain exactly as they were.
         const victim = await this.flushCandidate(touchOptions)
         if (!victim) return false
-        const evicted = await this.options.onEvict?.(victim)
-        if (evicted === false) return false
-        this.order.delete(victim)
-        this.order.set(key, true)
-        return true
+        let candidate: string | null = victim
+        while (candidate) {
+            const evicted = await this.options.onEvict?.(candidate)
+            if (evicted !== false) {
+                this.order.delete(candidate)
+                this.order.set(key, true)
+                return true
+            }
+            const next = await this.flushCandidate(touchOptions)
+            if (!next || next === candidate) return false
+            candidate = next
+        }
+        return false
     }
 
     /** Evict every safe resident body except the selected chat. */
@@ -199,9 +210,17 @@ export class ChatHydrationCache {
         while (true) {
             const victim = await this.flushCandidate(options)
             if (!victim) return
-            const evicted = await this.options.onEvict?.(victim)
-            if (evicted === false) return
-            this.order.delete(victim)
+            let candidate: string | null = victim
+            while (candidate) {
+                const evicted = await this.options.onEvict?.(candidate)
+                if (evicted !== false) {
+                    this.order.delete(candidate)
+                    break
+                }
+                const next = await this.flushCandidate(options)
+                if (!next || next === candidate) return
+                candidate = next
+            }
         }
     }
 }
@@ -249,7 +268,7 @@ function hasLiveChatWork(key: string): boolean {
 
 function evictRuntimeChat(key: string): boolean {
     const found = findRuntimeChat(key)
-    if (!found || hasLiveChatWork(key)) return false
+    if (!found || key === getActiveRuntimeChatKey() || hasLiveChatWork(key)) return false
     // Keep every enumerable metadata field. The sole heavy body is `message`;
     // `_sqlWindow` is a non-enumerable runtime cache but is excluded even if a
     // caller made it enumerable. No message or derived-cache reference moves
@@ -263,22 +282,27 @@ function evictRuntimeChat(key: string): boolean {
         _placeholder: true,
         messagesLoaded: false,
         messagesFullyLoaded: false,
-    } as Chat
+    } as unknown as Chat
     return true
 }
 
-function prepareRuntimeEviction(key: string): boolean {
+function prepareRuntimeEviction(key: string): RuntimeChat | false {
     const ids = parseChatKey(key)
-    if (!ids || hasLiveChatWork(key)) return false
+    const found = findRuntimeChat(key)
+    if (!ids || !found || hasLiveChatWork(key)) return false
     markSqlChatDirty(ids.characterId, ids.chatId)
-    return true
+    return found.chat
 }
 
 const runtimeChatHydrationCache = new ChatHydrationCache({
     maxChats: 2,
     flush: flushSqlDirtyChanges,
     prepareEviction: prepareRuntimeEviction,
-    isResident: key => Boolean(findRuntimeChat(key)),
+    isEvictionCurrent: (key, token) => findRuntimeChat(key)?.chat === token,
+    isResident: key => {
+        const chat = findRuntimeChat(key)?.chat
+        return Boolean(chat && !chat._placeholder && Array.isArray(chat.message) && chat.messagesLoaded !== false)
+    },
     onEvict: evictRuntimeChat,
 })
 
@@ -314,6 +338,22 @@ export function resetChatHydrationCacheForTesting(): void {
     runtimeChatHydrationCache.clear()
 }
 
+function touchSelectedRuntimeChat(): void {
+    try {
+        const database = getDatabase()
+        const character = database.characters?.[get(selectedCharID)]
+        const index = character?.chatPage ?? -1
+        if (character?.chaId && index >= 0) void touchHydratedChat(character.chaId, character.chats, index)
+    } catch {
+        // Storage may not be initialized while the selected-character store
+        // emits its initial value.
+    }
+}
+
+// Covers direct character-card and hotkey selections, which update the store
+// without necessarily routing through changeChar.
+selectedCharID.subscribe(() => touchSelectedRuntimeChat())
+
 /**
  * Apply the newest bounded SQL message page to one stable chat slot.  The
  * reverse-page hydrator owns window metadata and duplicate suppression; this
@@ -329,7 +369,8 @@ export async function hydrateRecentChatPage(
     if (!initial?.id) return null
     const hydrated = await ensureChatMessageWindow({ chaId, chats } as character, index, limit)
     if (!hydrated) return null
-    await touchHydratedChat(chaId, chats, index)
+    const currentIndex = chats.findIndex(chat => chat?.id === hydrated.id)
+    if (currentIndex !== -1) await touchHydratedChat(chaId, chats, currentIndex)
     return hydrated
 }
 
