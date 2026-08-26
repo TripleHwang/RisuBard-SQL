@@ -290,11 +290,10 @@ async function importCharXStream(source, options) {
     } catch (e) { throw currentError || normalizeError(e, invalid('Invalid or unsupported ZIP archive')); } finally { fs.closeSync(extractFd); }
     checkAbort();
     if (active.size) throw invalid('Truncated ZIP archive');
-    // Preserve a terminal event if extraction ever finishes without an entry
-    // completion reaching the declared archive total.
-    if (extractionCompleted !== extractionTotal) {
-      onProgress({ phase: 'extracting', completed: extractionTotal, total: extractionTotal });
-    }
+    // This is the only terminal marker. Per-entry events may also reach the
+    // total when trailing ZIP entries are empty, so callers must not infer
+    // completion from numeric equality alone.
+    onProgress({ phase: 'extracting', completed: extractionTotal, total: extractionTotal, terminal: true });
     if (cardCount !== 1 || cards.length !== 1) throw invalid('Archive must contain exactly one card.json');
     const card = utf8Json(cards[0]);
     if (!card || card.spec !== 'chara_card_v3') throw invalid('card.json must be a chara_card_v3 card');

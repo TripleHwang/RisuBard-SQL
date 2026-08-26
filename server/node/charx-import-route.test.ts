@@ -161,7 +161,7 @@ describe('createCharXImportHandler', () => {
             importCharXStream: async (_source: AsyncIterable<Uint8Array>, options: any) => {
                 options.onProgress({ phase: 'extracting', completed: 0, total: 2 })
                 options.onProgress({ phase: 'extracting', completed: 1, total: 2 })
-                options.onProgress({ phase: 'extracting', completed: 2, total: 2 })
+                options.onProgress({ phase: 'extracting', completed: 2, total: 2, terminal: true })
                 return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
             },
         })
@@ -171,6 +171,35 @@ describe('createCharXImportHandler', () => {
             { type: 'progress', completed: 0, total: 2 },
             { type: 'progress', completed: 2, total: 2 },
         ])
+    })
+
+    it('bounds many zero-byte extraction entries and emits only the explicit terminal progress', async () => {
+        const { server } = makeApp({
+            importCharXStream: async (_source: AsyncIterable<Uint8Array>, options: any) => {
+                options.onProgress({ phase: 'extracting', completed: 0, total: 1 })
+                for (let index = 0; index < 1000; index++) options.onProgress({ phase: 'extracting', completed: 1, total: 1 })
+                options.onProgress({ phase: 'extracting', completed: 1, total: 1, terminal: true })
+                return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
+            },
+        })
+        const response = await request(server, 'x')
+        const progress = response.body.split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(event => event.type === 'progress')
+        expect(progress).toHaveLength(2)
+        expect(progress.at(-1)).toEqual({ type: 'progress', completed: 1, total: 1 })
+    })
+
+    it('does not mutate the shared server request timeout', async () => {
+        const { server } = makeApp()
+        const original = server.requestTimeout
+        let assignments = 0
+        Object.defineProperty(server, 'requestTimeout', {
+            configurable: true,
+            get: () => original,
+            set: () => { assignments++ },
+        })
+        await request(server, 'x')
+        expect(assignments).toBe(0)
+        expect(server.requestTimeout).toBe(original)
     })
 
     it('does not abort a normally completed response when Express closes it', async () => {

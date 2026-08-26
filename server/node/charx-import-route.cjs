@@ -33,7 +33,6 @@ function createCharXImportHandler(deps) {
 
     let acquired = false;
     let heartbeatTimer = null;
-    let previousRequestTimeout;
     let previousSocketTimeout;
     let responseStarted = false;
     const controller = new AbortController();
@@ -75,11 +74,9 @@ function createCharXImportHandler(deps) {
         }
       }
 
-      previousRequestTimeout = req.socket.server && req.socket.server.requestTimeout;
       previousSocketTimeout = req.socket.timeout;
       req.socket.setTimeout(0);
       req.socket.setKeepAlive(true);
-      if (req.socket.server) req.socket.server.requestTimeout = 0;
       req.once('aborted', abort);
       req.once('close', onRequestClose);
       res.once('close', onResponseClose);
@@ -115,7 +112,7 @@ function createCharXImportHandler(deps) {
           const total = phase === 'extracting' ? Number(progress.total) : contentLength;
           lastCompleted = Math.max(lastCompleted, Number.isFinite(completed) ? Math.max(0, completed) : 0);
           lastTotal = Math.max(lastTotal, Number.isFinite(total) ? Math.max(0, total) : 0, lastCompleted);
-          const finalExtractionProgress = phase === 'extracting' && lastCompleted === lastTotal;
+          const finalExtractionProgress = phase === 'extracting' && progress.terminal === true;
           if (!finalExtractionProgress && now - lastProgressAt < 200) return;
           lastProgressAt = now;
           writeEvent({ type: 'progress', completed: lastCompleted, total: lastTotal });
@@ -140,7 +137,6 @@ function createCharXImportHandler(deps) {
       req.removeListener('close', onRequestClose);
       res.removeListener('close', onResponseClose);
       if (req.socket) req.socket.setTimeout(previousSocketTimeout || 0);
-      if (req.socket.server && previousRequestTimeout !== undefined) req.socket.server.requestTimeout = previousRequestTimeout;
       if (acquired) endImport();
     }
   };

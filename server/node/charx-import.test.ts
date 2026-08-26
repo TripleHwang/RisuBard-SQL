@@ -128,6 +128,7 @@ describe('importCharXStream', () => {
       });
       expect(extractionProgress[0]).toMatchObject({ phase: 'extracting', completed: 0, total: expect.any(Number) });
       expect(extractionProgress.at(-1)).toMatchObject({ phase: 'extracting', completed: extractionProgress.at(-1).total });
+      expect(extractionProgress.filter((progress) => progress.terminal)).toEqual([extractionProgress.at(-1)]);
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
