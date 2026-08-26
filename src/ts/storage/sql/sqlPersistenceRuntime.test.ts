@@ -112,6 +112,18 @@ describe('SQL persistence runtime', () => {
         expect((storage.commit as any).mock.calls[1][0].messages).toEqual([expect.objectContaining({ id: 'm-local' })])
     })
 
+    it('treats a missing remote entity as resolved while retaining a local delete', async () => {
+        const database = fixtureDatabaseWithMessages(0); database.characters = []
+        const storage = fakeStorageAtRevision(3)
+        ;(storage.commit as any).mockRejectedValueOnce(new SqlRevisionConflictError(4)).mockResolvedValueOnce({ revision: 5 })
+        ;(storage.loadCharacter as any) = vi.fn(async () => null)
+        activateSqlPersistenceRuntime(storage, database)
+        const { markSqlCharacterDirty } = await import('./sqlPersistenceRuntime')
+        markSqlCharacterDirty('character-a')
+        await flushSqlDirtyChanges()
+        expect((storage.commit as any).mock.calls[1][0].characterDeletes).toEqual(['character-a'])
+    })
+
     it('uses the first compatibility audit as a baseline and writes only a changed root', async () => {
         const storage = fakeStorageAtRevision(3)
         const database = fixtureDatabaseWithMessages(0)

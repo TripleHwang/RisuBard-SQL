@@ -236,7 +236,7 @@ export async function flushSqlDirtyChanges(): Promise<void>
 export function scheduleSqlCompatibilityAudit(run?: () => Promise<void> | void): void
 ```
 
-`flushSqlDirtyChanges` snapshots the registry, builds one `SqlCommit` with `activeStorage.getRevision()`, commits it, and acknowledges only on success. On `SqlRevisionConflictError`, call the prerequisite targeted entity read APIs for every dirty entity, merge only those rows, keep unresolved scopes dirty, and retry once. It must never fetch `/api/sql/snapshot` during ordinary conflict recovery.
+`flushSqlDirtyChanges` snapshots the registry, builds one `SqlCommit` with `activeStorage.getRevision()`, commits it, and acknowledges only on success. On `SqlRevisionConflictError`, call the prerequisite targeted entity read APIs for every dirty entity. A successful present *or missing* read resolves that remote scope, while the local whole-row dirty upsert/delete remains authoritative (field-level merge is unsafe without field-level intent); a read failure remains unresolved and dirty. Rebuild and retry once. It must never fetch `/api/sql/snapshot` during ordinary conflict recovery.
 
 Change `activateSqlStorage` in `sqlBootstrap.ts` to hold the live database reference, not `safeStructuredClone(database)`. Replace normal `syncActiveSqlDatabase` behavior with `flushSqlDirtyChanges`.
 
