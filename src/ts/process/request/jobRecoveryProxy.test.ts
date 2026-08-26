@@ -25,6 +25,7 @@ vi.mock('src/ts/storage/database.svelte', () => ({
 }))
 vi.mock('src/ts/storage/chatStorage', () => ({
     ensureChatHydrated: (...args: unknown[]) => mocks.hydrate(...args),
+    isChatHistoryIncomplete: (chat: any) => !chat || chat._placeholder === true || chat.messagesLoaded === false || chat.messagesFullyLoaded === false || chat._sqlWindow?.hasOlder === true,
     saveChatToServer: async (chaId: string, index: number, chatId: string, chat: any) => {
         mocks.saved.push({ chaId, index, chatId, chat: JSON.parse(JSON.stringify(chat)) })
     },
