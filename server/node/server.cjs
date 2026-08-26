@@ -13,6 +13,7 @@ const zlib = require('zlib')
 const rateLimit = require('express-rate-limit')
 const { WebSocketServer } = require('ws')
 const Vips = require('wasm-vips')
+const { createAssetThumbnailService, decodeCanonicalHexKey } = require('./asset-thumbnail.cjs')
 let _vipsPromise = null
 const getVips = () => {
     if (!_vipsPromise) {
@@ -3200,6 +3201,44 @@ async function generateThumbnail(buffer) {
         img.delete()
     }
 }
+
+async function inspectThumbnailSource(buffer) {
+    const vips = await getVips()
+    const image = vips.Image.newFromBuffer(buffer)
+    try {
+        return { width: image.width, height: image.height }
+    } finally {
+        image.delete()
+    }
+}
+
+// Derived image data is deliberately process-local and bounded: it must never
+// become unbounded user KV data or get included in backups.
+const assetThumbnailService = createAssetThumbnailService({
+    getUpdatedAt: kvGetUpdatedAt,
+    get: kvGet,
+    inspect: inspectThumbnailSource,
+    transform: generateThumbnail,
+    maxEntries: 128,
+    maxBytes: 32 * 1024 * 1024,
+    maxSourceBytes: 32 * 1024 * 1024,
+    maxPixels: 40_000_000,
+})
+
+app.get('/api/asset/:hexKey/thumb', sessionAuthMiddleware, async (req, res) => {
+    try {
+        const key = decodeCanonicalHexKey(req.params.hexKey)
+        const result = await assetThumbnailService.get(key, req.headers['if-none-match'])
+        res.set({ 'Cache-Control': 'public, max-age=31536000, immutable', 'ETag': result.etag })
+        if (result.status === 304) return res.status(304).end()
+        return res.type('image/webp').send(result.image)
+    } catch (error) {
+        const status = error?.status
+        if (status) return res.status(status).set('Cache-Control', 'no-store').end()
+        logger.warn('[Asset thumbnail] Failed to create thumbnail:', error)
+        return res.status(422).set('Cache-Control', 'no-store').end()
+    }
+})
 
 app.get('/api/asset/:hexKey', sessionAuthMiddleware, async (req, res) => {
     try {
