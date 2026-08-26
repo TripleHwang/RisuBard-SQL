@@ -39,6 +39,7 @@ function createCharXImportHandler(deps) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     const onRequestClose = () => { if (!req.complete) abort(); };
+    const onResponseClose = () => { if (!res.writableEnded) abort(); };
     const contentLength = Number(req.headers['content-length'] ?? '0');
 
     const writeJsonError = (status, code, message) => {
@@ -81,6 +82,7 @@ function createCharXImportHandler(deps) {
       if (req.socket.server) req.socket.server.requestTimeout = 0;
       req.once('aborted', abort);
       req.once('close', onRequestClose);
+      res.once('close', onResponseClose);
 
       res.status(200);
       res.setHeader('content-type', 'application/x-ndjson');
@@ -121,6 +123,7 @@ function createCharXImportHandler(deps) {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       req.removeListener('aborted', abort);
       req.removeListener('close', onRequestClose);
+      res.removeListener('close', onResponseClose);
       if (req.socket) req.socket.setTimeout(previousSocketTimeout || 0);
       if (req.socket.server && previousRequestTimeout !== undefined) req.socket.server.requestTimeout = previousRequestTimeout;
       if (acquired) endImport();

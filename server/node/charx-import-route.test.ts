@@ -138,6 +138,62 @@ describe('createCharXImportHandler', () => {
         expect(events.at(-1)).toMatchObject({ type: 'done', result: { card: { spec: 'chara_card_v3' } } })
     })
 
+    it('does not abort a normally completed response when Express closes it', async () => {
+        let signal: AbortSignal | undefined
+        const { server } = makeApp({
+            importCharXStream: async (source: AsyncIterable<Uint8Array>, options: any) => {
+                signal = options.signal
+                for await (const _chunk of source) {}
+                return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
+            },
+        })
+        await request(server, 'complete')
+        expect(signal?.aborted).toBe(false)
+    })
+
+    it('aborts extraction after a complete upload when the response connection closes', async () => {
+        let started!: () => void
+        const importStarted = new Promise<void>(resolve => { started = resolve })
+        let aborted = false
+        const { server, calls } = makeApp({
+            importCharXStream: async (source: AsyncIterable<Uint8Array>, options: any) => {
+                for await (const _chunk of source) {}
+                await new Promise<void>(resolve => {
+                started()
+                options.signal.addEventListener('abort', () => {
+                    aborted = true
+                    resolve()
+                }, { once: true })
+                setTimeout(resolve, 50)
+                })
+                if (!aborted) {
+                    const error: any = new Error('response disconnect was ignored')
+                    error.code = 'IMPORT_ABORTED'
+                    error.status = 499
+                    throw error
+                }
+            },
+        })
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+        const address = server.address() as { port: number }
+        let responseReady!: () => void
+        const responseStarted = new Promise<void>(resolve => { responseReady = resolve })
+        let incomingResponse: http.IncomingMessage | undefined
+        const client = http.request({ hostname: '127.0.0.1', port: address.port, path: '/api/charx/import', method: 'POST', headers: { 'content-type': 'application/x-risu-charx', 'content-length': '8', accept: 'application/x-ndjson' } }, response => {
+            response.on('error', () => {})
+            incomingResponse = response
+            responseReady()
+        })
+        client.on('error', () => {})
+        client.end('complete')
+        await importStarted
+        await responseStarted
+        incomingResponse!.destroy()
+        await new Promise(resolve => setTimeout(resolve, 75))
+        expect(aborted).toBe(true)
+        expect(calls).toContain('end')
+    })
+
     it('aborts a disconnected stream and releases the shared import lock', async () => {
         let aborted = false
         let started!: () => void
