@@ -27,12 +27,12 @@ function makeApp(overrides: Record<string, any> = {}) {
     return { server, calls }
 }
 async function request(server: http.Server, body = 'pixels', headers: Record<string, string> = {}) {
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    if (!server.listening) await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as { port: number }
-    return await new Promise<{ status: number, body: any }>((resolve, reject) => {
+    return await new Promise<{ status: number, body: any, headers: http.IncomingHttpHeaders }>((resolve, reject) => {
         const req = http.request({ hostname: '127.0.0.1', port, path: '/api/assets/upload', method: 'POST', headers: {
             'content-type': 'application/octet-stream', 'content-length': String(Buffer.byteLength(body)), 'x-risu-asset-key': 'assets/test.png', ...headers,
-        } }, res => { let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode || 0, body: text ? JSON.parse(text) : null })) })
+        } }, res => { let text = ''; res.on('data', chunk => text += chunk); res.on('end', () => resolve({ status: res.statusCode || 0, body: text ? JSON.parse(text) : null, headers: res.headers })) })
         req.on('error', reject); req.end(body)
     })
 }
@@ -61,6 +61,40 @@ describe('createAssetUploadHandler', () => {
         const response = await request(server)
         expect(response.status).toBe(500)
         expect(calls).toContain('cleanup')
+    })
+
+    it('caps concurrent uploads and releases a slot after completion', async () => {
+        const releases: Array<() => void> = []
+        const started: Array<() => void> = []
+        const { server } = makeApp({
+            spoolSourceToOwnedFile: async () => {
+                started.shift()?.()
+                await new Promise<void>(resolve => releases.push(resolve))
+                return { ownedDir: process.cwd(), filePath: 'asset.bin', bytes: 6 }
+            },
+        })
+        const firstStarted = new Promise<void>(resolve => started.push(resolve))
+        const secondStarted = new Promise<void>(resolve => started.push(resolve))
+        const first = request(server)
+        await firstStarted
+        const second = request(server)
+        await secondStarted
+
+        const rejected = await request(server)
+        expect(rejected).toMatchObject({ status: 429, body: { code: 'TOO_MANY_UPLOADS' } })
+        expect(rejected.headers['retry-after']).toBe('1')
+        releases.shift()?.()
+        await expect(first).resolves.toMatchObject({ status: 200 })
+
+        const thirdStarted = new Promise<void>(resolve => started.push(resolve))
+        const third = request(server)
+        await thirdStarted
+        releases.shift()?.()
+        releases.shift()?.()
+        await expect(Promise.all([second, third])).resolves.toEqual([
+            expect.objectContaining({ status: 200 }),
+            expect.objectContaining({ status: 200 }),
+        ])
     })
 
     it.each([

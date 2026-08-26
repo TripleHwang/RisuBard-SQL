@@ -14,4 +14,11 @@ describe('route rate limiting', () => {
         expect(server).toContain('const charxImportLimiter = rateLimit({')
         expect(server).toMatch(/app\.post\('\/api\/charx\/import', charxImportLimiter, createCharXImportHandler\(/)
     })
+
+    it('limits streamed Risum imports and high-volume asset uploads at their routes', () => {
+        expect(server).toContain('const risumImportLimiter = rateLimit({')
+        expect(server).toContain('const assetUploadLimiter = rateLimit({')
+        expect(server).toMatch(/app\.post\('\/api\/risum\/import', risumImportLimiter, createRisumImportHandler\(/)
+        expect(server).toMatch(/app\.post\('\/api\/assets\/upload', assetUploadLimiter, createAssetUploadHandler\(/)
+    })
 })

@@ -1593,6 +1593,28 @@ const charxImportLimiter = rateLimit({
     validate: { xForwardedForHeader: false }
 });
 
+// Risum imports share the import lock but still need an admission limit before
+// a client can repeatedly open large streamed request bodies.
+const risumImportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many Risum import requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Asset transfers are normally sequential during import/export workflows. Keep
+// a generous burst for those workflows while bounding repeated raw uploads.
+const assetUploadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 1200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many asset upload requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
 function isHex(str) {
     return hexRegex.test(str.toUpperCase().trim()) || str === '__password';
 }
@@ -4139,7 +4161,7 @@ app.post('/api/patch', async (req, res, next) => {
 // ─── Bulk asset endpoints (3-2-B) ─────────────────────────────────────────────
 const BULK_BATCH = 50;
 
-app.post('/api/assets/upload', createAssetUploadHandler({
+app.post('/api/assets/upload', assetUploadLimiter, createAssetUploadHandler({
     checkAuth,
     checkActiveSession,
     kvSetManyFromFilesAsync,
@@ -4512,7 +4534,7 @@ app.post('/api/charx/import', charxImportLimiter, createCharXImportHandler({
     logger,
 }));
 
-app.post('/api/risum/import', createRisumImportHandler({
+app.post('/api/risum/import', risumImportLimiter, createRisumImportHandler({
     checkAuth,
     checkActiveSession,
     beginImport: () => {

@@ -63,9 +63,14 @@ function createAssetUploadHandler(deps) {
     checkAuth, checkActiveSession, kvSetManyFromFilesAsync, stagingRoot,
     getAvailableBytes, maxBytes = MAX_ASSET_UPLOAD_BYTES,
     diskHeadroomBytes = ASSET_UPLOAD_HEADROOM_BYTES,
+    maxConcurrentUploads = 2,
     spoolSourceToOwnedFile: spool = spoolSourceToOwnedFile,
     removeOwnedDir = dir => fsp.rm(dir, { recursive: true, force: true }),
   } = deps;
+  const uploadLimit = Number.isSafeInteger(maxConcurrentUploads) && maxConcurrentUploads > 0
+    ? maxConcurrentUploads
+    : 2;
+  let activeUploads = 0;
   return async function assetUploadHandler(req, res) {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
@@ -76,6 +81,12 @@ function createAssetUploadHandler(deps) {
     if (contentType !== 'application/octet-stream') { res.status(415).json({ error: 'Unsupported asset content-type', code: 'UNSUPPORTED_MEDIA_TYPE' }); return; }
     if (contentLength === undefined) { res.status(400).json({ error: 'Invalid content length', code: 'INVALID_CONTENT_LENGTH' }); return; }
     if (contentLength !== null && contentLength > maxBytes) { res.status(413).json({ error: 'Asset exceeds the allowed size', code: 'IMPORT_LIMIT_EXCEEDED' }); return; }
+    if (activeUploads >= uploadLimit) {
+      res.set('Retry-After', '1').status(429).json({ error: 'Too many concurrent asset uploads', code: 'TOO_MANY_UPLOADS' });
+      return;
+    }
+    activeUploads++;
+    let acquiredUploadSlot = true;
     let previousSocketTimeout;
     let restoreRequestTimeout = () => {};
     let abort = () => {};
@@ -114,6 +125,10 @@ function createAssetUploadHandler(deps) {
       req.removeListener('end', restoreRequestTimeout);
       restoreRequestTimeout();
       if (req.socket && previousSocketTimeout !== undefined) req.socket.setTimeout(previousSocketTimeout);
+      if (acquiredUploadSlot) {
+        acquiredUploadSlot = false;
+        activeUploads--;
+      }
     }
   };
 }
