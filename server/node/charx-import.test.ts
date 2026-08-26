@@ -320,6 +320,18 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
+  test('rejects an over-limit central entry count before extracting any entry payload', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0;
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('first'), 'b.png': strToU8('second') });
+    const firstDataOffset = 30 + 'card.json'.length;
+    const readSpy = vi.spyOn(fsSync, 'readSync');
+    try {
+      await expect(importCharXStream(chunks(archive), { stagingRoot, limits: { entries: 2 }, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'CHARX_LIMIT_EXCEEDED', status: 413 });
+      expect(published).toBe(0);
+      expect(readSpy.mock.calls.some((call) => call[4] === firstDataOffset)).toBe(false);
+    } finally { readSpy.mockRestore(); await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test.each(['../a.png', '/a.png', 'C:a.png', 'a\\b.png', 'a/./b.png', 'a/../b.png'])('rejects unsafe name %s', async (name) => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     try {

@@ -64,10 +64,11 @@ function zipName(bytes) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC'); }
   catch { throw invalid('Invalid UTF-8 ZIP entry name'); }
 }
-function validateCentralDirectory(fd, archiveSize, eocdOffset) {
+function validateCentralDirectory(fd, archiveSize, eocdOffset, entryLimit) {
   const e = readExact(fd, eocdOffset, 22);
   const centralSize = u32(e, 12), centralOffset = u32(e, 16), count = u16(e, 10);
   if (u16(e, 4) || u16(e, 6) || u16(e, 8) !== count || centralOffset + centralSize !== eocdOffset) throw invalid('Invalid ZIP central directory');
+  if (count > entryLimit) throw limit('Archive has too many entries');
   let at = centralOffset; const names = new Set(), entries = [];
   for (let i = 0; i < count; i++) {
     if (at + 46 > eocdOffset) throw invalid('Truncated ZIP central directory');
@@ -235,7 +236,7 @@ async function importCharXStream(source, options) {
     fs.fsyncSync(archiveFd); fs.closeSync(archiveFd); archiveFd = undefined;
     const readFd = fs.openSync(archivePath, 'r');
     let entries;
-    try { entries = validateCentralDirectory(readFd, compressed, eocdAbsolute); } finally { fs.closeSync(readFd); }
+    try { entries = validateCentralDirectory(readFd, compressed, eocdAbsolute, limits.entries); } finally { fs.closeSync(readFd); }
     const extractFd = fs.openSync(archivePath, 'r');
     try {
       for (const entry of entries) {
