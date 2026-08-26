@@ -13,7 +13,7 @@ let metadataRuntimeStarted = false
 type CompatibilityBaseline = {
     roots: Map<string, string>; plugins: Map<string, string>; presets: Map<string, string>
     characters: Map<string, string>; chats: Map<string, { characterId: string; signature: string }>
-    characterOrder: string[]; presetOrder: string[]
+    characterOrder: string[]; presetOrder: string[]; activePreset: number; chatOrders: Map<string, string[]>
 }
 let compatibilityBaseline: CompatibilityBaseline | null = null
 
@@ -168,13 +168,14 @@ function snapshotCompatibility(database: Database): CompatibilityBaseline {
     for (const key of Object.keys(database)) if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) roots.set(key, fingerprint((database as any)[key]))
     const plugins = new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
     const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, fingerprint(preset)]))
-    const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>()
+    const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>(); const chatOrders = new Map<string, string[]>()
     for (const character of database.characters ?? []) {
         if (!character?.chaId) continue
         characters.set(character.chaId, fingerprint({ ...character, chats: undefined }))
+        const ids = (character.chats ?? []).map(chat => chat?.id).filter((id): id is string => Boolean(id)); chatOrders.set(character.chaId, ids)
         for (const chat of character.chats ?? []) if (chat?.id) chats.set(chat.id, { characterId: character.chaId, signature: fingerprint(chat) })
     }
-    return { roots, plugins, presets, characters, chats, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean) }
+    return { roots, plugins, presets, characters, chats, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
 }
 
 function changedKeys(before: Map<string, string>, after: Map<string, string>): Set<string> {
@@ -191,6 +192,7 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
     for (const key of changedKeys(previous.plugins, next.plugins)) markSqlPluginStorageDirty(key)
     for (const id of changedKeys(previous.presets, next.presets)) markSqlPresetDirty(id)
     if (previous.presetOrder.join('\u0000') !== next.presetOrder.join('\u0000')) markSqlRootDirty('botPresets')
+    if (previous.activePreset !== next.activePreset) markSqlRootDirty('botPresetsId')
     for (const id of changedKeys(previous.characters, next.characters)) markSqlCharacterDirty(id)
     const characterOrderChanged = previous.characterOrder.join('\u0000') !== next.characterOrder.join('\u0000')
     const changedChats = changedKeys(new Map([...previous.chats].map(([id, value]) => [id, `${value.characterId}\u0000${value.signature}`])), new Map([...next.chats].map(([id, value]) => [id, `${value.characterId}\u0000${value.signature}`])))
@@ -198,9 +200,14 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
         const info = next.chats.get(chatId) ?? previous.chats.get(chatId)
         if (info) markSqlChatDirty(info.characterId, chatId, true)
     }
-    if (characterOrderChanged) {
-        for (const character of database.characters ?? []) for (const chat of character?.chats ?? []) if (character.chaId && chat?.id) markSqlChatDirty(character.chaId, chat.id, true)
+    if (characterOrderChanged) for (const id of next.characterOrder) markSqlCharacterDirty(id)
+    for (const [characterId, order] of next.chatOrders) if (previous.chatOrders.get(characterId)?.join('\u0000') !== order.join('\u0000')) {
+        for (const chatId of order) markSqlChatDirty(characterId, chatId, true)
     }
+}
+
+export function initializeSqlCompatibilityBaseline(database: Database): void {
+    compatibilityBaseline = snapshotCompatibility(database)
 }
 
 /** Metadata-first startup deliberately avoids saveDb and its reactive encoder path. */

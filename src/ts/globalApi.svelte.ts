@@ -33,7 +33,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, scheduleSqlCompatibilityAudit, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
+import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, scheduleSqlCompatibilityAudit, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 
 export const forageStorage = new AutoStorage()
 
@@ -1192,11 +1192,11 @@ export async function startMetadataPersistence() {
         try { void fetch('/api/db/flush', { method: 'POST', keepalive: true, credentials: 'same-origin' }) } catch { /* best effort */ }
     })
 
+    initializeSqlCompatibilityBaseline(getDatabase())
     // Plugin code can mutate the legacy object graph directly. This scan is
     // explicitly idle/coalesced: it is never a reactive typing/streaming path.
     const audit = () => {
         const db = getDatabase()
-        try { deepTouch(db) } catch (error) { console.warn('[SQL compatibility audit] deepTouch failed', error) }
         auditSqlCompatibilityDatabase(db)
         setTimeout(() => scheduleSqlCompatibilityAudit(audit), 5_000)
     }

@@ -7,6 +7,7 @@ import {
     activateSqlPersistenceRuntime,
     auditSqlCompatibilityDatabase,
     flushSqlDirtyChanges,
+    initializeSqlCompatibilityBaseline,
     markSqlMessageDirty,
     startSqlMetadataPersistence,
     resetSqlPersistenceRuntimeForTesting,
@@ -108,6 +109,15 @@ describe('SQL persistence runtime', () => {
         expect(storage.commit).not.toHaveBeenCalled()
         database.theme = 'light'
         auditSqlCompatibilityDatabase(database)
+        await flushSqlDirtyChanges()
+        expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ root: { upserts: [{ key: 'theme', value: 'light' }], deletes: [] } }))
+    })
+
+    it('detects an edit made before the first idle compatibility audit', async () => {
+        const storage = fakeStorageAtRevision(3); const database = fixtureDatabaseWithMessages(0)
+        database.theme = 'dark'; activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+        database.theme = 'light'; auditSqlCompatibilityDatabase(database)
         await flushSqlDirtyChanges()
         expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ root: { upserts: [{ key: 'theme', value: 'light' }], deletes: [] } }))
     })
