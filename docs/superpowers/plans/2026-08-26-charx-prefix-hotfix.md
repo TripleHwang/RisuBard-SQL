@@ -87,7 +87,7 @@ git add server/node/charx-import.cjs server/node/charx-import.test.ts docs/super
 git commit -m "fix(server): accept prefixed CharX archives"
 ```
 
-### Task 2: Verify and publish `0.3.0-hotfix1`
+### Task 2: Verify and publish RisuVault v0.3.0-hotfix1 (`0.3.0.1` internally)
 
 **Files:**
 - No production files beyond Task 1
@@ -104,6 +104,6 @@ Review the diff against this plan, with special attention to arbitrary signature
 
 Push `hotfix/charx-prefix-archive`, create a PR targeting `main`, wait for required checks, and merge only when checks and reviews pass.
 
-- [ ] **Step 4: Publish release `0.3.0-hotfix1`**
+- [ ] **Step 4: Publish RisuVault v0.3.0-hotfix1**
 
-Create the repository's standard release tag and artifacts for `0.3.0-hotfix1`, verify the release workflow succeeds, and ensure the update manifest points to the hotfix version.
+Create the repository's standard release tag `v0.3.0.1` and artifacts/update manifest using the internal stable version `0.3.0.1`. After the workflow succeeds, use GitHub's release edit for tag `v0.3.0.1` to rename the generated draft from `RisuVault v0.3.0.1` to the public title **RisuVault v0.3.0-hotfix1**, then publish it as the latest stable release while retaining `0.3.0.1` for the internal package, tag, and update manifest. This numeric fourth segment is deliberately used because the already-installed v0.3.0 updater compares `0.3.0-hotfix1` as an older prerelease, whereas its existing version comparison recognizes `0.3.0.1` as newer than `0.3.0`.
