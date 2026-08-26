@@ -12,6 +12,7 @@ afterEach(async () => {
 })
 
 function makeApp(overrides: Partial<HandlerDeps> = {}) {
+    const { serverOptions = {}, ...dependencyOverrides } = overrides
     const calls: string[] = []
     const deps: HandlerDeps = {
         checkAuth: async () => { calls.push('auth'); return true },
@@ -30,11 +31,11 @@ function makeApp(overrides: Partial<HandlerDeps> = {}) {
             options.onProgress({ compressedBytes: chunks.reduce((sum, chunk) => sum + chunk.length, 0), decompressedBytes: 7 })
             return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
         },
-        ...overrides,
+        ...dependencyOverrides,
     }
     const app = express()
     app.post('/api/charx/import', createCharXImportHandler(deps))
-    const server = http.createServer(app)
+    const server = http.createServer(serverOptions, app)
     servers.push(server)
     return { server, calls, deps }
 }
@@ -204,8 +205,7 @@ describe('createCharXImportHandler', () => {
     })
 
     it('accepts an active upload that outlasts the server body timeout', async () => {
-        const { server } = makeApp()
-        server.requestTimeout = 30
+        const { server } = makeApp({ serverOptions: { requestTimeout: 30, connectionsCheckingInterval: 10 } })
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
         const address = server.address() as { port: number }
         const response = await new Promise<{ status: number, body: string }>((resolve, reject) => {

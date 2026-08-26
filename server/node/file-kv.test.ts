@@ -116,6 +116,72 @@ describe('file-native KV compatibility projection', () => {
         expect(createFileKv({ dataRoot }).kvList('assets/')).toEqual(['assets/first', 'assets/second'])
     })
 
+    it('keeps an ordinary manifest mutation made during a staged-file commit', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'staged.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('staged'))
+        let releaseWriter!: () => void
+        let writerStarted!: () => void
+        const writerStartedPromise = new Promise<void>(resolve => { writerStarted = resolve })
+        const writerRelease = new Promise<void>(resolve => { releaseWriter = resolve })
+        const store = createFileKv({
+            dataRoot,
+            manifestWriter: async next => {
+                writerStarted()
+                await writerRelease
+                atomicWriteJson(dataRoot, 'kv/manifest.json', next)
+            },
+        })
+
+        const staged = store.kvSetManyFromFilesAsync([{ key: 'assets/staged', sourcePath }])
+        await writerStartedPromise
+        store.kvSet('settings/during-staged-write', Buffer.from('ordinary'))
+        releaseWriter()
+        await staged
+
+        expect(store.kvList()).toEqual(['assets/staged', 'settings/during-staged-write'])
+        expect(createFileKv({ dataRoot }).kvList()).toEqual(['assets/staged', 'settings/during-staged-write'])
+    })
+
+    it('keeps an ordinary deletion and continues the staged queue after a failed staged commit', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const failedPath = path.join(stagingRoot, 'failed.bin')
+        const laterPath = path.join(stagingRoot, 'later.bin')
+        fs.writeFileSync(failedPath, Buffer.from('failed'))
+        fs.writeFileSync(laterPath, Buffer.from('later'))
+        let releaseFirstWriter!: () => void
+        let firstWriterStarted!: () => void
+        const firstWriterStartedPromise = new Promise<void>(resolve => { firstWriterStarted = resolve })
+        const firstWriterRelease = new Promise<void>(resolve => { releaseFirstWriter = resolve })
+        let writes = 0
+        const store = createFileKv({
+            dataRoot,
+            manifestWriter: async next => {
+                if (writes++ === 0) {
+                    firstWriterStarted()
+                    await firstWriterRelease
+                    throw new Error('manifest write failed')
+                }
+                atomicWriteJson(dataRoot, 'kv/manifest.json', next)
+            },
+        })
+        store.kvSet('assets/remove-me', Buffer.from('remove'))
+
+        const failed = store.kvSetManyFromFilesAsync([{ key: 'assets/failed', sourcePath: failedPath }])
+        await firstWriterStartedPromise
+        store.kvDel('assets/remove-me')
+        const later = store.kvSetManyFromFilesAsync([{ key: 'assets/later', sourcePath: laterPath }])
+        await waitForStagedSourceConsumption(laterPath)
+        releaseFirstWriter()
+        await expect(failed).rejects.toThrow('manifest write failed')
+        await later
+
+        expect(store.kvList()).toEqual(['assets/later'])
+        expect(createFileKv({ dataRoot }).kvList()).toEqual(['assets/later'])
+    })
+
     it('continues queued staged-file commits after a manifest write failure', async () => {
         const dataRoot = root()
         const stagingRoot = root()
