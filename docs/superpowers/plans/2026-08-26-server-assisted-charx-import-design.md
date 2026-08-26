@@ -179,19 +179,21 @@ manifest structures to the CharX route.
 Limits are checked incrementally so an attacker cannot bypass them with absent or
 incorrect ZIP metadata.
 
-- Compressed request body: maximum 1 GiB; reject known oversized `Content-Length`
+- Compressed request body: maximum 256 MiB; reject known oversized `Content-Length`
   before processing and stop once the streamed count exceeds the limit.
 - Total decompressed data: maximum 2 GiB across all entries.
 - Entry count: maximum 10,000 regular entries.
 - `card.json`: exactly one, maximum 4 MiB, valid UTF-8 JSON, and a character card with
-  `spec` equal to `chara_card_v2` or `chara_card_v3`.
+  `spec` equal to `chara_card_v3`, matching the existing CharX entry-point validation.
 - `module.risum`: zero or one, maximum 16 MiB.
 - Asset entry: preserve the existing 50 MiB per-file behavior. Oversized assets are
   drained but excluded and reported rather than failing the whole import.
 - Entry names: reject NUL bytes, absolute paths, drive prefixes, backslashes,
   traversal components, and duplicate normalized names.
-- ZIP integrity errors, encrypted entries, unsupported compression, truncated input,
-  and CRC failures fail the complete import.
+- ZIP parser/decompression errors, encrypted entries, unsupported compression, and
+  truncated input fail the complete import. The existing fflate streaming API does
+  not expose central-directory CRC values, so CRC verification is not added in this
+  change.
 
 The route checks authentication and the active writer session before consuming the
 body. A process-local CharX import lock permits one server-assisted CharX import at a
@@ -243,7 +245,7 @@ again in version one.
 - Node deployments automatically use the new route for `.charx` files of every size,
   avoiding two Node-mode implementations with size-dependent behavior.
 - Non-Node deployments retain the current importer and current limits.
-- Card v2/v3 acceptance, module/lorebook integration, `returnCharacter`, character
+- Card v3 acceptance, module/lorebook integration, `returnCharacter`, character
   ordering, success notification, and navigation behavior stay in the existing client
   code.
 - The result asset map uses the same original ZIP names and storage-key format as the
