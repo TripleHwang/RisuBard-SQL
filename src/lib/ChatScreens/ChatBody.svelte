@@ -9,6 +9,11 @@
     import { getModuleAssets } from "src/ts/process/modules";
     import { getCurrentCharacter } from "src/ts/storage/database.svelte";
     import { getFileSrc } from "src/ts/globalApi.svelte";
+    import { canApplyResolvedChatImage, clearGenericChatImageStyles, createChatAssetUrlResolver, isFirstMessageStudioManagedImage } from './chatImageHandling'
+
+    // Module assets are often repeated across several of the 40/60 mounted
+    // rows. Keep URL conversion single-flight across those rows.
+    const resolveChatAssetUrl = createChatAssetUrlResolver(getFileSrc)
 
     interface Props {
         character?: simpleCharacterArgument|string|null
@@ -109,7 +114,7 @@
             }
             if(retranslate || translated){
                 if (DBState.db.showTranslationLoading) {
-                    lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid #3b82f6; border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
+                    lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid var(--color-primary); border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
                 }
 
                 let transResult
@@ -189,8 +194,9 @@
             const exactAssets = new Map(normalizedAssets.map((asset) => [asset.name, asset.path]))
 
             imgs.forEach(async (img) => {
+                const studioManagedImage = isFirstMessageStudioManagedImage(img)
+                if (studioManagedImage) clearGenericChatImageStyles(img)
                 const name = img.getAttribute('src')?.toLocaleLowerCase() || ''
-                console.log(name)
 
                 if(
                     name.length > 200 ||
@@ -201,11 +207,18 @@
                 }
                 
                 const foundAsset = exactAssets.get(name)
-                console.log('Checking image:', name, 'Assets:', assets)
                 if(foundAsset){
-                    img.classList.add('root-loaded-image')
-                    img.classList.add('root-loaded-image-' + styl)
-                    img.src = await getFileSrc(foundAsset)
+                    if (!studioManagedImage) {
+                        img.classList.add('root-loaded-image')
+                        img.classList.add('root-loaded-image-' + styl)
+                    }
+                    const got = await resolveChatAssetUrl(foundAsset)
+                    // The message DOM and enabled modules can change while a
+                    // service-worker/storage request is in flight. Never let
+                    // a stale result replace a newly rendered image.
+                    if (got && canApplyResolvedChatImage(img, name)) {
+                        img.src = got
+                    }
                     return
                 }
 
@@ -228,13 +241,13 @@
                     }
                 }
                 if(currentFound){
-                    const got = await getFileSrc(currentFound)
+                    const got = await resolveChatAssetUrl(currentFound)
                     const name2 = img.getAttribute('src')?.toLocaleLowerCase() || ''
-                    if(name === name2){
+                    if(got && canApplyResolvedChatImage(img, name) && name === name2){
                         img.setAttribute('src', got)
                     }
 
-                    if(img.classList.length === 0){
+                    if(!studioManagedImage && img.classList.length === 0){
                         img.classList.add('root-loaded-image')
                         img.classList.add('root-loaded-image-' + styl)
                     }

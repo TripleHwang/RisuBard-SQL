@@ -1,20 +1,24 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
+    import ManagerResizeHandles from './ManagerResizeHandles.svelte';
 
     let {
         title,
         description,
         showTitle = true,
+        resizable = false,
         children,
     }: {
         title: string;
         description?: string;
         showTitle?: boolean;
+        resizable?: boolean;
         children?: Snippet;
     } = $props();
+    let pageElement: HTMLElement | null = $state(null);
 </script>
 
-<section data-settings-page class="settings-standard-page">
+<section bind:this={pageElement} data-settings-page class="settings-standard-page" class:settings-standard-page--resizable={resizable}>
     {#if showTitle}
         <header data-settings-page-header class="settings-standard-page__header">
             <h1>{title}</h1>
@@ -26,4 +30,25 @@
     <div data-settings-page-body class="settings-standard-page__body">
         {@render children?.()}
     </div>
+    {#if resizable}<ManagerResizeHandles target={pageElement} />{/if}
 </section>
+
+<style>
+    .settings-standard-page--resizable {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        width: var(--manager-width, min(100%, calc((var(--settings-content-width, 58rem) - 2 * var(--settings-page-gutter, 0rem)) * 1.3)));
+        max-width: 100%;
+        min-width: 0;
+        height: var(--manager-height, min(76dvh, 52rem));
+        min-height: min(24rem, calc(100dvh - 1rem));
+        max-height: calc(100dvh - 1rem);
+        padding-bottom: .75rem;
+    }
+    .settings-standard-page--resizable > .settings-standard-page__header { flex-shrink: 0; }
+    .settings-standard-page--resizable > .settings-standard-page__body { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; }
+    @media (max-width: 640px) {
+        .settings-standard-page--resizable { width: 100%; height: max(38rem, calc(100dvh - 8rem)); max-height: none; padding-bottom: 0; }
+    }
+</style>

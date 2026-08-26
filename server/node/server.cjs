@@ -3242,7 +3242,13 @@ function resolveAssetPayload(key, rawValue) {
 
     // assets/* and others: raw binary
     const ext = key.split('.').pop()?.toLowerCase()
-    const contentType = ASSET_EXT_MIME[ext] || detectMime(rawValue)
+    // Imported .risum manifests can carry a stale extension (notably WebP
+    // bytes named .png). Prefer a recognised binary signature so existing
+    // imported modules render correctly without a destructive re-import.
+    const detectedType = detectMime(rawValue)
+    const contentType = detectedType !== 'application/octet-stream'
+        ? detectedType
+        : ASSET_EXT_MIME[ext] || detectedType
     return { binary: rawValue, contentType }
 }
 

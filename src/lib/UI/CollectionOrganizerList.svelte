@@ -32,6 +32,7 @@
     import { getDatabase } from 'src/ts/storage/database.svelte'
     import ShButton from './GUI/ShButton.svelte'
     import TextInput from './GUI/TextInput.svelte'
+    import { resizeHandle } from 'src/ts/gui/resizeHandle'
 
     interface Props {
         kind: CollectionKind
@@ -58,6 +59,8 @@
     let draggedItemIds = $state<string[]>([])
     let primaryDraggedItemId = $state<string | null>(null)
     let draggedFolderId = $state<string | null>(null)
+    let organizerElement: HTMLElement | null = $state(null)
+    let sidebarWidth = $state<number | null>(null)
 
     const itemIds = $derived(items.map((item) => item.id))
     const organizerState = $derived(normalizeCollectionOrganizerState(
@@ -219,10 +222,27 @@
         draggedItemIds = []
         primaryDraggedItemId = null
     }
+
+    function startPaneResize() {
+        const element = organizerElement
+        if (!element) return
+        const { width } = element.getBoundingClientRect()
+        const initial = sidebarWidth ?? Math.min(208, width * 0.45)
+        const maximum = Math.max(176, Math.min(420, width * 0.55))
+        return (dx: number) => {
+            sidebarWidth = Math.min(maximum, Math.max(176, initial + dx))
+        }
+    }
+
+    function resetPaneResize() {
+        sidebarWidth = null
+    }
 </script>
 
 <div
-    class="grid min-h-72 overflow-hidden rounded-md border border-darkborderc md:grid-cols-[13rem_minmax(0,1fr)]"
+    bind:this={organizerElement}
+    class="collection-organizer grid min-h-72 overflow-hidden rounded-md border border-darkborderc md:grid-cols-[var(--collection-sidebar-width,13rem)_minmax(0,1fr)]"
+    style:--collection-sidebar-width={sidebarWidth === null ? undefined : `${sidebarWidth}px`}
     data-collection-organizer-list={kind}
 >
     <aside class="flex max-h-60 min-h-0 flex-col border-b border-darkborderc p-2 md:max-h-none md:border-b-0 md:border-r">
@@ -293,6 +313,15 @@
         </div>
     </aside>
 
+    <button
+        type="button"
+        class="collection-organizer__pane-resizer"
+        data-collection-pane-resizer
+        aria-label={copy.resizePanes}
+        title={copy.resizeHint}
+        use:resizeHandle={{ start: startPaneResize, reset: resetPaneResize }}
+    ><span></span></button>
+
     <section class="flex min-h-0 min-w-0 flex-col gap-2 p-3">
         <div class="flex flex-col gap-2 sm:flex-row">
             <TextInput className="min-w-0 grow" bind:value={search} placeholder={copy.searchPlaceholder} />
@@ -362,3 +391,39 @@
         </div>
     </section>
 </div>
+
+<style>
+    .collection-organizer { position: relative; }
+    .collection-organizer__pane-resizer {
+        position: absolute;
+        z-index: 5;
+        top: 0;
+        bottom: 0;
+        left: calc(var(--collection-sidebar-width, 13rem) - .3rem);
+        width: .6rem;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        cursor: col-resize;
+        touch-action: none;
+    }
+    .collection-organizer__pane-resizer::before {
+        position: absolute;
+        top: 50%;
+        left: .2rem;
+        width: .2rem;
+        height: 3rem;
+        border-radius: 999px;
+        background: var(--color-darkborderc);
+        content: '';
+        transition: background 120ms ease, height 120ms ease;
+    }
+    .collection-organizer__pane-resizer:hover::before,
+    .collection-organizer__pane-resizer:focus-visible::before,
+    .collection-organizer__pane-resizer:global([data-resizing])::before {
+        height: 4rem;
+        background: var(--color-borderc);
+    }
+    .collection-organizer__pane-resizer:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-borderc) 70%, transparent); outline-offset: -2px; }
+    @media (max-width: 767px) { .collection-organizer__pane-resizer { display: none; } }
+</style>

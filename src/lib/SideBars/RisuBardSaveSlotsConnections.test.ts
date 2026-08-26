@@ -33,6 +33,17 @@ const databaseSource = readFileSync(resolve(
 const koreanSource = readFileSync(resolve(process.cwd(), 'src/lang/ko.ts'), 'utf8')
 
 describe('chat file save slot connections', () => {
+    test('opens save mode in every chat theme and only writes after choosing a slot', () => {
+        expect(chatScreenSource.match(/onSaveChat=\{\(\) => openSaveSlots\('save'\)\}/g))
+            .toHaveLength(3)
+        expect(chatScreenSource.match(/onOpenChatLoad=\{\(\) => openSaveSlots\('load'\)\}/g))
+            .toHaveLength(3)
+        expect(chatScreenSource).toContain('bind:mode={saveSlotsMode}')
+        expect(chatScreenSource).toContain('onSave={saveCurrentChat}')
+        expect(chatScreenSource).toContain('saveId: saveId ?? v4()')
+        expect(chatScreenSource).toContain('overwrite: saveId !== undefined')
+    })
+
     test('removes save and load actions from the character sidebar', () => {
         expect(source).toContain('data-chat-file-header')
         expect(source).not.toContain('data-chat-file-toolbar')
@@ -170,12 +181,15 @@ describe('chat file save slot connections', () => {
         )
     })
 
-    test('loads into a new chat and finalizes its wiki only after persistence', () => {
-        expect(chatScreenSource).toContain('const destinationChatId = v4()')
+    test('replaces the current chat and finalizes its wiki only after persistence', () => {
+        expect(chatScreenSource).toContain('const destinationChatId = currentChat.id')
+        expect(chatScreenSource).toMatch(/prepareMemorySaveLoad\(\{[^}]*currentChat,/)
         expect(chatScreenSource).toContain('destinationChatId,')
         expect(chatScreenSource).toContain('loadedChat.id = destinationChatId')
-        expect(chatScreenSource).toContain('character.chats.unshift(loadedChat)')
-        expect(chatScreenSource).toContain('changeChatTo(0)')
+        expect(chatScreenSource).toContain('character.chats[chatIdx] = loadedChat')
+        expect(chatScreenSource).toContain('character.chats[chatIdx] = currentChat')
+        expect(chatScreenSource).toContain('changeChatTo(chatIdx)')
+        expect(chatScreenSource).not.toContain('character.chats.unshift(loadedChat)')
         expect(chatScreenSource).toMatch(
             /prepareMemorySaveLoad[\s\S]*requestImmediateSave[\s\S]*action: 'finalize'/
         )

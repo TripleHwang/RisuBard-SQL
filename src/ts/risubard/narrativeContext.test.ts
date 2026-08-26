@@ -438,6 +438,8 @@ describe('selectNarrativeWorkingMessages', () => {
         expect(normalizeNarrativeWorkingMessageLimit(undefined)).toBe(12)
         expect(normalizeNarrativeWorkingMessageLimit(0)).toBe(12)
         expect(normalizeNarrativeWorkingMessageLimit(101)).toBe(12)
+        expect(normalizeNarrativeWorkingMessageLimit(Infinity)).toBe(12)
+        expect(normalizeNarrativeWorkingMessageLimit(Number.MAX_SAFE_INTEGER + 1)).toBe(12)
         expect(normalizeNarrativeWorkingMessageLimit(24)).toBe(24)
     })
 

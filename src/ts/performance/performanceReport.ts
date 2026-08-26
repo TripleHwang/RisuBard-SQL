@@ -3,6 +3,7 @@ export type DurationMetric =
     | 'bootstrap-fetch' | 'bootstrap-json' | 'first-interactive'
     | 'character-hydration' | 'message-page-fetch' | 'sql-commit'
     | 'render-batch' | 'chat-selection' | 'long-task'
+    | 'sql-auth' | 'sql-open' | 'bootstrap-rebuild'
 
 export type ResourceSample = {
     hydratedChats: number

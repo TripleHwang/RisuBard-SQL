@@ -473,6 +473,36 @@ describe('RisuSavePatcher.set — botPresets path', () => {
     })
 })
 
+describe('RisuSavePatcher.set — large lorebook character patch', () => {
+    test('patches and round-trips roughly 30k changed lorebook entries without a spread overflow', async () => {
+        const count = 30_000
+        const makeCharacter = (content: string) => ({
+            chaId: 'large-lorebook-character',
+            chats: [],
+            globalLore: Array.from({ length: count }, (_, index) => ({
+                key: [`key-${index}`],
+                content,
+                comment: content,
+                secondkey: content,
+                selectiveLogic: content,
+                insertorder: content,
+            })),
+        })
+        const initial = { characters: [makeCharacter('before')], botPresets: [], modules: [] }
+        const next = { characters: [makeCharacter('after')], botPresets: [], modules: [] }
+        const patcher = new RisuSavePatcher()
+        await patcher.init(initial)
+
+        const { patch } = await patcher.set(next, {
+            ...emptyToSave(),
+            character: ['large-lorebook-character'],
+        })
+
+        expect(patch).toHaveLength(count * 5)
+        expect(applyOpsTo(normalizeJSON(initial), patch)).toEqual(normalizeJSON(next))
+    }, 20_000)
+})
+
 // ──────────────────────────────────────────────────────────────────────────
 // Round-trip integrity — the strongest correctness invariant:
 //

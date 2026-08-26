@@ -63,7 +63,7 @@ export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer |
 }
 
 let fileCache: {
-    origin: string[], res: (Uint8Array | 'loading' | 'done')[]
+    origin: string[], res: (Uint8Array | 'loading' | 'done' | 'failed')[]
 } = {
     origin: [],
     res: []
@@ -71,6 +71,22 @@ let fileCache: {
 
 let pathCache: { [key: string]: string } = {}
 let checkedPaths: string[] = []
+
+function getAssetMimeType(data: Uint8Array): string {
+    if (data.length >= 12
+        && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+        && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return 'image/webp'
+    if (data.length >= 8 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return 'image/png'
+    if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) return 'image/jpeg'
+    if (data.length >= 3 && data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) return 'image/gif'
+    if (data.length >= 12 && data[0] === 0x1a && data[1] === 0x45) return 'video/webm'
+    if (data.length >= 8 && data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) return 'video/mp4'
+    return 'application/octet-stream'
+}
+
+function getAssetDataUrl(data: Uint8Array): string {
+    return `data:${getAssetMimeType(data)};base64,${Buffer.from(data).toString('base64')}`
+}
 
 function buildTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number | undefined) {
     if (!timeoutMs || timeoutMs <= 0) {
@@ -114,10 +130,22 @@ export async function getFileSrc(loc: string) {
         if (usingSw) {
             const encoded = Buffer.from(loc, 'utf-8').toString('hex')
             let ind = fileCache.origin.indexOf(loc)
+            let shouldLoad = false
             if (ind === -1) {
                 ind = fileCache.origin.length
                 fileCache.origin.push(loc)
                 fileCache.res.push('loading')
+                shouldLoad = true
+            }
+            else if (fileCache.res[ind] === 'failed') {
+                // A service-worker registration can fail transiently (for
+                // example while the worker is activating). Retry on a later
+                // render rather than leaving every caller in a loading loop.
+                fileCache.res[ind] = 'loading'
+                shouldLoad = true
+            }
+
+            if (shouldLoad) {
                 try {
                     const hasCache: boolean = (await (await fetch("/sw/check/" + encoded)).json()).able
                     if (hasCache) {
@@ -135,18 +163,41 @@ export async function getFileSrc(loc: string) {
                     }
                     return "/sw/img/" + encoded
                 } catch (error) {
-
+                    // Do not leave this entry as `loading`: all other chat
+                    // rows resolving the same module image wait on this
+                    // state. Use the regular storage result as a fallback so
+                    // the image still appears while the worker is activating.
+                    console.warn('Failed to resolve service-worker asset', loc, error)
+                    try {
+                        const fallback = await forageStorage.getItem(loc) as unknown as Uint8Array
+                        if (fallback?.length) {
+                            fileCache.res[ind] = fallback
+                            return getAssetDataUrl(fallback)
+                        }
+                    } catch (fallbackError) {
+                        console.warn('Failed to read service-worker asset fallback', loc, fallbackError)
+                    }
+                    // A future render is allowed to retry an actual miss.
+                    fileCache.res[ind] = 'failed'
+                    return ''
                 }
             }
-            else {
-                const f = fileCache.res[ind]
-                if (f === 'loading') {
-                    while (fileCache.res[ind] === 'loading') {
-                        await sleep(10)
-                    }
+
+            if (fileCache.res[ind] === 'loading') {
+                while (fileCache.res[ind] === 'loading') {
+                    await sleep(10)
                 }
+            }
+            const cachedResult = fileCache.res[ind]
+            if (cachedResult === 'done') {
                 return "/sw/img/" + encoded
             }
+            if (cachedResult instanceof Uint8Array) {
+                return getAssetDataUrl(cachedResult)
+            }
+            // The in-flight owner failed. Returning an empty source lets the
+            // caller's single-flight image resolver retry on its next render.
+            return ''
         }
         else {
             let ind = fileCache.origin.indexOf(loc)
@@ -156,7 +207,7 @@ export async function getFileSrc(loc: string) {
                 fileCache.res.push('loading')
                 const f: Uint8Array = await forageStorage.getItem(loc) as unknown as Uint8Array
                 fileCache.res[ind] = f
-                return `data:image/png;base64,${Buffer.from(f).toString('base64')}`
+                return getAssetDataUrl(f)
             }
             else {
                 const f = fileCache.res[ind]
@@ -164,9 +215,9 @@ export async function getFileSrc(loc: string) {
                     while (fileCache.res[ind] === 'loading') {
                         await sleep(10)
                     }
-                    return `data:image/png;base64,${Buffer.from(fileCache.res[ind]).toString('base64')}`
+                    return getAssetDataUrl(fileCache.res[ind] as Uint8Array)
                 }
-                return `data:image/png;base64,${Buffer.from(f).toString('base64')}`
+                return getAssetDataUrl(f as Uint8Array)
             }
         }
     } catch (error) {

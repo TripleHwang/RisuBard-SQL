@@ -17,7 +17,7 @@
         getLatestChatPage,
         normalizeChatPageSize,
     } from 'src/ts/chatPagination';
-    import { isCurrentChatWindowRequest } from 'src/ts/chatWindow';
+    import { isCurrentChatWindowRequest, isNearReverseScrollTop } from 'src/ts/chatWindow';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -121,6 +121,8 @@ import { isMobile } from 'src/ts/platform'
     let chatWindowVersion = $state(0)
     let paginationMessageCount = $state(0)
     let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
+    let loadingPreviousScrollWindow = false
+    let previousScrollLoadArmed = true
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -296,18 +298,19 @@ import { isMobile } from 'src/ts/platform'
         scrollWithinContainer(messages[0].el, container, { block: 'start', behavior: 'smooth' })
     }
 
-    async function selectChatPage(page: number, scrollToLatest = false) {
+    async function selectChatPage(page: number, scrollToLatest = false, scrollToPreviousBottom = false) {
         // A manual page move wins over any in-flight reverse-page anchor.
         chatWindowVersion += 1
         chatPage = getChatPageBounds(currentChat.length, chatPageSize, page).page
         chatFoldedState.data = null
         await tick()
         if (scrollToLatest) chatsInstance?.scrollToLatestMessage()
+        else if (scrollToPreviousBottom) scrollToLoadedBottom('instant')
         else scrollToLoadedTop()
     }
 
-    async function selectPreviousChatPage() {
-        if (chatPage > 0) return selectChatPage(chatPage - 1)
+    async function selectPreviousChatPage(fromScroll = false) {
+        if (chatPage > 0) return selectChatPage(chatPage - 1, false, fromScroll)
         const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
         if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
@@ -342,12 +345,31 @@ import { isMobile } from 'src/ts/platform'
     }
 
     // Literal bottom of the scroll (end of the latest message).
-    function scrollToLoadedBottom() {
+    function scrollToLoadedBottom(behavior: ScrollBehavior = 'smooth') {
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
         if (!container) return
         const messages = getLoadedMessages(container)
         if (messages.length === 0) return
-        scrollWithinContainer(messages[messages.length - 1].el, container, { block: 'end', behavior: 'smooth' })
+        scrollWithinContainer(messages[messages.length - 1].el, container, { block: 'end', behavior })
+    }
+
+    function loadPreviousWindowOnScroll(container: HTMLElement) {
+        const nearTop = isNearReverseScrollTop(container, 160)
+        if (!nearTop) {
+            previousScrollLoadArmed = true
+            return
+        }
+        if (!previousScrollLoadArmed || loadingPreviousScrollWindow) return
+        const canMoveBack = chatPage > 0 || !!(currentChatSlot as any)?._sqlWindow?.hasOlder
+        if (!canMoveBack) return
+        previousScrollLoadArmed = false
+        loadingPreviousScrollWindow = true
+        void (async () => {
+            const shiftedWithinPage = await chatsInstance?.revealOlderMessages?.()
+            if (!shiftedWithinPage) await selectPreviousChatPage(true)
+        })().finally(() => {
+            requestAnimationFrame(() => { loadingPreviousScrollWindow = false })
+        })
     }
 
     function navigateMessage(direction: 'prev' | 'next') {
@@ -1470,6 +1492,7 @@ import { isMobile } from 'src/ts/platform'
             if(isAtBottom){
                 showNewMessageButton = false;
             }
+            loadPreviousWindowOnScroll(chatTarget)
         }}>
             {@render composerCluster()}
 

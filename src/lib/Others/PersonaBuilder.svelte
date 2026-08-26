@@ -10,6 +10,7 @@
         DEFAULT_PERSONA_BUILDER_TASK_PROMPT,
         buildPersonaBuilderMessages,
         collectPersonaBuilderSources,
+        matchPersonaBuilderCharacterLorebook,
         type PersonaBuilderSelections,
         type PersonaBuilderSourceSnapshot,
     } from 'src/ts/personaBuilder'
@@ -98,16 +99,18 @@
     async function sendRequest() {
         if (generating) return
         error = ''
+        const requestCharacter = currentCharacter
+        const requestInput = {
+            taskInstruction,
+            styleInstruction,
+            userInstruction,
+            draft,
+            selections: { ...selections },
+            sources: { ...sources, characterLorebook: '' },
+        }
         let formated
         try {
-            formated = buildPersonaBuilderMessages({
-                taskInstruction,
-                styleInstruction,
-                userInstruction,
-                draft,
-                selections,
-                sources,
-            })
+            formated = buildPersonaBuilderMessages(requestInput)
         }
         catch (cause) {
             error = cause instanceof Error && cause.message === 'persona-builder-task-required'
@@ -120,10 +123,21 @@
         abortController = controller
         generating = true
         try {
+            if (requestInput.selections.characterLorebook) {
+                const matched = await matchPersonaBuilderCharacterLorebook({
+                    character: requestCharacter,
+                    userInstruction: requestInput.userInstruction,
+                    draft: requestInput.draft,
+                })
+                if (controller.signal.aborted) return
+                requestInput.sources.characterLorebook = matched.content
+                requestInput.sources.characterLorebookSources = matched.sources
+                formated = buildPersonaBuilderMessages(requestInput)
+            }
             const response = await requestChatData({
                 formated,
                 bias: {},
-                currentChar: currentCharacter,
+                currentChar: requestCharacter,
                 useStreaming: false,
                 noMultiGen: true,
                 tools: [],

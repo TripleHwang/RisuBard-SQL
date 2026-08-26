@@ -34,7 +34,7 @@ import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
-import { markPerformance } from './performance/startupMetrics'
+import { markPerformance, measurePerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
 import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
@@ -83,7 +83,7 @@ async function loadDeferredModules(): Promise<void> {
 }
 
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
-    LoadingStatusState.text = "Opening SQL Database..."
+    LoadingStatusState.text = "Migrating Local Save to SQL Database..."
     const canonical = await openStandaloneSql(decoded, {
         beforeMigrate: async () => {
             const existing = await forageStorage.getItem(SQL_MIGRATION_BACKUP_PATH) as unknown as Uint8Array
@@ -111,6 +111,7 @@ export async function loadData() {
                 await forageStorage.Init()
 
                 LoadingStatusState.text = "Opening SQL Database..."
+                markPerformance('sql-open:start')
                 const existingSql = await openExistingStandaloneSql()
                 startupMode = existingSql?.mode
                 if (existingSql?.usingSql) {
@@ -140,6 +141,7 @@ export async function loadData() {
                     try {
                         const decoded = await decodeRisuSave(gotStorage)
                         console.log(decoded)
+                        LoadingStatusState.text = "Migrating Local Save to SQL Database..."
                         await activateCanonicalDatabase(decoded, gotStorage)
                     } catch (error) {
                         console.error(error)
@@ -150,6 +152,7 @@ export async function loadData() {
                                 LoadingStatusState.text = `Reading Backup File ${backup}...`
                                 const backupData: Uint8Array = await forageStorage.getItem(`database/dbbackup-${backup}.bin`) as unknown as Uint8Array
                                 const backupDecoded = await decodeRisuSave(backupData)
+                                LoadingStatusState.text = "Migrating Backup to SQL Database..."
                                 await activateCanonicalDatabase(backupDecoded, backupData)
                                 backupLoaded = true
                                 break
@@ -160,6 +163,9 @@ export async function loadData() {
                         }
                     }
                 }
+
+                markPerformance('sql-open:end')
+                measurePerformance('sql-open', 'sql-open:start', 'sql-open:end')
 
             }
             if (createdFreshDatabase) {
@@ -248,6 +254,10 @@ export async function loadData() {
             if (startupMode === 'metadata-first') startMetadataPersistence()
             else saveDb()
             scheduleAfterFirstPaint(() => loadDeferredModules())
+            // Asset URLs use the cookie session, but SQL bootstrap only needs
+            // its JWT header. Establish the cookie after a paint so it cannot
+            // add a serial network round trip to the opening screen.
+            scheduleAfterFirstPaint(() => forageStorage.ensureSession())
             scheduleAfterFirstPaint(() => cleanChunks(), 5_000)
             scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))
             scheduleAfterFirstPaint(() => initModelJobRecovery())

@@ -11,12 +11,12 @@
         backStudioRuntime,
         createScopedStudioCss,
         createStudioRuntime,
+        hasFirstMessageStudioPresentation,
         interpolateStudioTemplate,
         localizeStudioText,
         resetStudioRuntime,
-        resolveStudioLocale,
+        resolveStudioProjectLocale,
         setStudioInput,
-        toFirstMessageStudioLocale,
         type FirstMessageStudioProject,
         type FirstMessageStudioRuntime,
     } from 'src/ts/firstMessageStudio'
@@ -24,24 +24,68 @@
     interface Props {
         project: FirstMessageStudioProject
         variables?: Record<string, string>
+        assets?: [string, string, string][]
         preview?: boolean
         onChange?: (runtime: FirstMessageStudioRuntime) => void
     }
 
-    let { project, variables = {}, preview = false, onChange }: Props = $props()
+    let { project, variables = {}, assets = [], preview = false, onChange }: Props = $props()
     const scopeId = `fmstudio-${++studioScopeCounter}`
-    const appLocale = toFirstMessageStudioLocale(getCurrentLocale())
+    const appLocale = getCurrentLocale()
     let runtime = $state(untrack(() => createStudioRuntime(project, variables, appLocale)))
     let projectSignature = $state('')
     let validationError = $state('')
+    let activeOptionId = $state('')
+    let presentationImageSrc = $state('')
+    const presentationImageCache = new Map<string, string>()
+    let presentationImageAssetPath = ''
+    let presentationImageRequest = 0
     let stage = $derived(project.stages.find((candidate) => candidate.id === runtime.stageId) ?? project.stages[0])
+    let activeOption = $derived.by(() => {
+        const options = stage?.options ?? []
+        const selected = options.find((option) => option.id === activeOptionId)
+        if (selected && hasFirstMessageStudioPresentation(selected.presentation)) return selected
+        return options.find((option) => hasFirstMessageStudioPresentation(option.presentation)) ?? selected ?? options[0]
+    })
     let stageIndex = $derived(Math.max(0, project.stages.findIndex((candidate) => candidate.id === runtime.stageId)))
-    let locale = $derived(resolveStudioLocale(runtime.variables, runtime.locale))
+    let locale = $derived(resolveStudioProjectLocale(project, runtime.variables, runtime.locale))
+    let projectTitle = $derived(localizeStudioText(project.title, locale))
     let scopedCss = $derived(createScopedStudioCss(scopeId, project.customCss))
     let customHtml = $derived(DOMPurify.sanitize(
         interpolateStudioTemplate(project.customHtml, runtime.variables),
         { FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'] },
     ))
+
+    $effect(() => {
+        const presentation = activeOption?.presentation
+        const assetPath = presentation?.imageEnabled && presentation.imageAssetName
+            ? assets.find((asset) => asset[0] === presentation.imageAssetName)?.[1]
+            : undefined
+        if (!assetPath) {
+            presentationImageAssetPath = ''
+            presentationImageRequest++
+            presentationImageSrc = ''
+            return
+        }
+        if (assetPath === presentationImageAssetPath && presentationImageSrc) return
+        presentationImageAssetPath = assetPath
+        const cached = presentationImageCache.get(assetPath)
+        if (cached) {
+            presentationImageSrc = cached
+            return
+        }
+        const request = ++presentationImageRequest
+        presentationImageSrc = ''
+        import('src/ts/globalApi.svelte')
+            .then(({ getFileSrc }) => getFileSrc(assetPath))
+            .then((source) => {
+                presentationImageCache.set(assetPath, source)
+                if (request === presentationImageRequest && assetPath === presentationImageAssetPath) presentationImageSrc = source
+            })
+            .catch(() => {
+                if (request === presentationImageRequest && assetPath === presentationImageAssetPath) presentationImageSrc = ''
+            })
+    })
 
     $effect(() => {
         const nextSignature = JSON.stringify(project)
@@ -98,6 +142,10 @@
         runtime = setStudioInput(runtime, variable, value)
     }
 
+    function previewOption(option: NonNullable<typeof stage>['options'][number]) {
+        if (hasFirstMessageStudioPresentation(option.presentation)) activeOptionId = option.id
+    }
+
     function goBack() {
         validationError = ''
         runtime = backStudioRuntime(runtime)
@@ -120,12 +168,12 @@
     class="studio-window skin-{project.appearance.preset}"
     data-first-message-studio-runtime
     data-studio-skin={project.appearance.preset}
-    aria-label={project.title}
+    aria-label={projectTitle}
     style={`--studio-accent:${project.appearance.accentColor};--studio-bg:${project.appearance.backgroundColor};--studio-surface:${project.appearance.surfaceColor};--studio-text:${project.appearance.textColor};--studio-columns:${project.appearance.optionColumns};--studio-radius:${project.appearance.cornerRadius}px`}
 >
     {#if project.appearance.showHeader || project.appearance.showProgress}
         <header class="window-header">
-            {#if project.appearance.showHeader}<strong>{project.title}</strong>{/if}
+            {#if project.appearance.showHeader}<strong>{projectTitle}</strong>{/if}
             {#if project.appearance.showProgress}
                 <div class="progress" aria-label={locale === 'ko' ? '진행 단계' : locale === 'ja' ? '進行段階' : 'Progress'}>
                     {#each project.stages as item, index}
@@ -152,14 +200,41 @@
                     {#if localizeStudioText(stage.tag, locale)}<span>{localizeStudioText(stage.tag, locale)}</span>{/if}
                     <h3>{localizeStudioText(stage.title, locale)}</h3>
                 </div>
-                <div class="description">
-                    {#if stage.speaker}<b>{localizeStudioText(stage.speaker, locale)}</b>{/if}
-                    <p>{localizeStudioText(stage.description, locale)}</p>
-                </div>
+                {#if stage.optionPresentationEnabled && activeOption?.presentation}
+                    <div class="option-presentation" class:with-image={Boolean(presentationImageSrc && activeOption.presentation.imageEnabled)} data-studio-option-presentation={activeOption.id}>
+                        {#if presentationImageSrc && activeOption.presentation.imageEnabled}
+                            <div class="presentation-image-frame frame-{activeOption.presentation.imageFrame}" data-studio-presentation-image-frame style:position="relative">
+                                <img
+                                    data-studio-presentation-image
+                                    src={presentationImageSrc}
+                                    alt={localizeStudioText(activeOption.label, locale)}
+                                    style:width|important={activeOption.presentation.imageFrame === 'contain' ? 'auto' : '100%'}
+                                    style:height|important={activeOption.presentation.imageFrame === 'contain' ? 'auto' : '100%'}
+                                    style:max-width|important={activeOption.presentation.imageFrame === 'contain' ? '100%' : 'none'}
+                                    style:max-height|important={activeOption.presentation.imageFrame === 'contain' ? '17rem' : 'none'}
+                                    style:margin|important="0"
+                                    style:position|important={activeOption.presentation.imageFrame === 'contain' ? 'static' : 'absolute'}
+                                    style:inset|important={activeOption.presentation.imageFrame === 'contain' ? 'auto' : '0'}
+                                    style:object-fit|important={activeOption.presentation.imageFrame === 'contain' ? 'contain' : 'cover'}
+                                    style:object-position|important={activeOption.presentation.imageFrame === 'contain' ? '50% 50%' : `${activeOption.presentation.imagePositionX}% ${activeOption.presentation.imagePositionY}%`}
+                                />
+                            </div>
+                        {/if}
+                        <div class="presentation-copy" data-studio-presentation-copy>
+                            {#if activeOption.presentation.speaker}<b data-studio-presentation-speaker>{localizeStudioText(activeOption.presentation.speaker, locale)}</b>{/if}
+                            <p>{localizeStudioText(activeOption.presentation.description, locale)}</p>
+                        </div>
+                    </div>
+                {:else}
+                    <div class="description">
+                        {#if stage.speaker}<b>{localizeStudioText(stage.speaker, locale)}</b>{/if}
+                        <p>{localizeStudioText(stage.description, locale)}</p>
+                    </div>
+                {/if}
                 <div class="options">
                     {#each stage.options as option}
                         <div class="option-wrap" class:with-input={Boolean(option.input)}>
-                            <button type="button" data-studio-option={option.id} onclick={() => choose(option.id)}>
+                            <button type="button" data-studio-option={option.id} onpointermove={() => previewOption(option)} onfocus={() => previewOption(option)} onclick={() => choose(option.id)}>
                                 {#if option.badge}<span class="option-badge">{localizeStudioText(option.badge, locale)}</span>{/if}
                                 <span class="option-copy">
                                     <strong>{localizeStudioText(option.label, locale)}</strong>
@@ -202,7 +277,7 @@
 </section>
 
 <style>
-    .studio-window{position:relative;width:min(34rem,100%);margin:1rem auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--studio-text) 14%,transparent);border-radius:var(--studio-radius);color:var(--studio-text);background:var(--studio-bg);box-shadow:0 1.2rem 3.5rem rgba(0,0,0,.28);font-family:ui-sans-serif,system-ui,sans-serif}
+    .studio-window{position:relative;width:min(34rem,100%);margin:1rem auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--studio-text) 14%,transparent);border-radius:var(--studio-radius);color:var(--studio-text);background:var(--studio-bg);box-shadow:0 1.2rem 3.5rem color-mix(in srgb, var(--color-shadow) 28%, transparent);font-family:ui-sans-serif,system-ui,sans-serif}
     .skin-glass{border-color:color-mix(in srgb,var(--studio-accent) 35%,transparent);background:linear-gradient(145deg,color-mix(in srgb,var(--studio-bg) 88%,transparent),color-mix(in srgb,var(--studio-accent) 9%,var(--studio-bg)));backdrop-filter:blur(18px)}
     .window-header{display:flex;align-items:center;gap:1rem;padding:.85rem 1rem;border-bottom:1px solid color-mix(in srgb,var(--studio-text) 12%,transparent);background:color-mix(in srgb,var(--studio-surface) 78%,var(--studio-bg))}
     .window-header>strong{overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}
@@ -218,6 +293,7 @@
     .description{margin:.8rem 0;padding:.75rem;border-left:3px solid var(--studio-accent);border-radius:.25rem;background:color-mix(in srgb,var(--studio-accent) 8%,transparent)}
     .description b{display:block;margin-bottom:.25rem;color:var(--studio-accent);font-size:.68rem;letter-spacing:.06em}
     .description p{margin:0;font-size:.82rem;line-height:1.55}
+    .option-presentation{display:grid;gap:.65rem;margin:.8rem 0}.presentation-image-frame{position:relative;display:grid;width:100%;place-items:center;overflow:hidden;margin-inline:auto;border:1px solid color-mix(in srgb,var(--studio-accent) 30%,transparent);border-radius:calc(var(--studio-radius) * .55);background:color-mix(in srgb,var(--studio-bg) 62%,var(--studio-surface));box-shadow:inset 0 1px color-mix(in srgb,var(--studio-text) 5%,transparent)}.presentation-image-frame.frame-contain{max-height:18rem;padding:.5rem}.presentation-image-frame.frame-square{width:min(100%,20rem);aspect-ratio:1}.presentation-image-frame.frame-landscape{aspect-ratio:16/9}.presentation-image-frame.frame-portrait{width:min(100%,18rem);aspect-ratio:3/4}.presentation-image-frame.frame-contain img{display:block;width:auto;height:auto;max-width:100%;max-height:17rem;object-fit:contain;object-position:center}.presentation-image-frame:not(.frame-contain) img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center}.presentation-copy{display:grid;align-content:center;gap:.42rem;padding:.75rem;border-left:3px solid var(--studio-accent);border-radius:calc(var(--studio-radius) * .25);background:color-mix(in srgb,var(--studio-accent) 7%,transparent)}.presentation-copy b{color:var(--studio-accent);font-size:.7rem;letter-spacing:.06em}.presentation-copy p{margin:0;font-size:.84rem;line-height:1.6}
     .options{display:grid;grid-template-columns:repeat(var(--studio-columns),minmax(0,1fr));gap:.5rem}
     .option-wrap{display:grid;gap:.35rem}
     .option-wrap.with-input{grid-column:1/-1}
@@ -230,7 +306,7 @@
     .input-panel{display:grid;gap:.3rem;padding:.55rem;border:1px dashed color-mix(in srgb,var(--studio-accent) 40%,transparent);border-radius:.35rem}
     .input-panel span{color:var(--studio-accent);font-size:.68rem;font-weight:750}
     .input-panel input{width:100%;border:1px solid color-mix(in srgb,var(--studio-text) 16%,transparent);border-radius:.3rem;padding:.5rem;color:var(--studio-text);background:var(--studio-bg)}
-    .validation{margin:.6rem 0 0;color:#ff8b79;font-size:.72rem}
+    .validation{margin:.6rem 0 0;color:var(--color-danger);font-size:.72rem}
     .complete{display:grid;min-height:14rem;place-content:center;text-align:center}
     .complete strong{color:var(--studio-accent);font-size:1.35rem}
     .complete p{font-size:.8rem}

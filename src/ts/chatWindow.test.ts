@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
     getChatWindow,
+    getChatPageWindow,
     estimateSpacerHeight,
     restoreMessageAnchor,
     isCurrentChatWindowRequest,
+    distanceFromReverseScrollTop,
+    isNearReverseScrollTop,
     validateOlderMessagePage,
     reverseSpacerOrder,
 } from './chatWindow'
@@ -35,6 +38,31 @@ describe('chat DOM window', () => {
         // The fetch resolves after selectChatPage has incremented the version.
         expect(isCurrentChatWindowRequest(pending, { key: 'character/chat', version: 5 })).toBe(false)
         expect(isCurrentChatWindowRequest(pending, { key: 'character/chat', version: 4 })).toBe(true)
+    })
+
+    it('limits virtual rows and spacers to the selected chat page', () => {
+        expect(getChatPageWindow({
+            total: 500,
+            pageStart: 450,
+            pageEnd: 480,
+            anchorIndex: 479,
+            limit: 60,
+        })).toEqual({ start: 450, end: 480, beforeCount: 0, afterCount: 0 })
+        expect(getChatPageWindow({
+            total: 500,
+            pageStart: 200,
+            pageEnd: 400,
+            anchorIndex: 399,
+            limit: 60,
+        })).toEqual({ start: 340, end: 400, beforeCount: 140, afterCount: 0 })
+    })
+
+    it('detects the visual top for negative and mirrored positive reverse scroll offsets', () => {
+        const base = { scrollHeight: 1_000, clientHeight: 400 }
+        expect(distanceFromReverseScrollTop({ ...base, scrollTop: -600 })).toBe(0)
+        expect(distanceFromReverseScrollTop({ ...base, scrollTop: 600 })).toBe(0)
+        expect(isNearReverseScrollTop({ ...base, scrollTop: -500 }, 120)).toBe(true)
+        expect(isNearReverseScrollTop({ ...base, scrollTop: 0 }, 120)).toBe(false)
     })
 })
 

@@ -13,6 +13,11 @@ export interface PersonaDatabaseView {
     selectedPersona: number
 }
 
+export function normalizeSelectedPersonaIndex(personaCount: number, selectedPersona: number): number {
+    if (personaCount <= 0 || !Number.isInteger(selectedPersona)) return 0
+    return Math.min(Math.max(selectedPersona, 0), personaCount - 1)
+}
+
 export function getCharacterPersonas(character?: character | null): RisuPersona[] {
     return character?.personas ?? []
 }
@@ -51,7 +56,7 @@ export function getEffectivePersona(
     const bound = resolvePersonaById(db, character, chat?.bindedPersona)
     if (bound) return bound
 
-    const index = Math.min(Math.max(db.selectedPersona ?? 0, 0), db.personas.length - 1)
+    const index = normalizeSelectedPersonaIndex(db.personas.length, db.selectedPersona)
     const persona = db.personas[index]
     return persona ? { persona, scope: 'global', index } : null
 }

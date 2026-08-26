@@ -59,7 +59,7 @@ import {
 */
 
 const pluginChannel = new Map<string, Function>();
-const documentEventListeners: Array<{type: string, listener: EventListenerOrEventListenerObject, options: any}> = [];
+const documentEventListeners: Array<{target: HTMLElement, type: string, listener: EventListenerOrEventListenerObject, options: any}> = [];
 
 class SafeElement {
     #element: HTMLElement;
@@ -319,8 +319,9 @@ class SafeElement {
                 listener(trimEvent(event))
             }
             this.#eventIdMap.set(id, modifiedListener)
-            documentEventListeners.push({type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
-            document.addEventListener(type, modifiedListener, realOptions)
+            documentEventListeners.push({target: this.#element, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
+            // Element listeners must not receive input meant for an overlying dialog.
+            this.#element.addEventListener(type, modifiedListener, realOptions)
             return id;
         }
         else if(allowedDelayedEventListeners.includes(type)){
@@ -334,8 +335,8 @@ class SafeElement {
                 }, delay);
             }
             this.#eventIdMap.set(id, modifiedListener)
-            documentEventListeners.push({type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
-            document.addEventListener(type, modifiedListener, realOptions);
+            documentEventListeners.push({target: this.#element, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
+            this.#element.addEventListener(type, modifiedListener, realOptions);
             return id;
         }
         else{
@@ -347,7 +348,7 @@ class SafeElement {
         const listener = this.#eventIdMap.get(id);
         if(listener){
             const realOptions = typeof options === 'boolean' ? { capture: options } : options || {};
-            document.removeEventListener(type, listener as EventListenerOrEventListenerObject, realOptions);
+            this.#element.removeEventListener(type, listener as EventListenerOrEventListenerObject, realOptions);
             const idx = documentEventListeners.findIndex(e => e.listener === listener);
             if(idx !== -1) documentEventListeners.splice(idx, 1);
             this.#eventIdMap.delete(id);
@@ -1615,7 +1616,7 @@ export async function loadV3Plugins(plugins:RisuPlugin[]){
     }));
 
     for(const entry of documentEventListeners){
-        document.removeEventListener(entry.type, entry.listener, entry.options);
+        entry.target.removeEventListener(entry.type, entry.listener, entry.options);
     }
     documentEventListeners.length = 0;
 
