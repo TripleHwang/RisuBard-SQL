@@ -18,7 +18,16 @@ import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
 import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
-import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty } from './storage/sql/sqlPersistenceRuntime';
+import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
+
+/** Assign identities before a chat becomes visible, then mark its parent before rows. */
+function markImportedChat(characterId: string, chat: Chat): void {
+    chat.id ||= uuidv4()
+    for (const message of chat.message ?? []) message.chatId ||= uuidv4()
+    markSqlChatDirty(characterId, chat.id, true)
+    for (const message of chat.message ?? []) markSqlMessageDirty(chat.id, message.chatId!, true)
+    if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id)
+}
 
 export function createNewCharacter() {
     let db = getDatabase()
@@ -385,7 +394,6 @@ export async function importChat(){
                             data: formatTavernChat(presedLine.mes, db.characters[selectedID].name),
                             chatId: v4(),
                         })
-                        markSqlMessageDirty(newChat.id!, newChat.message.at(-1)!.chatId!, true)
                     }
                 }
 
@@ -403,6 +411,7 @@ export async function importChat(){
             }
 
             db.characters[selectedID].chats.unshift(newChat)
+            markImportedChat(db.characters[selectedID].chaId, newChat)
             changeChatTo(0)
             notifySuccess(language.successImport)
         }
@@ -433,14 +442,16 @@ export async function importChat(){
                     }
                     chat.id = v4()
                 })
-                db.characters[selectedID].chats.unshift(...chats.map(c => normalizeChat(c)))
+                const imported = chats.map(c => normalizeChat(c))
+                db.characters[selectedID].chats.unshift(...imported)
+                imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
                 notifySuccess(language.successImport)
                 return
             }
             if(json.type === 'risuAllChats' && json.ver === 1){
                 const chats = json.data
                 if(Array.isArray(chats) && chats.length > 0){
-                    db.characters[selectedID].chats.unshift(...(chats.map((v) => {
+                    const imported = chats.map((v) => {
                         if(!v.id){
                             v.id = uuidv4()
                         }
@@ -449,7 +460,9 @@ export async function importChat(){
                         }
                         v.fmIndex ??= -1
                         return normalizeChat(v)
-                    })))
+                    })
+                    db.characters[selectedID].chats.unshift(...imported)
+                    imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
                     notifySuccess(language.successImport)
                     return
                 } else {
@@ -462,7 +475,9 @@ export async function importChat(){
                 if(!(checkNullish(das.message) || checkNullish(das.note) || checkNullish(das.name) || checkNullish(das.localLore))){
                     das.fmIndex ??= -1
                     das.id = v4()
-                    db.characters[selectedID].chats.unshift(normalizeChat(das))
+                    const imported = normalizeChat(das)
+                    db.characters[selectedID].chats.unshift(imported)
+                    markImportedChat(db.characters[selectedID].chaId, imported)
                     notifySuccess(language.successImport)
                     return
                 }
@@ -481,7 +496,9 @@ export async function importChat(){
             const chat = doc.querySelector('.idat').textContent
             const json = JSON.parse(chat)
             if(json.message && json.note && json.name && json.localLore){
-                db.characters[selectedID].chats.unshift(normalizeChat(json))
+                const imported = normalizeChat(json)
+                db.characters[selectedID].chats.unshift(imported)
+                markImportedChat(db.characters[selectedID].chaId, imported)
                 notifySuccess(language.successImport)
             }
             else{
@@ -733,8 +750,11 @@ export async function removeChar(identifier:string|number,name:string, type:'nor
     }
     if(type === 'normal'){
         chars[index].trashTime = Date.now()
+        markSqlCharacterDirty(chars[index].chaId)
     }
     else{
+        // Mark before removal: the dirty builder emits an explicit row delete.
+        markSqlCharacterDirty(chars[index].chaId)
         chars.splice(index, 1)
     }
     checkCharOrder()
