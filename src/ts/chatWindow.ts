@@ -25,6 +25,12 @@ export function estimateSpacerHeight(measured: number[], count: number, fallback
 
 export type MessageAnchor = { id: string, top: number }
 
+export type ChatWindowRequest = { key: string, version: number }
+
+export function isCurrentChatWindowRequest(request: ChatWindowRequest, current: ChatWindowRequest): boolean {
+    return request.key === current.key && request.version === current.version
+}
+
 export function restoreMessageAnchor(scroller: HTMLElement, anchor: MessageAnchor | null, element: HTMLElement | null): boolean {
     if (!anchor || !element) return false
     scroller.scrollTop += element.getBoundingClientRect().top - anchor.top

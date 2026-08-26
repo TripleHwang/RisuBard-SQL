@@ -3,6 +3,7 @@ import {
     getChatWindow,
     estimateSpacerHeight,
     restoreMessageAnchor,
+    isCurrentChatWindowRequest,
     validateOlderMessagePage,
     reverseSpacerOrder,
 } from './chatWindow'
@@ -27,6 +28,13 @@ describe('chat DOM window', () => {
 
     it('places reverse-flex spacers on their visual sides', () => {
         expect(reverseSpacerOrder).toEqual(['after', 'messages', 'before'])
+    })
+
+    it('cancels a pending older-page anchor after the user changes pages', () => {
+        const pending = { key: 'character/chat', version: 4 }
+        // The fetch resolves after selectChatPage has incremented the version.
+        expect(isCurrentChatWindowRequest(pending, { key: 'character/chat', version: 5 })).toBe(false)
+        expect(isCurrentChatWindowRequest(pending, { key: 'character/chat', version: 4 })).toBe(true)
     })
 })
 

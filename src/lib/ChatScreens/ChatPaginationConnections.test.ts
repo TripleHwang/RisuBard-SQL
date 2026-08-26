@@ -26,9 +26,15 @@ describe('bounded chat-page UI connections', () => {
     it('uses stable ID anchoring and cancels stale page fetch DOM restoration', () => {
         const source = screen()
         expect(source).toContain('chatWindowVersion')
-        expect(source).toContain('requestVersion !== chatWindowVersion')
+        expect(source).toContain('isCurrentChatWindowRequest')
         expect(source).toContain('[data-chat-id]')
         expect(source).toContain('container.scrollTop += restored.getBoundingClientRect().top - anchor.top')
+    })
+
+    it('invalidates an older-page anchor request when the user changes pages', () => {
+        const source = screen()
+        const selectPage = source.slice(source.indexOf('async function selectChatPage'), source.indexOf('async function selectPreviousChatPage'))
+        expect(selectPage).toContain('chatWindowVersion += 1')
     })
 
     it('resolves a mounted row index by stable message ID before actions', () => {

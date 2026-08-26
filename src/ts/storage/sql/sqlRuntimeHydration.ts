@@ -101,8 +101,11 @@ function validateOlderReversePage(
     seen.add(id)
     previous = position
   }
-  if (page.hasMore ? page.nextBefore === null || page.nextBefore >= page.before! : page.nextBefore !== null) {
+  if (page.hasMore ? page.nextBefore !== page.positions[0] : page.nextBefore !== null) {
     throw new Error("Reverse page boundary is noncontiguous")
+  }
+  if (!page.hasMore && knownIds.size + seen.size !== page.total) {
+    throw new Error("Reverse page terminal coverage is incomplete")
   }
 }
 

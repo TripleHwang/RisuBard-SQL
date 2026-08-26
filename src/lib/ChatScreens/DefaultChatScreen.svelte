@@ -17,6 +17,7 @@
         getLatestChatPage,
         normalizeChatPageSize,
     } from 'src/ts/chatPagination';
+    import { isCurrentChatWindowRequest } from 'src/ts/chatWindow';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -295,6 +296,8 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function selectChatPage(page: number, scrollToLatest = false) {
+        // A manual page move wins over any in-flight reverse-page anchor.
+        chatWindowVersion += 1
         chatPage = getChatPageBounds(currentChat.length, chatPageSize, page).page
         chatFoldedState.data = null
         await tick()
@@ -322,7 +325,10 @@ import { isMobile } from 'src/ts/platform'
         await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
         // The fetch may finish after selection changed. It may update its old
         // object, but must never mutate this screen's scroll position.
-        if (requestKey !== paginationKey || requestVersion !== chatWindowVersion) return
+        if (!isCurrentChatWindowRequest(
+            { key: requestKey, version: requestVersion },
+            { key: paginationKey, version: chatWindowVersion },
+        )) return
         const anchorIndex = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
         chatPage = getChatPageForMessage(Math.max(0, anchorIndex), currentChat.length, chatPageSize)
         await tick()

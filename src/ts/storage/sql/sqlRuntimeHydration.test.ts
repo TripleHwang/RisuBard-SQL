@@ -105,6 +105,7 @@ describe("Node SQL runtime hydration", () => {
     ["changed total", { total: 5 }],
     ["duplicate ID", { messages: [{ chatId: "m2" }], positions: [1] }],
     ["noncontiguous boundary", { before: 7 }],
+    ["changed next-before position", { hasMore: true, nextBefore: 2 }],
   ])("rejects an older page with %s without changing the loaded window", async (_name, change) => {
     const newest = { chatId: "chat-1", messages: [{ chatId: "m2" }, { chatId: "m3" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 4, hasMore: true };
     const older = { chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }], positions: [0, 4], nextPosition: 13, before: 8, nextBefore: null, total: 4, hasMore: false, ...change };
@@ -117,6 +118,21 @@ describe("Node SQL runtime hydration", () => {
     const previousWindow = (character.chats[0] as any)._sqlWindow;
     await expect(loadOlderChatMessages(character, 0, 2)).rejects.toThrow(/reverse page/i);
 
+    expect(character.chats[0].message).toBe(previousMessages);
+    expect((character.chats[0] as any)._sqlWindow).toBe(previousWindow);
+  });
+
+  it("rejects a terminal reverse page that leaves known message coverage below total", async () => {
+    const reverse = vi.fn()
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m2" }, { chatId: "m3" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 4, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }], positions: [0], nextPosition: 13, before: 8, nextBefore: null, total: 4, hasMore: false });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
+
+    await ensureChatMessageWindow(character, 0, 2);
+    const previousMessages = character.chats[0].message;
+    const previousWindow = (character.chats[0] as any)._sqlWindow;
+    await expect(loadOlderChatMessages(character, 0, 2)).rejects.toThrow(/reverse page/i);
     expect(character.chats[0].message).toBe(previousMessages);
     expect((character.chats[0] as any)._sqlWindow).toBe(previousWindow);
   });
