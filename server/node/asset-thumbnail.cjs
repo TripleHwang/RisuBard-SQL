@@ -44,9 +44,12 @@ function createAssetThumbnailService(options) {
         if (queue.length >= maxQueue) return reject(httpError(429, 'Thumbnail queue is full'))
         queue.push(start)
     })
-    const assetHash = source => crypto.createHash('sha256').update(source).digest('hex')
+    const getMetadata = options.getMetadata ?? (key => {
+        const updatedAt = options.getUpdatedAt(key)
+        return updatedAt === null || updatedAt === undefined ? null : { object: String(updatedAt), updatedAt, size: 0 }
+    })
     const etag = hash => `"thumb-${transformVersion}-${hash}"`
-    const cacheKey = (key, updatedAt, hash) => crypto.createHash('sha256').update(`${key}\0${updatedAt}\0${transformVersion}\0${options.maxSide ?? 320}\0${options.quality ?? 75}\0${hash}`).digest('hex')
+    const cacheKey = (key, metadata) => crypto.createHash('sha256').update(`${key}\0${metadata.updatedAt}\0${transformVersion}\0${options.maxSide ?? 320}\0${options.quality ?? 75}\0${metadata.object}`).digest('hex')
     const trim = () => {
         while (cache.size > maxEntries || bytes > maxBytes) {
             const first = cache.entries().next().value
@@ -55,12 +58,11 @@ function createAssetThumbnailService(options) {
         }
     }
 
-    async function resolve(key) {
-        let operation = inFlight.get(key)
+    async function resolve(key, metadata) {
+        const operationKey = `${key}\0${metadata.object}`
+        let operation = inFlight.get(operationKey)
         if (operation) return operation
         operation = runBounded(async () => {
-            const updatedAt = options.getUpdatedAt(key)
-            if (updatedAt === null || updatedAt === undefined) throw httpError(404, 'Asset not found')
             const source = options.get(key)
             if (!source) throw httpError(404, 'Asset not found')
             if (source.length > maxSourceBytes) throw httpError(422, 'Image exceeds source byte limit')
@@ -68,8 +70,7 @@ function createAssetThumbnailService(options) {
                 const meta = await options.inspect(source)
                 if (!meta || !Number.isFinite(meta.width) || !Number.isFinite(meta.height) || meta.width * meta.height > maxPixels) throw httpError(422, 'Image exceeds decoded pixel limit')
             }
-            const hash = assetHash(source)
-            const id = cacheKey(key, updatedAt, hash)
+            const id = cacheKey(key, metadata)
             let image = cache.get(id)
             if (image) {
                 cache.delete(id); cache.set(id, image)
@@ -78,17 +79,19 @@ function createAssetThumbnailService(options) {
                 if (!image.length || image.length > maxBytes) throw httpError(422, 'Invalid thumbnail output')
                 cache.set(id, image); bytes += image.length; trim()
             }
-            return { etag: etag(hash), image }
-        }).finally(() => inFlight.delete(key))
-        inFlight.set(key, operation)
+            return { etag: etag(metadata.object), image }
+        }).finally(() => inFlight.delete(operationKey))
+        inFlight.set(operationKey, operation)
         return operation
     }
 
     async function get(key, ifNoneMatch) {
         if (!key.startsWith('assets/') || !IMAGE_EXTENSIONS.has(key.split('.').pop().toLowerCase())) throw httpError(404, 'Asset not found')
-        const result = await resolve(key)
-        const tag = result.etag
+        const metadata = getMetadata(key)
+        if (!metadata?.object || metadata.updatedAt === null || metadata.updatedAt === undefined) throw httpError(404, 'Asset not found')
+        const tag = etag(metadata.object)
         if (ifNoneMatch === tag) return { status: 304, etag: tag }
+        const result = await resolve(key, metadata)
         return { status: 200, etag: tag, image: result.image }
     }
 

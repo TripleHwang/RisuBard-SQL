@@ -25,7 +25,7 @@ const getVips = () => {
     return _vipsPromise
 }
 const { kvGet, kvSet, kvSetMany, kvSetManyFromFilesAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
+        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvGetMetadata, kvCopyValue,
         gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
@@ -3215,7 +3215,7 @@ async function inspectThumbnailSource(buffer) {
 // Derived image data is deliberately process-local and bounded: it must never
 // become unbounded user KV data or get included in backups.
 const assetThumbnailService = createAssetThumbnailService({
-    getUpdatedAt: kvGetUpdatedAt,
+    getMetadata: kvGetMetadata,
     get: kvGet,
     inspect: inspectThumbnailSource,
     transform: generateThumbnail,

@@ -22,3 +22,9 @@ export function scrollTopForIndex(index: number, scrollTop: number, height: numb
     if (bottom > scrollTop + height) return bottom - height
     return scrollTop
 }
+
+export function reconcileFocus<T extends string | number>(keys: T[], focusedKey: T | null, fallbackIndex: number) {
+    const retained = focusedKey === null ? -1 : keys.indexOf(focusedKey)
+    const index = retained >= 0 ? retained : Math.min(Math.max(0, fallbackIndex), Math.max(0, keys.length - 1))
+    return { key: keys[index] ?? null, index }
+}

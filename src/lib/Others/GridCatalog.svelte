@@ -159,6 +159,7 @@
                 </div>
             {/each}
         {:else if selected === 3}
+            <!-- Task 7 scope: only Simple (selected === 3) is virtualized; Grid, List, and Trash remain follow-up work. -->
             <MobileCharacters {search} gridMode endGrid={endGrid} />
         {/if}
         </div>

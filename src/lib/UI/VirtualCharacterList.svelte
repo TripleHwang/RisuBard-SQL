@@ -1,21 +1,31 @@
 <script lang="ts">
     import { tick } from 'svelte'
-    import { nextRovingIndex, scrollTopForIndex, visibleRange } from './virtualCharacterList'
+    import { nextRovingIndex, reconcileFocus, scrollTopForIndex, visibleRange } from './virtualCharacterList'
 
-    interface Props { count: number; rowHeight?: number; overscan?: number; getKey?: (index: number) => string | number; children: import('svelte').Snippet<[number, number]> }
-    let { count, rowHeight = 68, overscan = 8, getKey = (index) => index, children }: Props = $props()
+    interface Props { count: number; itemsSignature: string; rowHeight?: number; overscan?: number; getKey?: (index: number) => string | number; children: import('svelte').Snippet<[number, number, string | number]> }
+    let { count, itemsSignature, rowHeight = 68, overscan = 8, getKey = (index) => index, children }: Props = $props()
     let scrollTop = $state(0)
     let height = $state(680)
     let viewport: HTMLDivElement
     let focusedIndex = $state(0)
+    let focusedKey = $state<string | number | null>(null)
     $effect(() => {
         const observer = new ResizeObserver(() => height = viewport.clientHeight)
         observer.observe(viewport); return () => observer.disconnect()
     })
     let range = $derived(visibleRange({ count, scrollTop, height, rowHeight, overscan }))
+    let focusedMounted = $derived(focusedIndex >= range.start && focusedIndex < range.end)
+    $effect(() => {
+        itemsSignature
+        const keys = Array.from({ length: count }, (_, index) => getKey(index))
+        const next = reconcileFocus(keys, focusedKey, focusedIndex)
+        focusedKey = next.key
+        focusedIndex = next.index
+    })
 
     async function focusIndex(index: number) {
         focusedIndex = index
+        focusedKey = getKey(index)
         viewport.scrollTop = scrollTopForIndex(index, viewport.scrollTop, height, rowHeight)
         scrollTop = viewport.scrollTop
         await tick()
@@ -30,14 +40,17 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -- virtual scroller delegates keyboard focus to child buttons -->
-<div bind:this={viewport} class="h-full w-full overflow-y-auto" role="region" aria-label="Character list" onscroll={() => scrollTop = viewport.scrollTop} onkeydown={onKeydown} onfocusin={(event) => {
+<div bind:this={viewport} class="h-full w-full overflow-y-auto" role="listbox" aria-label="Character list" tabindex={focusedMounted ? -1 : 0} aria-activedescendant={focusedMounted ? undefined : `virtual-character-${focusedKey}`} onscroll={() => scrollTop = viewport.scrollTop} onkeydown={onKeydown} onfocusin={(event) => {
     const index = Number((event.target as HTMLElement).dataset.virtualIndex)
-    if (Number.isInteger(index)) focusedIndex = index
+    if (Number.isInteger(index)) { focusedIndex = index; focusedKey = getKey(index) }
 }}>
+    {#if !focusedMounted && focusedKey !== null}
+        <span id={`virtual-character-${focusedKey}`} class="sr-only" role="option" aria-selected="true"></span>
+    {/if}
     <div style:height={`${count * rowHeight}px`} class="relative">
         <div class="absolute w-full" style:transform={`translateY(${range.start * rowHeight}px)`}>
             {#each Array(range.end - range.start) as _, offset (getKey(range.start + offset))}
-                {@render children(range.start + offset, focusedIndex)}
+                {@render children(range.start + offset, focusedIndex, getKey(range.start + offset))}
             {/each}
         </div>
     </div>

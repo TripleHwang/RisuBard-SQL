@@ -305,6 +305,13 @@ function createFileKv(options = {}) {
         return manifest.entries[key]?.updatedAt ?? null;
     }
 
+    // Read-only manifest metadata: callers can validate object identity without
+    // opening the content-addressed object file.
+    function kvGetMetadata(key) {
+        const entry = manifest.entries[key];
+        return entry ? { object: entry.object, size: entry.size, updatedAt: entry.updatedAt } : null;
+    }
+
     function kvCopyValue(source, destination) {
         const entry = manifest.entries[source];
         if (!entry) return;
@@ -425,6 +432,7 @@ function createFileKv(options = {}) {
         kvDel,
         kvSize,
         kvGetUpdatedAt,
+        kvGetMetadata,
         kvCopyValue,
         kvDelPrefix,
         kvList,

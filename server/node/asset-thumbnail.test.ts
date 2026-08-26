@@ -10,17 +10,20 @@ describe('asset thumbnails', () => {
     expect(() => decodeCanonicalHexKey('6173736574732f2e2e2f7365637265742e706e67')).toThrow()
   })
 
-  it('revalidates a matching ETag without transforming again', async () => {
-    let reads = 0
+  it('returns 304 from metadata without reading or inspecting the source', async () => {
+    let reads = 0, inspections = 0
+    const metadata = { object: 'a'.repeat(64), updatedAt: 17, size: 5 }
     const service = createAssetThumbnailService({
-      getUpdatedAt: () => 17,
+      getMetadata: () => metadata,
       get: () => { reads++; return Buffer.from('image') },
+      inspect: async () => { inspections++; return { width: 1, height: 1 } },
       transform: async () => Buffer.from('webp'),
     })
     const first = await service.get('assets/portrait.png')
     const result = await service.get('assets/portrait.png', first.etag)
     expect(result.status).toBe(304)
-    expect(reads).toBe(2)
+    expect(reads).toBe(1)
+    expect(inspections).toBe(1)
   })
 
   it('deduplicates concurrent transforms and bounds the cache', async () => {
@@ -51,10 +54,12 @@ describe('asset thumbnails', () => {
 
   it('changes ETag and regenerates when content changes at the same timestamp', async () => {
     let source = Buffer.from('first')
+    let metadata = { object: 'a'.repeat(64), updatedAt: 1, size: 5 }
     let transforms = 0
-    const service = createAssetThumbnailService({ getUpdatedAt: () => 1, get: () => source, transform: async () => Buffer.from(`webp-${++transforms}`) })
+    const service = createAssetThumbnailService({ getMetadata: () => metadata, get: () => source, transform: async () => Buffer.from(`webp-${++transforms}`) })
     const first = await service.get('assets/a.png')
     source = Buffer.from('other')
+    metadata = { object: 'b'.repeat(64), updatedAt: 1, size: 5 }
     const second = await service.get('assets/a.png', first.etag)
     expect(second.status).toBe(200)
     expect(second.etag).not.toBe(first.etag)
