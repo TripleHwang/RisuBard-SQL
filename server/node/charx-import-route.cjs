@@ -92,6 +92,8 @@ function createCharXImportHandler(deps) {
       responseStarted = true;
       heartbeatTimer = setInterval(() => writeEvent({ type: 'heartbeat' }), Math.max(100, heartbeatMs));
       let lastProgressAt = 0;
+      let lastCompleted = 0;
+      let lastTotal = contentLength > 0 ? contentLength : 0;
       const result = await importCharXStream(req, {
         stagingRoot,
         publishAssets,
@@ -103,7 +105,10 @@ function createCharXImportHandler(deps) {
           const now = Date.now();
           if (now - lastProgressAt < 200) return;
           lastProgressAt = now;
-          writeEvent({ type: 'progress', progress });
+          const compressedBytes = Number(progress && progress.compressedBytes);
+          lastCompleted = Math.max(lastCompleted, Number.isFinite(compressedBytes) ? Math.max(0, compressedBytes) : 0);
+          lastTotal = Math.max(lastTotal, lastCompleted);
+          writeEvent({ type: 'progress', completed: lastCompleted, total: lastTotal });
         },
       });
       writeEvent({ type: 'done', result });

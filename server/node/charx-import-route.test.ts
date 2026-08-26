@@ -126,7 +126,7 @@ describe('createCharXImportHandler', () => {
         expect(calls).toContain('end')
     })
 
-    it('streams throttled progress and done framing with no-cache headers', async () => {
+    it('streams the locked flat progress contract and done framing with no-cache headers', async () => {
         const { server } = makeApp()
         const response = await request(server, 'abc')
         expect(response.status).toBe(200)
@@ -134,8 +134,26 @@ describe('createCharXImportHandler', () => {
         expect(response.headers['cache-control']).toContain('no-cache')
         expect(response.headers['x-accel-buffering']).toBe('no')
         const events = response.body.split('\n').filter(Boolean).map(line => JSON.parse(line))
-        expect(events.some(event => event.type === 'progress')).toBe(true)
+        const progress = events.find(event => event.type === 'progress')
+        // Wire contract consumed by NodeStorage.importCharX: never re-nest this.
+        expect(progress).toEqual({ type: 'progress', completed: 3, total: 3 })
+        expect(progress.progress).toBeUndefined()
         expect(events.at(-1)).toMatchObject({ type: 'done', result: { card: { spec: 'chara_card_v3' } } })
+    })
+
+    it('uses a nondecreasing safe total for progress when Content-Length is unknown', async () => {
+        const { server } = makeApp({
+            importCharXStream: async (_source: AsyncIterable<Uint8Array>, options: any) => {
+                options.onProgress({ compressedBytes: 3, decompressedBytes: 7 })
+                options.onProgress({ compressedBytes: 5, decompressedBytes: 9 })
+                return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
+            },
+        })
+        const response = await request(server, '', { 'content-length': '0' })
+        const progress = response.body.split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(event => event.type === 'progress')
+        expect(progress).toEqual([
+            { type: 'progress', completed: 3, total: 3 },
+        ])
     })
 
     it('does not abort a normally completed response when Express closes it', async () => {
