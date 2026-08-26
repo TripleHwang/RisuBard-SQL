@@ -60,7 +60,10 @@ describe('file-native KV compatibility projection', () => {
         createFileKv({ dataRoot }).kvSet('assets/existing', Buffer.from('existing'))
         const store = createFileKv({
             dataRoot,
-            manifestWriter: () => { throw new Error('manifest write failed') },
+            manifestWriter: async () => {
+                await Promise.resolve()
+                throw new Error('manifest write failed')
+            },
         })
 
         await expect(store.kvSetManyFromFilesAsync([

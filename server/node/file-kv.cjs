@@ -150,8 +150,8 @@ function createFileKv(options = {}) {
         validate: value => value?.schemaVersion === 1 && typeof value?.entries === 'object',
     }));
 
-    function commitManifest(next) {
-        manifestWriter(next);
+    async function commitManifest(next) {
+        await manifestWriter(next);
         manifest = next;
     }
 
@@ -210,7 +210,7 @@ function createFileKv(options = {}) {
         if (!entries.length) return;
         const next = { schemaVersion: 1, updatedAt: Date.now(), entries: { ...manifest.entries } };
         for (const [key, entry] of prepared) next.entries[key] = entry;
-        commitManifest(next);
+        await commitManifest(next);
     }
 
     function kvSetMany(entries) {
