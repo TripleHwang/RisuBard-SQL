@@ -26,15 +26,11 @@ const TABLES = Object.freeze([
 const WRITABLE_TABLES = new Set(TABLES.filter((table) => (
     table !== 'system_storage_meta' && table !== 'system_revisions'
 )));
-const BOOTSTRAP_SETTING_KEYS = Object.freeze([
-    'language', 'theme', 'textTheme', 'colorSchemeName', 'customColorScheme',
-    'zoomsize', 'iconsize', 'heightMode', 'characterOrder', 'selectedPersona',
-    'apiType', 'aiModel', 'subModel', 'temperature', 'maxContext', 'maxResponse',
-    'frequencyPenalty', 'PresensePenalty', 'username', 'userIcon',
-]);
 const DEFAULT_MESSAGE_PAGE_LIMIT = 40;
 const MAX_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
+const MAX_SQL_READ_KEY_LENGTH = 256;
+const MAX_SQL_READ_LIMIT = 100;
 
 function statementTable(sql) {
     const normalized = String(sql || '').trim();
@@ -172,6 +168,19 @@ function createRelationalSqlite(options) {
         return rows.length ? rebuildRelationalValue(rows) : undefined;
     }
 
+    function requireBoundedReadKey(value, description) {
+        if (typeof value !== 'string' || value.trim().length === 0 || value.length > MAX_SQL_READ_KEY_LENGTH) {
+            throw new Error(`Invalid ${description}`);
+        }
+        return value;
+    }
+
+    function boundedReadLimit(value, fallback) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return fallback;
+        return Math.min(MAX_SQL_READ_LIMIT, Math.max(1, Math.floor(numeric)));
+    }
+
     function parseCanonicalJson(value, description) {
         try {
             return JSON.parse(String(value));
@@ -217,8 +226,7 @@ function createRelationalSqlite(options) {
 
     function bootstrap() {
         return inReadTransaction(() => {
-            const placeholders = BOOTSTRAP_SETTING_KEYS.map(() => '?').join(',');
-            const settingRows = database.prepare(`SELECT key FROM system_settings WHERE key IN (${placeholders})`).all(...BOOTSTRAP_SETTING_KEYS);
+            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
             const settings = Object.fromEntries(settingRows.map((row) => [
                 row.key, readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]),
             ]));
@@ -328,6 +336,96 @@ function createRelationalSqlite(options) {
         });
     }
 
+    function getChatDraft(key) {
+        return inReadTransaction(() => {
+            const draftKey = requireBoundedReadKey(key, 'draft key');
+            const row = database.prepare(
+                'SELECT message_text, translate_text FROM chat_drafts WHERE draft_key = ?',
+            ).get(draftKey);
+            return row ? { m: row.message_text, t: row.translate_text } : null;
+        });
+    }
+
+    function listChatDraftKeys() {
+        return inReadTransaction(() => database.prepare(
+            'SELECT draft_key FROM chat_drafts ORDER BY updated_at DESC, draft_key ASC LIMIT ?',
+        ).all(MAX_SQL_READ_LIMIT).map((row) => row.draft_key));
+    }
+
+    function getColdStorageItem(key) {
+        return inReadTransaction(() => {
+            const archiveId = requireBoundedReadKey(key, 'cold storage key');
+            if (!database.prepare('SELECT 1 FROM cold_archives WHERE archive_id = ?').get(archiveId)) return null;
+            return readNodeValue('cold_extension_nodes', 'archive_id = ?', [archiveId]) ?? null;
+        });
+    }
+
+    function listColdStorageItems() {
+        return inReadTransaction(() => ({
+            items: database.prepare(
+                'SELECT archive_id FROM cold_archives ORDER BY updated_at DESC, archive_id ASC LIMIT ?',
+            ).all(MAX_SQL_READ_LIMIT).map((row) => row.archive_id),
+        }));
+    }
+
+    function listRevisions(requestedLimit) {
+        return inReadTransaction(() => database.prepare(
+            `SELECT id, storage_revision, database_initialized, scope, action, restored_from_revision, created_at
+             FROM system_revisions ORDER BY created_at DESC, id DESC LIMIT ?`,
+        ).all(boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT)).map((row) => ({
+            id: Number(row.id),
+            storage_revision: row.storage_revision == null ? null : Number(row.storage_revision),
+            database_initialized: row.database_initialized == null ? null : Boolean(row.database_initialized),
+            scope: row.scope,
+            action: row.action,
+            restored_from_revision: row.restored_from_revision == null ? null : Number(row.restored_from_revision),
+            created_at: row.created_at,
+            change_count: 0,
+        })));
+    }
+
+    function searchMessages(query, requestedLimit) {
+        return inReadTransaction(() => {
+            const phrase = requireBoundedReadKey(query, 'message search query');
+            const rows = database.prepare(
+                `SELECT m.chat_id, m.id, m.position, m.role, m.sent_time, m.sender_name, m.content_text,
+                        c.character_id, c.name AS chat_name, ch.name AS character_name
+                 FROM messages m JOIN chats c ON c.id = m.chat_id
+                 JOIN characters ch ON ch.id = c.character_id
+                 WHERE m.content_text LIKE ? ORDER BY m.sent_time DESC, m.position DESC LIMIT ?`,
+            ).all(`%${phrase}%`, boundedReadLimit(requestedLimit, 50));
+            return rows.map((row) => ({
+                storageState: 'active', archiveId: null,
+                characterId: row.character_id, characterName: row.character_name,
+                chatId: row.chat_id, chatName: row.chat_name,
+                messageId: row.id, position: Number(row.position), role: row.role,
+                sentTime: row.sent_time == null ? null : Number(row.sent_time),
+                senderName: row.sender_name ?? null,
+                snippet: String(row.content_text ?? '').slice(0, 200),
+            }));
+        });
+    }
+
+    function characterSearchRows(whereSql, query, requestedLimit) {
+        const phrase = requireBoundedReadKey(query, 'character search query');
+        return database.prepare(
+            `SELECT DISTINCT c.id, c.name, c.image, c.kind FROM characters c ${whereSql}
+             ORDER BY c.position ASC LIMIT ?`,
+        ).all(`%${phrase}%`, boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT)).map((row) => ({
+            id: row.id, name: row.name, image: row.image ?? null, kind: row.kind,
+        }));
+    }
+
+    function searchCharactersByName(name, requestedLimit) {
+        return inReadTransaction(() => characterSearchRows('WHERE c.name LIKE ?', name, requestedLimit));
+    }
+
+    function searchCharactersByTag(tag, requestedLimit) {
+        return inReadTransaction(() => characterSearchRows(
+            'JOIN character_tags t ON t.character_id = c.id WHERE t.tag LIKE ?', tag, requestedLimit,
+        ));
+    }
+
     function commit(payload) {
         const statements = Array.isArray(payload?.statements) ? payload.statements : [];
         if (statements.length > 250_000) throw new Error('SQL commit is too large');
@@ -404,6 +502,8 @@ function createRelationalSqlite(options) {
 
     return {
         databasePath, revision, dump, bootstrap, loadCharacter, loadChat, loadChatMessages,
+        getChatDraft, listChatDraftKeys, getColdStorageItem, listColdStorageItems, listRevisions,
+        searchMessages, searchCharactersByName, searchCharactersByTag,
         commit, checkpoint, reset, close,
     };
 }

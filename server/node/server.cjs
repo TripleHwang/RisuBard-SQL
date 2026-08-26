@@ -39,7 +39,13 @@ const { releaseToUpdateInfo } = require('./release-update.cjs');
 const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest } = require('./update-manifest.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
-const { normalizeSqlMessagePageQuery } = require('./sql-read-route-params.cjs');
+const {
+    normalizeSqlMessagePageQuery,
+    normalizeSqlAncillaryLimitQuery,
+    normalizeSqlSearchQuery,
+    normalizeSqlCharacterSearchQuery,
+    normalizeSqlReadKey,
+} = require('./sql-read-route-params.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
 const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
 const { createCharXImportHandler } = require('./charx-import-route.cjs');
@@ -3643,6 +3649,88 @@ app.get('/api/sql/chats/:chatId/messages', async (req, res, next) => {
         const result = relationalSql.loadChatMessages(id, pageQuery.before, pageQuery.limit);
         if (!result) return res.status(404).json({ error: 'Chat not found' });
         res.set('Cache-Control', 'no-store').json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Ancillary reads intentionally stay bounded. They replace normal-mode
+// snapshot fallbacks for drafts, cold archives, history and search UI.
+app.get('/api/sql/chat-drafts', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        res.set('Cache-Control', 'no-store').json({ keys: relationalSql.listChatDraftKeys() });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/chat-drafts/:draftKey', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlReadKey(req.params.draftKey);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        const draft = relationalSql.getChatDraft(parsed.key);
+        if (!draft) return res.status(404).json({ error: 'Chat draft not found' });
+        res.set('Cache-Control', 'no-store').json({ key: parsed.key, draft });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/cold-storage', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        res.set('Cache-Control', 'no-store').json(relationalSql.listColdStorageItems());
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/cold-storage/:archiveId', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlReadKey(req.params.archiveId);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        const item = relationalSql.getColdStorageItem(parsed.key);
+        if (item === null) return res.status(404).json({ error: 'Cold storage item not found' });
+        res.set('Cache-Control', 'no-store').json({ id: parsed.key, item });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/revisions', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlAncillaryLimitQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        res.set('Cache-Control', 'no-store').json({ revisions: relationalSql.listRevisions(parsed.limit) });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/search/messages', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlSearchQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        res.set('Cache-Control', 'no-store').json({ results: relationalSql.searchMessages(parsed.query, parsed.limit) });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/search/characters', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlCharacterSearchQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        const results = parsed.mode === 'tag'
+            ? relationalSql.searchCharactersByTag(parsed.query, parsed.limit)
+            : relationalSql.searchCharactersByName(parsed.query, parsed.limit);
+        res.set('Cache-Control', 'no-store').json({ results });
     } catch (error) {
         next(error);
     }

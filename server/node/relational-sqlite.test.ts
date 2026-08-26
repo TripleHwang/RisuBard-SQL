@@ -36,6 +36,51 @@ describe('server relational SQLite', () => {
       ['__proto__']: { safelyStored: true },
     })
     expect(JSON.stringify(result)).not.toContain('message_extension_nodes')
+    expect(result.settings).toMatchObject({
+      theme: 'dark',
+      moduleSetting: { enabled: true },
+    })
+  })
+
+  it('reads ancillary SQL data without dumping messages or cold archives', () => {
+    const storage = seededReaderStorage()
+
+    expect(storage.getChatDraft('character-1/chat-1')).toEqual({ m: 'draft', t: '번역' })
+    expect(storage.getChatDraft('missing')).toBeNull()
+    expect(storage.listChatDraftKeys()).toEqual(['character-1/chat-1'])
+
+    expect(storage.listColdStorageItems()).toEqual({ items: ['archive-1'] })
+    expect(storage.getColdStorageItem('archive-1')).toEqual({ archived: ['message-1'] })
+    expect(storage.getColdStorageItem('missing')).toBeNull()
+
+    expect(storage.listRevisions(999)).toHaveLength(1)
+    expect(storage.searchMessages('message', 999)).toEqual([
+      expect.objectContaining({
+        storageState: 'active', characterId: 'character-1', characterName: 'Alice',
+        chatId: 'chat-1', chatName: 'Chat', messageId: 'message-3', snippet: 'message 3',
+      }),
+      expect.objectContaining({ messageId: 'message-2' }),
+      expect.objectContaining({ messageId: 'message-1' }),
+    ])
+    expect(storage.searchCharactersByName('ali', 999)).toEqual([
+      { id: 'character-1', name: 'Alice', image: null, kind: 'character' },
+    ])
+    expect(storage.searchCharactersByTag('fantasy', 999)).toEqual([
+      { id: 'character-1', name: 'Alice', image: null, kind: 'character' },
+    ])
+  })
+
+  it('rejects unsafe ancillary read keys and queries while clamping limits', () => {
+    const storage = seededReaderStorage()
+    const overlong = 'x'.repeat(257)
+
+    expect(() => storage.getChatDraft(overlong)).toThrow(/key/i)
+    expect(() => storage.getColdStorageItem(overlong)).toThrow(/key/i)
+    expect(() => storage.searchMessages('   ', 1)).toThrow(/query/i)
+    expect(() => storage.searchMessages(overlong, 1)).toThrow(/query/i)
+    expect(() => storage.searchCharactersByName(overlong, 1)).toThrow(/query/i)
+    expect(() => storage.searchCharactersByTag(overlong, 1)).toThrow(/query/i)
+    expect(storage.searchMessages('message', 0)).toHaveLength(1)
   })
 
   it('loads full character detail and a bounded chat summary', () => {
@@ -154,6 +199,9 @@ function seededReaderStorage() {
     statements: [
       { sql: 'INSERT INTO system_settings (key, domain, value_type) VALUES (?, ?, ?)', bind: ['theme', 'database', 'string'] },
       { sql: 'INSERT INTO setting_extension_nodes (setting_key, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['theme', 0, null, 0, null, 'string', 'dark'] },
+      { sql: 'INSERT INTO system_settings (key, domain, value_type) VALUES (?, ?, ?)', bind: ['moduleSetting', 'module', 'object'] },
+      { sql: 'INSERT INTO setting_extension_nodes (setting_key, node_id, parent_node_id, node_order, object_key, value_type) VALUES (?, ?, ?, ?, ?, ?)', bind: ['moduleSetting', 0, null, 0, null, 'object'] },
+      { sql: 'INSERT INTO setting_extension_nodes (setting_key, node_id, parent_node_id, node_order, object_key, value_type, boolean_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['moduleSetting', 1, 0, 0, 'enabled', 'boolean', 1] },
       { sql: 'INSERT INTO bot_presets (preset_id, position, name, image, api_type, ai_model, data, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['preset-2', 1, 'Second', '', '', '', JSON.stringify({ id: 'incorrect-id', name: 'Second' }), 'hash-2'] },
       { sql: 'INSERT INTO bot_presets (preset_id, position, name, image, api_type, ai_model, data, content_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['preset-1', 0, 'First', '', '', '', JSON.stringify({ name: 'First' }), 'hash-1'] },
       { sql: 'INSERT INTO plugin_custom_storage (key, value) VALUES (?, ?)', bind: ['pagefold.config.v1', JSON.stringify({ provider: 'google' })] },
@@ -162,10 +210,16 @@ function seededReaderStorage() {
       node('character_extension_nodes', 'character_id', 'character-1', {}),
       { sql: 'INSERT INTO character_extension_nodes (character_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['character-1', 1, 0, 0, 'greeting', 'string', 'Hello'] },
       { sql: 'INSERT INTO chats (id, character_id, position, name, note) VALUES (?, ?, ?, ?, ?)', bind: ['chat-1', 'character-1', 0, 'Chat', 'summary'] },
+      { sql: 'INSERT INTO character_tags (character_id, position, tag) VALUES (?, ?, ?)', bind: ['character-1', 0, 'fantasy'] },
+      { sql: 'INSERT INTO chat_drafts (draft_key, message_text, translate_text) VALUES (?, ?, ?)', bind: ['character-1/chat-1', 'draft', '번역'] },
+      { sql: 'INSERT INTO cold_archives (archive_id, archive_kind) VALUES (?, ?)', bind: ['archive-1', 'chat'] },
+      { sql: 'INSERT INTO cold_extension_nodes (archive_id, node_id, parent_node_id, node_order, object_key, value_type) VALUES (?, ?, ?, ?, ?, ?)', bind: ['archive-1', 0, null, 0, null, 'object'] },
+      { sql: 'INSERT INTO cold_extension_nodes (archive_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['archive-1', 1, 0, 0, 'archived', 'array', null] },
+      { sql: 'INSERT INTO cold_extension_nodes (archive_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['archive-1', 2, 1, 0, null, 'string', 'message-1'] },
       node('chat_extension_nodes', 'chat_id', 'chat-1', {}),
       { sql: 'INSERT INTO chat_extension_nodes (chat_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?)', bind: ['chat-1', 1, 0, 0, 'custom', 'string', 'chat detail'] },
       ...[1, 2, 3].flatMap((position) => [
-        { sql: 'INSERT INTO messages (chat_id, id, position, role) VALUES (?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, position - 1, 'user'] },
+        { sql: 'INSERT INTO messages (chat_id, id, position, role, sent_time, content_text) VALUES (?, ?, ?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, position - 1, 'user', position, `message ${position}`] },
         { sql: 'INSERT INTO message_extension_nodes (chat_id, message_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, 0, null, 0, null, 'object', null] },
         { sql: 'INSERT INTO message_extension_nodes (chat_id, message_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, 1, 0, 0, 'content', 'string', `message ${position}`] },
       ]),
