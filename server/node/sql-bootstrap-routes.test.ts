@@ -20,6 +20,7 @@ describe('bounded SQL read routes', () => {
         expect(source).toContain("app.get('/api/sql/search/messages'")
         expect(source).toContain("app.get('/api/sql/search/characters'")
         expect(source).toContain('normalizeSqlCharacterSearchQuery(req.query)')
+        expect(source).toContain('normalizeSqlAncillaryPageQuery(req.query)')
         expect(source).toContain("'Cache-Control', 'no-store'")
     })
 })

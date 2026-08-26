@@ -53,10 +53,20 @@ function normalizeSqlReadKey(value) {
     return { key: value };
 }
 
+function normalizeSqlAncillaryPageQuery(query) {
+    const after = query.after;
+    if (after !== undefined && (typeof after !== 'string' || after.trim().length === 0 || after.length > 256)) {
+        return { error: 'Invalid cursor' };
+    }
+    const limitQuery = normalizeSqlAncillaryLimitQuery(query);
+    return limitQuery.error ? limitQuery : { after, limit: limitQuery.limit };
+}
+
 module.exports = {
     normalizeSqlMessagePageQuery,
     normalizeSqlAncillaryLimitQuery,
     normalizeSqlSearchQuery,
     normalizeSqlCharacterSearchQuery,
     normalizeSqlReadKey,
+    normalizeSqlAncillaryPageQuery,
 };

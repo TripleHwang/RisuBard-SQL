@@ -5,6 +5,7 @@ const {
     normalizeSqlAncillaryLimitQuery,
     normalizeSqlSearchQuery,
     normalizeSqlCharacterSearchQuery,
+    normalizeSqlAncillaryPageQuery,
 } = require('./sql-read-route-params.cjs')
 
 describe('normalizeSqlMessagePageQuery', () => {
@@ -71,5 +72,16 @@ describe('bounded ancillary SQL read query parsers', () => {
         expect(normalizeSqlReadKey('draft-1')).toEqual({ key: 'draft-1' })
         expect(normalizeSqlReadKey(' ')).toEqual({ error: 'Invalid key' })
         expect(normalizeSqlReadKey('x'.repeat(257))).toEqual({ error: 'Invalid key' })
+    })
+
+    it('accepts a bounded stable list cursor and clamps its limit', () => {
+        expect(normalizeSqlAncillaryPageQuery({ after: 'draft-099', limit: '999' })).toEqual({
+            after: 'draft-099', limit: 100,
+        })
+        expect(normalizeSqlAncillaryPageQuery({})).toEqual({ after: undefined, limit: 100 })
+    })
+
+    it.each(['', ' ', ['draft-1'], 'x'.repeat(257)])('rejects invalid list cursors', (after) => {
+        expect(normalizeSqlAncillaryPageQuery({ after })).toEqual({ error: 'Invalid cursor' })
     })
 })

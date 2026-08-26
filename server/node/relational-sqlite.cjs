@@ -31,6 +31,7 @@ const MAX_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
 const MAX_SQL_READ_KEY_LENGTH = 256;
 const MAX_SQL_READ_LIMIT = 100;
+const MAX_MESSAGE_SEARCH_SCAN = 50_000;
 
 function statementTable(sql) {
     const normalized = String(sql || '').trim();
@@ -179,6 +180,10 @@ function createRelationalSqlite(options) {
         const numeric = Number(value);
         if (!Number.isFinite(numeric)) return fallback;
         return Math.min(MAX_SQL_READ_LIMIT, Math.max(1, Math.floor(numeric)));
+    }
+
+    function escapeSqlLike(value) {
+        return String(value).replace(/[\\%_]/g, '\\$&');
     }
 
     function parseCanonicalJson(value, description) {
@@ -346,10 +351,18 @@ function createRelationalSqlite(options) {
         });
     }
 
-    function listChatDraftKeys() {
-        return inReadTransaction(() => database.prepare(
-            'SELECT draft_key FROM chat_drafts ORDER BY updated_at DESC, draft_key ASC LIMIT ?',
-        ).all(MAX_SQL_READ_LIMIT).map((row) => row.draft_key));
+    function listChatDraftKeys(after, requestedLimit) {
+        return inReadTransaction(() => {
+            const afterKey = after === undefined ? undefined : requireBoundedReadKey(after, 'draft cursor');
+            const limit = boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT);
+            const rows = database.prepare(
+                `SELECT draft_key FROM chat_drafts ${afterKey === undefined ? '' : 'WHERE draft_key > ?'}
+                 ORDER BY draft_key ASC LIMIT ?`,
+            ).all(...(afterKey === undefined ? [limit + 1] : [afterKey, limit + 1]));
+            const keys = rows.slice(0, limit).map((row) => row.draft_key);
+            const hasMore = rows.length > limit;
+            return { keys, nextAfter: hasMore ? keys.at(-1) : null, hasMore };
+        });
     }
 
     function getColdStorageItem(key) {
@@ -360,12 +373,18 @@ function createRelationalSqlite(options) {
         });
     }
 
-    function listColdStorageItems() {
-        return inReadTransaction(() => ({
-            items: database.prepare(
-                'SELECT archive_id FROM cold_archives ORDER BY updated_at DESC, archive_id ASC LIMIT ?',
-            ).all(MAX_SQL_READ_LIMIT).map((row) => row.archive_id),
-        }));
+    function listColdStorageItems(after, requestedLimit) {
+        return inReadTransaction(() => {
+            const afterKey = after === undefined ? undefined : requireBoundedReadKey(after, 'cold storage cursor');
+            const limit = boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT);
+            const rows = database.prepare(
+                `SELECT archive_id FROM cold_archives ${afterKey === undefined ? '' : 'WHERE archive_id > ?'}
+                 ORDER BY archive_id ASC LIMIT ?`,
+            ).all(...(afterKey === undefined ? [limit + 1] : [afterKey, limit + 1]));
+            const items = rows.slice(0, limit).map((row) => row.archive_id);
+            const hasMore = rows.length > limit;
+            return { items, nextAfter: hasMore ? items.at(-1) : null, hasMore };
+        });
     }
 
     function listRevisions(requestedLimit) {
@@ -390,10 +409,12 @@ function createRelationalSqlite(options) {
             const rows = database.prepare(
                 `SELECT m.chat_id, m.id, m.position, m.role, m.sent_time, m.sender_name, m.content_text,
                         c.character_id, c.name AS chat_name, ch.name AS character_name
-                 FROM messages m JOIN chats c ON c.id = m.chat_id
+                 FROM (SELECT chat_id, id, position, role, sent_time, sender_name, content_text
+                       FROM messages ORDER BY sent_time DESC, position DESC LIMIT ?) m
+                 JOIN chats c ON c.id = m.chat_id
                  JOIN characters ch ON ch.id = c.character_id
-                 WHERE m.content_text LIKE ? ORDER BY m.sent_time DESC, m.position DESC LIMIT ?`,
-            ).all(`%${phrase}%`, boundedReadLimit(requestedLimit, 50));
+                 WHERE m.content_text LIKE ? ESCAPE '\\' ORDER BY m.sent_time DESC, m.position DESC LIMIT ?`,
+            ).all(MAX_MESSAGE_SEARCH_SCAN, `%${escapeSqlLike(phrase)}%`, boundedReadLimit(requestedLimit, 50));
             return rows.map((row) => ({
                 storageState: 'active', archiveId: null,
                 characterId: row.character_id, characterName: row.character_name,
@@ -411,18 +432,18 @@ function createRelationalSqlite(options) {
         return database.prepare(
             `SELECT DISTINCT c.id, c.name, c.image, c.kind FROM characters c ${whereSql}
              ORDER BY c.position ASC LIMIT ?`,
-        ).all(`%${phrase}%`, boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT)).map((row) => ({
+        ).all(`%${escapeSqlLike(phrase)}%`, boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT)).map((row) => ({
             id: row.id, name: row.name, image: row.image ?? null, kind: row.kind,
         }));
     }
 
     function searchCharactersByName(name, requestedLimit) {
-        return inReadTransaction(() => characterSearchRows('WHERE c.name LIKE ?', name, requestedLimit));
+        return inReadTransaction(() => characterSearchRows("WHERE c.name LIKE ? ESCAPE '\\'", name, requestedLimit));
     }
 
     function searchCharactersByTag(tag, requestedLimit) {
         return inReadTransaction(() => characterSearchRows(
-            'JOIN character_tags t ON t.character_id = c.id WHERE t.tag LIKE ?', tag, requestedLimit,
+            "JOIN character_tags t ON t.character_id = c.id WHERE t.tag LIKE ? ESCAPE '\\'", tag, requestedLimit,
         ));
     }
 

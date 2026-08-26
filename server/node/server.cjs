@@ -45,6 +45,7 @@ const {
     normalizeSqlSearchQuery,
     normalizeSqlCharacterSearchQuery,
     normalizeSqlReadKey,
+    normalizeSqlAncillaryPageQuery,
 } = require('./sql-read-route-params.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
 const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
@@ -3658,8 +3659,10 @@ app.get('/api/sql/chats/:chatId/messages', async (req, res, next) => {
 // snapshot fallbacks for drafts, cold archives, history and search UI.
 app.get('/api/sql/chat-drafts', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlAncillaryPageQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
     try {
-        res.set('Cache-Control', 'no-store').json({ keys: relationalSql.listChatDraftKeys() });
+        res.set('Cache-Control', 'no-store').json(relationalSql.listChatDraftKeys(parsed.after, parsed.limit));
     } catch (error) {
         next(error);
     }
@@ -3680,8 +3683,10 @@ app.get('/api/sql/chat-drafts/:draftKey', async (req, res, next) => {
 
 app.get('/api/sql/cold-storage', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlAncillaryPageQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
     try {
-        res.set('Cache-Control', 'no-store').json(relationalSql.listColdStorageItems());
+        res.set('Cache-Control', 'no-store').json(relationalSql.listColdStorageItems(parsed.after, parsed.limit));
     } catch (error) {
         next(error);
     }
