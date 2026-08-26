@@ -53,6 +53,41 @@ function utf8Json(chunks) {
   try { return JSON.parse(text); } catch { throw invalid('card.json must contain valid JSON'); }
 }
 
+function readExact(fd, position, length) {
+  const out = Buffer.allocUnsafe(length);
+  if (fs.readSync(fd, out, 0, length, position) !== length) throw invalid('Truncated ZIP archive');
+  return out;
+}
+function u16(b, at) { return b[at] | (b[at + 1] << 8); }
+function u32(b, at) { return b[at] + b[at + 1] * 0x100 + b[at + 2] * 0x10000 + b[at + 3] * 0x1000000; }
+function zipName(bytes) {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC'); }
+  catch { throw invalid('Invalid UTF-8 ZIP entry name'); }
+}
+function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
+  const e = readExact(fd, eocdOffset, 22);
+  const centralSize = u32(e, 12), centralOffset = u32(e, 16), count = u16(e, 10);
+  if (u16(e, 4) || u16(e, 6) || u16(e, 8) !== count || count !== entryCount || centralOffset + centralSize !== eocdOffset) throw invalid('Invalid ZIP central directory');
+  let at = centralOffset; const names = new Set();
+  for (let i = 0; i < count; i++) {
+    if (at + 46 > eocdOffset) throw invalid('Truncated ZIP central directory');
+    const h = readExact(fd, at, 46);
+    if (u32(h, 0) !== 0x02014b50) throw invalid('Invalid ZIP central directory');
+    const flags = u16(h, 8), method = u16(h, 10), compressedSize = u32(h, 20), originalSize = u32(h, 24);
+    const nameLength = u16(h, 28), extraLength = u16(h, 30), commentLength = u16(h, 32), diskStart = u16(h, 34), localOffset = u32(h, 42);
+    const end = at + 46 + nameLength + extraLength + commentLength;
+    if ((flags & 1) || (method !== 0 && method !== 8) || diskStart || end > eocdOffset || compressedSize === 0xffffffff || originalSize === 0xffffffff || localOffset >= centralOffset) throw invalid('Unsupported or invalid ZIP entry');
+    const nameBytes = readExact(fd, at + 46, nameLength); const name = zipName(nameBytes);
+    if (names.has(name)) throw invalid('Duplicate archive entry name'); names.add(name);
+    const local = readExact(fd, localOffset, 30);
+    if (u32(local, 0) !== 0x04034b50 || u16(local, 6) !== flags || u16(local, 8) !== method) throw invalid('ZIP local header mismatch');
+    const localNameLength = u16(local, 26), localExtraLength = u16(local, 28);
+    if (localOffset + 30 + localNameLength + localExtraLength + compressedSize + ((flags & 8) ? 16 : 0) > centralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
+    at = end;
+  }
+  if (at !== centralOffset + centralSize) throw invalid('Invalid ZIP central directory');
+}
+
 async function importCharXStream(source, options) {
   const { stagingRoot, publishAssets, expectedCompressedBytes = 0, getAvailableBytes, onProgress = () => {}, signal } = options || {};
   const limits = { ...DEFAULT_CHARX_LIMITS, ...(options && options.limits) };
@@ -69,6 +104,8 @@ async function importCharXStream(source, options) {
 
   await fsp.mkdir(stagingRoot, { recursive: true });
   const ownedDir = await fsp.mkdtemp(path.join(stagingRoot, 'charx-'));
+  const archivePath = path.join(ownedDir, 'archive.charx');
+  let archiveFd = fs.openSync(archivePath, 'wx');
   const seen = new Set();
   const cards = [];
   const modules = [];
@@ -163,21 +200,10 @@ async function importCharXStream(source, options) {
     } catch (e) { currentError = normalizeError(e, invalid('Unable to read archive entry')); }
   });
   unzip.register(UnzipInflate);
-  let signature = 0, headerBytes = 0, flags = 0;
   try {
     for await (const input of source) {
       checkAbort();
       const chunk = input instanceof Uint8Array ? input : new Uint8Array(input);
-      // ZIP encryption is unsupported. This is deliberately incremental and only retains a few bytes.
-      for (const byte of chunk) {
-        if (headerBytes) {
-          if (headerBytes <= 2) flags |= byte << ((2 - headerBytes) * 8);
-          if (--headerBytes === 0 && (flags & 1)) throw invalid('Encrypted ZIP entries are unsupported');
-          continue;
-        }
-        signature = ((signature << 8) | byte) >>> 0;
-        if (signature === 0x504b0304) { headerBytes = 4; flags = 0; }
-      }
       if (chunk.length >= zipTail.length) { zipTail.set(chunk.subarray(chunk.length - zipTail.length)); zipTailLength = zipTail.length; }
       else {
         const keep = Math.min(zipTailLength, zipTail.length - chunk.length);
@@ -186,7 +212,9 @@ async function importCharXStream(source, options) {
       }
       compressed += chunk.length;
       if (compressed > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
-      await refreshSpace(0);
+      await refreshSpace(chunk.length);
+      useSpace(chunk.length);
+      fs.writeSync(archiveFd, chunk);
       try { unzip.push(chunk, false); } catch (e) { throw currentError || invalid('Invalid or unsupported ZIP archive'); }
       checkAbort();
       onProgress({ compressedBytes: compressed, decompressedBytes: decompressed });
@@ -199,13 +227,10 @@ async function importCharXStream(source, options) {
       if (zipTail[i] === 0x50 && zipTail[i + 1] === 0x4b && zipTail[i + 2] === 0x05 && zipTail[i + 3] === 0x06 && i + 22 + zipTail[i + 20] + (zipTail[i + 21] << 8) === zipTailLength) { eocd = i; break; }
     }
     if (eocd < 0) throw invalid('Truncated or invalid ZIP archive');
-    const read16 = (at) => zipTail[at] | (zipTail[at + 1] << 8);
-    const read32 = (at) => (zipTail[at] | (zipTail[at + 1] << 8) | (zipTail[at + 2] << 16) | (zipTail[at + 3] * 0x1000000));
     const eocdAbsolute = compressed - zipTailLength + eocd;
-    const disk = read16(eocd + 4), centralDisk = read16(eocd + 6);
-    const entriesOnDisk = read16(eocd + 8), centralEntries = read16(eocd + 10);
-    const centralSize = read32(eocd + 12), centralOffset = read32(eocd + 16);
-    if (disk !== 0 || centralDisk !== 0 || entriesOnDisk !== centralEntries || centralEntries !== entryCount || centralOffset + centralSize !== eocdAbsolute) throw invalid('Invalid ZIP central directory');
+    fs.fsyncSync(archiveFd); fs.closeSync(archiveFd); archiveFd = undefined;
+    const readFd = fs.openSync(archivePath, 'r');
+    try { validateCentralDirectory(readFd, compressed, eocdAbsolute, entryCount); } finally { fs.closeSync(readFd); }
     if (active.size) throw invalid('Truncated ZIP archive');
     if (cardCount !== 1 || cards.length !== 1) throw invalid('Archive must contain exactly one card.json');
     const card = utf8Json(cards[0]);
@@ -220,6 +245,7 @@ async function importCharXStream(source, options) {
   } catch (e) {
     throw normalizeError(e);
   } finally {
+    try { if (archiveFd !== undefined) fs.closeSync(archiveFd); } catch {}
     for (const state of active) { try { if (state.fd !== undefined) fs.closeSync(state.fd); } catch {} }
     try { await fsp.rm(ownedDir, { recursive: true, force: true }); } catch {}
   }

@@ -30,6 +30,15 @@ async function writeLargeCharX(destination: string) {
   });
 }
 
+async function duplicateNameZip(name: string) {
+  return await new Promise<Uint8Array>((resolve, reject) => {
+    const pieces: Uint8Array[] = [];
+    const zip = new Zip((error, data, final) => { if (error) reject(error); else { pieces.push(data); if (final) resolve(Buffer.concat(pieces)); } });
+    for (const content of ['one', 'two']) { const entry = new ZipPassThrough(name); zip.add(entry); entry.push(strToU8(content), true); }
+    zip.end();
+  });
+}
+
 describe('importCharXStream', () => {
   test('imports a valid card-only archive and publishes only after validation', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
@@ -180,6 +189,17 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
+  test('rejects forged central names that do not match their local header', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}') });
+    const forged = archive.slice();
+    const centralOffset = new DataView(forged.buffer, forged.byteOffset, forged.byteLength).getUint32(forged.length - 6, true);
+    forged[centralOffset + 46] = 'z'.charCodeAt(0);
+    try {
+      await expect(importCharXStream(chunks(forged), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test('enforces advertised and actual metadata, entry and total decompressed limits', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const base = { 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'module.risum': strToU8('module'), 'a.png': strToU8('asset') };
@@ -236,6 +256,19 @@ describe('importCharXStream', () => {
     try {
       await expect(importCharXStream(chunks(encrypted), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
       await expect(importCharXStream(chunks(unsupported), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test.each(['card.json', 'module.risum'])('rejects duplicate local %s entries', async (duplicate) => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    try {
+      const duplicateArchive = await duplicateNameZip(duplicate);
+      // module fixture still needs a root card; the card duplicate fixture is already self-contained.
+      const archive = duplicate === 'card.json' ? duplicateArchive : zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}') });
+      if (duplicate === 'module.risum') {
+        // Concatenate local/central ZIPs would invalidate EOCD, so the module duplicate itself is enough to prove early duplicate-local rejection.
+        await expect(importCharXStream(chunks(duplicateArchive), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      } else await expect(importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
