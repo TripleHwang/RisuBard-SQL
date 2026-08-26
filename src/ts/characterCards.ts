@@ -20,6 +20,7 @@ import { CharXImporter, CharXSkippableChecker, CharXWriter } from "./process/pro
 import { exportModuleLegacy, readModule, type RisuModule } from "./process/modules"
 import { pinCharacterVaultQuickAccess } from './characterVault'
 import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } from './firstMessageStudio'
+import { isNodeServer } from './platform'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -82,18 +83,43 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
     let db = getDatabase()
     db.statics.imports += 1
 
-    if(f.name.endsWith('charx') || f.name.endsWith('jpg') || f.name.endsWith('jpeg')){
+    const fileName = f.name.toLowerCase()
+    if(fileName.endsWith('.charx') || fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')){
         console.log('reading charx')
-        alertStore.set({
-            type: 'wait',
-            msg: 'Loading... (Reading)'
-        })
+        let cardData: string | undefined
+        let moduleData: Uint8Array | undefined
+        let assets: Record<string, string>
+        let serverWarnings: string[] = []
 
-        const importer = new CharXImporter()
-        importer.alertInfo = true
-        await importer.parse(f.data)
-        await importer.done()
-        const cardData = importer.cardData
+        if(isNodeServer && fileName.endsWith('.charx')){
+            if(f.data instanceof ReadableStream){
+                throw new Error('Node CharX import requires a file or byte buffer')
+            }
+            const blob = f.data instanceof Uint8Array ? new Blob([new Uint8Array(f.data)]) : f.data
+            const result = await forageStorage.importCharX(blob, (progress) => {
+                alertStore.set({
+                    type: progress.phase === 'uploading' ? 'wait' : 'progress',
+                    msg: progress.phase === 'uploading' ? 'Uploading CharX…' : 'Processing CharX on server…',
+                })
+            })
+            cardData = JSON.stringify(result.card)
+            moduleData = result.moduleBase64 ? new Uint8Array(Buffer.from(result.moduleBase64, 'base64')) : undefined
+            assets = result.assets
+            serverWarnings = [...result.excludedFiles, ...result.warnings]
+        }
+        else{
+            alertStore.set({
+                type: 'wait',
+                msg: 'Loading... (Reading)'
+            })
+            const importer = new CharXImporter()
+            importer.alertInfo = true
+            await importer.parse(f.data)
+            await importer.done()
+            cardData = importer.cardData
+            moduleData = importer.moduleData
+            assets = importer.assets
+        }
         if(!cardData){
             alertError(language.errors.noData)
             return
@@ -104,8 +130,8 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
             return
         }
         let lorebook:loreBook[] = null
-        if(importer.moduleData){
-            const md = await readModule(Buffer.from(importer.moduleData))
+        if(moduleData){
+            const md = await readModule(Buffer.from(moduleData))
             card.data.extensions ??= {}
             card.data.extensions.risuai ??= {}
             card.data.extensions.risuai.triggerscript = md.trigger ?? []
@@ -114,7 +140,14 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
                 lorebook = md.lorebook
             }
         }
-        let v = await importCharacterCardSpec(card, undefined, 'normal', importer.assets, lorebook, f.returnCharacter)
+        alertStore.set({
+            type: 'wait',
+            msg: 'Finalizing character…'
+        })
+        let v = await importCharacterCardSpec(card, undefined, 'normal', assets, lorebook, f.returnCharacter)
+        if(serverWarnings.length > 0){
+            notifyError([...new Set(serverWarnings)].join('\n'))
+        }
         if(f.returnCharacter){
             return v as any
         }
