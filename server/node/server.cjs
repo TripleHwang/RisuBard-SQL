@@ -809,21 +809,6 @@ const chatContentWriteLimiter = rateLimit({
     validate: { xForwardedForHeader: false }
 });
 app.use('/api/chat-content', chatContentWriteLimiter);
-// Backup and save-folder imports share one destructive import slot. Reject
-// repeated raw uploads before any body parser or stream consumer runs.
-const legacySaveImportLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 5,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many legacy save import requests. Please wait and try again later.' },
-    validate: { xForwardedForHeader: false },
-    // app.use() mounts by prefix. At either mount point only the exact POST
-    // upload path has a remaining req.path of '/', not /prepare or a child.
-    skip: (req) => req.method !== 'POST' || req.path !== '/',
-});
-app.use('/api/backup/import', legacySaveImportLimiter);
-app.use('/api/migrate/save-folder/upload', legacySaveImportLimiter);
 app.use(express.json({ limit: '100mb' }));
 app.use((req, res, next) => {
     // Streaming imports must bypass express.raw(), which would buffer their full bodies.
@@ -1638,6 +1623,17 @@ const assetUploadLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many asset upload requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Backup and save-folder imports share one destructive import slot. These are
+// attached directly to their raw-body POST handlers before stream consumption.
+const legacySaveImportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many legacy save import requests. Please wait and try again later.' },
     validate: { xForwardedForHeader: false }
 });
 
@@ -4626,7 +4622,7 @@ app.post('/api/backup/import/prepare', async (req, res, next) => {
     }
 });
 
-app.post('/api/backup/import', async (req, res, next) => {
+app.post('/api/backup/import', legacySaveImportLimiter, async (req, res, next) => {
     if(!await checkAuth(req, res)){ return; }
     if (!checkActiveSession(req, res)) return;
 
@@ -5436,7 +5432,7 @@ app.post('/api/migrate/save-folder/execute', async (req, res, next) => {
     }
 });
 
-app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
+app.post('/api/migrate/save-folder/upload', legacySaveImportLimiter, async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
     if (importInProgress) {

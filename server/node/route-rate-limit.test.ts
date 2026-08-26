@@ -45,32 +45,20 @@ describe('route rate limiting', () => {
         expect(server).toContain("app.post('/api/chat-content/:chaId/:chatIndex', async")
     })
 
-    it('limits legacy raw save imports before body parsing', () => {
+    it('limits exact legacy raw save upload routes', () => {
         const limiter = server.indexOf('const legacySaveImportLimiter = rateLimit({')
-        const backupMiddleware = server.indexOf("app.use('/api/backup/import', legacySaveImportLimiter)")
-        const saveFolderMiddleware = server.indexOf("app.use('/api/migrate/save-folder/upload', legacySaveImportLimiter)")
-        const jsonParser = server.indexOf("app.use(express.json({ limit: '100mb' }))")
         expect(limiter).toBeGreaterThanOrEqual(0)
-        expect(backupMiddleware).toBeGreaterThan(limiter)
-        expect(saveFolderMiddleware).toBeGreaterThan(backupMiddleware)
-        expect(jsonParser).toBeGreaterThan(saveFolderMiddleware)
-        expect(server).toContain("skip: (req) => req.method !== 'POST' || req.path !== '/',")
-        expect(server).not.toContain("app.use('/api/backup/import/prepare', legacySaveImportLimiter)")
-        expect(server).toContain("app.post('/api/backup/import', async")
-        expect(server).toContain("app.post('/api/migrate/save-folder/upload', async")
+        expect(server).toContain("app.post('/api/backup/import', legacySaveImportLimiter, async")
+        expect(server).toContain("app.post('/api/migrate/save-folder/upload', legacySaveImportLimiter, async")
+        expect(server).not.toContain("app.use('/api/backup/import', legacySaveImportLimiter)")
+        expect(server).not.toContain("skip: (req) => req.method !== 'POST' || req.path !== '/'")
     })
 
     it('does not charge backup prepare requests against the exact upload limit', async () => {
         const app = express()
-        const limiter = rateLimit({
-            windowMs: 60_000,
-            max: 1,
-            validate: { xForwardedForHeader: false },
-            skip: (req) => req.method !== 'POST' || req.path !== '/',
-        })
-        app.use('/api/backup/import', limiter)
+        const limiter = rateLimit({ windowMs: 60_000, max: 1, validate: { xForwardedForHeader: false } })
         app.post('/api/backup/import/prepare', (_req, res) => res.sendStatus(200))
-        app.post('/api/backup/import', (_req, res) => res.sendStatus(200))
+        app.post('/api/backup/import', limiter, (_req, res) => res.sendStatus(200))
         const listener = http.createServer(app)
         await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', resolve))
         try {
