@@ -162,5 +162,10 @@ describe('SQL persistence runtime', () => {
         database.characters[0].chats[0].message.splice(1, 0, { chatId: 'm-middle', role: 'char', data: 'unsafe' })
         auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
         expect(storage.commit).not.toHaveBeenCalled()
+        auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
+        expect(storage.commit).not.toHaveBeenCalled()
+        database.characters[0].chats[0].messagesFullyLoaded = true
+        auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
+        expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ messageManifests: [{ chatId: 'chat-a', ids: ['m-0', 'm-middle', 'm-1'] }] }))
     })
 })

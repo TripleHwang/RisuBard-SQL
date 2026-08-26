@@ -120,7 +120,7 @@ async function commitDirtyScopes(): Promise<void> {
         if (!(error instanceof SqlRevisionConflictError)) throw error
         // Targeted reads are observability-only: local dirty intent is
         // last-local-wins and must never be overwritten before the retry.
-        await observeDirtyEntities(storage, snapshot)
+        await rebaseDirtyScopes(storage, snapshot)
         commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision())
         if (!hasSqlCommitChanges(commit)) {
             registry.acknowledge(snapshot)
@@ -135,7 +135,9 @@ async function commitDirtyScopes(): Promise<void> {
  * Conflict recovery intentionally uses entity endpoints only.  A full snapshot
  * can overwrite concurrent rows and is reserved for explicit recovery flows.
  */
-async function observeDirtyEntities(storage: ISqlStorage, dirty: DirtySnapshot): Promise<void> {
+/** Targeted-read last-local-wins rebase: a successful present/null read resolves
+ * the remote row; our explicit dirty upsert/delete remains authoritative. */
+async function rebaseDirtyScopes(storage: ISqlStorage, dirty: DirtySnapshot): Promise<void> {
     for (const key of dirty.rootKeys) await storage.loadSettingKey(key)
     for (const key of dirty.pluginStorageKeys) await storage.loadPluginCustomStorageKey(key)
     for (const id of dirty.presetIds) await storage.loadBotPreset(id)
@@ -239,15 +241,25 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
         for (const chatId of order) markSqlChatDirty(characterId, chatId, true)
     }
     for (const [chatId, current] of next.messages) {
-        const prior = previous.messages.get(chatId); if (!prior) continue
+        const prior = previous.messages.get(chatId)
+        if (!prior) {
+            for (const id of current.order) markSqlMessageDirty(chatId, id)
+            if (current.complete) markSqlMessageManifestDirty(chatId)
+            continue
+        }
         const survivingPrior = prior.order.filter(id => current.values.has(id))
         const currentPrior = current.order.filter(id => prior.values.has(id))
-        const unsafePartialOrder = !prior.complete && (
+        const unsafePartialOrder = !prior.complete && !current.complete && (
             survivingPrior.join('\u0000') !== currentPrior.join('\u0000') ||
             current.order.slice(0, currentPrior.length).join('\u0000') !== currentPrior.join('\u0000')
         )
         if (unsafePartialOrder) {
             console.warn(`[SQL compatibility audit] deferred unsafe middle message insertion/reorder in partial chat ${chatId}; hydrate it before retrying`)
+            // Keep this chat's old baseline so a later full hydration can safely
+            // reconcile the same mutation. Independent row edits below remain dirty.
+            next.messages.set(chatId, prior)
+            for (const id of currentPrior) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
+            for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
             continue
         }
         for (const id of current.order) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
