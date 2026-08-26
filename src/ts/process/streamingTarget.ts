@@ -1,31 +1,31 @@
-export interface StreamingMessageTarget {
-    chatId?: string
-}
+import type { character, Chat, Message } from '../storage/database.svelte'
 
-export interface StreamingChatTarget<Message extends StreamingMessageTarget> {
-    id?: string
-    message: Message[]
-}
-
-export interface StreamingCharacterTarget<Chat extends StreamingChatTarget<StreamingMessageTarget>> {
-    chaId?: string
-    chats?: Chat[]
-}
-
-/** Resolves durable stream ownership again after any async boundary. */
-export function findStreamingMessageTarget<
-    Message extends StreamingMessageTarget,
-    Chat extends StreamingChatTarget<Message>,
-    Character extends StreamingCharacterTarget<Chat>,
->(characters: readonly Character[], characterId: string, chatId: string, messageId: string): {
+export interface StreamingChatTarget {
+    character: character
     chat: Chat
+}
+
+export interface StreamingMessageTarget extends StreamingChatTarget {
     message: Message
     index: number
-} | undefined {
+}
+
+/** Re-finds a chat by durable ownership after an async streaming boundary. */
+export function findStreamingChat(
+    characters: readonly character[], characterId: string, chatId: string,
+): StreamingChatTarget | undefined {
     const character = characters.find((item) => item?.chaId === characterId)
     const chat = character?.chats?.find((item) => item?.id === chatId)
-    const index = chat?.message.findIndex((item) => item?.chatId === messageId) ?? -1
-    if (!chat || index < 0) return undefined
-    const message = chat.message[index]
-    return message ? { chat, message, index } : undefined
+    return character && chat ? { character, chat } : undefined
+}
+
+/** Re-finds the exact streamed row; never falls back to a mutable index. */
+export function findStreamingMessageTarget(
+    characters: readonly character[], characterId: string, chatId: string, messageId: string,
+): StreamingMessageTarget | undefined {
+    const target = findStreamingChat(characters, characterId, chatId)
+    const index = target?.chat.message.findIndex((item) => item?.chatId === messageId) ?? -1
+    if (!target || index < 0) return undefined
+    const message = target.chat.message[index]
+    return message ? { ...target, message, index } : undefined
 }

@@ -80,6 +80,22 @@ describe('StreamRenderScheduler', () => {
         expect(render).not.toHaveBeenCalled()
     })
 
+    test('waits for an in-flight renderer before abort cleanup completes', async () => {
+        const frames = createFrames()
+        let resolveRender: (() => void) | undefined
+        const render = vi.fn(() => new Promise<void>(resolve => { resolveRender = resolve }))
+        const scheduler = new StreamRenderScheduler(render, frames.request, frames.cancel)
+
+        scheduler.schedule('partial')
+        await frames.run()
+        const cleanup = scheduler.cancelAndWait()
+        scheduler.schedule('ignored')
+        resolveRender?.()
+        await cleanup
+
+        expect(render).toHaveBeenCalledExactlyOnceWith('partial')
+    })
+
     test('stops future frames after a renderer error and reports it to terminal cleanup', async () => {
         const frames = createFrames()
         const failure = new Error('parse failed')

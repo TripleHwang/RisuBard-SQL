@@ -62,6 +62,12 @@ export class StreamRenderScheduler<Value> {
         this.clearFrame()
     }
 
+    /** Cancels queued work and waits until a current renderer has settled. */
+    async cancelAndWait(): Promise<void> {
+        this.cancel()
+        await this.running
+    }
+
     private requestNextFrame(): void {
         if (this.cancelled || this.frame !== null || this.running !== null || !this.hasPending) return
         this.frame = this.requestFrame(() => {

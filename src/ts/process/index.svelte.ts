@@ -16,7 +16,7 @@ import { sayTTS } from "./tts";
 import { v4 } from "uuid";
 import { markSqlMessageDirty } from '../storage/sql/sqlPersistenceRuntime';
 import { StreamRenderScheduler } from '../markdown/streamRenderScheduler';
-import { findStreamingMessageTarget } from './streamingTarget';
+import { findStreamingChat, findStreamingMessageTarget } from './streamingTarget';
 import { runTrigger } from "./triggers";
 import { HypaProcesser } from "./memory/hypamemory";
 import { additionalInformations } from "./embedding/addinfo";
@@ -2597,9 +2597,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         // Snapshot the mode for this generation. Saver Mode may choose a more
         // conservative mode for later generations without changing this one.
         const performanceMode: StreamingDisplayOptimizationMode = DBState.db.streamingDisplayOptimizationMode ?? 'balanced'
-        DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
-        DBState.db.characters[selectedChar].chats[selectedChat].activeStreamingDisplayOptimizationMode = performanceMode
-        DBState.db.characters[selectedChar].reloadKeys += 1
+        currentChat.isStreaming = true
+        currentChat.activeStreamingDisplayOptimizationMode = performanceMode
+        currentChar.reloadKeys += 1
         const streamingCharacterId = currentChar.chaId
         const streamingChatId = currentChat.id
         const streamingMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].chatId
@@ -2608,37 +2608,48 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         let receivedStreamingResult = false
         const deferStreamingPostProcessing = performanceMode === 'strong'
         const coalesceStreamingDisplay = performanceMode === 'balanced' || performanceMode === 'strong'
+        let streamingDisplayActive = true
+        const bumpStreamingCharacterReload = () => {
+            const target = streamingCharacterId && streamingChatId
+                ? findStreamingChat(DBState.db.characters, streamingCharacterId, streamingChatId)
+                : undefined
+            if(target) target.character.reloadKeys += 1
+        }
         const applyStreamingDisplay = async (nextResult: string) => {
-            if (!streamingCharacterId || !streamingChatId || !streamingMessageId) return
+            if (!streamingDisplayActive || !streamingCharacterId || !streamingChatId || !streamingMessageId) return
             let target = findStreamingMessageTarget(DBState.db.characters, streamingCharacterId, streamingChatId, streamingMessageId)
             if (!target) return
             if(deferStreamingPostProcessing){
+                if (!streamingDisplayActive) return
                 target.message.data = reformatContent(prefix + nextResult)
                 markSqlMessageDirty(streamingChatId, streamingMessageId)
-                DBState.db.characters[selectedChar].reloadKeys += 1
+                bumpStreamingCharacterReload()
                 return
             }
-            const result2 = await processScriptFull(target.chat, reformatContent(prefix + nextResult), 'editoutput', target.index)
+            const result2 = await processScriptFull(target.character, reformatContent(prefix + nextResult), 'editoutput', target.index)
             // Processing can yield; only write if the same durable message still exists.
+            if (!streamingDisplayActive) return
             target = findStreamingMessageTarget(DBState.db.characters, streamingCharacterId, streamingChatId, streamingMessageId)
             if (!target) return
             target.message.data = result2.data
             markSqlMessageDirty(streamingChatId, streamingMessageId)
             emoChanged = result2.emoChanged
-            DBState.db.characters[selectedChar].reloadKeys += 1
+            bumpStreamingCharacterReload()
         }
-        const streamingScheduler = new StreamRenderScheduler(async (nextResult) => {
+        const streamingScheduler = new StreamRenderScheduler<string>(async (nextResult) => {
             try {
                 await applyStreamingDisplay(nextResult)
             }
             catch(error){
                 streamAborted = true
+                streamingDisplayActive = false
                 void reader.cancel().catch(() => {})
                 throw error
             }
         })
         const abortReader = () => {
             streamAborted = true
+            streamingDisplayActive = false
             streamingScheduler.cancel()
             void reader.cancel().catch(() => {})
         }
@@ -2680,7 +2691,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             }
         }
         finally {
-            abortSignal.removeEventListener('abort', abortReader)
             try {
                 if(coalesceStreamingDisplay){
                     try {
@@ -2692,14 +2702,15 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         throw error
                     }
                 }
-                if(deferStreamingPostProcessing && receivedStreamingResult){
+                if(deferStreamingPostProcessing && receivedStreamingResult && !streamAborted && !abortSignal.aborted && streamingDisplayActive){
                     // The raw frame updates above keep strong mode cheap. Parse once,
                     // after the exact terminal text has been drained.
                     const target = streamingCharacterId && streamingChatId && streamingMessageId
                         ? findStreamingMessageTarget(DBState.db.characters, streamingCharacterId, streamingChatId, streamingMessageId)
                         : undefined
                     if(target){
-                        const result2 = await processScriptFull(target.chat, reformatContent(prefix + result), 'editoutput', target.index)
+                        const result2 = await processScriptFull(target.character, reformatContent(prefix + result), 'editoutput', target.index)
+                        if (!streamingDisplayActive) return false
                         const stillCurrent = findStreamingMessageTarget(DBState.db.characters, streamingCharacterId, streamingChatId, streamingMessageId)
                         if(stillCurrent){
                             stillCurrent.message.data = result2.data
@@ -2710,15 +2721,17 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 }
             }
             finally {
-                streamingScheduler.cancel()
-                const target = streamingCharacterId && streamingChatId && streamingMessageId
-                    ? findStreamingMessageTarget(DBState.db.characters, streamingCharacterId, streamingChatId, streamingMessageId)
+                streamingDisplayActive = false
+                await streamingScheduler.cancelAndWait()
+                const target = streamingCharacterId && streamingChatId
+                    ? findStreamingChat(DBState.db.characters, streamingCharacterId, streamingChatId)
                     : undefined
                 if(target){
                     target.chat.isStreaming = false
                     target.chat.activeStreamingDisplayOptimizationMode = undefined
                 }
-                DBState.db.characters[selectedChar].reloadKeys += 1
+                bumpStreamingCharacterReload()
+                abortSignal.removeEventListener('abort', abortReader)
                 void reader.cancel().catch(() => {})
             }
         }
