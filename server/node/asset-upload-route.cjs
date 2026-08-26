@@ -6,6 +6,28 @@ const { spoolSourceToOwnedFile } = require('./import-stream.cjs');
 const MAX_ASSET_UPLOAD_BYTES = 256 * 1024 * 1024;
 const ASSET_UPLOAD_HEADROOM_BYTES = 512 * 1024 * 1024;
 
+const requestTimeoutOverrides = new WeakMap();
+function suspendRequestTimeout(req) {
+  const server = req.socket && req.socket.server;
+  if (!server || typeof server.requestTimeout !== 'number') return () => {};
+  let override = requestTimeoutOverrides.get(server);
+  if (!override) {
+    if (server.requestTimeout === 0) return () => {};
+    override = { original: server.requestTimeout, count: 0 };
+    requestTimeoutOverrides.set(server, override);
+    server.requestTimeout = 0;
+  }
+  override.count++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--override.count !== 0) return;
+    requestTimeoutOverrides.delete(server);
+    if (server.requestTimeout === 0) server.requestTimeout = override.original;
+  };
+}
+
 function parseContentLength(value) {
   if (value === undefined) return null;
   const text = String(value).trim();
@@ -54,6 +76,10 @@ function createAssetUploadHandler(deps) {
     if (contentType !== 'application/octet-stream') { res.status(415).json({ error: 'Unsupported asset content-type', code: 'UNSUPPORTED_MEDIA_TYPE' }); return; }
     if (contentLength === undefined) { res.status(400).json({ error: 'Invalid content length', code: 'INVALID_CONTENT_LENGTH' }); return; }
     if (contentLength !== null && contentLength > maxBytes) { res.status(413).json({ error: 'Asset exceeds the allowed size', code: 'IMPORT_LIMIT_EXCEEDED' }); return; }
+    let previousSocketTimeout;
+    let restoreRequestTimeout = () => {};
+    let abort = () => {};
+    let onRequestClose = () => {};
     try {
       if (getAvailableBytes) {
         const available = getAvailableBytes({ phase: 'preflight', needed: contentLength || 0 });
@@ -62,9 +88,15 @@ function createAssetUploadHandler(deps) {
         }
       }
       const controller = new AbortController();
-      const abort = () => controller.abort();
+      abort = () => controller.abort();
+      onRequestClose = () => { if (req.aborted || !req.complete) abort(); };
+      previousSocketTimeout = req.socket && req.socket.timeout;
+      req.socket?.setTimeout(0);
+      req.socket?.setKeepAlive(true);
+      restoreRequestTimeout = suspendRequestTimeout(req);
       req.once('aborted', abort);
-      req.once('close', () => { if (req.aborted || !req.complete) abort(); });
+      req.once('close', onRequestClose);
+      req.once('end', restoreRequestTimeout);
       let staged;
       try {
         staged = await spool(req, { stagingRoot, prefix: 'asset-upload-', filename: 'asset.bin', maxBytes, diskHeadroomBytes, getAvailableBytes, signal: controller.signal });
@@ -75,9 +107,15 @@ function createAssetUploadHandler(deps) {
       }
     } catch (error) {
       const status = statusFor(error);
-      res.status(status).json({ error: messageFor(error), code: error?.code || 'ASSET_UPLOAD_FAILED' });
+      if (!res.destroyed && !res.writableEnded) res.status(status).json({ error: messageFor(error), code: error?.code || 'ASSET_UPLOAD_FAILED' });
+    } finally {
+      req.removeListener('aborted', abort);
+      req.removeListener('close', onRequestClose);
+      req.removeListener('end', restoreRequestTimeout);
+      restoreRequestTimeout();
+      if (req.socket && previousSocketTimeout !== undefined) req.socket.setTimeout(previousSocketTimeout);
     }
   };
 }
 
-module.exports = { MAX_ASSET_UPLOAD_BYTES, ASSET_UPLOAD_HEADROOM_BYTES, isSafeAssetKey, createAssetUploadHandler };
+module.exports = { MAX_ASSET_UPLOAD_BYTES, ASSET_UPLOAD_HEADROOM_BYTES, isSafeAssetKey, suspendRequestTimeout, createAssetUploadHandler };

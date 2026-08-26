@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import express from 'express'
 import http from 'node:http'
 
-const { createAssetUploadHandler } = require('./asset-upload-route.cjs')
+const { createAssetUploadHandler, suspendRequestTimeout } = require('./asset-upload-route.cjs')
 
 const servers: http.Server[] = []
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve())))) })
@@ -61,5 +61,86 @@ describe('createAssetUploadHandler', () => {
         const response = await request(server)
         expect(response.status).toBe(500)
         expect(calls).toContain('cleanup')
+    })
+
+    it.each([
+        ['success', {}],
+        ['error', { kvSetManyFromFilesAsync: async () => { throw new Error('publish failed') } }],
+    ])('suspends slow-upload timeouts and restores them after %s', async (_name, overrides) => {
+        let socket: any
+        const timeoutRestores: number[] = []
+        let requestTimeoutDuringUpload: number | undefined
+        let socketTimeoutDuringUpload: number | undefined
+        const { server } = makeApp({
+            ...overrides,
+            spoolSourceToOwnedFile: async (source: any) => {
+                socket = source.socket
+                requestTimeoutDuringUpload = socket.server.requestTimeout
+                socketTimeoutDuringUpload = socket.timeout
+                const setTimeout = socket.setTimeout.bind(socket)
+                socket.setTimeout = (value: number, ...args: any[]) => { timeoutRestores.push(value); return setTimeout(value, ...args) }
+                for await (const _ of source) {}
+                return { ownedDir: process.cwd(), filePath: 'asset.bin', bytes: 6 }
+            },
+        })
+        server.requestTimeout = 123
+        server.setTimeout(456)
+        await request(server)
+        expect(requestTimeoutDuringUpload).toBe(0)
+        expect(socketTimeoutDuringUpload).toBe(0)
+        expect(server.requestTimeout).toBe(123)
+        expect(timeoutRestores).toContain(456)
+    })
+
+    it('restores upload timeouts after a client abort', async () => {
+        let handlerSettled!: () => void
+        const settled = new Promise<void>(resolve => { handlerSettled = resolve })
+        let socket: any
+        const timeoutRestores: number[] = []
+        const { server } = makeApp({
+            spoolSourceToOwnedFile: async (source: any, options: any) => {
+                socket = source.socket
+                const setTimeout = socket.setTimeout.bind(socket)
+                socket.setTimeout = (value: number, ...args: any[]) => { timeoutRestores.push(value); return setTimeout(value, ...args) }
+                return await new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => {
+                    const error: any = new Error('aborted'); error.code = 'IMPORT_ABORTED'; error.status = 499
+                    handlerSettled(); reject(error)
+                }, { once: true }))
+            },
+        })
+        server.requestTimeout = 123
+        server.setTimeout(456)
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+        const { port } = server.address() as { port: number }
+        const client = http.request({ hostname: '127.0.0.1', port, path: '/api/assets/upload', method: 'POST', headers: {
+            'content-type': 'application/octet-stream', 'content-length': '100', 'x-risu-asset-key': 'assets/test.png',
+        } })
+        client.on('error', () => {})
+        client.write('partial')
+        await new Promise(resolve => setTimeout(resolve, 10))
+        client.destroy()
+        await settled
+        await new Promise(resolve => setImmediate(resolve))
+        expect(server.requestTimeout).toBe(123)
+        expect(timeoutRestores).toContain(456)
+    })
+})
+
+describe('suspendRequestTimeout', () => {
+    it('reference-counts overlapping uploads and preserves concurrent configuration changes', () => {
+        const server = { requestTimeout: 123 }
+        const req = { socket: { server } }
+        const releaseA = suspendRequestTimeout(req)
+        const releaseB = suspendRequestTimeout(req)
+        expect(server.requestTimeout).toBe(0)
+        releaseA()
+        expect(server.requestTimeout).toBe(0)
+        releaseB()
+        expect(server.requestTimeout).toBe(123)
+
+        const releaseC = suspendRequestTimeout(req)
+        server.requestTimeout = 789
+        releaseC()
+        expect(server.requestTimeout).toBe(789)
     })
 })
