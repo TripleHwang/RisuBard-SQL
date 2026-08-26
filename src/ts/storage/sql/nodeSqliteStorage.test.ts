@@ -279,6 +279,28 @@ describe("Node server SQLite client", () => {
     server.close();
   });
 
+  it("requests a newest-40 chat page without a snapshot", async () => {
+    const { client, requests, server } = createClientWithBootstrap();
+    await client.replaceDatabase({
+      characters: [{
+        chaId: "character-1", name: "Character",
+        chats: [{
+          id: "chat-1", name: "Chat",
+          message: Array.from({ length: 41 }, (_, index) => ({ chatId: `message-${index}`, role: "user", data: String(index) })),
+        }],
+      }],
+      botPresets: [],
+    } as any);
+    requests.splice(0);
+
+    const page = await client.loadChatMessageReversePage("chat-1", undefined, 40);
+
+    expect(page.messages).toHaveLength(40);
+    expect(requests).toEqual(["/api/sql/chats/chat-1/messages?limit=40"]);
+    expect(requests).not.toContain("/api/sql/snapshot");
+    server.close();
+  });
+
   it("reads ancillary SQL data through bounded endpoints", async () => {
     const { client, requests, server } = createClientWithBootstrap();
     await client.replaceDatabase({

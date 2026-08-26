@@ -1,17 +1,23 @@
 import { describe, test, expect, vi } from 'vitest'
 
+const activeStorage = vi.hoisted(() => ({ current: null as any }))
+
 // Stub out the heavy reactive modules so loading chatStorage.ts doesn't trigger
 // unrelated $effect chains that fail in a stripped-down test environment.
 // Mirror the production isChatStub semantics including the hybrid guard so
 // the chat-data-loss tests below exercise the real intent.
 vi.mock('../globalApi.svelte', () => ({ forageStorage: { realStorage: null } }))
 vi.mock('./database.svelte', () => ({
+    getDatabase: () => ({ characters: [] }),
     isChatStub: (chat: any) => chat
         && chat._stub === true
         && !Array.isArray(chat.message),
 }))
+vi.mock('./sql/sqlBootstrap', () => ({ getActiveSqlStorage: () => activeStorage.current }))
+vi.mock('./sql/sqlPersistenceRuntime', () => ({ flushSqlDirtyChanges: async () => undefined }))
+vi.mock('../process/generationState', () => ({ isChatGenerating: () => false }))
 
-const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat } = await import('./chatStorage')
+const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage } = await import('./chatStorage')
 type Chat = any
 type ChatStub = any
 
@@ -213,5 +219,92 @@ describe('hybrid corruption (chat with _stub:true + message)', () => {
         expect('note' in stub).toBe(false)
         // Once stripped, the chat-data guard would see no chat-internal field
         // ops in a baseline-vs-current diff between two of these stubs.
+    })
+})
+
+describe('ChatHydrationCache', () => {
+    test('keeps the two most recently touched hydrated chat IDs after a third hydration', async () => {
+        const cache = new ChatHydrationCache({ maxChats: 2, flush: vi.fn().mockResolvedValue(undefined) })
+
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+        await cache.touch('char-b', 'chat-3', { activeChatId: 'chat-3' })
+
+        expect(cache.ids()).toEqual(['char-a/chat-2', 'char-b/chat-3'])
+    })
+
+    test('moves an existing ID to the most-recent position', async () => {
+        const cache = new ChatHydrationCache({ maxChats: 2, flush: vi.fn().mockResolvedValue(undefined) })
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+        await cache.touch('char-a', 'chat-1')
+
+        expect(cache.ids()).toEqual(['char-a/chat-2', 'char-a/chat-1'])
+    })
+
+    test('does not mutate the LRU when flushing before eviction fails', async () => {
+        const flush = vi.fn().mockRejectedValue(new Error('offline'))
+        const cache = new ChatHydrationCache({ maxChats: 1, flush })
+        await cache.touch('char-a', 'chat-1')
+
+        await expect(cache.touch('char-a', 'chat-2', { activeChatId: 'chat-2' })).rejects.toThrow('offline')
+        expect(cache.ids()).toEqual(['char-a/chat-1'])
+    })
+
+    test('re-evaluates the eviction candidate after an await reorders the LRU', async () => {
+        let release!: () => void
+        const flush = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+        const evicted: string[] = []
+        const cache = new ChatHydrationCache({ maxChats: 2, flush, onEvict: key => evicted.push(key) })
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+
+        const third = cache.touch('char-a', 'chat-3')
+        await Promise.resolve()
+        await cache.touch('char-a', 'chat-1')
+        release()
+        await third
+
+        expect(evicted).toEqual(['char-a/chat-2'])
+        expect(cache.ids()).toEqual(['char-a/chat-1', 'char-a/chat-3'])
+    })
+
+    test('skips active, protected, and in-flight chat IDs', async () => {
+        const evicted: string[] = []
+        const cache = new ChatHydrationCache({ maxChats: 2, flush: vi.fn().mockResolvedValue(undefined), onEvict: key => evicted.push(key) })
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+        await cache.touch('char-a', 'chat-3', {
+            activeChatId: 'chat-1',
+            isProtected: key => key === 'char-a/chat-2',
+        })
+
+        expect(evicted).toEqual([])
+        expect(cache.ids()).toEqual(['char-a/chat-1', 'char-a/chat-2'])
+    })
+
+    test('stores identifiers only, never chat object references', async () => {
+        const cache = new ChatHydrationCache({ maxChats: 2, flush: vi.fn().mockResolvedValue(undefined) })
+        const chat = blankChat()
+        await cache.touch('char-a', 'chat-1', { chat } as any)
+
+        expect(Object.values(cache as any).flatMap((value: any) => value instanceof Map ? [...value.values()] : [])).not.toContain(chat)
+    })
+})
+
+describe('hydrateRecentChatPage', () => {
+    test('rehydrates the newest 40-message reverse page without a snapshot', async () => {
+        const loadChatMessageReversePage = vi.fn().mockResolvedValue({
+            chatId: 'chat-1', messages: [{ chatId: 'm-39' }, { chatId: 'm-40' }],
+            positions: [39, 40], before: 41, nextBefore: 1, nextPosition: 41, total: 41, hasMore: true,
+        })
+        activeStorage.current = { backendKind: 'server-sql', loadCharacterHydration: vi.fn(), loadChatMessageReversePage }
+        const chats = [blankChat({ id: 'chat-1', message: [], messagesLoaded: false })]
+
+        const hydrated = await hydrateRecentChatPage(chats, 0, 'char-a')
+
+        expect(loadChatMessageReversePage).toHaveBeenCalledWith('chat-1', undefined, 40)
+        expect(hydrated?.message.map((message: any) => message.chatId)).toEqual(['m-39', 'm-40'])
+        expect((hydrated as any)._sqlWindow).toMatchObject({ hasOlder: true, total: 41 })
     })
 })

@@ -1,9 +1,11 @@
 import { forageStorage } from "../globalApi.svelte"
-import { type Chat, type ChatStub, type ChatOrStub, isChatStub } from "./database.svelte"
+import { getDatabase, type Chat, type ChatStub, type ChatOrStub, type character, isChatStub } from "./database.svelte"
 import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
+import { flushSqlDirtyChanges } from "./sql/sqlPersistenceRuntime"
+import { isChatGenerating } from "../process/generationState"
 
 // ── Stub ↔ Placeholder conversion ───────────────────────────────────────────
 
@@ -97,6 +99,193 @@ function chatKey(chaId: string, chatId: string): string {
     return `${chaId}/${chatId}`
 }
 
+type ChatEvictionOptions = {
+    /** The selected chat is never a valid eviction victim. */
+    activeChatId?: string
+    /** Evaluated immediately before eviction, after the persistence await. */
+    isProtected?: (key: string) => boolean
+}
+
+type ChatHydrationCacheOptions = {
+    maxChats: number
+    flush: () => Promise<void>
+    /** Receives a stable key only; cache ownership must never retain Chat objects. */
+    onEvict?: (key: string) => unknown | Promise<unknown>
+}
+
+/**
+ * ID-only LRU bookkeeping for hydrated chat bodies.  Actual chat lookup is
+ * intentionally delegated to the caller so the LRU cannot keep a message or
+ * Chat reference alive after that slot has been stubbed.
+ */
+export class ChatHydrationCache {
+    private readonly order = new Map<string, true>()
+
+    constructor(private readonly options: ChatHydrationCacheOptions) {}
+
+    ids(): string[] {
+        return [...this.order.keys()]
+    }
+
+    private evictionCandidate(options: ChatEvictionOptions): string | null {
+        for (const key of this.order.keys()) {
+            const chatId = key.slice(key.lastIndexOf('/') + 1)
+            if (chatId === options.activeChatId || options.isProtected?.(key)) continue
+            return key
+        }
+        return null
+    }
+
+    /**
+     * Records a completed hydration. A third chat flushes dirty scopes before
+     * its oldest safe peer is evicted; a failed flush leaves the LRU unchanged.
+     */
+    async touch(characterId: string, chatId: string, touchOptions: ChatEvictionOptions = {}): Promise<boolean> {
+        const key = chatKey(characterId, chatId)
+        if (this.order.delete(key)) {
+            this.order.set(key, true)
+            return true
+        }
+        if (this.order.size < this.options.maxChats) {
+            this.order.set(key, true)
+            return true
+        }
+
+        if (!this.evictionCandidate(touchOptions)) return false
+        // Do not adjust ordering before this await: on failure both the slot
+        // and the observable LRU order remain exactly as they were.
+        await this.options.flush()
+
+        // A selection or another hydration may have changed order while the
+        // flush was in flight. Pick again by stable ID, never a stale object.
+        const victim = this.evictionCandidate(touchOptions)
+        if (!victim) return false
+        const evicted = await this.options.onEvict?.(victim)
+        if (evicted === false) return false
+        this.order.delete(victim)
+        this.order.set(key, true)
+        return true
+    }
+
+    /** Evict every safe resident body except the selected chat. */
+    async evictExcept(activeChatId: string, options: Omit<ChatEvictionOptions, 'activeChatId'> = {}): Promise<void> {
+        while (true) {
+            const victim = this.evictionCandidate({ ...options, activeChatId })
+            if (!victim) return
+            await this.options.flush()
+            const currentVictim = this.evictionCandidate({ ...options, activeChatId })
+            if (!currentVictim) return
+            const evicted = await this.options.onEvict?.(currentVictim)
+            if (evicted === false) return
+            this.order.delete(currentVictim)
+        }
+    }
+}
+
+function parseChatKey(key: string): { characterId: string; chatId: string } | null {
+    const separator = key.lastIndexOf('/')
+    if (separator <= 0 || separator === key.length - 1) return null
+    return { characterId: key.slice(0, separator), chatId: key.slice(separator + 1) }
+}
+
+type RuntimeChat = Chat & {
+    messagesLoaded?: boolean
+    messagesFullyLoaded?: boolean
+    _sqlWindow?: { fullHistoryOperation?: boolean; loading?: boolean }
+    isLoadingFullHistory?: boolean
+    loadingFullHistory?: boolean
+    fullHistoryOperation?: boolean
+    _fullHistoryOperation?: boolean
+    loadingMessages?: boolean
+    isLoading?: boolean
+    risuBardWikiReboot?: { status?: string }
+}
+
+/** Re-find by stable IDs at eviction time; never retain a character/chat reference in the LRU. */
+function findRuntimeChat(key: string): { chats: Chat[]; index: number; chat: RuntimeChat } | null {
+    const ids = parseChatKey(key)
+    if (!ids) return null
+    const character = (getDatabase().characters ?? []).find(value => value?.chaId === ids.characterId)
+    const index = character?.chats?.findIndex(value => value?.id === ids.chatId) ?? -1
+    const chat = index === -1 ? null : character?.chats[index] as RuntimeChat | undefined
+    return chat && character ? { chats: character.chats, index, chat } : null
+}
+
+function hasLiveChatWork(key: string): boolean {
+    const ids = parseChatKey(key)
+    const found = findRuntimeChat(key)
+    if (!ids || !found) return true
+    const { chat } = found
+    const jobStatus = chat.risuBardWikiReboot?.status
+    return chat._placeholder === true || isHydrationActive(key) || isChatGenerating(ids.chatId) ||
+        Boolean(chat.isStreaming || chat.activeStreamingDisplayOptimizationMode ||
+            chat.isLoadingFullHistory || chat.loadingFullHistory || chat._sqlWindow?.fullHistoryOperation ||
+            chat._sqlWindow?.loading || chat.fullHistoryOperation || chat._fullHistoryOperation ||
+            chat.loadingMessages || chat.isLoading || jobStatus === 'running' || jobStatus === 'stop-requested' || jobStatus === 'finalizing')
+}
+
+function evictRuntimeChat(key: string): boolean {
+    const found = findRuntimeChat(key)
+    if (!found || hasLiveChatWork(key)) return false
+    // Construct from metadata only. The old Chat/message graph is not copied
+    // into the placeholder and becomes unreachable when its slot is replaced.
+    found.chats[found.index] = stubToPlaceholder(chatToStub(found.chat))
+    return true
+}
+
+const runtimeChatHydrationCache = new ChatHydrationCache({
+    maxChats: 2,
+    flush: flushSqlDirtyChanges,
+    onEvict: evictRuntimeChat,
+})
+
+function selectedChatId(characterId: string, chats: Chat[]): string | undefined {
+    const database = getDatabase() as typeof getDatabase extends () => infer T ? T & { selectedChatId?: string | null } : never
+    const character = database.characters?.find(value => value?.chaId === characterId) as character | undefined
+    const selected = character?.chats?.[character.chatPage ?? -1]?.id
+    if (selected) return selected
+    if (typeof database.selectedChatId === 'string') return database.selectedChatId
+    return chats.find(chat => chat?.id)?.id
+}
+
+/** Public safe eviction entrypoint for saver-mode/resource reclamation. */
+export async function evictHydratedChats(activeChatId: string): Promise<void> {
+    await runtimeChatHydrationCache.evictExcept(activeChatId, { isProtected: hasLiveChatWork })
+}
+
+async function recordCompletedSqlHydration(chaId: string, chats: Chat[], chatId: string): Promise<void> {
+    // Hydration has already applied and settled before this point. An eviction
+    // failure must not roll back that successful fetch, so it is deliberately
+    // contained here while the cache retains its previous IDs/slot.
+    try {
+        await runtimeChatHydrationCache.touch(chaId, chatId, {
+            activeChatId: selectedChatId(chaId, chats),
+            isProtected: hasLiveChatWork,
+        })
+    } catch (error) {
+        console.warn(`[chatStorage] unable to evict hydrated chat after ${chatKey(chaId, chatId)}`, error)
+    }
+}
+
+/**
+ * Apply the newest bounded SQL message page to one stable chat slot.  The
+ * reverse-page hydrator owns window metadata and duplicate suppression; this
+ * wrapper is the single convergence point for runtime LRU touches.
+ */
+export async function hydrateRecentChatPage(
+    chats: Chat[],
+    index: number,
+    chaId: string,
+    limit = 40,
+): Promise<Chat | null> {
+    const initial = chats[index]
+    if (!initial?.id) return null
+    const hydrated = await ensureChatMessageWindow({ chaId, chats } as character, index, limit)
+    if (!hydrated) return null
+    await recordCompletedSqlHydration(chaId, chats, initial.id)
+    return hydrated
+}
+
 /** Track in-flight hydration promises to avoid duplicate fetches */
 const hydrationPromises = new Map<string, Promise<Chat | null>>()
 
@@ -162,11 +351,8 @@ export async function ensureChatHydrated(
         try {
             const sqlStorage = activeSql
             if (sqlStorage?.backendKind === 'server-sql') {
-                const hydrated = await ensureChatMessageWindow({ chaId, chats } as any, index, 40)
+                const hydrated = await hydrateRecentChatPage(chats, index, chaId, 40)
                 if (!hydrated) return null
-                beginHydrationApply(key)
-                await tick()
-                endHydrationApply(key)
                 return hydrated
             }
             const full = await fetchChatFromServer(chaId, index, chatId)
@@ -202,6 +388,8 @@ export async function ensureChatHydrated(
             // Wait one tick so Svelte reactivity settles before allowing dirty tracking
             await tick()
             endHydrationApply(key)
+
+            await recordCompletedSqlHydration(chaId, chats, chatId)
 
             return full
         } finally {
