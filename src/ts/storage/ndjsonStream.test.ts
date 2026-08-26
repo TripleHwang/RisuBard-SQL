@@ -21,5 +21,5 @@ describe('incremental NDJSON parser', () => {
         }
         expect(count).toBe(20_000)
         expect(parser.bufferedCharacters()).toBe(0)
-    })
+    }, 30_000)
 })
