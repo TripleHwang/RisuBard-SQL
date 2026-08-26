@@ -146,4 +146,12 @@ describe('SQL persistence runtime', () => {
         await vi.advanceTimersByTimeAsync(10_000)
         expect(audit).toHaveBeenCalledTimes(1)
     })
+
+    it('detects an idle-only raw plugin message edit and preserves its row id', async () => {
+        const storage = fakeStorageAtRevision(3); const database = fixtureDatabaseWithMessages(1)
+        activateSqlPersistenceRuntime(storage, database); initializeSqlCompatibilityBaseline(database)
+        database.characters[0].chats[0].message[0].data = 'plugin edit'
+        auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
+        expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ messages: [expect.objectContaining({ id: 'm-0', data: expect.objectContaining({ data: 'plugin edit' }) })] }))
+    })
 })

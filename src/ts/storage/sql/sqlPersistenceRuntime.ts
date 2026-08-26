@@ -4,6 +4,7 @@ import type { ISqlStorage } from './ISqlStorage'
 import { DirtyRegistry, type DirtySnapshot } from './dirtyRegistry'
 import { buildSqlDirtyCommit } from './sqlDirtyCommit'
 import { hasSqlCommitChanges, SqlRevisionConflictError } from './sqlCommit'
+import { v4 as uuidv4 } from 'uuid'
 
 let activeStorage: ISqlStorage | null = null
 let activeDatabase: Database | null = null
@@ -15,6 +16,7 @@ let metadataRuntimeStarted = false
 type CompatibilityBaseline = {
     roots: Map<string, string>; plugins: Map<string, string>; presets: Map<string, string>
     characters: Map<string, string>; chats: Map<string, { characterId: string; signature: string }>
+    messages: Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>
     characterOrder: string[]; presetOrder: string[]; activePreset: number; chatOrders: Map<string, string[]>
 }
 let compatibilityBaseline: CompatibilityBaseline | null = null
@@ -184,7 +186,7 @@ export function startSqlCompatibilityAuditLoop(run: () => Promise<void> | void):
 }
 
 function fingerprint(value: unknown): string {
-    try { return JSON.stringify(value, (key, item) => key === 'message' ? undefined : item) ?? 'undefined' }
+    try { return JSON.stringify(value) ?? 'undefined' }
     catch { return String(value) }
 }
 
@@ -193,14 +195,18 @@ function snapshotCompatibility(database: Database): CompatibilityBaseline {
     for (const key of Object.keys(database)) if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) roots.set(key, fingerprint((database as any)[key]))
     const plugins = new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
     const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, fingerprint(preset)]))
-    const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>(); const chatOrders = new Map<string, string[]>()
+    const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>(); const chatOrders = new Map<string, string[]>(); const messages = new Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>()
     for (const character of database.characters ?? []) {
         if (!character?.chaId) continue
         characters.set(character.chaId, fingerprint({ ...character, chats: undefined }))
         const ids = (character.chats ?? []).map(chat => chat?.id).filter((id): id is string => Boolean(id)); chatOrders.set(character.chaId, ids)
-        for (const chat of character.chats ?? []) if (chat?.id) chats.set(chat.id, { characterId: character.chaId, signature: fingerprint(chat) })
+        for (const chat of character.chats ?? []) if (chat?.id) {
+            chats.set(chat.id, { characterId: character.chaId, signature: fingerprint({ ...chat, message: undefined }) })
+            const rows = chat.message ?? []; for (const message of rows) message.chatId ||= uuidv4()
+            messages.set(chat.id, { order: rows.map(message => message.chatId!), values: new Map(rows.map(message => [message.chatId!, fingerprint(message)])), complete: (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false })
+        }
     }
-    return { roots, plugins, presets, characters, chats, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
+    return { roots, plugins, presets, characters, chats, messages, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
 }
 
 function changedKeys(before: Map<string, string>, after: Map<string, string>): Set<string> {
@@ -228,6 +234,15 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
     if (characterOrderChanged) for (const id of next.characterOrder) markSqlCharacterDirty(id)
     for (const [characterId, order] of next.chatOrders) if (previous.chatOrders.get(characterId)?.join('\u0000') !== order.join('\u0000')) {
         for (const chatId of order) markSqlChatDirty(characterId, chatId, true)
+    }
+    for (const [chatId, current] of next.messages) {
+        const prior = previous.messages.get(chatId); if (!prior) continue
+        for (const id of current.order) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
+        for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
+        if (prior.complete && current.complete && prior.order.join('\u0000') !== current.order.join('\u0000')) {
+            for (const id of current.order) markSqlMessageDirty(chatId, id)
+            markSqlMessageManifestDirty(chatId)
+        }
     }
 }
 
