@@ -452,9 +452,12 @@ describe('importCharXStream', () => {
     try {
       await writeLargeCharX(archivePath);
       let maxReadChunk = 0;
-      const source = createReadStream(archivePath, { highWaterMark: 64 * 1024 });
-      source.on('data', (chunk) => { maxReadChunk = Math.max(maxReadChunk, chunk.length); });
-      const result = await importCharXStream(source, {
+      async function* source() {
+        for await (const chunk of createReadStream(archivePath, { highWaterMark: 64 * 1024 })) {
+          maxReadChunk = Math.max(maxReadChunk, chunk.length); yield chunk;
+        }
+      }
+      const result = await importCharXStream(source(), {
         stagingRoot,
         publishAssets: async (entries: any[]) => { await Promise.all(entries.map((entry) => readFile(entry.sourcePath))); },
       });
