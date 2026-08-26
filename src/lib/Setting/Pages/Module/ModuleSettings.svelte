@@ -133,7 +133,7 @@
     })
 </script>
 {#if mode === 0}
-    <SettingPage title={language.modules}>
+    <SettingPage resizable title={language.modules}>
 
     <CollectionOrganizerList
         kind="modules"
@@ -142,7 +142,7 @@
         bind:selectedFolderId={selectedModuleFolder}
     >
         {#snippet toolbar(_selectedFolderId)}
-            <div class="flex items-center gap-1">
+            <div class="flex flex-wrap items-center gap-1">
                 <ShButton variant="ghost" size="icon-sm" aria-label={language.createModule} onclick={() => {
                     tempModule = { name: '', description: '', id: v4() }
                     mode = 1
@@ -156,12 +156,12 @@
             {@const moduleIndex = DBState.db.modules.findIndex((module) => module.id === moduleId)}
             {#if moduleIndex >= 0}
                 {@const rmodule = DBState.db.modules[moduleIndex]}
-                <div class="pl-3 pt-3 text-left flex items-center">
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 pl-3 pt-3 text-left">
                     {#if rmodule.mcp}
                         <Waypoints size={18} class="mr-2" />
                     {/if}
                     <span class="font-bold">{rmodule.name}</span>
-                    <div class="grow flex justify-end">
+                    <div class="ml-auto flex flex-wrap justify-end gap-y-1">
                         <button class={(DBState.db.enabledModules.includes(rmodule.id)) ?
                                 "mr-2 cursor-pointer text-blue-500" :
                                 rmodule.namespace && 

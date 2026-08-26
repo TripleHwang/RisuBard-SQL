@@ -33,6 +33,8 @@ describe('RisuBard analysis settings', () => {
         expect(normalizeRisuBardAdditionalSearchLimit(99)).toBe(4)
         expect(normalizeRisuBardCanonicalTargetLimit(0)).toBe(1)
         expect(normalizeRisuBardCanonicalTargetLimit(99)).toBe(8)
+        expect(normalizeRisuBardAnalysisTokenLimit(Infinity)).toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
+        expect(normalizeRisuBardAnalysisTokenLimit(Number.MAX_SAFE_INTEGER + 1)).toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
     })
 
     test('normalizes configurable inquiry target and maximum budgets', () => {
@@ -45,6 +47,14 @@ describe('RisuBard analysis settings', () => {
             .toEqual({ target: 4_000, maximum: 4_000 })
         expect(normalizeRisuBardInquiryTokenBudget(1, 99_999))
             .toEqual({ target: 256, maximum: 32_768 })
+    })
+
+    test('clamps configured message windows above one hundred', () => {
+        const settings = resolveRisuBardChatSettings({
+            risuBardRecentMessageCount: 250, risuBardResponseMessageCount: 300,
+        })
+        expect(settings.risuBardRecentMessageCount).toBe(100)
+        expect(settings.risuBardResponseMessageCount).toBe(100)
     })
 
     test('normalizes the shared canonical writing policy', () => {

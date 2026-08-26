@@ -1,4 +1,4 @@
-export type FirstMessageStudioLocale = 'ko' | 'ja' | 'en'
+export type FirstMessageStudioLocale = string
 
 export type FirstMessageStudioSkinPreset = 'minimal' | 'glass' | 'custom'
 
@@ -27,10 +27,38 @@ export interface FirstMessageStudioVariable {
     choices: FirstMessageStudioVariableChoice[]
 }
 
-export type FirstMessageStudioText = string | {
-    ko: string
-    ja: string
-    en: string
+export type FirstMessageStudioText = string | Record<string, string>
+
+export interface FirstMessageStudioLanguage {
+    id: string
+    label: string
+    value: string
+}
+
+export interface FirstMessageStudioLocalization {
+    variable: string
+    defaultLanguage: string
+    languages: FirstMessageStudioLanguage[]
+}
+
+export type FirstMessageStudioScenarioOperator = 'equals' | 'not-equals'
+
+export interface FirstMessageStudioScenarioCondition {
+    variable: string
+    operator: FirstMessageStudioScenarioOperator
+    value: string
+}
+
+export interface FirstMessageStudioScenarioGroup {
+    id: string
+    conditions: FirstMessageStudioScenarioCondition[]
+}
+
+export interface FirstMessageStudioScenarioRule {
+    id: string
+    label: string
+    message: FirstMessageStudioText
+    groups: FirstMessageStudioScenarioGroup[]
 }
 
 export interface FirstMessageStudioEffect {
@@ -46,6 +74,18 @@ export interface FirstMessageStudioInput {
     displayVariable?: string
 }
 
+export type FirstMessageStudioImageFrame = 'contain' | 'square' | 'landscape' | 'portrait'
+
+export interface FirstMessageStudioOptionPresentation {
+    speaker?: FirstMessageStudioText
+    description: FirstMessageStudioText
+    imageEnabled: boolean
+    imageFrame: FirstMessageStudioImageFrame
+    imagePositionX: number
+    imagePositionY: number
+    imageAssetName?: string
+}
+
 export interface FirstMessageStudioOption {
     id: string
     label: FirstMessageStudioText
@@ -54,6 +94,7 @@ export interface FirstMessageStudioOption {
     effects: FirstMessageStudioEffect[]
     nextStageId?: string
     input?: FirstMessageStudioInput
+    presentation?: FirstMessageStudioOptionPresentation
     completes?: boolean
 }
 
@@ -63,16 +104,22 @@ export interface FirstMessageStudioStage {
     title: FirstMessageStudioText
     speaker?: FirstMessageStudioText
     description: FirstMessageStudioText
+    /** Missing in existing projects; normalization supplies false before rendering. */
+    optionPresentationEnabled?: boolean
     options: FirstMessageStudioOption[]
 }
 
 export interface FirstMessageStudioProject {
     version: 1
     enabled: boolean
-    title: string
+    compatibilityEnabled: boolean
+    fallbackMessage: string
+    title: FirstMessageStudioText
     completionVariable: string
     stageVariable?: string
     startStageId: string
+    localization: FirstMessageStudioLocalization
+    scenarioRules: FirstMessageStudioScenarioRule[]
     variables: FirstMessageStudioVariable[]
     stages: FirstMessageStudioStage[]
     appearance: FirstMessageStudioAppearance
@@ -98,6 +145,11 @@ export type FirstMessageStudioApplyResult = {
 }
 
 const text = (ko: string, ja: string, en: string): FirstMessageStudioText => ({ ko, ja, en })
+const legacyLanguages = (): FirstMessageStudioLanguage[] => [
+    { id: 'ko', label: '한국어', value: '1' },
+    { id: 'ja', label: '日本語', value: '2' },
+    { id: 'en', label: 'English', value: '3' },
+]
 const cleanVariable = (value: unknown, fallback = '') => String(value ?? fallback).trim().replace(/^\$+/, '')
 const cleanId = (value: unknown, fallback: string) => {
     const cleaned = String(value ?? '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
@@ -151,7 +203,18 @@ function normalizeAppearance(value: unknown): FirstMessageStudioAppearance {
 export function localizeStudioText(value: FirstMessageStudioText | undefined, locale: FirstMessageStudioLocale): string {
     if (typeof value === 'string') return value
     if (!value) return ''
-    return value[locale] || value.ko || value.en || value.ja || ''
+    return value[locale] || value.ko || value.en || value.ja || Object.values(value).find(Boolean) || ''
+}
+
+export function hasFirstMessageStudioPresentation(value: FirstMessageStudioOptionPresentation | undefined): boolean {
+    const hasText = (text: FirstMessageStudioText | undefined) => typeof text === 'string'
+        ? Boolean(text.trim())
+        : Boolean(text && Object.values(text).some((entry) => entry.trim()))
+    return Boolean(value && (
+        (value.imageEnabled && value.imageAssetName)
+        || hasText(value.speaker)
+        || hasText(value.description)
+    ))
 }
 
 export function toFirstMessageStudioLocale(locale: string | undefined): FirstMessageStudioLocale {
@@ -168,18 +231,131 @@ export function resolveStudioLocale(variables: Record<string, string>, fallback:
     return fallback
 }
 
+export function resolveStudioProjectLocale(
+    project: FirstMessageStudioProject,
+    variables: Record<string, string>,
+    fallback: FirstMessageStudioLocale = project.localization.defaultLanguage,
+): FirstMessageStudioLocale {
+    const configuredValue = variables[project.localization.variable]
+    const configured = project.localization.languages.find((language) => language.value === configuredValue)
+    if (configured) return configured.id
+    const normalizedFallback = String(fallback).toLowerCase()
+    const matchingFallback = project.localization.languages.find((language) => {
+        const id = language.id.toLowerCase()
+        return id === normalizedFallback || id.split('-')[0] === normalizedFallback.split('-')[0]
+    })
+    return matchingFallback?.id ?? project.localization.defaultLanguage
+}
+
+export function setStudioTextLanguage(
+    value: FirstMessageStudioText | undefined,
+    locale: FirstMessageStudioLocale,
+    nextValue: string,
+    languages: FirstMessageStudioLanguage[],
+): FirstMessageStudioText {
+    const translated: Record<string, string> = typeof value === 'string'
+        ? Object.fromEntries(languages.map((language) => [language.id, value]))
+        : { ...(value ?? {}) }
+    translated[locale] = nextValue
+    return translated
+}
+
 function normalizeText(value: unknown, fallback = ''): FirstMessageStudioText {
     if (typeof value === 'string') return value
     if (value && typeof value === 'object') {
         const candidate = value as Record<string, unknown>
-        const ko = String(candidate.ko ?? candidate.en ?? candidate.ja ?? fallback)
-        return {
-            ko,
-            ja: String(candidate.ja ?? ko),
-            en: String(candidate.en ?? ko),
-        }
+        const translated = Object.fromEntries(
+            Object.entries(candidate)
+                .filter(([key]) => key.trim())
+                .map(([key, entry]) => [key, String(entry ?? '')]),
+        )
+        return Object.keys(translated).length > 0 ? translated : fallback
     }
     return fallback
+}
+
+function normalizeImageFrame(value: unknown): FirstMessageStudioImageFrame {
+    return value === 'square' || value === 'landscape' || value === 'portrait' ? value : 'contain'
+}
+
+function normalizeImagePosition(value: unknown): number {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) return 50
+    return Math.round(Math.min(100, Math.max(0, numeric)) * 100) / 100
+}
+
+function normalizeLocalization(value: unknown): FirstMessageStudioLocalization {
+    const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+    const candidates = Array.isArray(raw.languages) && raw.languages.length > 0 ? raw.languages : legacyLanguages()
+    const used = new Set<string>()
+    const languages = candidates.flatMap((entry, index) => {
+        const source = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {}
+        let id = cleanId(source.id, `language-${index + 1}`)
+        while (used.has(id)) id = `${id}-${index + 1}`
+        used.add(id)
+        return [{
+            id,
+            label: String(source.label ?? id).trim() || id,
+            value: String(source.value ?? id),
+        }]
+    })
+    const requestedDefault = cleanId(raw.defaultLanguage, languages[0].id)
+    return {
+        variable: cleanVariable(raw.variable, 'cv_lang'),
+        defaultLanguage: languages.some((language) => language.id === requestedDefault) ? requestedDefault : languages[0].id,
+        languages,
+    }
+}
+
+function normalizeScenarioRules(value: unknown): FirstMessageStudioScenarioRule[] {
+    if (!Array.isArray(value)) return []
+    const usedRuleIds = new Set<string>()
+    return value.map((entry, ruleIndex) => {
+        const source = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {}
+        let id = cleanId(source.id, `scenario-${ruleIndex + 1}`)
+        while (usedRuleIds.has(id)) id = `${id}-${ruleIndex + 1}`
+        usedRuleIds.add(id)
+        const usedGroupIds = new Set<string>()
+        const groups: FirstMessageStudioScenarioGroup[] = Array.isArray(source.groups)
+            ? source.groups.map((groupEntry, groupIndex) => {
+                const groupSource = groupEntry && typeof groupEntry === 'object' ? groupEntry as Record<string, unknown> : {}
+                let groupId = cleanId(groupSource.id, `group-${groupIndex + 1}`)
+                while (usedGroupIds.has(groupId)) groupId = `${groupId}-${groupIndex + 1}`
+                usedGroupIds.add(groupId)
+                const conditions: FirstMessageStudioScenarioCondition[] = Array.isArray(groupSource.conditions)
+                    ? groupSource.conditions.flatMap((conditionEntry) => {
+                        const condition = conditionEntry && typeof conditionEntry === 'object' ? conditionEntry as Record<string, unknown> : {}
+                        const variable = cleanVariable(condition.variable)
+                        if (!variable) return []
+                        return [{
+                            variable,
+                            operator: condition.operator === 'not-equals' ? 'not-equals' : 'equals',
+                            value: String(condition.value ?? ''),
+                        } satisfies FirstMessageStudioScenarioCondition]
+                    })
+                    : []
+                return { id: groupId, conditions }
+            })
+            : []
+        return {
+            id,
+            label: String(source.label ?? `Scenario ${ruleIndex + 1}`).trim() || `Scenario ${ruleIndex + 1}`,
+            message: normalizeText(source.message),
+            groups,
+        }
+    })
+}
+
+export function matchesFirstMessageStudioScenario(
+    rule: FirstMessageStudioScenarioRule,
+    variables: Record<string, string>,
+): boolean {
+    return rule.groups.length > 0 && rule.groups.every((group) => (
+        group.conditions.length > 0 && group.conditions.some((condition) => {
+            const equal = (variables[cleanVariable(condition.variable)] ?? '') === condition.value
+            return condition.operator === 'not-equals' ? !equal : equal
+        })
+    ))
 }
 
 export function normalizeFirstMessageStudioProject(value: unknown): FirstMessageStudioProject {
@@ -200,6 +376,7 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
         const options = Array.isArray(source.options) ? source.options.map((optionEntry, optionIndex) => {
             const option = optionEntry && typeof optionEntry === 'object' ? optionEntry as Record<string, unknown> : {}
             const inputSource = option.input && typeof option.input === 'object' ? option.input as Record<string, unknown> : undefined
+            const presentationSource = option.presentation && typeof option.presentation === 'object' ? option.presentation as Record<string, unknown> : undefined
             const effects = Array.isArray(option.effects) ? option.effects.flatMap((effectEntry) => {
                 const effect = effectEntry && typeof effectEntry === 'object' ? effectEntry as Record<string, unknown> : {}
                 const variable = cleanVariable(effect.variable)
@@ -219,6 +396,15 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
                     required: Boolean(inputSource.required),
                     displayVariable: inputSource.displayVariable ? cleanVariable(inputSource.displayVariable) : undefined,
                 } : undefined,
+                presentation: presentationSource ? {
+                    speaker: presentationSource.speaker === undefined ? undefined : normalizeText(presentationSource.speaker),
+                    description: normalizeText(presentationSource.description),
+                    imageEnabled: Boolean(presentationSource.imageEnabled),
+                    imageFrame: normalizeImageFrame(presentationSource.imageFrame),
+                    imagePositionX: normalizeImagePosition(presentationSource.imagePositionX),
+                    imagePositionY: normalizeImagePosition(presentationSource.imagePositionY),
+                    imageAssetName: String(presentationSource.imageAssetName ?? '').trim() || undefined,
+                } : undefined,
                 completes: Boolean(option.completes),
             } satisfies FirstMessageStudioOption
         }) : []
@@ -228,6 +414,7 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
             title: normalizeText(source.title, `Stage ${stageIndex + 1}`),
             speaker: source.speaker === undefined ? undefined : normalizeText(source.speaker),
             description: normalizeText(source.description),
+            optionPresentationEnabled: Boolean(source.optionPresentationEnabled),
             options,
         }
     })
@@ -253,10 +440,14 @@ export function normalizeFirstMessageStudioProject(value: unknown): FirstMessage
     return {
         version: 1,
         enabled: raw.enabled === undefined ? false : Boolean(raw.enabled),
-        title: String(raw.title ?? 'First Message Studio'),
+        compatibilityEnabled: raw.compatibilityEnabled === undefined ? true : Boolean(raw.compatibilityEnabled),
+        fallbackMessage: String(raw.fallbackMessage ?? ''),
+        title: normalizeText(raw.title, 'First Message Studio'),
         completionVariable: cleanVariable(raw.completionVariable, 'first_message_studio_done'),
         stageVariable: raw.stageVariable ? cleanVariable(raw.stageVariable) : undefined,
         startStageId: stages.some((stage) => stage.id === requestedStart) ? requestedStart : stages[0].id,
+        localization: normalizeLocalization(raw.localization),
+        scenarioRules: normalizeScenarioRules(raw.scenarioRules),
         variables,
         stages,
         appearance: normalizeAppearance(raw.appearance),
@@ -269,9 +460,17 @@ export function createBlankStudioProject(): FirstMessageStudioProject {
     return normalizeFirstMessageStudioProject({
         version: 1,
         enabled: true,
+        compatibilityEnabled: true,
+        fallbackMessage: '',
         title: 'FIRST MESSAGE',
         completionVariable: 'first_message_studio_done',
         startStageId: 'welcome',
+        localization: {
+            variable: 'cv_lang',
+            defaultLanguage: 'ko',
+            languages: legacyLanguages(),
+        },
+        scenarioRules: [],
         variables: [],
         appearance: createStudioAppearance('minimal'),
         customCss: '',
@@ -287,7 +486,7 @@ export function createBlankStudioProject(): FirstMessageStudioProject {
 }
 
 function projectVariables(project: FirstMessageStudioProject): Set<string> {
-    const variables = new Set<string>([project.completionVariable])
+    const variables = new Set<string>([project.completionVariable, project.localization.variable])
     if (project.stageVariable) variables.add(project.stageVariable)
     for (const variable of project.variables) variables.add(variable.name)
     for (const stage of project.stages) {
@@ -300,6 +499,24 @@ function projectVariables(project: FirstMessageStudioProject): Set<string> {
         }
     }
     return variables
+}
+
+export function resetFirstMessageStudioScriptstate(
+    projectValue: FirstMessageStudioProject,
+    scriptstate: Record<string, string | number | boolean> = {},
+): Record<string, string | number | boolean> {
+    const project = normalizeFirstMessageStudioProject(projectValue)
+    const next = { ...scriptstate }
+    for (const variable of projectVariables(project)) delete next[`$${variable}`]
+    const defaultLanguage = project.localization.languages.find((language) => language.id === project.localization.defaultLanguage)
+        ?? project.localization.languages[0]
+    next[`$${project.localization.variable}`] = defaultLanguage?.value ?? ''
+    for (const variable of project.variables) {
+        if (variable.name !== project.localization.variable) next[`$${variable.name}`] = variable.defaultValue
+    }
+    next[`$${project.completionVariable}`] = '0'
+    if (project.stageVariable) next[`$${project.stageVariable}`] = project.startStageId
+    return next
 }
 
 function stageForSavedValue(project: FirstMessageStudioProject, variables: Record<string, string>): string {
@@ -344,7 +561,7 @@ export function applyStudioOption(projectValue: FirstMessageStudioProject, runti
     if (!stage || !option) return { runtime, error: 'unknown-option' }
     const inputValue = option.input ? (runtime.inputs[option.input.variable] ?? '').trim() : ''
     if (option.input?.required && !inputValue) return { runtime, error: 'required-input' }
-    const locale = resolveStudioLocale(runtime.variables, runtime.locale)
+    const locale = resolveStudioProjectLocale(project, runtime.variables, runtime.locale)
     const variables = { ...runtime.variables }
     for (const effect of option.effects) variables[effect.variable] = localizeStudioText(effect.value, locale)
     if (option.input) {

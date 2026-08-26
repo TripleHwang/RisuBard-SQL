@@ -17,6 +17,22 @@ import { isNodeServer } from '../platform'
 
 const MAX_BROWSER_RISUM_BYTES = 128 * 1024 * 1024
 
+// Module manifests in the wild occasionally label WebP bytes as PNG.  Keep
+// the stored key aligned with the bytes so Node's direct asset endpoint sends
+// the right MIME type; the original manifest extension remains only metadata.
+function getAssetExtensionFromBytes(data: Uint8Array, fallback: unknown = 'png'): string {
+    if (data.length >= 12
+        && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+        && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return 'webp'
+    if (data.length >= 8
+        && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return 'png'
+    if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) return 'jpg'
+    if (data.length >= 3 && data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) return 'gif'
+    return typeof fallback === 'string' && fallback.trim()
+        ? fallback.toLowerCase()
+        : 'png'
+}
+
 export interface MCPModule{
     url: string
 }
@@ -217,7 +233,7 @@ async function readModuleScoped(buf:Buffer):Promise<RisuModule> {
                     if (!module.assets?.[task.index]) {
                         throw new Error(`Missing asset metadata for index ${task.index}`)
                     }
-                    module.assets[task.index][1] = await saveAsset(data)
+                    module.assets[task.index][1] = await saveAsset(data, '', `asset.${getAssetExtensionFromBytes(data, module.assets[task.index][2])}`)
                     completed += 1
                 } catch {
                     failed.push(task)
@@ -239,7 +255,7 @@ async function readModuleScoped(buf:Buffer):Promise<RisuModule> {
                     }
                     return {
                         task,
-                        key: `assets/${id}.png`,
+                        key: `assets/${id}.${getAssetExtensionFromBytes(data, module.assets?.[task.index]?.[2])}`,
                         value: data,
                     }
                 }))

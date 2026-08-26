@@ -49,7 +49,9 @@ function boundedInteger(
     maximum: number
 ): number {
     if (!Number.isFinite(value) || typeof value !== 'number') return fallback
-    return Math.max(minimum, Math.min(maximum, Math.round(value)))
+    const rounded = Math.round(value)
+    if (!Number.isSafeInteger(rounded)) return fallback
+    return Math.max(minimum, Math.min(maximum, rounded))
 }
 
 export function resolveRisuBardChatSettings(

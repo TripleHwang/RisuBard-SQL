@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { buildInjectionManifest } from './status/requestStatus'
 import type {
     Database,
     PersonaBuilderPromptPreset,
@@ -122,6 +123,55 @@ describe('persona builder request compiler', () => {
         characterLorebook: 'CHARACTER LORE',
         moduleLorebook: 'MODULE LORE',
     }
+
+    test('reports named lorebook entries through the shared injection manifest instead of chat history', async () => {
+        const snapshot = collectPersonaBuilderSources({
+            database: database(),
+            character: currentCharacter({ globalLore: [
+                lore({ comment: '라이잘린 슈타우트', key: '라이자', content: '연금술사\n## 본문 내부 제목' }),
+                lore({ comment: 'Disabled', enabled: false }),
+                lore({ comment: 'Folder', mode: 'folder' }),
+                lore({ comment: 'Empty', content: ' ' }),
+            ] }),
+            moduleLorebooks: [{ scopeId: 'module:world', entry: lore({ comment: '세계관' }) }],
+        })
+        const messages = buildPersonaBuilderMessages({
+            taskInstruction: '페르소나를 작성해', styleInstruction: '간결하게 작성해',
+            userInstruction: '라이자가 나오는 셋팅에 어울리는 남자 캐릭터를 만들어 줘',
+            draft: '기억을 잃은 연금술사',
+            selections: { systemPrompt: true, characterDescription: true, characterLorebook: true, moduleLorebook: true },
+            sources: snapshot,
+        })
+        const manifest = await buildInjectionManifest(messages, [232, 25839], async (source) => source.content.length)
+
+        expect(messages[1].content).toContain('## 라이잘린 슈타우트')
+        expect(manifest.items.filter((item) => item.kind === 'lorebook').map((item) => item.name))
+            .toEqual(['라이잘린 슈타우트', '세계관'])
+        expect(manifest.items).toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'instruction', name: '작업 지시 프롬프트' }),
+            expect.objectContaining({ kind: 'instruction', name: '스타일 지시 프롬프트' }),
+            expect.objectContaining({ kind: 'systemPrompt' }),
+            expect.objectContaining({ kind: 'character' }),
+            expect.objectContaining({ kind: 'persona', name: '초안' }),
+            expect.objectContaining({ kind: 'instruction', name: '사용자 OOC 지시' }),
+        ]))
+        expect(manifest.items.some((item) => item.kind === 'chatHistory')).toBe(false)
+        expect(manifest.totalTokens).toBe(26071)
+        expect(manifest.items.reduce((sum, item) => sum + item.tokens, 0)).toBe(26071)
+    })
+
+    test('omits unchecked and empty contexts from injection metadata', async () => {
+        const messages = buildPersonaBuilderMessages({
+            taskInstruction: 'Task', styleInstruction: '', userInstruction: 'Create', draft: '',
+            selections: { systemPrompt: false, characterDescription: false, characterLorebook: false, moduleLorebook: true },
+            sources: { ...sources, moduleLorebook: '' },
+        })
+        const manifest = await buildInjectionManifest(messages, [20, 30], async (source) => source.content.length)
+        expect(manifest.items.map(({ kind, name }) => ({ kind, name }))).toEqual([
+            { kind: 'instruction', name: '작업 지시 프롬프트' },
+            { kind: 'instruction', name: '사용자 OOC 지시' },
+        ])
+    })
 
     test('places task and style prompts in named system blocks', () => {
         const messages = buildPersonaBuilderMessages({

@@ -60,7 +60,7 @@
     }
 </script>
 
-<SettingPage title={language.plugin}>
+<SettingPage resizable title={language.plugin}>
 <span class="text-draculared text-xs mb-4">{language.pluginWarn}</span>
 
 <CollectionOrganizerList
@@ -70,7 +70,7 @@
     bind:selectedFolderId={selectedPluginFolder}
 >
     {#snippet toolbar(_selectedFolderId)}
-        <div class="flex items-center gap-1 text-textcolor2">
+        <div class="flex flex-wrap items-center gap-1 text-textcolor2">
             <ShButton variant="ghost" size="icon-sm" aria-label={language.import} onclick={() => importPluginsToSelectedFolder(() => importPlugin())}><PlusIcon /></ShButton>
             <ShButton variant="ghost" size="icon-sm" aria-label="Plugin developer tools" onclick={async () => {
                 const v = parseInt(await alertSelect([
@@ -96,7 +96,7 @@
         {#if i >= 0}
             {@const plugin = DBState.db.plugins[i]}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div class="flex gap-2" aria-labelledby="show-params" role='button' tabindex="0" onclick={() => {
+        <div class="flex flex-wrap items-start gap-2" aria-labelledby="show-params" role='button' tabindex="0" onclick={() => {
             if(showParams.includes(plugin.name)){
                 showParams.splice(showParams.indexOf(plugin.name),1)
             }
@@ -105,7 +105,7 @@
             }
             showParams = showParams
         }}>
-            <div class="font-bold grow">
+            <div class="min-w-0 grow break-words font-bold">
                 <span>
                     {plugin.displayName ?? plugin.name}
                 </span>

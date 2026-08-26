@@ -1882,6 +1882,7 @@ interface RisuaiPluginAPI {
      * (`getChatFromIndex(...).message[i].data`).
      *
      * Returns `null` if no asset exists for that UUID.
+     * Requires 'inlay' permission; returns `null` when permission is denied.
      *
      * @param id - Inlay UUID
      * @returns Asset with `data` as a base64 data-URI string, or `null`

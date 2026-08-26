@@ -4259,6 +4259,9 @@
   var STATS_KEY = "pagefold.stats.v1";
   var GEMINI_PDF_TOKENS_PER_PAGE = 280;
   var OPENROUTER_PDF_TOKENS_PER_PAGE = 560;
+  var DEFAULT_PDF_FONT_SIZE = 2;
+  var MIN_PDF_FONT_SIZE = 0.5;
+  var MAX_PDF_FONT_SIZE = 12;
   var FONT_CACHE_KEY = "pagefold.font.noto-sans-cjk-kr.v1";
   var DEFAULT_FONT_URL = "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf";
   var EMOJI_FONT_CACHE_KEY = "pagefold.font.noto-emoji.v1";
@@ -4276,6 +4279,7 @@
   var DEFAULT_CONFIG = Object.freeze({
     activeProvider: "google",
     packagingMode: "maximum",
+    pdfFontSize: DEFAULT_PDF_FONT_SIZE,
     google: {
       apiKey: "",
       model: "gemini-3.5-flash",
@@ -4305,6 +4309,12 @@
   function mergeObject(base, value) {
     return { ...base, ...value && typeof value === "object" ? value : {} };
   }
+  function normalizePdfFontSize(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_PDF_FONT_SIZE;
+    const clamped = Math.min(MAX_PDF_FONT_SIZE, Math.max(MIN_PDF_FONT_SIZE, numeric));
+    return Math.round(clamped * 10) / 10;
+  }
   function normalizeConfig(value) {
     const input = value && typeof value === "object" ? value : {};
     const config2 = {
@@ -4321,6 +4331,7 @@
     if (!["maximum", "balanced"].includes(config2.packagingMode)) {
       config2.packagingMode = DEFAULT_CONFIG.packagingMode;
     }
+    config2.pdfFontSize = normalizePdfFontSize(input.pdfFontSize);
     delete config2.density;
     delete config2.columns;
     delete config2.pageTokens;
@@ -52610,7 +52621,7 @@ ${systemText}` : "Use the attached PDF as the ordered conversation context and p
     }
     return btoa(binary);
   }
-  async function generateTranscriptPdf(transcript, primaryFontBytes, emojiFontBytes = null) {
+  async function generateTranscriptPdf(transcript, primaryFontBytes, emojiFontBytes = null, fontSize = DEFAULT_PDF_FONT_SIZE) {
     if (!primaryFontBytes?.byteLength) throw new Error("PageFold PDF \uAE00\uAF34\uC744 \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
     const pdf = await PDFDocument_default.create();
     pdf.registerFontkit(fontkit_es_default);
@@ -52620,17 +52631,18 @@ ${systemText}` : "Use the attached PDF as the ordered conversation context and p
     const columnWidth = usableWidth / COLUMN_COUNT;
     const contentTop = PAGE_HEIGHT - MARGIN;
     const contentBottom = MARGIN;
-    const linesPerColumn = Math.max(1, Math.floor((contentTop - contentBottom) / LINE_HEIGHT));
+    const lineHeight = fontSize * (LINE_HEIGHT / FONT_SIZE);
+    const linesPerColumn = Math.max(1, Math.floor((contentTop - contentBottom) / lineHeight));
     const linesPerPage = linesPerColumn * COLUMN_COUNT;
     const escaped = String(transcript || "").replaceAll("\r\n", "\n").replaceAll("\r", "\n").replaceAll("\n", "\\n");
     const tokenFor = createTokenFactory(primary, emoji);
-    const tokens = graphemes(escaped).flatMap((value) => emojiPattern.test(value) && Array.from(value).length > 1 ? Array.from(value, (codePoint) => tokenFor(codePoint, FONT_SIZE, true)) : [tokenFor(value, FONT_SIZE)]);
+    const tokens = graphemes(escaped).flatMap((value) => emojiPattern.test(value) && Array.from(value).length > 1 ? Array.from(value, (codePoint) => tokenFor(codePoint, fontSize, true)) : [tokenFor(value, fontSize)]);
     const formatFont = createFormatFont(
       pdf,
       tokens.filter((token) => token.font === FORMAT_FONT).map((token) => token.formatCodePoint)
     );
     const lines = wrapTokens(tokens, columnWidth);
-    if (lines.length === 0) lines.push([tokenFor("(empty context)", FONT_SIZE)]);
+    if (lines.length === 0) lines.push([tokenFor("(empty context)", fontSize)]);
     const pageCount = Math.ceil(lines.length / linesPerPage);
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
       const page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
@@ -52654,8 +52666,8 @@ ${systemText}` : "Use the attached PDF as the ordered conversation context and p
             page,
             line,
             x,
-            contentTop - (row + 1) * LINE_HEIGHT,
-            FONT_SIZE,
+            contentTop - (row + 1) * lineHeight,
+            fontSize,
             fontKeys
           );
         }
@@ -52736,23 +52748,26 @@ ${systemText}` : "Use the attached PDF as the ordered conversation context and p
       return (hash >>> 0).toString(16);
     }
     async function createPdf(packed, currentConfig, signal, log3) {
+      const fontSize = currentConfig.pdfFontSize;
       const cacheKey = simpleHash(JSON.stringify({
-        transcript: packed.pdfTranscript
+        transcript: packed.pdfTranscript,
+        fontSize
       }));
       if (pdfCache?.key === cacheKey) {
-        log3("PDF \uBA54\uBAA8\uB9AC \uCE90\uC2DC \uC0AC\uC6A9", `${pdfCache.value.pageCount}\uD398\uC774\uC9C0`);
+        log3("PDF \uBA54\uBAA8\uB9AC \uCE90\uC2DC \uC0AC\uC6A9", `${pdfCache.value.pageCount}\uD398\uC774\uC9C0 / ${fontSize}pt`);
         return pdfCache.value;
       }
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       log3("\uAE00\uAF34 \uB85C\uB4DC \uC2DC\uC791");
       let fonts = await loadFonts(packed.pdfTranscript, signal, log3);
-      log3("PDF \uC0DD\uC131 \uC2DC\uC791");
+      log3("PDF \uC0DD\uC131 \uC2DC\uC791", `${fontSize}pt`);
       let value;
       try {
         value = await generateTranscriptPdf(
           packed.pdfTranscript,
           fonts.primary,
-          fonts.emoji
+          fonts.emoji,
+          fontSize
         );
       } catch (error2) {
         if (signal?.aborted || error2?.name === "AbortError") throw error2;
@@ -52764,7 +52779,8 @@ ${systemText}` : "Use the attached PDF as the ordered conversation context and p
         value = await generateTranscriptPdf(
           packed.pdfTranscript,
           fonts.primary,
-          fonts.emoji
+          fonts.emoji,
+          fontSize
         );
       }
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -53186,6 +53202,7 @@ ${packed.userText}`);
       <section class="pf-card full"><h2>PDF \uD328\uD0A4\uC9D5</h2>
         <div class="pf-grid">
           ${selectField("packaging-mode", "\uD328\uD0A4\uC9D5 \uBAA8\uB4DC", config2.packagingMode, [["maximum", "\uC808\uC57D"], ["balanced", "\uC548\uC815"]], "\uC808\uC57D \uBAA8\uB4DC\uB294 \uC804\uCCB4 \uB300\uD654\uB97C PDF\uC5D0 \uB123\uB294 \uAD8C\uC7A5 \uC124\uC815\uC785\uB2C8\uB2E4. \uC548\uC815 \uBAA8\uB4DC\uB294 system\uB9CC \uC6D0\uBB38\uC73C\uB85C \uC720\uC9C0\uD558\uACE0 user\xB7assistant \uBA54\uC2DC\uC9C0\uB294 PDF\uC5D0 \uB123\uC2B5\uB2C8\uB2E4.")}
+          ${field("pdf-font-size", "PDF \uAE00\uC790 \uD06C\uAE30 (pt)", config2.pdfFontSize, { type: "number", step: "0.1", min: "0.5", max: "12", help: "\uAE30\uBCF8\uAC12\uC740 2pt\uC785\uB2C8\uB2E4. \uC791\uC744\uC218\uB85D \uD55C \uD398\uC774\uC9C0\uC5D0 \uB354 \uB9CE\uC740 \uBB38\uC790\uAC00 \uB4E4\uC5B4\uAC11\uB2C8\uB2E4." })}
         </div>
       </section>
       <section class="pf-card full pf-provider ${active === "google" ? "active" : ""}" data-provider="google" ${active === "google" ? "" : "hidden"}><h2>Google AI Studio<span class="pf-badge">\uD65C\uC131</span></h2>
@@ -53262,6 +53279,7 @@ ${packed.userText}`);
         await persistConfig({
           ...config2,
           packagingMode: get("packaging-mode"),
+          pdfFontSize: Number(get("pdf-font-size")),
           activeProvider: config2.activeProvider,
           google: {
             apiKey: get("google-key"),

@@ -1497,6 +1497,9 @@ export const languageKorean = {
   presetSelectOther: "다른 프롬프트 프리셋 선택",
   promptPresets: "프롬프트 프리셋",
   collectionOrganizer: {
+    resizeWindow: "관리자 창 크기 조절",
+    resizePanes: "폴더와 항목 영역 크기 조절",
+    resizeHint: "드래그 또는 방향키로 크기 조절 · Shift: 크게 조절 · 두 번 클릭 또는 Home: 초기화",
     title: "{} 정리",
     description: "실행 데이터는 바꾸지 않고 항목을 분류하고 순서를 정합니다.",
     close: "정리 창 닫기",

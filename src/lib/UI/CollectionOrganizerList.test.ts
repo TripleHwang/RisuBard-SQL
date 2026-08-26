@@ -16,7 +16,17 @@ describe('inline collection organizer list', () => {
         expect(component).toContain("import type { Snippet }")
         expect(component).toContain('itemContent')
         expect(component).toContain('{@render itemContent(item.id)}')
-        expect(component).toContain("md:grid-cols-[13rem_minmax(0,1fr)]")
+        expect(component).toContain('md:grid-cols-[var(--collection-sidebar-width,13rem)_minmax(0,1fr)]')
+    })
+
+    test('adds an accessible desktop-only pane resizer without replacing the responsive stacked layout', () => {
+        const component = source('src/lib/UI/CollectionOrganizerList.svelte')
+
+        expect(component).toContain("import { resizeHandle } from 'src/ts/gui/resizeHandle'")
+        expect(component).toContain('data-collection-pane-resizer')
+        expect(component).toContain('aria-label={copy.resizePanes}')
+        expect(component).toContain('use:resizeHandle={{ start: startPaneResize, reset: resetPaneResize }}')
+        expect(component).toContain('@media (max-width: 767px) { .collection-organizer__pane-resizer { display: none; } }')
     })
 
     test('keeps folder deletion, immediate persistence, bulk movement, and accessible reorder controls inline', () => {
@@ -66,5 +76,15 @@ describe('inline collection organizer list', () => {
         expect(page).toContain('assignPluginToFolder')
         expect(page).not.toContain('CollectionOrganizerDialog')
         expect(page).not.toContain('organizerOpen')
+    })
+
+    test('module and plugin item controls can wrap in their responsive organizer panes', () => {
+        const modulePage = source('src/lib/Setting/Pages/Module/ModuleSettings.svelte')
+        const pluginPage = source('src/lib/Setting/Pages/PluginSettings.svelte')
+
+        expect(modulePage).toContain('flex flex-wrap items-center gap-x-2 gap-y-1')
+        expect(modulePage).toContain('ml-auto flex flex-wrap justify-end gap-y-1')
+        expect(pluginPage).toContain('flex flex-wrap items-start gap-2')
+        expect(pluginPage).toContain('min-w-0 grow break-words font-bold')
     })
 })

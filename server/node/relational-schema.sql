@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE INDEX IF NOT EXISTS chats_character_position_idx ON chats (character_id, position);
 CREATE INDEX IF NOT EXISTS chats_folder_idx ON chats (character_id, folder_id) WHERE folder_id IS NOT NULL;
 
+-- Startup lists need a message count per chat.  Maintain it on writes so the
+-- metadata bootstrap never needs to aggregate the entire messages table.
+CREATE TABLE IF NOT EXISTS chat_message_counts (
+    chat_id TEXT PRIMARY KEY REFERENCES chats(id) ON DELETE CASCADE,
+    message_count INTEGER NOT NULL DEFAULT 0 CHECK (message_count >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS chat_extension_nodes (
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     node_id INTEGER NOT NULL, parent_node_id INTEGER, node_order INTEGER NOT NULL CHECK (node_order >= 0),
@@ -129,6 +136,25 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_chat_position_idx ON messages (chat_id, position);
 CREATE INDEX IF NOT EXISTS messages_content_idx ON messages (content_text);
 CREATE INDEX IF NOT EXISTS messages_model_idx ON messages (generation_model);
+
+CREATE TRIGGER IF NOT EXISTS messages_count_after_insert
+AFTER INSERT ON messages
+BEGIN
+    INSERT INTO chat_message_counts (chat_id, message_count) VALUES (NEW.chat_id, 1)
+    ON CONFLICT(chat_id) DO UPDATE SET message_count = message_count + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_count_after_delete
+AFTER DELETE ON messages
+BEGIN
+    UPDATE chat_message_counts SET message_count = MAX(0, message_count - 1) WHERE chat_id = OLD.chat_id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_count_after_chat_move
+AFTER UPDATE OF chat_id ON messages WHEN OLD.chat_id <> NEW.chat_id
+BEGIN
+    UPDATE chat_message_counts SET message_count = MAX(0, message_count - 1) WHERE chat_id = OLD.chat_id;
+    INSERT INTO chat_message_counts (chat_id, message_count) VALUES (NEW.chat_id, 1)
+    ON CONFLICT(chat_id) DO UPDATE SET message_count = message_count + 1;
+END;
 
 CREATE TABLE IF NOT EXISTS message_extension_nodes (
     chat_id TEXT NOT NULL, message_id TEXT NOT NULL,

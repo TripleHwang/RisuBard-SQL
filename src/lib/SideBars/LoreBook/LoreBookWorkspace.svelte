@@ -22,6 +22,8 @@
     import type { LorebookLocalActivation } from './loreBookWorkspaceConnections'
     import SolarIcon from './SolarIcon.svelte'
     import LoreBookStatusIcons from './LoreBookStatusIcons.svelte'
+    import CbsConditionView from '../../UI/GUI/CbsConditionView.svelte'
+    import { resizeHandle } from 'src/ts/gui/resizeHandle'
     import { loreBookVisualStatus } from './loreBookVisualStatus'
     import {
         readLorebookWorkspaceSession,
@@ -95,6 +97,7 @@
     let draggingIds = $state(new Set<string>())
     let dragOrigin: { item: HTMLElement; parent: Node; nextSibling: ChildNode | null } | null = null
     let mobileViewport = $state(false)
+    let conditionView = $state(false)
     let stateScopeOwner: {
         key: string
         sessionKey?: string
@@ -386,6 +389,15 @@
             event.preventDefault()
             commitDraft(field)
         }
+    }
+
+    function startListResize() {
+        const shell = workspaceElement
+        const list = shell?.querySelector<HTMLElement>('.lore-list-pane')
+        if (!shell || !list) return
+        const width = shell.getBoundingClientRect().width
+        const start = list.getBoundingClientRect().width
+        return (dx: number) => shell.style.setProperty('--lore-list-ratio', `${Math.max(120, Math.min(width - 240, start + dx)) / width * 100}%`)
     }
 
     function setSelected(next: Set<string>) {
@@ -926,7 +938,8 @@
 
     </aside>
 
-    <button type="button" class="lore-splitter" data-lorebook-splitter aria-label={language.lorebookWorkspace.resizeList}></button>
+    <button type="button" class="lore-splitter" data-lorebook-splitter aria-label={language.lorebookWorkspace.resizeList}
+        use:resizeHandle={{ start: startListResize, reset: () => workspaceElement?.style.setProperty('--lore-list-ratio', '38%') }}></button>
 
     <main
         bind:this={editorElement}
@@ -1038,7 +1051,11 @@
                             onkeydown={(event) => commitOnShortcut(event, 'secondkey')}
                         />
                     </label>
-                    <label class="content-field">{language.lorebookWorkspace.content}
+                    <div class="content-field">
+                        <div class="content-heading"><span>{language.lorebookWorkspace.content}</span><button type="button" data-cbs-view-toggle aria-pressed={conditionView} onclick={() => { commitDraft('content'); conditionView = !conditionView }}>{conditionView ? 'Source' : 'CBS branches'}</button></div>
+                        {#if conditionView}
+                            <CbsConditionView value={drafts.content} onInput={(value) => markDraftDirty('content', value)} onblur={() => commitDraft('content')} onkeydown={(event) => commitOnShortcut(event, 'content')} />
+                        {:else}
                         <textarea
                             class="lore-content"
                             data-lorebook-field="content"
@@ -1047,7 +1064,8 @@
                             onblur={() => commitDraft('content')}
                             onkeydown={(event) => commitOnShortcut(event, 'content')}
                         ></textarea>
-                    </label>
+                        {/if}
+                    </div>
                 </div>
                 <aside class="lore-state-rail" aria-label={language.lorebookWorkspace.loreState}>
                     {#if localActivation?.visible}
@@ -1253,7 +1271,7 @@
     .batch-key-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
     .batch-key-actions button { min-height: 2.4rem; padding: .45rem; }
     .lore-splitter { position: absolute; top: 0; bottom: 0; left: calc(var(--lore-effective-list-width) - .25rem); z-index: 5; width: .5rem; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
-    .lore-splitter:hover, .lore-splitter:focus-visible { background: color-mix(in srgb, var(--color-borderc) 45%, transparent); box-shadow: none; }
+    .lore-splitter:hover, .lore-splitter:focus-visible, .lore-splitter:global([data-resizing]) { background: color-mix(in srgb, var(--color-borderc) 45%, transparent); box-shadow: none; }
     .lore-editor-pane { display: flex; grid-row: 2; grid-column: 2; flex-direction: column; background: var(--color-darkbg); }
     .mobile-back { display: none; }
     .lore-editor-grid {
@@ -1266,7 +1284,9 @@
     .editor-heading { display: grid; grid-template-columns: minmax(0, 1fr) 7rem; gap: .7rem; }
     .editor-fields label { display: grid; gap: .3rem; color: var(--color-textcolor2); font-size: .74rem; font-weight: 650; letter-spacing: .02em; }
     .editor-fields input, .editor-fields textarea { width: 100%; padding: .48rem .55rem; color: var(--color-textcolor); }
-    .content-field { min-height: 0; flex: 1; grid-template-rows: auto minmax(0, 1fr); }
+    .content-field { display: grid; min-height: 0; flex: 1; gap: .35rem; grid-template-rows: auto minmax(0, 1fr); }
+    .content-heading { display:flex; align-items:center; justify-content:space-between; gap:.5rem; color:var(--color-textcolor2); font-size:.74rem; font-weight:650; }
+    .content-heading button { padding:.25rem .55rem; border:1px solid var(--color-darkborderc); border-radius:.35rem; font-size:.72rem; }
     .lore-content {
         min-height: 18rem;
         height: 100%;

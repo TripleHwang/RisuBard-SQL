@@ -16,6 +16,7 @@ import {
     type ChatContentPageEnvelope,
 } from './chatContentPage'
 import { createIncrementalNdjsonParser } from './ndjsonStream'
+import { markPerformance, measurePerformance } from '../performance/startupMetrics'
 
 const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 200
 
@@ -243,8 +244,8 @@ export class NodeStorage{
         }
     }
 
-    private async authFetch(input: RequestInfo | URL, init: RequestInit = {}, retry = true) {
-        await this.checkAuth()
+    private async authFetch(input: RequestInfo | URL, init: RequestInit = {}, retry = true, initializeSession = true, authAlreadyChecked = false) {
+        if (!authAlreadyChecked) await this.checkAuth(initializeSession)
         const headers = new Headers(init.headers)
         headers.set('risu-auth', await this.createAuth())
         headers.set('x-session-id', NodeStorage.sessionId)
@@ -262,8 +263,8 @@ export class NodeStorage{
         if(retry && await this.shouldRetryAuth(response)){
             this.authChecked = false
             this.cachedJwt = null
-            await this.checkAuth()
-            return this.authFetch(input, init, false)
+            await this.checkAuth(initializeSession)
+            return this.authFetch(input, init, false, initializeSession)
         }
 
         return response
@@ -272,7 +273,22 @@ export class NodeStorage{
     /** Authenticated transport for standalone server-owned subsystems such as
      * the canonical relational SQLite backend. */
     async authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-        return await this.authFetch(input, init)
+        // SQL/API calls authenticate with the JWT header and do not need the
+        // image-cookie session. Avoid making cold SQL bootstrap wait for that
+        // separate round trip; bootstrap schedules it after first paint.
+        markPerformance('sql-auth:start')
+        try {
+            await this.checkAuth(false)
+        } finally {
+            markPerformance('sql-auth:end')
+            measurePerformance('sql-auth', 'sql-auth:start', 'sql-auth:end')
+        }
+        const request = this.authFetch(input, init, true, false, true)
+        // Start the asset-cookie request in parallel with SQL. It must not delay
+        // bootstrap, but starting it here avoids a race where initial avatars
+        // render before the post-paint retry has established the cookie.
+        void this.initSession()
+        return await request
     }
 
     async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
@@ -414,7 +430,12 @@ export class NodeStorage{
         }
     }
 
-    private async checkAuth(){
+    /** Establish the cookie used by unauthenticated asset URLs after UI is usable. */
+    async ensureSession(): Promise<void> {
+        await this.checkAuth(true)
+    }
+
+    private async checkAuth(initializeSession = true){
 
         if(!this.authChecked){
             const data = await (await fetch('/api/test_auth',{
@@ -440,13 +461,13 @@ export class NodeStorage{
                 }
 
                 await this.loginWithPassword(input)
-                await this.initSession()
+                if (initializeSession) await this.initSession()
                 return
             }
             else if(data.status === 'incorrect'){
                 const input = await digestPassword(await alertInput(language.inputNodePassword))
                 await this.loginWithPassword(input)
-                await this.initSession()
+                if (initializeSession) await this.initSession()
                 return
             }
             else{
@@ -456,7 +477,7 @@ export class NodeStorage{
                 this.authChecked = true
             }
         }
-        await this.initSession()
+        if (initializeSession) await this.initSession()
     }
 
     listItem = this.keys

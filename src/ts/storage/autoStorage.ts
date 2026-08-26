@@ -46,6 +46,12 @@ export class AutoStorage{
         return this.realStorage.createAuth()
     }
 
+    /** Defer image-cookie session setup without delaying authenticated SQL reads. */
+    async ensureSession(): Promise<void> {
+        await this.Init()
+        await this.realStorage.ensureSession()
+    }
+
     async exportBackup(opts?: ExportBackupOptions) {
         await this.Init()
         return this.realStorage.exportBackup(opts)

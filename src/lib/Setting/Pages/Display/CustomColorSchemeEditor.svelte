@@ -22,6 +22,7 @@
         ['textcolor', 'Text Color'],
         ['textcolor2', 'Text Color 2'],
         ['primary', 'Primary (Accent)'],
+        ['accentText', 'Text on Accent'],
     ] as const;
 </script>
 

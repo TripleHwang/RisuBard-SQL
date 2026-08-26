@@ -70,6 +70,16 @@ function createRelationalSqlite(options) {
     function openDatabase() {
         database = new DatabaseSync(databasePath);
         database.exec(schema);
+        // Databases created before chat_message_counts need a one-time
+        // backfill. Normal opens touch no messages: only chats missing their
+        // durable counter are joined to messages.
+        database.prepare(
+            `INSERT INTO chat_message_counts (chat_id, message_count)
+             SELECT c.id, COUNT(m.id)
+             FROM chats c LEFT JOIN messages m ON m.chat_id = c.id
+             WHERE NOT EXISTS (SELECT 1 FROM chat_message_counts counts WHERE counts.chat_id = c.id)
+             GROUP BY c.id`,
+        ).run();
     }
 
     openDatabase();
@@ -201,9 +211,9 @@ function createRelationalSqlite(options) {
         const where = characterId === undefined ? '' : 'WHERE c.character_id = ?';
         const rows = database.prepare(
             `SELECT c.id, c.character_id, c.position, c.name, c.note, c.folder_id, c.last_message_time,
-                    COUNT(m.id) AS message_total
-             FROM chats c LEFT JOIN messages m ON m.chat_id = c.id ${where}
-             GROUP BY c.id ORDER BY c.character_id, c.position`,
+                    COALESCE(counts.message_count, 0) AS message_total
+             FROM chats c LEFT JOIN chat_message_counts counts ON counts.chat_id = c.id ${where}
+             ORDER BY c.character_id, c.position`,
         ).all(...(characterId === undefined ? [] : [characterId]));
         return rows;
     }
@@ -211,9 +221,9 @@ function createRelationalSqlite(options) {
     function loadChatSummaryRow(chatId) {
         return database.prepare(
             `SELECT c.id, c.character_id, c.position, c.name, c.note, c.folder_id, c.last_message_time,
-                    COUNT(m.id) AS message_total
-             FROM chats c LEFT JOIN messages m ON m.chat_id = c.id
-             WHERE c.id = ? GROUP BY c.id`,
+                    COALESCE(counts.message_count, 0) AS message_total
+             FROM chats c LEFT JOIN chat_message_counts counts ON counts.chat_id = c.id
+             WHERE c.id = ?`,
         ).get(chatId);
     }
 

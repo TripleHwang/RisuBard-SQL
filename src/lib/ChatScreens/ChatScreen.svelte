@@ -14,60 +14,56 @@
     import ModuleChatMenu from "../Setting/Pages/Module/ModuleChatMenu.svelte";
     import RisuBardSaveSlotsDialog from '../SideBars/RisuBardSaveSlotsDialog.svelte';
     import { ensureChatHydrated, isChatHistoryIncomplete } from 'src/ts/storage/chatStorage';
-    import { notifyError, notifySuccess } from 'src/ts/alert';
+    import { notifySuccess } from 'src/ts/alert';
     import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
     import { pluginStateStore } from 'src/ts/plugins/plugins.svelte';
-    import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
+    import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad, type MemorySaveSlotSummary } from 'src/ts/risubard/memorySaveSlots';
+    import { resolveChatTextSurface } from 'src/ts/gui/textTheme';
     let openChatList = $state(false)
     let openModuleList = $state(false)
     let saveSlotsOpen = $state(false)
+    let saveSlotsMode = $state<'save' | 'load'>('load')
     let savingSlot = $state(false)
     let currentCharacter = $derived(
         $selectedCharID >= 0 ? DBState.db.characters[$selectedCharID] : undefined
     )
 
-    async function saveCurrentChat(): Promise<void> {
+    function openSaveSlots(mode: 'save' | 'load'): void {
+        if(savingSlot) return
+        saveSlotsMode = mode
+        saveSlotsOpen = true
+    }
+
+    async function saveCurrentChat(saveId?: string): Promise<MemorySaveSlotSummary> {
         const character = currentCharacter
-        if(savingSlot || !character) return
+        if(savingSlot || !character) throw new Error('현재 채팅을 저장할 수 없습니다.')
         const chatIdx = character.chatPage
-        if(isChatHistoryIncomplete(character.chats[chatIdx])){
-            await ensureChatHydrated(
-                character.chats,
-                chatIdx,
-                character.chaId
-            )
-        }
-        const chat = character.chats[chatIdx]
-        if(isChatHistoryIncomplete(chat)){
-            notifyError('Load earlier messages before saving this chat.')
-            return
-        }
-        if(chat.isStreaming){
-            notifyError('응답 생성이 끝난 뒤 채팅을 저장해 주세요.')
-            return
-        }
-        if(!character.chaId || !chat.id){
-            notifyError('채팅 저장에는 안정적인 캐릭터와 채팅 ID가 필요합니다.')
-            return
-        }
         savingSlot = true
         try {
-            await createMemorySaveSlot({
+            if(isChatHistoryIncomplete(character.chats[chatIdx])){
+                await ensureChatHydrated(character.chats, chatIdx, character.chaId)
+            }
+            const chat = character.chats[chatIdx]
+            if(!chat || isChatHistoryIncomplete(chat)){
+                throw new Error('Load earlier messages before saving this chat.')
+            }
+            if(chat.isStreaming){
+                throw new Error('응답 생성이 끝난 뒤 채팅을 저장해 주세요.')
+            }
+            if(!character.chaId || !chat.id){
+                throw new Error('채팅 저장에는 안정적인 캐릭터와 채팅 ID가 필요합니다.')
+            }
+            const saved = await createMemorySaveSlot({
                 characterId: character.chaId,
                 chat,
-                saveId: v4(),
+                saveId: saveId ?? v4(),
+                overwrite: saveId !== undefined,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
             notifySuccess('채팅, 변수와 Memory Wiki를 저장했습니다.')
-        }
-        catch(error){
-            notifyError(
-                `채팅 저장 실패: ${error instanceof Error
-                    ? error.message
-                    : String(error)}`
-            )
+            return saved
         }
         finally {
             savingSlot = false
@@ -88,21 +84,21 @@
         if(currentChat.isStreaming){
             throw new Error('응답 생성이 끝난 뒤 저장 파일을 불러와 주세요.')
         }
-        const destinationChatId = v4()
+        const destinationChatId = currentChat.id
         const prepared = await prepareMemorySaveLoad({
             characterId: character.chaId,
             saveId,
+            currentChat,
             destinationChatId,
             fetchImpl: fetch,
             createAuth: () => forageStorage.createAuth(),
         })
         const loadedChat = prepared.chat
         loadedChat.id = destinationChatId
-        loadedChat.name = `${loadedChat.name} (Load)`
         loadedChat.isStreaming = false
         delete loadedChat.activeStreamingDisplayOptimizationMode
         delete loadedChat._placeholder
-        character.chats.unshift(loadedChat)
+        character.chats[chatIdx] = loadedChat
         character.chats = character.chats
         try {
             await requestImmediateSave({
@@ -111,10 +107,7 @@
             })
         }
         catch(error){
-            character.chats.splice(
-                character.chats.indexOf(loadedChat),
-                1
-            )
+            character.chats[chatIdx] = currentChat
             character.chats = character.chats
             await completeMemoryWikiFork({
                 characterId: character.chaId,
@@ -138,7 +131,7 @@
             fetchImpl: fetch,
             createAuth: () => forageStorage.createAuth(),
         })
-        changeChatTo(0)
+        changeChatTo(chatIdx)
         saveSlotsOpen = false
         notifySuccess('스토리 불러오기 완료', { duration: 3000 })
     }
@@ -151,11 +144,12 @@
     })
 
     const wallPaper = `background: url(${defaultWallpaper})`
-    const externalStyles = 
-            ("background: " + (DBState.db.textScreenColor ? (DBState.db.textScreenColor + '80') : "rgba(0,0,0,0.8)") + ';\n')
-        +   (DBState.db.textBorder ? "text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;" : '')
+    const chatTextSurface = $derived(resolveChatTextSurface(DBState.db.colorScheme, DBState.db))
+    const externalStyles = $derived(chatTextSurface.active ?
+            ("background: " + chatTextSurface.background + ';\n')
+        +   (DBState.db.textBorder ? "text-shadow: -1px -1px 0 var(--color-shadow), 1px -1px 0 var(--color-shadow), -1px 1px 0 var(--color-shadow), 1px 1px 0 var(--color-shadow);" : '')
         +   (DBState.db.textScreenRounded ? "border-radius: 2rem; padding: 1rem;" : '')
-        +   (DBState.db.textScreenBorder ? `border: 0.3rem solid ${DBState.db.textScreenBorder};` : '')
+        +   (DBState.db.textScreenBorder ? `border: 0.3rem solid ${DBState.db.textScreenBorder};` : '') : '')
     let bgImg= $state('')
     let lastBg = $state('')
     $effect.pre(() => {
@@ -184,7 +178,7 @@
             {/if}
         {/if}
         <div class="h-full w-2xl" style:width="{42 * (DBState.db.waifuWidth / 100)}rem" class:halfwp={$selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none'}>
-            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList onSaveChat={saveCurrentChat} onOpenChatLoad={() => { saveSlotsOpen = true }} {savingSlot}/>
+            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList onSaveChat={() => openSaveSlots('save')} onOpenChatLoad={() => openSaveSlots('load')} {savingSlot}/>
         </div>
     </div>
 {:else if DBState.db.theme === 'waifuMobile'}
@@ -195,7 +189,7 @@
             class:per33={$selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
             class:h-full={!($selectedCharID >= 0 && DBState.db.characters[$selectedCharID].viewScreen !== 'none')}
         >
-            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList onSaveChat={saveCurrentChat} onOpenChatLoad={() => { saveSlotsOpen = true }} {savingSlot}/>
+            <DefaultChatScreen customStyle={`${externalStyles}backdrop-filter: blur(4px);`} bind:openChatList bind:openModuleList onSaveChat={() => openSaveSlots('save')} onOpenChatLoad={() => openSaveSlots('load')} {savingSlot}/>
         </div>
         {#if $selectedCharID >= 0}
             {#if DBState.db.characters[$selectedCharID].viewScreen !== 'none'}
@@ -215,13 +209,13 @@
                     <ResizeBox />
                 {/if}
             {/if}
-            <DefaultChatScreen customStyle={bgImg.length > 2 ? `${externalStyles}`: ''} bind:openChatList bind:openModuleList onSaveChat={saveCurrentChat} onOpenChatLoad={() => { saveSlotsOpen = true }} {savingSlot}/>
+            <DefaultChatScreen customStyle={externalStyles} bind:openChatList bind:openModuleList onSaveChat={() => openSaveSlots('save')} onOpenChatLoad={() => openSaveSlots('load')} {savingSlot}/>
         </div>
     </div>
 {/if}
 {#if openChatList}
     <ChatList close={() => {openChatList = false}}/>
-{:else if openModuleList}
+  {:else if openModuleList}
     {#if $pluginStateStore === 'idle' || $pluginStateStore === 'loading'}
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 text-textcolor">Loading plugins…</div>
     {:else if $pluginStateStore === 'failed'}
@@ -237,6 +231,7 @@
 {#if currentCharacter?.chaId}
     <RisuBardSaveSlotsDialog
         open={saveSlotsOpen}
+        bind:mode={saveSlotsMode}
         characterId={currentCharacter.chaId}
         currentChatId={currentCharacter.chats[currentCharacter.chatPage]?.id}
         currentLatestMessageId={latestChatMessageId(
@@ -244,6 +239,7 @@
         )}
         onOpenChange={(open) => { saveSlotsOpen = open }}
         onLoad={loadSavedChat}
+        onSave={saveCurrentChat}
     />
 {/if}
 

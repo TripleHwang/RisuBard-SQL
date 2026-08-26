@@ -1394,6 +1394,9 @@ export const languageEnglish = {
     presetSelectOther: "Select Other Prompt Preset",
     promptPresets: "Prompt Presets",
     collectionOrganizer: {
+        resizeWindow: "Resize manager window",
+        resizePanes: "Resize folders and items",
+        resizeHint: "Drag or use arrow keys to resize. Shift: larger steps. Double-click or Home: reset.",
         title: "Organize {}",
         description: "Group and reorder items without changing their runtime data.",
         close: "Close organizer",

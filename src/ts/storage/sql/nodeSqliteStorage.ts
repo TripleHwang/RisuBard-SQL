@@ -269,7 +269,14 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   async loadDatabase(_options?: SqlLoadDatabaseOptions): Promise<SqlLoadDatabaseResult | null> {
     if (!this.enabled) await this.init();
     const payload = this.bootstrapPayload ?? await this.loadBootstrap();
-    const database = this.rebuildBootstrap(payload);
+    markPerformance('bootstrap-rebuild:start');
+    let database: Database | null;
+    try {
+      database = this.rebuildBootstrap(payload);
+    } finally {
+      markPerformance('bootstrap-rebuild:end');
+      measurePerformance('bootstrap-rebuild', 'bootstrap-rebuild:start', 'bootstrap-rebuild:end');
+    }
     return { status: payload.status, revision: payload.revision, database };
   }
 

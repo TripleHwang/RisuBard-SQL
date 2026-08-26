@@ -1,12 +1,12 @@
 <script lang="ts">
     import type { character, Message, StreamingDisplayOptimizationMode } from 'src/ts/storage/database.svelte';
-    import { mount, onDestroy, unmount } from 'svelte';
+    import { mount, onDestroy, tick, unmount } from 'svelte';
     import Chat from './Chat.svelte';
     import { getCharImage } from 'src/ts/characters';
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
-    import { estimateSpacerHeight, getChatWindow } from 'src/ts/chatWindow';
+    import { estimateSpacerHeight, getChatPageWindow, restoreMessageAnchor } from 'src/ts/chatWindow';
     import { updateRuntimeResources } from 'src/ts/performance/performanceReport';
     
     const getCurrentChatRoomId = () => {
@@ -68,6 +68,56 @@
     type MountedChat = { instance: ChatInstance, element: HTMLDivElement, signature: string }
     let mountInstances: Map<string, MountedChat> = new Map();
     let measuredRowHeights: number[] = [];
+    let windowAnchor = $state(-1);
+    let windowKey = $state('');
+
+    function getDomLimit(): 60 | 40 {
+        return saverMode ? 40 : 60;
+    }
+
+    function getBoundedDomWindow() {
+        const start = Math.max(0, Math.min(messages.length, pageStart));
+        const end = Math.max(start, Math.min(messages.length, pageEnd));
+        const anchor = Math.max(start, Math.min(end - 1, windowAnchor < 0 ? end - 1 : windowAnchor));
+        // Pagination owns messages outside this page. Spacers represent only
+        // the unmounted portion of the currently selected page.
+        return getChatPageWindow({
+            total: messages.length,
+            pageStart: start,
+            pageEnd: end,
+            anchorIndex: anchor,
+            limit: getDomLimit(),
+        });
+    }
+
+    export const revealOlderMessages = async (): Promise<boolean> => {
+        if (!chatBody || !messageHost) return false;
+        const currentWindow = getBoundedDomWindow();
+        const pageFloor = Math.max(0, Math.min(messages.length, pageStart));
+        if (currentWindow.start <= pageFloor) return false;
+
+        const scroller = chatBody.parentElement as HTMLElement | null;
+        const scrollerRect = scroller?.getBoundingClientRect();
+        const firstVisible = scroller && scrollerRect
+            ? Array.from(messageHost.querySelectorAll<HTMLElement>('[data-chat-id]'))
+                .map((element) => ({ element, top: element.getBoundingClientRect().top }))
+                .filter(({ element }) => element.getBoundingClientRect().bottom >= scrollerRect.top)
+                .sort((left, right) => left.top - right.top)[0]
+            : undefined;
+        const anchor = firstVisible?.element.dataset.chatId
+            ? { id: firstVisible.element.dataset.chatId, top: firstVisible.top }
+            : null;
+
+        // Center the next window on the old first row. This shifts by half a
+        // window while retaining that row as a stable viewport anchor.
+        windowAnchor = currentWindow.start;
+        await tick();
+        if (scroller && anchor) {
+            const restored = messageHost.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(anchor.id)}"]`);
+            restoreMessageAnchor(scroller, anchor, restored);
+        }
+        return true;
+    }
 
     function stableMessageId(message: Message): string {
         // Legacy imported rows receive their durable identity before becoming a
@@ -95,9 +145,8 @@
         const activeStreamingIndex = performanceMode !== 'off' && currentChat?.isStreaming
             ? messages.length - 1
             : -1
-        const domLimit: 60 | 40 = saverMode ? 40 : 60;
-        const pageAnchor = Math.max(pageStart, Math.min(pageEnd - 1, Math.floor((pageStart + pageEnd - 1) / 2)));
-        let domWindow = getChatWindow({ total: messages.length, anchorIndex: pageAnchor, limit: domLimit });
+        const domLimit = getDomLimit();
+        let domWindow = getBoundedDomWindow();
         // A live stream stays mounted even when the user has paged away from its tail.
         if (currentChat?.isStreaming && activeStreamingIndex >= 0 && (activeStreamingIndex < domWindow.start || activeStreamingIndex >= domWindow.end)) {
             const end = messages.length;
@@ -256,6 +305,11 @@
 
     $effect(() => {
         void $ReloadChatPointer; // Make $effect track ReloadChatPointer changes
+        const nextWindowKey = `${getCurrentChatRoomId() ?? ''}/${pageStart}/${pageEnd}/${getDomLimit()}`;
+        if (nextWindowKey !== windowKey) {
+            windowKey = nextWindowKey;
+            windowAnchor = Math.max(pageStart, pageEnd - 1);
+        }
         const wasAtBottom = checkIfAtBottom();
         updateChatBody()
 

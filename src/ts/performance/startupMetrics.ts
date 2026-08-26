@@ -11,6 +11,12 @@ export type StartupMetricMark =
     | 'sql-commit:end'
     | 'render-batch:start'
     | 'render-batch:end'
+    | 'sql-auth:start'
+    | 'sql-auth:end'
+    | 'sql-open:start'
+    | 'sql-open:end'
+    | 'bootstrap-rebuild:start'
+    | 'bootstrap-rebuild:end'
 
 import { recordRuntimeDuration, type DurationMetric } from './performanceReport'
 
@@ -49,7 +55,7 @@ export function markPerformance(name: StartupMetricMark): void {
 function reportMetric(name: string): DurationMetric | undefined {
     const metrics: readonly DurationMetric[] = [
         'bootstrap-fetch', 'bootstrap-json', 'character-hydration',
-        'message-page-fetch', 'sql-commit', 'render-batch',
+        'message-page-fetch', 'sql-commit', 'render-batch', 'sql-auth', 'sql-open', 'bootstrap-rebuild',
     ]
     return metrics.find((metric) => metric === name)
 }

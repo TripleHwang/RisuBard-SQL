@@ -26,6 +26,7 @@ describe('server relational SQLite', () => {
       id: 'chat-1',
       message: [],
       messagesLoaded: false,
+      messageTotal: 3,
     })
     expect(result.botPresets).toEqual([
       { name: 'First', id: 'preset-1' },
@@ -131,6 +132,35 @@ describe('server relational SQLite', () => {
     })
     expect(storage.loadCharacter('missing')).toBeNull()
     expect(storage.loadChat('missing')).toBeNull()
+  })
+
+  it('maintains chat message counters without making bootstrap aggregate messages', () => {
+    const storage = seededReaderStorage()
+
+    storage.commit({
+      baseRevision: 1,
+      action: 'append-message',
+      statements: [
+        { sql: 'INSERT INTO messages (chat_id, id, position, role) VALUES (?, ?, ?, ?)', bind: ['chat-1', 'message-4', 3, 'user'] },
+      ],
+    })
+    expect(storage.bootstrap().characters[0].chats[0].messageTotal).toBe(4)
+
+    storage.commit({
+      baseRevision: 2,
+      action: 'remove-message',
+      statements: [{ sql: 'DELETE FROM messages WHERE chat_id = ? AND id = ?', bind: ['chat-1', 'message-4'] }],
+    })
+    expect(storage.bootstrap().characters[0].chats[0].messageTotal).toBe(3)
+
+    const source = readFileSync('server/node/relational-sqlite.cjs', 'utf8')
+    const summaryStart = source.indexOf('function loadChatSummaryRows')
+    const summarySource = source.slice(
+      summaryStart,
+      source.indexOf('function loadChatSummaryRow(', summaryStart + 1),
+    )
+    expect(summarySource).toContain('chat_message_counts')
+    expect(summarySource).not.toContain('JOIN messages')
   })
 
   it('returns newest messages as an ascending reverse-cursor page', () => {

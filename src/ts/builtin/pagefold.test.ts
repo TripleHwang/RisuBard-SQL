@@ -31,6 +31,14 @@ describe("built-in PageFold provider", () => {
     expect(builtInPageFoldPlugin.script).not.toContain("storage.setItem(CONFIG_KEY, args?.pagefold_route");
   });
 
+  test("keeps PDF font-size customization within save-backed packaging settings", () => {
+    expect(builtInPageFoldPlugin.script).toContain("function normalizePdfFontSize(value)");
+    expect(builtInPageFoldPlugin.script).toContain("config2.pdfFontSize = normalizePdfFontSize(input.pdfFontSize)");
+    expect(builtInPageFoldPlugin.script).toContain('field("pdf-font-size", "PDF \\uAE00\\uC790 \\uD06C\\uAE30 (pt)"');
+    expect(builtInPageFoldPlugin.script).toContain("fontSize = currentConfig.pdfFontSize");
+    expect(builtInPageFoldPlugin.script).toContain("fontSize * (LINE_HEIGHT / FONT_SIZE)");
+  });
+
   test("is injected for per-preset dispatch without appearing as a standalone model", () => {
     const source = readFileSync("src/ts/plugins/plugins.svelte.ts", "utf8");
     expect(source).toContain("loadBuiltInPageFoldPlugin");
