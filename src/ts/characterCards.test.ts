@@ -17,6 +17,12 @@ vi.mock('./process/modules', () => ({
     readModule: vi.fn(),
 }))
 
+vi.mock('./stores.svelte', () => ({
+    selectedCharID: { set: vi.fn(), subscribe: vi.fn(() => () => undefined) },
+    selIdState: { selId: undefined },
+    DBState: { db: { characters: [] } },
+}))
+
 function nativeCharacter(globalLore: character['globalLore']): character {
     return {
         name: 'Enabled state test',
