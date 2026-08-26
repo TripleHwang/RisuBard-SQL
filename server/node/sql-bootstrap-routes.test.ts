@@ -10,5 +10,7 @@ describe('bounded SQL read routes', () => {
         expect(source).toContain("app.get('/api/sql/chats/:chatId/messages'")
         expect(source).toContain("app.get('/api/sql/snapshot'")
         expect(source).toContain('relationalSql.loadChatMessages')
+        expect(source).toContain("require('./sql-read-route-params.cjs')")
+        expect(source).toContain('normalizeSqlMessagePageQuery(req.query)')
     })
 })

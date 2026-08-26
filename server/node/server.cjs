@@ -39,6 +39,7 @@ const { releaseToUpdateInfo } = require('./release-update.cjs');
 const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest } = require('./update-manifest.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
+const { normalizeSqlMessagePageQuery } = require('./sql-read-route-params.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
 const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
 const { createCharXImportHandler } = require('./charx-import-route.cjs');
@@ -3633,13 +3634,13 @@ app.get('/api/sql/characters/:characterId', async (req, res, next) => {
 app.get('/api/sql/chats/:chatId/messages', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     const id = String(req.params.chatId || '');
-    const before = req.query.before === undefined ? undefined : Number(req.query.before);
-    const limit = req.query.limit === undefined ? 40 : Number(req.query.limit);
     if (!id || id.length > 256) {
         return res.status(400).json({ error: 'Invalid chat id' });
     }
+    const pageQuery = normalizeSqlMessagePageQuery(req.query);
+    if (pageQuery.error) return res.status(400).json({ error: pageQuery.error });
     try {
-        const result = relationalSql.loadChatMessages(id, before, limit);
+        const result = relationalSql.loadChatMessages(id, pageQuery.before, pageQuery.limit);
         if (!result) return res.status(404).json({ error: 'Chat not found' });
         res.set('Cache-Control', 'no-store').json(result);
     } catch (error) {
