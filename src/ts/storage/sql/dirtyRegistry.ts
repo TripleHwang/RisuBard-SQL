@@ -128,7 +128,10 @@ export class DirtyRegistry {
 
     flushNow(): Promise<void> {
         this.clearTimer()
-        if (this.inFlight) return this.inFlight
+        if (this.inFlight) {
+            if (this.generation > this.inFlightGeneration) this.followUpRequested = true
+            return this.inFlight
+        }
 
         this.inFlightGeneration = this.generation
         const flush = Promise.resolve().then(() => this.onFlush())
