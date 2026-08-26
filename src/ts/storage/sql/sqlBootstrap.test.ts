@@ -69,6 +69,19 @@ describe("standalone SQL bootstrap", () => {
     expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
   });
 
+  it("allows explicit degraded recovery for network failures without an HTTP status", async () => {
+    setActiveSqlStorageForTesting(null);
+    const storage = {
+      ...fakeStorage([]), backendKind: "server-sql" as const,
+      init: vi.fn(async () => { throw new TypeError("Failed to fetch"); }),
+      loadBootstrap: vi.fn(), loadRecoverySnapshot: vi.fn(), loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn(),
+    } as unknown as SqlBootstrapStorage;
+
+    const result = await openExistingStandaloneSql(storage);
+    expect(result).toMatchObject({ mode: "degraded", recoveryStorage: storage });
+    expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
+  });
+
   it("activates recovered SQL storage so later edits retain the canonical revision", () => {
     const storage = fakeStorage([]);
     const database = { characters: [] } as any;

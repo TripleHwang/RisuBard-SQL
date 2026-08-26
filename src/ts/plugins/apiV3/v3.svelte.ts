@@ -1,4 +1,4 @@
-import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
+import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, hasMetadataOnlyCharacters, isPluginCharacterComplete, isPluginChatComplete, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
 import { SandboxHost } from "./factory";
 import { getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
 import { SafeLocalPluginStorage, tagWhitelist } from "../pluginSafeClass";
@@ -953,6 +953,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             const db = DBState.db
             let liteDB = {}
             for(const key of allowedDbKeys){
+                if (key === 'characters' && hasMetadataOnlyCharacters(db)) continue
                 if(includeOnly !== 'all' && !includeOnly.includes(key)){
                     continue;
                 }
@@ -1053,6 +1054,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             const charIds = Object.keys(db.characters);
             const charId = charIds[index];
             if(charId){
+                if (!isPluginCharacterComplete(db.characters[charId])) return null
                 return $state.snapshot(db.characters[charId]);
             }
             return null;
@@ -1062,6 +1064,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             const charIds = Object.keys(db.characters);
             const charId = charIds[index];
             if(charId){
+                if (!isPluginCharacterComplete(db.characters[charId])) throw new Error('Character details are still loading')
                 DBState.db.characters[charId] = char
             }
         },
@@ -1072,6 +1075,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             if(charId){
                 const chats = db.characters[charId].chats;
                 if(chats && chats[chatIndex]){
+                    if (!isPluginChatComplete(chats[chatIndex])) return null
                     return $state.snapshot(chats[chatIndex]);
                 }
             }
@@ -1084,6 +1088,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             if(charId){
                 const chats = db.characters[charId].chats;
                 if(chats && chats[chatIndex]){
+                    if (!isPluginChatComplete(chats[chatIndex])) throw new Error('Chat history is still loading')
                     DBState.db.characters[charId].chats[chatIndex] = normalizeChat(chat)
                 }
             }
@@ -1094,15 +1099,17 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
         getCurrentChatIndex: () => {
             const db = DBState.db
             const charId = get(selectedCharID)
+            if (!isPluginCharacterComplete(db.characters[charId])) return -1
             return db.characters[charId].chatPage
         },
         getCurrentLorebookEntries: () => {
             const charId = get(selectedCharID)
             const char = DBState.db.characters[charId]
-            if(!char){
+            if(!isPluginCharacterComplete(char)){
                 return []
             }
             const page = char.chatPage
+            if (!isPluginChatComplete(char.chats?.[page])) return []
             const characterLore = char.globalLore ?? []
             const chatLore = char.chats?.[page]?.localLore ?? []
             const moduleLore = getModuleLorebooks()

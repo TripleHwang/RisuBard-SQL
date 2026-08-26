@@ -17,6 +17,7 @@
     import { notifyError, notifySuccess } from 'src/ts/alert';
     import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
+    import { pluginLoadingStore } from 'src/ts/plugins/plugins.svelte';
     import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
     let openChatList = $state(false)
     let openModuleList = $state(false)
@@ -221,7 +222,11 @@
 {#if openChatList}
     <ChatList close={() => {openChatList = false}}/>
 {:else if openModuleList}
-    <ModuleChatMenu close={() => {openModuleList = false}}/>
+    {#if $pluginLoadingStore}
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 text-textcolor">Loading plugins…</div>
+    {:else}
+        <ModuleChatMenu close={() => {openModuleList = false}}/>
+    {/if}
 {/if}
 
 {#if currentCharacter?.chaId}

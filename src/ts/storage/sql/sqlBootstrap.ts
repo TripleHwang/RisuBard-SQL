@@ -140,7 +140,7 @@ export async function openExistingStandaloneSql(
           error,
         };
       }
-      if (status === undefined || status < 500 || status > 599) {
+      if (status !== undefined && (status < 500 || status > 599)) {
         return {
           database: {} as Database,
           storage: null,

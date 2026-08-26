@@ -7,11 +7,14 @@ const source = readFileSync(resolve(process.cwd(), 'src/ts/plugins/plugins.svelt
 describe('plugin readiness with metadata bootstrap', () => {
     it('publishes readiness after plugin loading settles', () => {
         expect(source).toContain('export const pluginReadyStore')
-        expect(source).toMatch(/pluginLoadingStore\.set\(true\)[\s\S]*finally[\s\S]*pluginReadyStore\.set\(true\)/)
+        expect(source).toContain("pluginStateStore.set('failed')")
+        expect(source).toContain("pluginStateStore.set('ready')")
+        expect(source).not.toMatch(/finally[\s\S]*pluginReadyStore\.set\(true\)/)
     })
 
     it('does not expose or replace metadata-only characters through v2 plugin APIs', () => {
         expect(source).toContain("character?.detailsLoaded === false ? null : character")
         expect(source).toContain("throw new Error('Character details are still loading')")
+        expect(source).toContain("prop === 'characters' && hasMetadataOnlyCharacters(target)")
     })
 })
