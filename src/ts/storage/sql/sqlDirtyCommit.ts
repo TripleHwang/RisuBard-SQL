@@ -53,28 +53,37 @@ function canonicalMessagePosition(
   throw new Error(`Dirty message ${message.chatId ?? "(missing id)"} is missing its canonical SQL position`);
 }
 
-function messageLookup(chat: RuntimeChat): Map<string, MessageLookup> {
+function messageLookup(chat: RuntimeChat, requested: ReadonlySet<string>): Map<string, MessageLookup> {
   const lookup = new Map<string, MessageLookup>();
   for (const [localPosition, message] of (chat.message ?? []).entries()) {
-    if (message.chatId) lookup.set(message.chatId, { message, localPosition });
+    if (message.chatId && requested.has(message.chatId)) lookup.set(message.chatId, { message, localPosition });
   }
   return lookup;
 }
 
-function allocateAppendedPositions(chat: RuntimeChat, lookup: Map<string, MessageLookup>): void {
+function allocateAppendedPositions(chat: RuntimeChat): void {
   if (!messageWindowIsIncomplete(chat)) return;
-  const entries = [...lookup.values()].sort((left, right) => left.localPosition - right.localPosition);
-  const firstUnpositioned = entries.findIndex(({ message }) => !Number.isSafeInteger(message._sqlPosition));
+  const messages = chat.message ?? [];
+  let firstUnpositioned = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (!Number.isSafeInteger((messages[index] as PositionedMessage)._sqlPosition)) {
+      firstUnpositioned = index;
+      break;
+    }
+  }
   if (firstUnpositioned < 0) return;
-  if (entries.slice(firstUnpositioned).some(({ message }) => Number.isSafeInteger(message._sqlPosition))) return;
+  for (let index = firstUnpositioned; index < messages.length; index += 1) {
+    if (Number.isSafeInteger((messages[index] as PositionedMessage)._sqlPosition)) return;
+  }
   const nextPosition = chat._sqlWindow?.nextPosition;
   if (!Number.isSafeInteger(nextPosition) || nextPosition! < 0) return;
-  for (const [offset, { message }] of entries.slice(firstUnpositioned).entries()) {
+  for (let index = firstUnpositioned; index < messages.length; index += 1) {
+    const message = messages[index] as PositionedMessage;
     Object.defineProperty(message, "_sqlPosition", {
-      configurable: true, enumerable: false, writable: true, value: nextPosition! + offset,
+      configurable: true, enumerable: false, writable: true, value: nextPosition! + index - firstUnpositioned,
     });
   }
-  if (chat._sqlWindow) chat._sqlWindow.nextPosition = nextPosition! + entries.length - firstUnpositioned;
+  if (chat._sqlWindow) chat._sqlWindow.nextPosition = nextPosition! + messages.length - firstUnpositioned;
 }
 
 /**
@@ -138,8 +147,8 @@ export function buildSqlDirtyCommit(
     if (!found) continue;
     const [, chat] = found;
     const runtimeChat = chat as RuntimeChat;
-    const lookup = messageLookup(runtimeChat);
-    allocateAppendedPositions(runtimeChat, lookup);
+    allocateAppendedPositions(runtimeChat);
+    const lookup = messageLookup(runtimeChat, new Set(group.messageIds));
     for (const messageId of group.messageIds) {
       const current = lookup.get(messageId);
       if (!current) continue;
