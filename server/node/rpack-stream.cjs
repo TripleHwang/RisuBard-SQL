@@ -12,16 +12,18 @@ function invalid(message) { return new RPackStreamError('INVALID_IMPORT_INPUT', 
 function importLimit() { return new RPackStreamError('IMPORT_LIMIT_EXCEEDED', 'Import exceeds allowed size', 413); }
 function importAborted() { return new RPackStreamError('IMPORT_ABORTED', 'Import aborted', 499); }
 
-function validate(sourcePath, targetPath, options) {
+function validate(options) {
+  if (!options || typeof options !== 'object') throw invalid('options are required');
+  const { sourcePath, targetPath, start, length, chunkBytes = 64 * 1024, maxOutputBytes, onChunk, signal } = options;
   if (typeof sourcePath !== 'string' || !sourcePath || typeof targetPath !== 'string' || !targetPath) throw invalid('sourcePath and targetPath are required');
-  if (!options || !Number.isSafeInteger(options.start) || options.start < 0) throw invalid('start must be a non-negative safe integer');
-  if (!Number.isSafeInteger(options.length) || options.length < 0) throw invalid('length must be a non-negative safe integer');
-  if (!Number.isSafeInteger(options.chunkSize) || options.chunkSize <= 0) throw invalid('chunkSize must be a positive safe integer');
-  if (!Number.isSafeInteger(options.maxOutputBytes) || options.maxOutputBytes < 0) throw invalid('maxOutputBytes must be a non-negative safe integer');
-  if (options.onChunk !== undefined && typeof options.onChunk !== 'function') throw invalid('onChunk must be a function');
-  if (options.signal !== undefined && (!options.signal || typeof options.signal.addEventListener !== 'function')) throw invalid('signal must be an AbortSignal');
-  if (options.start > Number.MAX_SAFE_INTEGER - options.length) throw invalid('source range overflows');
-  if (options.length > options.maxOutputBytes) throw importLimit();
+  if (!Number.isSafeInteger(start) || start < 0) throw invalid('start must be a non-negative safe integer');
+  if (!Number.isSafeInteger(length) || length < 0) throw invalid('length must be a non-negative safe integer');
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1 || chunkBytes > 1024 * 1024) throw invalid('chunkBytes must be a safe integer from 1 through 1048576');
+  if (!Number.isFinite(maxOutputBytes) || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 0) throw invalid('maxOutputBytes must be a finite non-negative safe integer');
+  if (onChunk !== undefined && typeof onChunk !== 'function') throw invalid('onChunk must be a function');
+  if (signal !== undefined && (!signal || typeof signal.addEventListener !== 'function')) throw invalid('signal must be an AbortSignal');
+  if (start > Number.MAX_SAFE_INTEGER - length) throw invalid('source range overflows');
+  if (length > maxOutputBytes) throw importLimit();
 }
 
 function checkAbort(signal) { if (signal && signal.aborted) throw importAborted(); }
@@ -58,9 +60,9 @@ async function writeAll(handle, buffer, signal) {
   }
 }
 
-async function decodeRPackRangeToFile(sourcePath, targetPath, options) {
-  validate(sourcePath, targetPath, options);
-  const { start, length, chunkSize, maxOutputBytes, onChunk = () => {}, signal } = options;
+async function decodeRPackRangeToFile(options) {
+  validate(options);
+  const { sourcePath, targetPath, start, length, chunkBytes = 64 * 1024, maxOutputBytes, onChunk = () => {}, signal } = options;
   checkAbort(signal);
   let source; let target; let succeeded = false; let ownsTarget = false;
   try {
@@ -75,7 +77,7 @@ async function decodeRPackRangeToFile(sourcePath, targetPath, options) {
     let remaining = length; let position = start; let bytes = 0;
     while (remaining) {
       checkAbort(signal);
-      const size = Math.min(remaining, chunkSize);
+      const size = Math.min(remaining, chunkBytes);
       const chunk = Buffer.allocUnsafe(size);
       await readExact(source, chunk, position, signal);
       for (let index = 0; index < chunk.length; index++) chunk[index] = RPACK_DECODE_MAP[chunk[index]];

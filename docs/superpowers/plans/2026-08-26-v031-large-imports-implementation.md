@@ -110,7 +110,7 @@ git commit -m "feat(import): add disk spool primitive"
 it('decodes client RPack in non-aligned chunks', async () => {
   const encoded = Buffer.from(await encodeRPack(Buffer.from('streaming-compatible')));
   await writeFile(input, encoded);
-  await decodeRPackRangeToFile({ sourcePath: input, start: 0, length: encoded.length, targetPath: output, chunkBytes: 3 });
+  await decodeRPackRangeToFile({ sourcePath: input, start: 0, length: encoded.length, targetPath: output, chunkBytes: 3, maxOutputBytes: encoded.length });
   expect(await readFile(output, 'utf8')).toBe('streaming-compatible');
 });
 it('matches all 256 client encoding values', async () => {
@@ -130,8 +130,10 @@ Expected: FAIL because server decoder does not exist.
 Generate a literal inverse decode map in rpack-map.cjs from the authoritative rpack_map.bin at development time. Do not read a source-tree path at runtime.
 
 ~~~js
-async function decodeRPackRangeToFile({ sourcePath, start, length, targetPath, chunkBytes = 64 * 1024, maxOutputBytes = Infinity, signal, onChunk = () => {} }) {
+async function decodeRPackRangeToFile({ sourcePath, start, length, targetPath, chunkBytes = 64 * 1024, maxOutputBytes, signal, onChunk = () => {} }) {
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0) throw new RangeError('Invalid RPack range');
+  if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1 || chunkBytes > 1024 * 1024) throw new RangeError('Invalid RPack chunk size');
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 0) throw new RangeError('Invalid RPack output limit');
   if (length > maxOutputBytes) throw importLimit();
   // Read exactly min(remaining, chunkBytes), replace each byte with RPACK_DECODE_MAP[byte],
   // write, invoke onChunk, close and sync both handles in finally.

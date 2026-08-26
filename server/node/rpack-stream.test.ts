@@ -23,8 +23,9 @@ afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).
 describe('RPack server decode map', () => {
   it('is the literal inverse of every client encoder value', async () => {
     const { RPACK_DECODE_MAP } = await import(mapModule)
-    const encode = (await readFile(clientMapPath)).subarray(0, 256)
+    const clientMap = await readFile(clientMapPath); const encode = clientMap.subarray(0, 256)
     expect(RPACK_DECODE_MAP).toHaveLength(256)
+    expect(Buffer.from(RPACK_DECODE_MAP)).toEqual(clientMap.subarray(256, 512))
     for (let value = 0; value < 256; value++) expect(RPACK_DECODE_MAP[encode[value]]).toBe(value)
   })
 })
@@ -34,7 +35,7 @@ describe('decodeRPackRangeToFile', () => {
     const { decodeRPackRangeToFile } = await import(streamModule)
     const decoded = Buffer.from(Array.from({ length: 256 }, (_, value) => value))
     const { sourcePath, targetPath, encoded } = await fixture(decoded); const progress: any[] = []
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: encoded.length, chunkSize, maxOutputBytes: encoded.length, onChunk: (info: any) => progress.push(info) })).resolves.toMatchObject({ bytes: 256, filePath: targetPath })
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: encoded.length, chunkBytes: chunkSize, maxOutputBytes: encoded.length, onChunk: (info: any) => progress.push(info) })).resolves.toMatchObject({ bytes: 256, filePath: targetPath })
     expect(await readFile(targetPath)).toEqual(decoded); expect(await readFile(sourcePath)).toEqual(encoded)
     expect(progress.reduce((total, item) => total + item.bytes, 0)).toBe(256)
     if (process.platform !== 'win32') expect((await stat(targetPath)).mode & 0o777).toBe(0o600)
@@ -43,32 +44,57 @@ describe('decodeRPackRangeToFile', () => {
   it('decodes an exact non-aligned source range', async () => {
     const { decodeRPackRangeToFile } = await import(streamModule)
     const decoded = Buffer.from(Array.from({ length: 40 }, (_, value) => value + 10)); const { sourcePath, targetPath } = await fixture(decoded)
-    await decodeRPackRangeToFile(sourcePath, targetPath, { start: 7, length: 19, chunkSize: 3, maxOutputBytes: 19 })
+    await decodeRPackRangeToFile({ sourcePath, targetPath, start: 7, length: 19, chunkBytes: 3, maxOutputBytes: 19 })
     expect(await readFile(targetPath)).toEqual(decoded.subarray(7, 26))
+  })
+
+  it('completes each chunk when the source returns partial reads', async () => {
+    const { decodeRPackRangeToFile } = await import(streamModule); const { sourcePath, targetPath } = await fixture(Buffer.from('partial-read'))
+    const fsPromises = require('node:fs/promises'); const realOpen = fsPromises.open; const readLengths: number[] = []
+    vi.spyOn(fsPromises, 'open').mockImplementation(async (...args: any[]) => {
+      const handle = await realOpen(...args)
+      if (args[1] === constants.O_RDONLY) return { read: async (buffer: Buffer, offset: number, length: number, position: number) => { readLengths.push(length); return handle.read(buffer, offset, Math.min(1, length), position) }, close: handle.close.bind(handle) }
+      return handle
+    })
+    await decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 12, chunkBytes: 12, maxOutputBytes: 12 })
+    expect(await readFile(targetPath, 'utf8')).toBe('partial-read'); expect(readLengths).toHaveLength(12)
+  })
+
+  it('completes each chunk when the target accepts partial writes', async () => {
+    const { decodeRPackRangeToFile } = await import(streamModule); const { sourcePath, targetPath } = await fixture(Buffer.from('partial-write'))
+    const fsPromises = require('node:fs/promises'); const realOpen = fsPromises.open; const writeLengths: number[] = []
+    vi.spyOn(fsPromises, 'open').mockImplementation(async (...args: any[]) => {
+      const handle = await realOpen(...args)
+      if (args[1] !== constants.O_RDONLY) return { write: async (buffer: Buffer, offset: number, length: number) => { writeLengths.push(length); return handle.write(buffer, offset, Math.min(1, length), null) }, sync: handle.sync.bind(handle), close: handle.close.bind(handle) }
+      return handle
+    })
+    await decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 13, chunkBytes: 13, maxOutputBytes: 13 })
+    expect(await readFile(targetPath, 'utf8')).toBe('partial-write'); expect(writeLengths).toHaveLength(13)
   })
 
   it('allows exactly maxOutputBytes and rejects excess without leaving a target', async () => {
     const { decodeRPackRangeToFile } = await import(streamModule)
     const { sourcePath, targetPath } = await fixture(Buffer.from('abcdef'))
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: 6, chunkSize: 3, maxOutputBytes: 6 })).resolves.toMatchObject({ bytes: 6 })
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 6, chunkBytes: 3, maxOutputBytes: 6 })).resolves.toMatchObject({ bytes: 6 })
     const excess = join((await root()), 'excess.bin')
-    await expect(decodeRPackRangeToFile(sourcePath, excess, { start: 0, length: 6, chunkSize: 3, maxOutputBytes: 5 })).rejects.toMatchObject({ code: 'IMPORT_LIMIT_EXCEEDED', status: 413 })
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath: excess, start: 0, length: 6, chunkBytes: 3, maxOutputBytes: 5 })).rejects.toMatchObject({ code: 'IMPORT_LIMIT_EXCEEDED', status: 413 })
     await expect(stat(excess)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it.each([
-    { start: -1, length: 1, chunkSize: 1, maxOutputBytes: 1 }, { start: 0, length: -1, chunkSize: 1, maxOutputBytes: 1 },
-    { start: Number.MAX_SAFE_INTEGER, length: 1, chunkSize: 1, maxOutputBytes: 1 }, { start: 0, length: 1, chunkSize: 0, maxOutputBytes: 1 },
-    { start: 0, length: 1, chunkSize: 1, maxOutputBytes: -1 }, { start: 2, length: 10, chunkSize: 1, maxOutputBytes: 10 },
+    { start: -1, length: 1, chunkBytes: 1, maxOutputBytes: 1 }, { start: 0, length: -1, chunkBytes: 1, maxOutputBytes: 1 },
+    { start: Number.MAX_SAFE_INTEGER, length: 1, chunkBytes: 1, maxOutputBytes: 1 }, { start: 0, length: 1, chunkBytes: 0, maxOutputBytes: 1 },
+    { start: 0, length: 1, chunkBytes: 1024 * 1024 + 1, maxOutputBytes: 1 }, { start: 0, length: 1, chunkBytes: 1, maxOutputBytes: Infinity },
+    { start: 0, length: 1, chunkBytes: 1, maxOutputBytes: -1 }, { start: 2, length: 10, chunkBytes: 1, maxOutputBytes: 10 },
   ])('rejects invalid, overflow, and out-of-range requests', async (options) => {
     const { decodeRPackRangeToFile } = await import(streamModule); const { sourcePath, targetPath } = await fixture(Buffer.from('abc'))
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, options)).rejects.toMatchObject({ status: 400 })
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, ...options })).rejects.toMatchObject({ status: 400 })
     await expect(stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('rejects an already aborted signal before creating its output', async () => {
     const { decodeRPackRangeToFile } = await import(streamModule); const { sourcePath, targetPath } = await fixture(Buffer.from('abc')); const controller = new AbortController(); controller.abort()
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: 3, chunkSize: 1, maxOutputBytes: 3, signal: controller.signal })).rejects.toMatchObject({ code: 'IMPORT_ABORTED', status: 499 })
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 3, chunkBytes: 1, maxOutputBytes: 3, signal: controller.signal })).rejects.toMatchObject({ code: 'IMPORT_ABORTED', status: 499 })
     await expect(stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -80,7 +106,7 @@ describe('decodeRPackRangeToFile', () => {
       if (args[1] === constants.O_RDONLY) return { read: () => new Promise(() => {}), close: handle.close.bind(handle) }
       return handle
     })
-    const pending = decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: 3, chunkSize: 1, maxOutputBytes: 3, signal: controller.signal }); controller.abort()
+    const pending = decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 3, chunkBytes: 1, maxOutputBytes: 3, signal: controller.signal }); controller.abort()
     await expect(Promise.race([pending, new Promise((_, reject) => setTimeout(() => reject(new Error('abort did not settle')), 200))])).rejects.toMatchObject({ code: 'IMPORT_ABORTED', status: 499 })
     await expect(stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -93,7 +119,7 @@ describe('decodeRPackRangeToFile', () => {
       if (args[1] !== constants.O_RDONLY) return { write: async () => { throw writeFailure }, close: handle.close.bind(handle) }
       return handle
     })
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: 3, chunkSize: 1, maxOutputBytes: 3 })).rejects.toBe(writeFailure)
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 3, chunkBytes: 1, maxOutputBytes: 3 })).rejects.toBe(writeFailure)
     await expect(stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' }); vi.restoreAllMocks()
     const syncFailure: any = new Error('sync failed'); syncFailure.code = 'EIO'
     vi.spyOn(fsPromises, 'open').mockImplementation(async (...args: any[]) => {
@@ -101,13 +127,13 @@ describe('decodeRPackRangeToFile', () => {
       if (args[1] !== constants.O_RDONLY) return { write: handle.write.bind(handle), sync: async () => { throw syncFailure }, close: handle.close.bind(handle) }
       return handle
     })
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: 3, chunkSize: 1, maxOutputBytes: 3 })).rejects.toBe(syncFailure)
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 3, chunkBytes: 1, maxOutputBytes: 3 })).rejects.toBe(syncFailure)
     await expect(stat(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('creates target exclusively', async () => {
     const { decodeRPackRangeToFile } = await import(streamModule); const { sourcePath, targetPath } = await fixture(Buffer.from('abc')); await writeFile(targetPath, 'keep')
-    await expect(decodeRPackRangeToFile(sourcePath, targetPath, { start: 0, length: 3, chunkSize: 1, maxOutputBytes: 3 })).rejects.toMatchObject({ code: 'EEXIST' })
+    await expect(decodeRPackRangeToFile({ sourcePath, targetPath, start: 0, length: 3, chunkBytes: 1, maxOutputBytes: 3 })).rejects.toMatchObject({ code: 'EEXIST' })
     expect(await readFile(targetPath, 'utf8')).toBe('keep')
   })
 })
