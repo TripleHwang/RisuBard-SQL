@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import express from 'express'
+import { rateLimit } from 'express-rate-limit'
 import http from 'node:http'
 
 const { createRisumImportHandler } = require('./risum-import-route.cjs')
@@ -38,7 +39,13 @@ function makeApp(overrides: Record<string, any> = {}) {
         ...overrides,
     }
     const app = express()
-    app.post('/api/risum/import', createRisumImportHandler(deps))
+    app.post('/api/risum/import', rateLimit({
+        windowMs: 60 * 1000,
+        max: 1000,
+        standardHeaders: true,
+        legacyHeaders: false,
+        validate: { xForwardedForHeader: false },
+    }), createRisumImportHandler(deps))
     const server = http.createServer(app)
     servers.push(server)
     return { server, calls }

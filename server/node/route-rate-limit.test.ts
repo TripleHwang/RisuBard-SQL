@@ -21,4 +21,18 @@ describe('route rate limiting', () => {
         expect(server).toMatch(/app\.post\('\/api\/risum\/import', risumImportLimiter, createRisumImportHandler\(/)
         expect(server).toMatch(/app\.post\('\/api\/assets\/upload', assetUploadLimiter, createAssetUploadHandler\(/)
     })
+
+    it('caps SQL hydration reads and legacy full-chat saves without a global limiter', () => {
+        expect(server).toContain('const sqlReadLimiter = rateLimit({')
+        expect(server).toContain('const chatContentWriteLimiter = rateLimit({')
+        for (const route of [
+            '/api/sql/bootstrap', '/api/sql/characters/:characterId', '/api/sql/chats/:chatId/messages',
+            '/api/sql/chat-drafts', '/api/sql/chat-drafts/:draftKey', '/api/sql/cold-storage',
+            '/api/sql/cold-storage/:archiveId', '/api/sql/revisions', '/api/sql/search/messages',
+            '/api/sql/search/characters',
+        ]) {
+            expect(server).toContain(`app.get('${route}', sqlReadLimiter,`)
+        }
+        expect(server).toContain("app.post('/api/chat-content/:chaId/:chatIndex', chatContentWriteLimiter,")
+    })
 })

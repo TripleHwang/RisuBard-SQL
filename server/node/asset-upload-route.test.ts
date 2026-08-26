@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import express from 'express'
+import { rateLimit } from 'express-rate-limit'
 import http from 'node:http'
 
 const { createAssetUploadHandler, suspendRequestTimeout } = require('./asset-upload-route.cjs')
@@ -10,7 +11,13 @@ afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Pr
 function makeApp(overrides: Record<string, any> = {}) {
     const calls: string[] = []
     const app = express()
-    app.post('/api/assets/upload', createAssetUploadHandler({
+    app.post('/api/assets/upload', rateLimit({
+        windowMs: 60 * 1000,
+        max: 1000,
+        standardHeaders: true,
+        legacyHeaders: false,
+        validate: { xForwardedForHeader: false },
+    }), createAssetUploadHandler({
         checkAuth: async () => { calls.push('auth'); return true },
         checkActiveSession: () => { calls.push('session'); return true },
         stagingRoot: process.cwd(),
