@@ -157,12 +157,25 @@ describe('server relational SQLite', () => {
       messages: [{ chatId: 'message-2' }, { chatId: 'message-3' }],
       positions: [1, 9],
       nextPosition: 10,
+      hasMore: true,
     })
     expect(storage.loadChatMessages('chat-1', 9, 2)).toMatchObject({
       messages: [{ chatId: 'message-1' }, { chatId: 'message-2' }],
       positions: [0, 1],
       nextPosition: 10,
+      hasMore: false,
     })
+  })
+
+  it('rejects a page that would split tied message positions', () => {
+    const storage = seededReaderStorage()
+    storage.commit({
+      baseRevision: 1,
+      action: 'tie-positions',
+      statements: [{ sql: 'UPDATE messages SET position = ? WHERE chat_id = ? AND id IN (?, ?)', bind: [9, 'chat-1', 'message-2', 'message-3'] }],
+    })
+
+    expect(() => storage.loadChatMessages('chat-1', undefined, 1)).toThrow(/tied.*position/i)
   })
 
   it('echoes the effective cursor while paging older messages in ascending order', () => {

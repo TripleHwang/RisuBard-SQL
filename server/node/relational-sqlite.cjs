@@ -323,9 +323,15 @@ function createRelationalSqlite(options) {
                 'SELECT COALESCE(MAX(position) + 1, 0) AS cursor FROM messages WHERE chat_id = ?',
             ).get(chatId).cursor);
             const descendingRows = database.prepare(
-                'SELECT id, position FROM messages WHERE chat_id = ? AND position < ? ORDER BY position DESC LIMIT ?',
-            ).all(chatId, normalizedBefore, limit);
-            const ids = descendingRows.map((row) => row.id);
+                'SELECT id, position FROM messages WHERE chat_id = ? AND position < ? ORDER BY position DESC, id DESC LIMIT ?',
+            ).all(chatId, normalizedBefore, limit + 1);
+            const extraRow = descendingRows[limit];
+            const boundaryRow = descendingRows[limit - 1];
+            if (extraRow && boundaryRow && Number(extraRow.position) === Number(boundaryRow.position)) {
+                throw new Error('Reverse message page would split tied SQL positions');
+            }
+            const rows = descendingRows.slice(0, limit).reverse();
+            const ids = rows.map((row) => row.id);
             const nodeRows = ids.length
                 ? database.prepare(`SELECT * FROM message_extension_nodes WHERE chat_id = ? AND message_id IN (${ids.map(() => '?').join(',')}) ORDER BY message_id, node_id`).all(chatId, ...ids)
                 : [];
@@ -335,7 +341,6 @@ function createRelationalSqlite(options) {
                 group.push(row);
                 byId.set(row.message_id, group);
             }
-            const rows = descendingRows.reverse();
             const messages = rows.map((row) => ({
                 ...(rebuildRelationalValue(byId.get(row.id) || []) || {}), chatId: row.id,
             }));
@@ -343,7 +348,7 @@ function createRelationalSqlite(options) {
             const nextBefore = rows.length ? Math.min(...rows.map((row) => Number(row.position))) : null;
             return {
                 revision: revision(), chatId, messages, positions, nextPosition, before: normalizedBefore, nextBefore, total,
-                hasMore: nextBefore !== null && nextBefore > 0,
+                hasMore: Boolean(extraRow),
             };
         });
     }

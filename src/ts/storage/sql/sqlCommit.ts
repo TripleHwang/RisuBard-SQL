@@ -52,7 +52,9 @@ export interface SqlCommit {
     upserts: SqlPresetUpsert[];
     deletes: string[];
     order?: string[];
-    activeId?: string;
+    /** Reconcile the stored list to order, including removal of absent IDs. */
+    manifest?: boolean;
+    activeId?: string | null;
   };
   characters: SqlEntityUpsert[];
   characterDeletes?: string[];

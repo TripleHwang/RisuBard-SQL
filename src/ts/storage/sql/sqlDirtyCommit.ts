@@ -176,10 +176,14 @@ export function buildSqlDirtyCommit(
     commit.pluginStorage = { upserts, deletes };
   }
 
-  const presetRootsDirty = dirty.rootKeys.includes("botPresets") || dirty.rootKeys.includes("botPresetsId");
-  if (dirty.presetIds.length || presetRootsDirty) {
+  const presetListDirty = dirty.rootKeys.includes("botPresets");
+  const presetActiveDirty = dirty.rootKeys.includes("botPresetsId");
+  if (dirty.presetIds.length || presetListDirty || presetActiveDirty) {
     const presets = database.botPresets ?? [];
-    const upserts = dirty.presetIds.flatMap((id) => {
+    const upsertIds = presetListDirty
+      ? presets.map((preset) => preset.id).filter((id): id is string => Boolean(id))
+      : dirty.presetIds;
+    const upserts = upsertIds.flatMap((id) => {
       const position = presets.findIndex((preset) => preset.id === id);
       return position < 0 ? [] : [{ id, position, data: presets[position] }];
     });
@@ -189,8 +193,8 @@ export function buildSqlDirtyCommit(
     commit.presets = {
       upserts,
       deletes,
-      order: ids,
-      ...(ids.length ? { activeId: ids[activeIndex] } : {}),
+      ...(presetListDirty ? { order: ids, manifest: true } : {}),
+      ...(presetListDirty || presetActiveDirty ? { activeId: ids[activeIndex] ?? null } : {}),
     };
   }
 

@@ -164,12 +164,15 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
       const known = new Set(current.message.map((message) => message.chatId));
-      const older = page.messages.filter((message) => !known.has(message.chatId));
+      const olderPairs = page.messages.flatMap((message, index) =>
+        !known.has(message.chatId) ? [{ message, position: page.positions?.[index] }] : [],
+      );
+      const older = olderPairs.map(({ message }) => message);
       if (older.length === 0 && page.hasMore && page.nextBefore === window.nextBefore) {
         setWindow(current, { ...window, hasOlder: false });
         return current;
       }
-      attachCanonicalPositions(older, page.positions);
+      attachCanonicalPositions(older, olderPairs.map(({ position }) => position));
       current.message = [...older, ...current.message];
       (current as HydratableChat).messagesLoaded = true;
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore;

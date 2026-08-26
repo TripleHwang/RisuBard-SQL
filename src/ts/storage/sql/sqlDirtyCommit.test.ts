@@ -125,7 +125,7 @@ describe("row-scoped SQL dirty commits", () => {
     expect(buildSqlDirtyCommit(db, dirty, 7).characterDeletes).toEqual(["character-a"]);
   });
 
-  it("preserves preset order and active selection while upserting only marked presets", () => {
+  it("keeps a per-ID preset update row-scoped", () => {
     const db = fixtureDatabaseWithMessages(0);
     db.botPresets = [{ id: "preset-b", name: "B" }, { id: "preset-a", name: "A" }];
     db.botPresetsId = 1;
@@ -135,8 +135,48 @@ describe("row-scoped SQL dirty commits", () => {
     expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
       upserts: [{ id: "preset-a", position: 1, data: db.botPresets[1] }],
       deletes: [],
+    });
+  });
+
+  it("reconciles the complete preset list only when the list root is dirty", () => {
+    const db = fixtureDatabaseWithMessages(0);
+    db.botPresets = [{ id: "preset-b", name: "B" }, { id: "preset-a", name: "A" }];
+    db.botPresetsId = 1;
+    const dirty = cleanDirty();
+    dirty.rootKeys = ["botPresets"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
+      upserts: [
+        { id: "preset-b", position: 0, data: db.botPresets[0] },
+        { id: "preset-a", position: 1, data: db.botPresets[1] },
+      ],
+      deletes: [],
       order: ["preset-b", "preset-a"],
       activeId: "preset-a",
+      manifest: true,
+    });
+  });
+
+  it("clears the preset manifest and active selection when the list is replaced with empty", () => {
+    const db = fixtureDatabaseWithMessages(0);
+    db.botPresets = [];
+    const dirty = cleanDirty();
+    dirty.rootKeys = ["botPresets"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
+      upserts: [], deletes: [], order: [], activeId: null, manifest: true,
+    });
+  });
+
+  it("writes only the selected preset when the active preset root is dirty", () => {
+    const db = fixtureDatabaseWithMessages(0);
+    db.botPresets = [{ id: "preset-a", name: "A" }, { id: "preset-b", name: "B" }];
+    db.botPresetsId = 1;
+    const dirty = cleanDirty();
+    dirty.rootKeys = ["botPresetsId"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
+      upserts: [], deletes: [], activeId: "preset-b",
     });
   });
 

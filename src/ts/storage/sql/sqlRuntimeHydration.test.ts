@@ -86,6 +86,21 @@ describe("Node SQL runtime hydration", () => {
     expect(Object.keys(character.chats[0].message[0])).not.toContain("_sqlPosition");
   });
 
+  it("keeps page message positions paired when an older page overlaps the window", async () => {
+    const reverse = vi.fn()
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m1" }, { chatId: "m3" }], positions: [4, 12], nextPosition: 13, before: 13, nextBefore: 4, total: 4, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }, { chatId: "m2" }], positions: [0, 4, 8], nextPosition: 13, before: 4, nextBefore: 0, total: 4, hasMore: false });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
+
+    await ensureChatMessageWindow(character, 0, 2);
+    await loadOlderChatMessages(character, 0, 3);
+
+    expect(character.chats[0].message.map((message: any) => [message.chatId, message._sqlPosition])).toEqual([
+      ["m0", 0], ["m2", 8], ["m1", 4], ["m3", 12],
+    ]);
+  });
+
   it("deduplicates concurrent initial chat window hydration", async () => {
     const pending = deferred<any>();
     const reverse = vi.fn(() => pending.promise);

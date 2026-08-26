@@ -267,6 +267,14 @@ export async function applySqliteCommit(
         ],
       );
     }
+    if (commit.presets.manifest) {
+      const ids = commit.presets.order ?? [];
+      if (!ids.length) await execute("DELETE FROM bot_presets");
+      else await execute(
+        `DELETE FROM bot_presets WHERE preset_id NOT IN (${ids.map(() => "?").join(",")})`,
+        ids,
+      );
+    }
     if (commit.presets.order) {
       await execute("UPDATE bot_presets SET position = position + 1000000000");
       for (const [position, id] of commit.presets.order.entries()) {
@@ -276,7 +284,10 @@ export async function applySqliteCommit(
         );
       }
     }
-    if (commit.presets.activeId !== undefined) {
+    if (commit.presets.activeId === null) {
+      await execute("DELETE FROM system_settings WHERE key = ?", ["activeBotPresetId"]);
+      await execute("DELETE FROM setting_extension_nodes WHERE setting_key = ?", ["activeBotPresetId"]);
+    } else if (commit.presets.activeId !== undefined) {
       const value = commit.presets.activeId;
       const root = flattenRelationalValue(value)[0];
       await execute(

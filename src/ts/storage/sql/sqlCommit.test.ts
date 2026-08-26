@@ -123,6 +123,19 @@ describe("RisuVault SQL row commits", () => {
     });
   });
 
+  it("uses a preset manifest to remove absent presets and clear the active setting", async () => {
+    const commit = createEmptySqlCommit(1);
+    commit.presets = { upserts: [], deletes: [], order: [], activeId: null, manifest: true };
+    const statements: { sql: string; bind: unknown[] }[] = [];
+
+    await applySqliteCommit(commit, (sql, bind = []) => {
+      statements.push({ sql, bind });
+    });
+
+    expect(statements).toContainEqual({ sql: "DELETE FROM bot_presets", bind: [] });
+    expect(statements).toContainEqual({ sql: "DELETE FROM system_settings WHERE key = ?", bind: ["activeBotPresetId"] });
+  });
+
   it("generates stable ids for legacy chats and messages that lack them", () => {
     const database = {
       characters: [{ chaId: "character-1", name: "C", chats: [{ message: [{ role: "char", data: "A" }] }] }],
