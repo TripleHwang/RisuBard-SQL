@@ -178,6 +178,7 @@ function createFileKv(options = {}) {
     }));
     let manifestCommitTail = Promise.resolve();
     const inFlightManifests = new Set();
+    const pendingReplacementMutationJournals = new Set();
     const preparedObjectReferences = new Map();
 
     function retainPreparedObject(hash) {
@@ -218,6 +219,7 @@ function createFileKv(options = {}) {
     // Apply it to both the live manifest and every in-flight staged snapshot so a
     // later staged publish cannot overwrite the synchronous write with stale data.
     function mutateManifest(mutate) {
+        for (const journal of pendingReplacementMutationJournals) journal.push(mutate);
         const targets = new Set([manifest, ...inFlightManifests]);
         for (const target of targets) {
             mutate(target);
@@ -266,7 +268,11 @@ function createFileKv(options = {}) {
         if (!Array.isArray(entries)) throw new TypeError('File KV entries must be an array');
         const keys = new Set();
         const sourcePaths = new Set();
+        const sourceInodes = new Set();
         const objectsDirectory = path.resolve(dataRoot, 'kv', 'objects');
+        const realObjectsDirectory = fs.existsSync(objectsDirectory)
+            ? fs.realpathSync.native(objectsDirectory)
+            : objectsDirectory;
         return entries.map((entry, index) => {
             if (!entry || typeof entry.key !== 'string' || !entry.key || entry.key.includes('\0')) {
                 throw new TypeError(`Invalid file KV key at entry ${index}`);
@@ -277,12 +283,28 @@ function createFileKv(options = {}) {
             if (keys.has(entry.key)) throw new Error(`Duplicate file KV key: ${entry.key}`);
             keys.add(entry.key);
             const sourcePath = path.resolve(entry.sourcePath);
-            const relativeToObjects = path.relative(objectsDirectory, sourcePath);
+            let canonicalSourcePath = sourcePath;
+            try {
+                const sourceLstat = fs.lstatSync(sourcePath);
+                if (sourceLstat.isSymbolicLink()) {
+                    throw new Error(`Unsafe symbolic-link file KV source path: ${entry.sourcePath}`);
+                }
+                canonicalSourcePath = fs.realpathSync.native(sourcePath);
+                const sourceStat = fs.statSync(sourcePath);
+                const inodeIdentity = `${sourceStat.dev}:${sourceStat.ino}`;
+                if (sourceInodes.has(inodeIdentity)) {
+                    throw new Error(`Ambiguous hard-link file KV source path: ${entry.sourcePath}`);
+                }
+                sourceInodes.add(inodeIdentity);
+            } catch (error) {
+                if (error?.code !== 'ENOENT') throw error;
+            }
+            const relativeToObjects = path.relative(realObjectsDirectory, canonicalSourcePath);
             if (relativeToObjects === '' || (!relativeToObjects.startsWith(`..${path.sep}`) && relativeToObjects !== '..' && !path.isAbsolute(relativeToObjects))) {
                 throw new Error(`Unsafe file KV source path inside object store: ${entry.sourcePath}`);
             }
-            if (sourcePaths.has(sourcePath)) throw new Error(`Ambiguous file KV source path: ${entry.sourcePath}`);
-            sourcePaths.add(sourcePath);
+            if (sourcePaths.has(canonicalSourcePath)) throw new Error(`Ambiguous file KV source path: ${entry.sourcePath}`);
+            sourcePaths.add(canonicalSourcePath);
             return { key: entry.key, sourcePath };
         });
     }
@@ -363,24 +385,34 @@ function createFileKv(options = {}) {
 
     async function kvReplaceAllFromFilesAsync(entries) {
         const validEntries = validateFileEntries(entries);
+        const deferredMutations = [];
         const retainedHashes = [];
-        try {
-            const prepared = await prepareFileEntriesAsync(validEntries, retainedHashes);
-            await queueManifestCommit(async () => {
+        pendingReplacementMutationJournals.add(deferredMutations);
+        return queueManifestCommit(async () => {
+            try {
+                const prepared = await prepareFileEntriesAsync(validEntries, retainedHashes);
                 const next = {
                     schemaVersion: 1,
                     updatedAt: Date.now(),
                     entries: Object.fromEntries(prepared),
                 };
+                for (const mutate of deferredMutations) {
+                    mutate(next);
+                    next.updatedAt = Date.now();
+                }
+                pendingReplacementMutationJournals.delete(deferredMutations);
                 await commitManifest(next);
-            });
-        } finally {
-            releasePreparedObjects(retainedHashes);
-        }
+            } finally {
+                pendingReplacementMutationJournals.delete(deferredMutations);
+                releasePreparedObjects(retainedHashes);
+            }
+        });
     }
 
     function kvDel(key) {
-        if (!(key in manifest.entries) && ![...inFlightManifests].some(target => key in target.entries)) return;
+        if (!(key in manifest.entries)
+            && ![...inFlightManifests].some(target => key in target.entries)
+            && pendingReplacementMutationJournals.size === 0) return;
         mutateManifest(target => { delete target.entries[key]; });
     }
 
@@ -408,7 +440,8 @@ function createFileKv(options = {}) {
 
     function kvDelPrefix(prefix) {
         const changed = [manifest, ...inFlightManifests]
-            .some(target => Object.keys(target.entries).some(key => key.startsWith(prefix)));
+            .some(target => Object.keys(target.entries).some(key => key.startsWith(prefix)))
+            || pendingReplacementMutationJournals.size > 0;
         if (changed) mutateManifest(target => {
             for (const key of Object.keys(target.entries)) {
                 if (key.startsWith(prefix)) delete target.entries[key];

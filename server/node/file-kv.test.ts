@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 
 const { createFileKv } = require('./file-kv.cjs')
 const { atomicWriteJson } = require('./file-store.cjs')
@@ -362,6 +363,99 @@ describe('file-native KV compatibility projection', () => {
         ])
 
         expect(store.kvGet('database/database.bin')?.toString()).toBe('replacement')
+    })
+
+    it('reserves replacement order before preparation so later sync and queued writes survive', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const replacementPath = path.join(stagingRoot, 'replacement.bin')
+        const removedPath = path.join(stagingRoot, 'removed.bin')
+        const laterPath = path.join(stagingRoot, 'later.bin')
+        fs.writeFileSync(replacementPath, Buffer.from('replacement'))
+        fs.writeFileSync(removedPath, Buffer.from('remove-me'))
+        fs.writeFileSync(laterPath, Buffer.from('later'))
+        const store = createFileKv({ dataRoot, objectWriteConcurrency: 1 })
+        store.kvSet('assets/old', Buffer.from('old'))
+
+        const createReadStream = fs.createReadStream.bind(fs)
+        let releasePreparation!: () => void
+        let preparationStarted!: () => void
+        const preparationGate = new Promise<void>(resolve => { releasePreparation = resolve })
+        const preparationStartedPromise = new Promise<void>(resolve => { preparationStarted = resolve })
+        const streamSpy = vi.spyOn(fs, 'createReadStream').mockImplementation(((filePath: fs.PathLike, options?: unknown) => {
+            if (path.resolve(String(filePath)) !== path.resolve(replacementPath)) {
+                return createReadStream(filePath, options as never)
+            }
+            return Readable.from((async function* () {
+                preparationStarted()
+                await preparationGate
+                yield fs.readFileSync(replacementPath)
+            })()) as fs.ReadStream
+        }) as typeof fs.createReadStream)
+
+        try {
+            const replacement = store.kvReplaceAllFromFilesAsync([
+                { key: 'database/database.bin', sourcePath: replacementPath },
+                { key: 'assets/remove-after-replacement', sourcePath: removedPath },
+            ])
+            await preparationStartedPromise
+            store.kvSet('settings/after-replacement', Buffer.from('sync'))
+            store.kvDel('assets/remove-after-replacement')
+            const queued = store.kvSetManyFromFilesAsync([
+                { key: 'assets/after-replacement', sourcePath: laterPath },
+            ])
+            await waitForStagedSourceConsumption(laterPath)
+            releasePreparation()
+            await Promise.all([replacement, queued])
+        } finally {
+            releasePreparation()
+            streamSpy.mockRestore()
+        }
+
+        expect(store.kvList()).toEqual([
+            'assets/after-replacement',
+            'database/database.bin',
+            'settings/after-replacement',
+        ])
+        expect(store.kvGet('settings/after-replacement')?.toString()).toBe('sync')
+        expect(store.kvGet('assets/after-replacement')?.toString()).toBe('later')
+    })
+
+    it('rejects hard-link source aliases before consuming either staged path', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'source.bin')
+        const aliasPath = path.join(stagingRoot, 'alias.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('shared'))
+        fs.linkSync(sourcePath, aliasPath)
+        const store = createFileKv({ dataRoot })
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/source', sourcePath },
+            { key: 'assets/alias', sourcePath: aliasPath },
+        ])).rejects.toThrow(/alias|hard.?link|source path/i)
+
+        expect(fs.existsSync(sourcePath)).toBe(true)
+        expect(fs.existsSync(aliasPath)).toBe(true)
+        expect(store.kvList()).toEqual([])
+    })
+
+    it('rejects an object-store source reached through a directory alias', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const store = createFileKv({ dataRoot })
+        store.kvSet('assets/existing', Buffer.from('existing'))
+        const objectsDirectory = path.join(dataRoot, 'kv', 'objects')
+        const objectName = fs.readdirSync(objectsDirectory)[0]
+        const aliasedDirectory = path.join(stagingRoot, 'objects-alias')
+        fs.symlinkSync(objectsDirectory, aliasedDirectory, 'junction')
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/reused', sourcePath: path.join(aliasedDirectory, objectName) },
+        ])).rejects.toThrow(/unsafe.*object store/i)
+
+        expect(store.kvGet('assets/existing')?.toString()).toBe('existing')
+        expect(fs.existsSync(path.join(objectsDirectory, objectName))).toBe(true)
     })
 
     it('round-trips binary values and persists only a small manifest plus content objects', () => {
