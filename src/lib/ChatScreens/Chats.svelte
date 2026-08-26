@@ -29,6 +29,8 @@
         userIcon,
         pageStart,
         pageEnd,
+        // Task 8's SaverModeCoordinator owns the reactive source and will pass
+        // this hook; no saver store exists yet, so normal mode is the default.
         saverMode = false,
         userIconPortrait,
         hasNewUnreadMessage = $bindable(false)
@@ -64,18 +66,13 @@
     }
     type MountedChat = { instance: ChatInstance, element: HTMLDivElement, signature: string }
     let mountInstances: Map<string, MountedChat> = new Map();
-    let legacyMessageIds = new WeakMap<object, string>();
     let measuredRowHeights: number[] = [];
 
-    function stableMessageId(message: Message, index: number): string {
-        if (message.chatId) return message.chatId;
-        const objectMessage = message as object;
-        let id = legacyMessageIds.get(objectMessage);
-        if (!id) {
-            id = `legacy:${crypto.randomUUID?.() ?? `${index}:${message.role}`}`;
-            legacyMessageIds.set(objectMessage, id);
-        }
-        return id;
+    function stableMessageId(message: Message): string {
+        // Legacy imported rows receive their durable identity before becoming a
+        // mounted owner; there is no mutable-index identity fallback.
+        message.chatId ??= crypto.randomUUID();
+        return message.chatId;
     }
 
     const updateChatBody = () => {
@@ -136,11 +133,11 @@
             if(i < 0) break; // Prevent out of bounds
             const message = messages[i];
             const messageLargePortrait = message.role === 'user' ? (userIconPortrait ?? false) : ((currentCharacter as character).largePortrait ?? false);
-            const reloadPointer = reloadPointerMap[i] ?? 0;
+            const messageId = stableMessageId(message);
+            const reloadPointer = reloadPointerMap[messageId] ?? 0;
             const isRerollTarget = i === lastRealCharIdx;
             const activeStreamingMessage = i === activeStreamingIndex && message.role === 'char';
             const hashMessageData = activeStreamingMessage ? '' : message.data;
-            const messageId = stableMessageId(message, i);
             const signature = `${hashMessageData}|${messageLargePortrait}|${message.disabled}|${reloadPointer}|${message.swipeId ?? 0}|${message.swipes?.length ?? 0}|${isRerollTarget}|${message.risubardMemoryConfirmed ?? false}|${JSON.stringify(message.risubardCanonicalReceipt ?? null)}`;
             currentIds.add(messageId);
             const mounted = mountInstances.get(messageId);
@@ -221,7 +218,6 @@
 
     onDestroy(() => {
         console.log('Unmounting Chats');
-        legacyMessageIds = new WeakMap();
         mountInstances.forEach((inst) => {
             unmount(inst);
         });
@@ -229,9 +225,9 @@
     })
 
     function checkIfAtBottom() {
-        if (!chatBody || !chatBody.parentElement) return true;
+        if (!chatBody || !chatBody.parentElement || !messageHost) return true;
         const sc = chatBody.parentElement;
-        const lastEl = chatBody.firstElementChild;
+        const lastEl = messageHost.firstElementChild;
         if (!lastEl) return true;
         const rect = lastEl.getBoundingClientRect();
         const scRect = sc.getBoundingClientRect();
@@ -239,8 +235,8 @@
     }
 
     function scrollLatestIntoChatScreen() {
-        if(!chatBody) return;
-        const element = chatBody.firstElementChild as HTMLElement | null;
+        if(!chatBody || !messageHost) return;
+        const element = messageHost.firstElementChild as HTMLElement | null;
         const chatScreen = chatBody.parentElement;
         if(!element || !chatScreen) return;
         scrollWithinContainer(element, chatScreen, { block: 'start', behavior: 'instant' });

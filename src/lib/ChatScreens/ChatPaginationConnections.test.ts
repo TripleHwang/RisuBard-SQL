@@ -18,6 +18,8 @@ describe('bounded chat-page UI connections', () => {
         expect(source).toContain('data-chat-spacer="before"')
         expect(source).toContain('Map<string, MountedChat>')
         expect(source).toContain('messageId,')
+        expect(source).toContain('messageHost.firstElementChild')
+        expect(source).not.toContain('const lastEl = chatBody.firstElementChild')
         expect(source).not.toContain('messages.length - loadPages')
     })
 
@@ -34,6 +36,7 @@ describe('bounded chat-page UI connections', () => {
         expect(source).toContain('messageId?: string')
         expect(source).toContain('message.findIndex((candidate) => candidate.chatId === messageId)')
         expect(source).toContain('idx: initialIdx = -1')
+        expect(source).toContain('$ReloadChatPointer[messageId]')
     })
 
     it('uses explicit bounded navigation instead of cumulative scroll loading', () => {

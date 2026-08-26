@@ -9,7 +9,7 @@
     import { risuChatParser } from "src/ts/process/scripts"
     import { runTrigger } from 'src/ts/process/triggers'
     import { sayTTS } from "src/ts/process/tts"
-    import { DBState, ReloadChatPointer, CurrentTriggerIdStore, popupStore } from 'src/ts/stores.svelte'
+    import { DBState, ReloadChatPointer, bumpReloadChatPointer, CurrentTriggerIdStore, popupStore } from 'src/ts/stores.svelte'
 
     import { capitalize, getUserIcon, getUserName, sleep } from "src/ts/util"
     import { onDestroy, onMount } from "svelte"
@@ -244,10 +244,7 @@
         if (!chat) return
         chat.scriptstate = writeFirstMessageStudioVariables(chat.scriptstate ?? {}, runtime.variables)
         if (current?.chaId && chat.id) markSqlChatDirty(current.chaId, chat.id)
-        ReloadChatPointer.update((value) => ({
-            ...value,
-            [idx]: (value[idx] ?? 0) + 1,
-        }))
+        bumpReloadChatPointer(messageId)
     }
 
     async function getTranslationCacheKey(): Promise<string> {
@@ -353,10 +350,7 @@
 
         if(triggerResult) {
             setCurrentChat(triggerResult.chat)
-            ReloadChatPointer.update((v) => {
-                v[idx] = (v[idx] ?? 0) + 1
-                return v
-            })
+            bumpReloadChatPointer(messageId)
         }
         
         if(triggerName && triggerId) {
@@ -538,7 +532,7 @@
             {language.noMessage}
         </div>
     {:else}
-        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0)}
+        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[messageId] ?? 0)}
         {@const totalLengthPointer = (idx > totalLength - 6) ? totalLength : 0}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1409,10 +1403,7 @@
                             <span>{DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'Assistant' : 'User'}</span>
                             <button class="ml-2 text-textcolor2 hover:text-textcolor" onclick={() => {
                                 DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'user' : 'char'
-                                ReloadChatPointer.update((v) => {
-                                    v[idx] = (v[idx] ?? 0) + 1
-                                    return v
-                                })
+                                bumpReloadChatPointer(messageId)
                             }}><ArrowLeftRightIcon size="18" /></button>
                         </span>
                     {:else if !$HideIconStore}
@@ -1507,10 +1498,7 @@
                             <span>{DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'Assistant' : 'User'}</span>
                             <button class="ml-2 text-textcolor2 hover:text-textcolor" onclick={() => {
                                 DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'user' : 'char'
-                                ReloadChatPointer.update((v) => {
-                                    v[idx] = (v[idx] ?? 0) + 1
-                                    return v
-                                })
+                                bumpReloadChatPointer(messageId)
                             }}><ArrowLeftRightIcon size="18" /></button>
                         </span>
                     {:else if !blankMessage && !$HideIconStore}
@@ -1532,10 +1520,7 @@
                             <span>{DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'Assistant' : 'User'}</span>
                             <button class="ml-2 text-textcolor2 hover:text-textcolor" onclick={() => {
                                 DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'user' : 'char'
-                                ReloadChatPointer.update((v) => {
-                                    v[idx] = (v[idx] ?? 0) + 1
-                                    return v
-                                })
+                                bumpReloadChatPointer(messageId)
                             }}><ArrowLeftRightIcon size="18" /></button>
                         </span>
                     {:else if !blankMessage && !$HideIconStore}

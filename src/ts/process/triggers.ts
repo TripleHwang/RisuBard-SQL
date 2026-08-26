@@ -4,7 +4,7 @@ import { getCurrentCharacter, getCurrentChat, getDatabase, setCurrentCharacter, 
 import { tokenize } from "../tokenizer";
 import { getModuleTriggers } from "./modules";
 import { get } from "svelte/store";
-import { ReloadChatPointer, ReloadGUIPointer, selectedCharID, CurrentTriggerIdStore } from "../stores.svelte";
+import { bumpActiveChatReloadAt, ReloadGUIPointer, selectedCharID, CurrentTriggerIdStore } from "../stores.svelte";
 import { processMultiCommand } from "./command";
 import { parseKeyValue, sleep } from "../util";
 import { alertError, alertInput, alertNormal, alertSelect } from "../alert";
@@ -2377,10 +2377,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     break
                 }
                 case 'v2UpdateChatAt':{
-                    ReloadChatPointer.update((v) => {
-                        v[effect.index] = (v[effect.index] ?? 0) + 1
-                        return v
-                    })
+                    bumpActiveChatReloadAt(Number(effect.index))
                     break
                 }
                 case 'v2Wait':{

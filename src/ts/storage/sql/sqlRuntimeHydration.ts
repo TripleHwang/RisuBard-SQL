@@ -3,6 +3,7 @@ import type { SqlBootstrapStorage } from "./ISqlStorage";
 import { getActiveSqlStorage } from "./sqlBootstrap";
 import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
+import { validateOlderMessagePage } from "../../chatWindow";
 
 export type SqlHydrationWindow = {
   before: number | null;
@@ -69,6 +70,39 @@ function attachCanonicalPositions(messages: Chat["message"], positions: number[]
       writable: true,
       value: positions[index],
     });
+  }
+}
+
+/**
+ * Reverse pages are a different contract from forward hydration: every page
+ * must terminate exactly at the persisted boundary we asked for. Validate the
+ * response before attaching positions or replacing either observable window.
+ */
+function validateOlderReversePage(
+  page: Awaited<ReturnType<SqlBootstrapStorage["loadChatMessageReversePage"]>>,
+  window: SqlHydrationWindow,
+  knownIds: Set<string | undefined>,
+): void {
+  if (page.total !== window.total || page.before !== window.nextBefore || page.nextPosition !== window.nextPosition) {
+    throw new Error("Reverse page metadata changed")
+  }
+  if (!Array.isArray(page.positions) || page.positions.length !== page.messages.length) {
+    throw new Error("Reverse page positions are invalid")
+  }
+  const seen = new Set<string>()
+  let previous = -Infinity
+  for (const [index, message] of page.messages.entries()) {
+    const id = message.chatId
+    const position = page.positions[index]
+    if (!id || knownIds.has(id) || seen.has(id)) throw new Error("Reverse page has duplicate message IDs")
+    if (!Number.isSafeInteger(position) || position <= previous || position >= (window.nextBefore ?? Infinity)) {
+      throw new Error("Reverse page positions are noncontiguous")
+    }
+    seen.add(id)
+    previous = position
+  }
+  if (page.hasMore ? page.nextBefore === null || page.nextBefore >= page.before! : page.nextBefore !== null) {
+    throw new Error("Reverse page boundary is noncontiguous")
   }
 }
 
@@ -164,6 +198,13 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
       const known = new Set(current.message.map((message) => message.chatId));
+      // Use the common ID/total guard at the merge boundary; persisted SQL
+      // boundaries and positions are validated below by this backend contract.
+      validateOlderMessagePage(
+        { offset: 0, total: page.total, messages: page.messages },
+        { offset: page.messages.length, total: window.total, ids: [...known].filter((id): id is string => !!id) },
+      );
+      validateOlderReversePage(page, window, known);
       const olderPairs = page.messages.flatMap((message, index) =>
         !known.has(message.chatId) ? [{ message, position: page.positions?.[index] }] : [],
       );

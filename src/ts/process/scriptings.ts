@@ -4,7 +4,7 @@ import { hasher, type simpleCharacterArgument, risuChatParser } from "../parser/
 import { LuaEngine, LuaFactory } from "wasmoon";
 import { getCurrentCharacter, getCurrentChat, getDatabase, setDatabase, type Chat, type character, type triggerscript } from "../storage/database.svelte";
 import { get } from "svelte/store";
-import { ReloadChatPointer, ReloadGUIPointer, selectedCharID } from "../stores.svelte";
+import { bumpActiveChatReloadAt, ReloadGUIPointer, selectedCharID } from "../stores.svelte";
 import { alertSelect, alertError, alertInput, alertNormal, alertConfirm } from "../alert";
 import { HypaProcesser } from "./memory/hypamemory";
 import { generateAIImage } from "./stableDiff";
@@ -310,10 +310,7 @@ export async function runScripted(code:string, arg:{
                 if(!ScriptingSafeIds.has(id)){
                     return
                 }
-                ReloadChatPointer.update((v) => {
-                    v[index] = (v[index] ?? 0) + 1
-                    return v
-                })
+                bumpActiveChatReloadAt(index)
             })
 
             //Low Level Access

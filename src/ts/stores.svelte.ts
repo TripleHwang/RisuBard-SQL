@@ -8,6 +8,7 @@ import { resetScriptCache } from "./process/scripts";
 import type { hubType } from "./characterCards";
 import type { PluginSafetyErrors } from "./plugins/pluginSafety";
 import type { PersonaSelection } from "./personaScopes";
+import { bumpMessageReloadPointer, messageReloadKey, type MessageReloadPointers } from "./reloadChatPointer";
 
 function updateSize(){
     SizeStore.set({
@@ -93,7 +94,7 @@ export const InlayGallerySubmenuIndex = writable(0)
 // Distinct from the editor's own sub-tabs, which stay page-local.
 export const ModelPresetListTabIndex = writable(0)
 export const ReloadGUIPointer = writable(0)
-export const ReloadChatPointer = writable({} as Record<number, number>)
+export const ReloadChatPointer = writable({} as MessageReloadPointers)
 export const ScrollToMessageStore = $state({ value: -1 })
 export const OpenRealmStore = writable(false)
 export const RealmInitialOpenChar = writable<null | hubType>(null)
@@ -160,6 +161,17 @@ window.addEventListener("resize", updateSize);
 export const DBState = $state({
     db: {} as any as Database
 });
+
+/** Stable row invalidation. Numeric indexes become stale whenever a page prepends. */
+export function bumpReloadChatPointer(messageId: string | null | undefined): void {
+    ReloadChatPointer.update((pointers) => bumpMessageReloadPointer(pointers, messageId ?? null))
+}
+
+/** Compatibility entry point for script APIs that still receive an index. */
+export function bumpActiveChatReloadAt(index: number): void {
+    const current = DBState.db.characters[selIdState.selId]?.chats?.[DBState.db.characters[selIdState.selId]?.chatPage]
+    bumpReloadChatPointer(messageReloadKey(current?.message[index] ?? {}))
+}
 
 export const LoadingStatusState = $state({
     text: '',

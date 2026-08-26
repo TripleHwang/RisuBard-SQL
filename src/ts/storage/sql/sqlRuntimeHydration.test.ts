@@ -56,8 +56,8 @@ describe("Node SQL runtime hydration", () => {
 
   it("loads newest 40 then prepends an older reverse page without duplicates", async () => {
     const reverse = vi.fn()
-      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m1" }, { chatId: "m2" }], before: null, nextBefore: 2, total: 3, hasMore: true })
-      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }], before: 2, nextBefore: null, total: 3, hasMore: false });
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m1" }, { chatId: "m2" }], positions: [1, 2], nextPosition: 3, before: null, nextBefore: 2, total: 3, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }], positions: [0], nextPosition: 3, before: 2, nextBefore: null, total: 3, hasMore: false });
     activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
     const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
 
@@ -86,10 +86,10 @@ describe("Node SQL runtime hydration", () => {
     expect(Object.keys(character.chats[0].message[0])).not.toContain("_sqlPosition");
   });
 
-  it("keeps page message positions paired when an older page overlaps the window", async () => {
+  it("keeps page message positions paired when an older page precedes the window", async () => {
     const reverse = vi.fn()
-      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m1" }, { chatId: "m3" }], positions: [4, 12], nextPosition: 13, before: 13, nextBefore: 4, total: 4, hasMore: true })
-      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }, { chatId: "m2" }], positions: [0, 4, 8], nextPosition: 13, before: 4, nextBefore: 0, total: 4, hasMore: false });
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m2" }, { chatId: "m3" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 4, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }], positions: [0, 4], nextPosition: 13, before: 8, nextBefore: null, total: 4, hasMore: false });
     activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
     const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
 
@@ -97,8 +97,28 @@ describe("Node SQL runtime hydration", () => {
     await loadOlderChatMessages(character, 0, 3);
 
     expect(character.chats[0].message.map((message: any) => [message.chatId, message._sqlPosition])).toEqual([
-      ["m0", 0], ["m2", 8], ["m1", 4], ["m3", 12],
+      ["m0", 0], ["m1", 4], ["m2", 8], ["m3", 12],
     ]);
+  });
+
+  it.each([
+    ["changed total", { total: 5 }],
+    ["duplicate ID", { messages: [{ chatId: "m2" }], positions: [1] }],
+    ["noncontiguous boundary", { before: 7 }],
+  ])("rejects an older page with %s without changing the loaded window", async (_name, change) => {
+    const newest = { chatId: "chat-1", messages: [{ chatId: "m2" }, { chatId: "m3" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 4, hasMore: true };
+    const older = { chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }], positions: [0, 4], nextPosition: 13, before: 8, nextBefore: null, total: 4, hasMore: false, ...change };
+    const reverse = vi.fn().mockResolvedValueOnce(newest).mockResolvedValueOnce(older);
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
+
+    await ensureChatMessageWindow(character, 0, 2);
+    const previousMessages = character.chats[0].message;
+    const previousWindow = (character.chats[0] as any)._sqlWindow;
+    await expect(loadOlderChatMessages(character, 0, 2)).rejects.toThrow(/reverse page/i);
+
+    expect(character.chats[0].message).toBe(previousMessages);
+    expect((character.chats[0] as any)._sqlWindow).toBe(previousWindow);
   });
 
   it("deduplicates concurrent initial chat window hydration", async () => {
