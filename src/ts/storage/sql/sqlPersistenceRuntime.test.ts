@@ -66,6 +66,17 @@ describe('SQL persistence runtime', () => {
         expect(storage.commit).toHaveBeenCalledTimes(2)
     })
 
+    it('retries a rejected dirty flush once after the bounded backoff', async () => {
+        vi.useFakeTimers()
+        const storage = fakeStorageAtRevision(3)
+        ;(storage.commit as any).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ revision: 4 })
+        activateSqlPersistenceRuntime(storage, fixtureDatabaseWithMessages(1))
+        markSqlMessageDirty('chat-a', 'm-0')
+        await expect(flushSqlDirtyChanges()).rejects.toThrow('offline')
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(storage.commit).toHaveBeenCalledTimes(2)
+    })
+
     it('installs one metadata lifecycle runtime without doing a legacy save', () => {
         const add = vi.fn()
         const keepalive = vi.fn()
@@ -91,6 +102,7 @@ describe('SQL persistence runtime', () => {
         const storage = fakeStorageAtRevision(3)
         ;(storage.commit as any).mockRejectedValueOnce(new SqlRevisionConflictError(4)).mockResolvedValueOnce({ revision: 5 })
         ;(storage.loadChatMessages as any) = vi.fn(async () => [{ chatId: 'm-0', role: 'char', data: 'remote' }])
+        ;(storage.loadChat as any) = vi.fn(async () => null)
         activateSqlPersistenceRuntime(storage, database)
         markSqlMessageDirty('chat-a', 'm-local')
 

@@ -10,6 +10,7 @@ let activeDatabase: Database | null = null
 let compatibilityTimer: ReturnType<typeof setTimeout> | undefined
 let compatibilityAuditScheduled = false
 let compatibilityRecurrenceTimer: ReturnType<typeof setTimeout> | undefined
+let dirtyRetryTimer: ReturnType<typeof setTimeout> | undefined
 let metadataRuntimeStarted = false
 type CompatibilityBaseline = {
     roots: Map<string, string>; plugins: Map<string, string>; presets: Map<string, string>
@@ -19,7 +20,8 @@ type CompatibilityBaseline = {
 let compatibilityBaseline: CompatibilityBaseline | null = null
 
 const registry = new DirtyRegistry(async () => {
-    await commitDirtyScopes()
+    try { await commitDirtyScopes() }
+    catch (error) { scheduleDirtyRetry(); throw error }
 })
 
 /** The active database is deliberately a live reference: normal typing must not clone it. */
@@ -86,6 +88,14 @@ function scheduleDirtyFlush(immediate: boolean): void {
     else registry.schedule(350)
 }
 
+function scheduleDirtyRetry(): void {
+    if (dirtyRetryTimer !== undefined) return
+    dirtyRetryTimer = setTimeout(() => {
+        dirtyRetryTimer = undefined
+        void flushSqlDirtyChanges().catch(() => undefined)
+    }, 5_000)
+}
+
 /** Flush only scopes explicitly marked at mutation boundaries. Rejections retain the registry. */
 export async function flushSqlDirtyChanges(): Promise<void> {
     await registry.flushNow()
@@ -124,6 +134,9 @@ async function commitDirtyScopes(): Promise<void> {
  * can overwrite concurrent rows and is reserved for explicit recovery flows.
  */
 async function observeDirtyEntities(storage: ISqlStorage, dirty: DirtySnapshot): Promise<void> {
+    for (const key of dirty.rootKeys) await storage.loadSettingKey(key)
+    for (const key of dirty.pluginStorageKeys) await storage.loadPluginCustomStorageKey(key)
+    for (const id of dirty.presetIds) await storage.loadBotPreset(id)
     for (const characterId of dirty.characterIds) {
         await storage.loadCharacter(characterId)
     }
@@ -136,6 +149,7 @@ async function observeDirtyEntities(storage: ISqlStorage, dirty: DirtySnapshot):
         ...dirty.messageDeletes.map(({ chatId }) => chatId),
     ])
     for (const chatId of messageChatIds) {
+        await storage.loadChat(chatId, { messageLimit: 1 })
         await storage.loadChatMessages(chatId)
     }
 }
@@ -238,8 +252,10 @@ export function startSqlMetadataPersistence(
 export function resetSqlPersistenceRuntimeForTesting(): void {
     if (compatibilityTimer !== undefined) clearTimeout(compatibilityTimer)
     if (compatibilityRecurrenceTimer !== undefined) clearTimeout(compatibilityRecurrenceTimer)
+    if (dirtyRetryTimer !== undefined) clearTimeout(dirtyRetryTimer)
     compatibilityTimer = undefined
     compatibilityRecurrenceTimer = undefined
+    dirtyRetryTimer = undefined
     compatibilityAuditScheduled = false
     metadataRuntimeStarted = false
     compatibilityBaseline = null
