@@ -1,0 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { describe, expect, it } from 'vitest'
+
+describe('bounded SQL read routes', () => {
+    it('registers authenticated bounded SQL routes without replacing snapshot recovery', () => {
+        const source = readFileSync('server/node/server.cjs', 'utf8')
+
+        expect(source).toContain("app.get('/api/sql/bootstrap'")
+        expect(source).toContain("app.get('/api/sql/characters/:characterId'")
+        expect(source).toContain("app.get('/api/sql/chats/:chatId/messages'")
+        expect(source).toContain("app.get('/api/sql/snapshot'")
+        expect(source).toContain('relationalSql.loadChatMessages')
+    })
+})
