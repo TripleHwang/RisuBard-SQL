@@ -7,6 +7,7 @@
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
     import { estimateSpacerHeight, getChatWindow } from 'src/ts/chatWindow';
+    import { updateRuntimeResources } from 'src/ts/performance/performanceReport';
     
     const getCurrentChatRoomId = () => {
         const charId = get(selectedCharID);
@@ -214,6 +215,7 @@
                 mountInstances.delete(id);
             }
         }
+        updateRuntimeResources({ mountedMessages: mountInstances.size });
     };
 
     onDestroy(() => {
@@ -222,6 +224,7 @@
             unmount(inst);
         });
         mountInstances.clear();
+        updateRuntimeResources({ mountedMessages: 0 });
     })
 
     function checkIfAtBottom() {

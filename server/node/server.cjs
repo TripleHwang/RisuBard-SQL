@@ -5276,24 +5276,22 @@ function scanHexFilesInDir(dirPath) {
     return { hexFiles, count: hexFiles.length, totalSize, hasDatabase };
 }
 
-async function replaceWithLegacySaveEntries(entries) {
+async function applyLegacySaveReplacement(apply, imported) {
     await flushPendingDb();
     maybeCollectUnreferencedObjects();
     invalidateDbCache();
-    await kvReplaceAllAsync(entries);
+    await apply();
     relationalSql.reset();
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: entries.length };
+    return { imported };
+}
+
+async function replaceWithLegacySaveEntries(entries) {
+    return applyLegacySaveReplacement(async () => await kvReplaceAllAsync(entries), entries.length);
 }
 
 async function replaceWithLegacySaveFileEntries(entries) {
-    await flushPendingDb();
-    maybeCollectUnreferencedObjects();
-    invalidateDbCache();
-    await kvReplaceAllFromFilesAsync(entries);
-    relationalSql.reset();
-    writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: entries.length };
+    return applyLegacySaveReplacement(async () => await kvReplaceAllFromFilesAsync(entries), entries.length);
 }
 
 async function importHexFilesFromDir(dirPath) {
@@ -5416,11 +5414,20 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
             getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); },
             replaceAllFromFiles: replaceWithLegacySaveFileEntries,
             onProgress: progress => ndjson.progress({ type: 'progress', ...progress }), });
-        await ndjson.final({ type: 'done', result }); res.end();
+        await ndjson.final({ type: 'done', result });
+        // A client can issue its next import as soon as it has read the final
+        // NDJSON event. Release before ending that response; otherwise the
+        // finally block runs one event-loop turn too late and returns a 409.
+        importInProgress = false;
+        res.end();
     } catch (error) {
         const status = Number.isInteger(error?.status) ? error.status : 400;
         const event = { type: 'error', code: error?.code || 'SAVE_FOLDER_IMPORT_FAILED', status, message: error?.message || 'Import failed' };
-        if (res.headersSent) { try { await ndjson.final(event); } catch {} if (!res.writableEnded) res.end(); } else res.status(status).json({ error: event.message, code: event.code });
+        if (res.headersSent) {
+            try { await ndjson.final(event); } catch {}
+            importInProgress = false;
+            if (!res.writableEnded) res.end();
+        } else res.status(status).json({ error: event.message, code: event.code });
     } finally {
         if (heartbeat) clearInterval(heartbeat); ndjson.close(); req.removeListener('close', onRequestClose); res.removeListener('close', onResponseClose);
         if (staged?.ownedDir) await fs.rm(staged.ownedDir, { recursive: true, force: true }).catch(() => {});

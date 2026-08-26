@@ -95,6 +95,22 @@ function buildSaveFolderZip(entries: Record<string, Buffer>): Buffer {
     return Buffer.from(fflate.zipSync(zippable))
 }
 
+/** Wait for the streaming save-folder importer to finish, not merely its 200 headers. */
+async function uploadSaveFolder(client: { fetch: (path: string, init?: RequestInit) => Promise<Response> }, zip: Buffer) {
+    const response = await client.fetch('/api/migrate/save-folder/upload', {
+        method: 'POST',
+        // application/zip leaves the stream intact for the server-side importer.
+        headers: { 'content-type': 'application/zip' },
+        body: new Uint8Array(zip),
+    })
+    const body = await response.text()
+    expect(response.ok, body).toBe(true)
+    const events = body.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+    const terminal = events.at(-1)
+    expect(terminal).toMatchObject({ type: 'done' })
+    return terminal.result as { imported: number }
+}
+
 /** Make a complete character object matching what the server expects. */
 function buildCharacter(chaId: string, name: string, firstMessage: string) {
     return {
@@ -242,15 +258,8 @@ describe('boot-time remote-block migration', () => {
             'remotes/cha-B.local.bin': Buffer.from(JSON.stringify(charB), 'utf-8'),
         })
 
-        // Upload via save-folder/upload endpoint
-        const upRes = await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            // 'application/zip' (not octet-stream) so the global express.raw()
-            // middleware leaves the body unbuffered for the streaming handler.
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
-        expect(upRes.ok).toBe(true)
+        // Upload completes asynchronously through an NDJSON response.
+        await uploadSaveFolder(client, zip)
 
         // Trigger ensureChatStore via /api/read on database.bin — this is the
         // first decode after import and where the migration kicks in.
@@ -289,13 +298,7 @@ describe('boot-time remote-block migration', () => {
             }),
             'remotes/ghost.local.bin': Buffer.from(JSON.stringify(ghost), 'utf-8'),
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            // 'application/zip' (not octet-stream) so the global express.raw()
-            // middleware leaves the body unbuffered for the streaming handler.
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
+        await uploadSaveFolder(client, zip)
         await client.fetch('/api/read', {
             headers: {
                 'file-path': Buffer.from('database/database.bin', 'utf-8').toString('hex'),
@@ -330,13 +333,7 @@ describe('boot-time remote-block migration', () => {
             }),
             'remotes/ghost2.local.bin': Buffer.from(JSON.stringify(ghost), 'utf-8'),
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            // 'application/zip' (not octet-stream) so the global express.raw()
-            // middleware leaves the body unbuffered for the streaming handler.
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
+        await uploadSaveFolder(client, zip)
 
         // First read — triggers migration
         const r1 = await client.fetch('/api/read', {
@@ -372,13 +369,7 @@ describe('boot-time remote-block migration', () => {
             'remotes/cha-ok.local.bin': Buffer.from(JSON.stringify(ok), 'utf-8'),
             // Intentionally omit remotes/cha-broken.local.bin
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            // 'application/zip' (not octet-stream) so the global express.raw()
-            // middleware leaves the body unbuffered for the streaming handler.
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
+        await uploadSaveFolder(client, zip)
         await client.fetch('/api/read', {
             headers: { 'file-path': Buffer.from('database/database.bin', 'utf-8').toString('hex') },
         })
@@ -431,11 +422,7 @@ describe('snapshot restore with legacy REMOTE-block snapshots', () => {
             'remotes/snap-char.local.bin': Buffer.from(JSON.stringify(character), 'utf-8'),
             'migration/disable-remote-saving': Buffer.from('done', 'utf-8'),
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
+        await uploadSaveFolder(client, zip)
 
         // First /api/read populates dbCache + initChatStore for the legacy live DB.
         // Migration sees marker=done & legacy buffer → no-op.
@@ -498,11 +485,7 @@ describe('snapshot restore with legacy REMOTE-block snapshots', () => {
             [snapshotKey]: remoteSnap,
             'remotes/survivor.local.bin': Buffer.from(JSON.stringify(character), 'utf-8'),
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
+        await uploadSaveFolder(client, zip)
 
         // First read: triggers boot-time migration. After the fix, remotes/
         // survive. Before the fix, this is where they get wiped.
@@ -565,11 +548,7 @@ describe('snapshot restore with legacy REMOTE-block snapshots', () => {
             [snapshotKey]: dbA,
             'migration/disable-remote-saving': Buffer.from('done', 'utf-8'),
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zip),
-        })
+        await uploadSaveFolder(client, zip)
         await client.fetch('/api/read', {
             headers: { 'file-path': Buffer.from('database/database.bin', 'utf-8').toString('hex') },
         })
@@ -614,11 +593,7 @@ describe('save-folder import clears stale remotes/', () => {
             'remotes/shared-id.local.bin': Buffer.from(JSON.stringify(userA), 'utf-8'),
             'migration/disable-remote-saving': Buffer.from('done', 'utf-8'),
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zipA),
-        })
+        await uploadSaveFolder(client, zipA)
         await client.fetch('/api/read', {
             headers: { 'file-path': Buffer.from('database/database.bin', 'utf-8').toString('hex') },
         })
@@ -637,11 +612,7 @@ describe('save-folder import clears stale remotes/', () => {
             // No remotes/shared-id.local.bin — the contamination opportunity.
             // Also no marker, so the migration runs on the new DB.
         })
-        await client.fetch('/api/migrate/save-folder/upload', {
-            method: 'POST',
-            headers: { 'content-type': 'application/zip' },
-            body: new Uint8Array(zipB),
-        })
+        await uploadSaveFolder(client, zipB)
         await client.fetch('/api/read', {
             headers: { 'file-path': Buffer.from('database/database.bin', 'utf-8').toString('hex') },
         })

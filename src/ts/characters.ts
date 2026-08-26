@@ -20,6 +20,7 @@ import { PngChunk } from "./pngChunk";
 import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
 import { withSaverScope } from './performance/saverMode'
 import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
+import { runtimeMetrics } from './performance/runtimeMetrics'
 
 /** Assign identities before a chat becomes visible, then mark its parent before rows. */
 function markImportedChat(characterId: string, chat: Chat): void {
@@ -827,6 +828,8 @@ export async function changeChar(index: number, arg:{
     reseter?:()=>any,
     clearNewBadge?:boolean,
 } = {}) {
+    const metric = runtimeMetrics.start('chat-selection')
+    try {
     const reseter = arg.reseter ?? (() => {})
     if(get(doingChat)){
       return
@@ -898,5 +901,8 @@ export async function changeChar(index: number, arg:{
             void touchHydratedChat(selectedCharacter.chaId, selectedCharacter.chats, selectedCharacter.chatPage)
             loadTogglesFromChat(chat)
         }
+    }
+    } finally {
+        runtimeMetrics.end(metric)
     }
 }

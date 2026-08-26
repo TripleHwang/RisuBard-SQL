@@ -12,6 +12,8 @@ export type StartupMetricMark =
     | 'render-batch:start'
     | 'render-batch:end'
 
+import { recordRuntimeDuration, type DurationMetric } from './performanceReport'
+
 const prefix = (name: string) => `risu:${name}`
 
 function bestEffort(callback: () => void): void {
@@ -39,6 +41,17 @@ export function markPerformance(name: StartupMetricMark): void {
     const markName = prefix(name)
     bestEffort(() => performance.clearMarks?.(markName))
     bestEffort(() => performance.mark(markName))
+    if (name === 'first-interactive') {
+        bestEffort(() => recordRuntimeDuration('first-interactive', performance.now()))
+    }
+}
+
+function reportMetric(name: string): DurationMetric | undefined {
+    const metrics: readonly DurationMetric[] = [
+        'bootstrap-fetch', 'bootstrap-json', 'character-hydration',
+        'message-page-fetch', 'sql-commit', 'render-batch',
+    ]
+    return metrics.find((metric) => metric === name)
 }
 
 export function measurePerformance(
@@ -57,6 +70,8 @@ export function measurePerformance(
             : performance.measure(measureName, startName, endName)
 
         bestEffort(() => performance.clearMeasures?.(measureName))
+        const metric = reportMetric(name)
+        if (metric) bestEffort(() => recordRuntimeDuration(metric, measure.duration))
         return measure
     }
     catch {
@@ -72,7 +87,10 @@ export function observeLongTasks(callback: (entry: PerformanceEntry) => void): {
 
         const observer = new globalThis.PerformanceObserver((entries) => {
             for (const entry of entries.getEntries()) {
-                if (entry.duration > 100) bestEffort(() => callback(entry))
+                if (entry.duration > 100) {
+                    bestEffort(() => recordRuntimeDuration('long-task', entry.duration))
+                    bestEffort(() => callback(entry))
+                }
             }
         })
         observer.observe({ type: 'longtask', buffered: true })

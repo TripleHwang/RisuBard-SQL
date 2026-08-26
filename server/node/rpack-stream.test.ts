@@ -3,10 +3,11 @@ import { constants } from 'node:fs'
 import { mkdtemp, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 const streamModule = './rpack-stream.cjs'
 const mapModule = './rpack-map.cjs'
-const clientMapPath = '../../src/ts/rpack/rpack_map.bin'
+const clientMapPath = fileURLToPath(new URL('../../src/ts/rpack/rpack_map.bin', import.meta.url))
 let roots: string[] = []
 
 async function root() { const value = await mkdtemp(join(tmpdir(), 'rpack-stream-test-')); roots.push(value); return value }

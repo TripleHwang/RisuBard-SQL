@@ -4,9 +4,11 @@ import {
     measurePerformance,
     observeLongTasks,
 } from './startupMetrics'
+import { resetRuntimePerformanceReportForTesting, runtimePerformanceReport } from './performanceReport'
 
 afterEach(() => {
     vi.unstubAllGlobals()
+    resetRuntimePerformanceReportForTesting()
 })
 
 describe('startup metrics', () => {
@@ -51,6 +53,12 @@ describe('startup metrics', () => {
         expect(clearMarks).toHaveBeenCalledTimes(2)
         expect(clearMarks).toHaveBeenCalledWith('risu:bootstrap-fetch:start')
         expect(clearMarks.mock.invocationCallOrder[1]).toBeLessThan(mark.mock.invocationCallOrder[1])
+    })
+
+    test('bridges first interactive and observed long tasks into the shared report', () => {
+        vi.stubGlobal('performance', { mark: vi.fn(), clearMarks: vi.fn(), now: () => 42 })
+        markPerformance('first-interactive')
+        expect(runtimePerformanceReport.export().durations['first-interactive']).toEqual([42])
     })
 
     test('clears a successful measurement without consuming its marks', () => {

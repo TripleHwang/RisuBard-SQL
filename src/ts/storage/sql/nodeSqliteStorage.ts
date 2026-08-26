@@ -13,7 +13,7 @@ import type {
   SqlTokenUsage,
   StoredBotPreset,
 } from "./ISqlStorage";
-import { markPerformance } from "../../performance/startupMetrics";
+import { markPerformance, measurePerformance } from "../../performance/startupMetrics";
 import { runtimeMetrics } from "../../performance/runtimeMetrics";
 import type {
   character,
@@ -120,10 +120,12 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       response = await this.request("/api/sql/bootstrap");
     } finally {
       markPerformance("bootstrap-fetch:end");
+      measurePerformance("bootstrap-fetch", "bootstrap-fetch:start", "bootstrap-fetch:end");
     }
     if (!response.ok) throw new SqlHttpError(`SQL bootstrap failed (${response.status})`, response.status);
     const payload = this.validateBootstrap(await response.json());
     markPerformance("bootstrap-json:end");
+    measurePerformance("bootstrap-json", "bootstrap-fetch:end", "bootstrap-json:end");
     this.revision = payload.revision;
     this.bootstrapPayload = payload;
     this.enabled = true;

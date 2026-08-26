@@ -8,6 +8,7 @@ import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRunt
 import { isChatGenerating } from "../process/generationState"
 import { selectedCharID } from "../stores.svelte"
 import { get } from "svelte/store"
+import { updateRuntimeResources } from '../performance/performanceReport'
 
 // ── Stub ↔ Placeholder conversion ───────────────────────────────────────────
 
@@ -309,6 +310,12 @@ const runtimeChatHydrationCache = new ChatHydrationCache({
     onEvict: evictRuntimeChat,
 })
 
+/** Bounded counters only: no IDs or content leave the runtime cache. */
+function recordHydrationResources(): void {
+    const keys = runtimeChatHydrationCache.ids()
+    updateRuntimeResources({ hydratedChats: keys.length })
+}
+
 function getActiveRuntimeChatKey(): string | undefined {
     const database = getDatabase() as typeof getDatabase extends () => infer T ? T & { selectedChatId?: string | null } : never
     const character = database.characters?.[get(selectedCharID)] as character | undefined
@@ -319,6 +326,7 @@ function getActiveRuntimeChatKey(): string | undefined {
 /** Public safe eviction entrypoint for saver-mode/resource reclamation. */
 export async function evictHydratedChats(): Promise<void> {
     await runtimeChatHydrationCache.evictExcept({ getActiveKey: getActiveRuntimeChatKey, isProtected: hasLiveChatWork })
+    recordHydrationResources()
 }
 
 export async function touchHydratedChat(chaId: string, chats: Chat[], index: number): Promise<void> {
@@ -334,6 +342,8 @@ export async function touchHydratedChat(chaId: string, chats: Chat[], index: num
         })
     } catch (error) {
         console.warn(`[chatStorage] unable to evict hydrated chat after ${chatKey(chaId, chatId)}`, error)
+    } finally {
+        recordHydrationResources()
     }
 }
 
@@ -355,7 +365,10 @@ function touchSelectedRuntimeChat(): void {
 
 // Covers direct character-card and hotkey selections, which update the store
 // without necessarily routing through changeChar.
-selectedCharID.subscribe(() => touchSelectedRuntimeChat())
+// Some isolated storage consumers intentionally provide no Svelte store. The
+// explicit hydration/touch paths remain authoritative; this convenience
+// subscription must never make importing the storage module a requirement.
+selectedCharID?.subscribe?.(() => touchSelectedRuntimeChat())
 
 /**
  * Apply the newest bounded SQL message page to one stable chat slot.  The

@@ -53,4 +53,17 @@ describe('runtime metrics', () => {
         const metrics = createRuntimeMetrics({ mark: () => { throw new Error('unsupported') }, measure: () => { throw new Error('unsupported') } })
         expect(() => { metrics.end(metrics.start('stream-render')) }).not.toThrow()
     })
+
+    it('bridges existing runtime spans to content-free report metric names', () => {
+        const reported: Array<[string, number]> = []
+        const metrics = createRuntimeMetrics({ mark: () => undefined, measure: () => undefined }, (name, duration) => {
+            reported.push([name, duration])
+        })
+
+        metrics.end(metrics.start('stream-render'))
+        metrics.end(metrics.start('chat-selection'))
+
+        expect(reported.map(([name]) => name)).toEqual(['render-batch', 'chat-selection'])
+        expect(reported.every(([, duration]) => Number.isFinite(duration) && duration >= 0)).toBe(true)
+    })
 })

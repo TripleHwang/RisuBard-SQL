@@ -4,6 +4,9 @@ export type RuntimeMetricName =
     | 'message-page'
     | 'dirty-commit'
     | 'stream-render'
+    | 'chat-selection'
+
+import { recordRuntimeDuration, type DurationMetric } from './performanceReport'
 
 export type RuntimePerformanceApi = {
     mark(name: string): unknown
@@ -15,6 +18,7 @@ export type RuntimeMetricHandle = Readonly<{
     name: RuntimeMetricName
     invocation: number
     startMark: string
+    startedAt: number
 }>
 
 function currentPerformance(): RuntimePerformanceApi | undefined {
@@ -30,7 +34,18 @@ function currentPerformance(): RuntimePerformanceApi | undefined {
  * is strictly best-effort: unsupported SSR/WebKit APIs can never affect data
  * loading, hydration, or persistence.
  */
-export function createRuntimeMetrics(api: RuntimePerformanceApi | undefined = currentPerformance()) {
+const reportMetric: Partial<Record<RuntimeMetricName, DurationMetric>> = {
+    'character-hydration': 'character-hydration',
+    'message-page': 'message-page-fetch',
+    'dirty-commit': 'sql-commit',
+    'stream-render': 'render-batch',
+    'chat-selection': 'chat-selection',
+}
+
+export function createRuntimeMetrics(
+    api: RuntimePerformanceApi | undefined = currentPerformance(),
+    onDuration: (name: DurationMetric, duration: number) => void = recordRuntimeDuration,
+) {
     let invocation = 0
     const mark = (name: string) => {
         try { api?.mark(name) } catch { /* optional browser API */ }
@@ -42,12 +57,16 @@ export function createRuntimeMetrics(api: RuntimePerformanceApi | undefined = cu
         try { api?.clearMarks?.(name) } catch { /* optional browser API */ }
     }
     const metric = (name: RuntimeMetricName) => `risu:${name}`
+    const now = () => {
+        try { return Number.isFinite(globalThis.performance?.now?.()) ? globalThis.performance.now() : Date.now() }
+        catch { return Date.now() }
+    }
     return {
         start(name: RuntimeMetricName): RuntimeMetricHandle {
             const id = ++invocation
             const startMark = `${metric(name)}:start:${id}`
             mark(startMark)
-            return { name, invocation: id, startMark }
+            return { name, invocation: id, startMark, startedAt: now() }
         },
         end(handle: RuntimeMetricHandle): void {
             const base = metric(handle.name)
@@ -56,6 +75,10 @@ export function createRuntimeMetrics(api: RuntimePerformanceApi | undefined = cu
             measure(base, handle.startMark, endMark)
             clearMark(handle.startMark)
             clearMark(endMark)
+            const reportName = reportMetric[handle.name]
+            if (reportName) {
+                try { onDuration(reportName, Math.max(0, now() - handle.startedAt)) } catch { /* reporting is optional */ }
+            }
         },
     }
 }

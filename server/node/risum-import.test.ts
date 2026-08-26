@@ -3,9 +3,10 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, open, readFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 const importer = './risum-import.cjs'
-const clientMapPath = '../../src/ts/rpack/rpack_map.bin'
+const clientMapPath = fileURLToPath(new URL('../../src/ts/rpack/rpack_map.bin', import.meta.url))
 const roots: string[] = []
 
 async function root() { const dir = await mkdtemp(join(tmpdir(), 'risum-import-test-')); roots.push(dir); return dir }
