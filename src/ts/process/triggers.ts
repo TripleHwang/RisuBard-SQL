@@ -16,7 +16,7 @@ import { generateAIImage } from "./stableDiff";
 import { writeInlayImage } from "./files/inlays";
 import { runScripted } from "./scriptings";
 import { calcString } from "./infunctions";
-import { markSqlMessageDirty, markSqlMessageManifestDirty } from '../storage/sql/sqlPersistenceRuntime';
+import { markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from '../storage/sql/sqlPersistenceRuntime';
 import { v4 } from 'uuid';
 
 
@@ -1402,7 +1402,11 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'cutchat':{
                     const start = Number(risuChatParser(effect.start,{chara:char}))
                     const end = Number(risuChatParser(effect.end,{chara:char}))
-                    chat.message = chat.message.slice(start,end)
+                    const before = chat.message
+                    const kept = before.slice(start,end)
+                    const keptIds = new Set(kept.map(message => message.chatId).filter(Boolean))
+                    for (const message of before) if (message.chatId && !keptIds.has(message.chatId)) markSqlMessageDeleted(chat.id!, message.chatId)
+                    chat.message = kept
                     if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id!)
                     break
                 }
@@ -1411,6 +1415,8 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     const value = risuChatParser(effect.value,{chara:char})
                     if(chat.message[index]){
                         chat.message[index].data = value
+                        chat.message[index].chatId ||= v4()
+                        markSqlMessageDirty(chat.id!, chat.message[index].chatId!)
                     }
                     break
                 }
@@ -1819,7 +1825,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                         end = chat.message.length
                     }
                     
-                    chat.message = chat.message.slice(start,end)
+                    const before = chat.message
+                    const kept = before.slice(start,end)
+                    const keptIds = new Set(kept.map(message => message.chatId).filter(Boolean))
+                    for (const message of before) if (message.chatId && !keptIds.has(message.chatId)) markSqlMessageDeleted(chat.id!, message.chatId)
+                    chat.message = kept
+                    if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id!)
                     break
                 }
                 case 'v2ModifyChat':{
@@ -1827,6 +1838,8 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     let value = effect.valueType === 'value' ? risuChatParser(effect.value,{chara:char}) : getVar(risuChatParser(effect.value,{chara:char}))
                     if(chat.message[index]){
                         chat.message[index].data = value
+                        chat.message[index].chatId ||= v4()
+                        markSqlMessageDirty(chat.id!, chat.message[index].chatId!)
                     }
                     break
                 }

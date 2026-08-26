@@ -872,7 +872,11 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
     function runCurrentChatFunction(chat:Chat){
         chat.message = chat.message.map((v) => {
-            v.data = risuChatParser(v.data, {chara: currentChar, runVar: true})
+            const data = risuChatParser(v.data, {chara: currentChar, runVar: true})
+            const hadId = Boolean(v.chatId)
+            v.chatId ||= v4()
+            if (data !== v.data || !hadId) markSqlMessageDirty(chat.id!, v.chatId!)
+            v.data = data
             return v
         })
         return chat
@@ -2756,6 +2760,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         if(inlayr.promise){
             const t = await inlayr.promise
             currentChat.message[msgIndex].data = t
+            markSqlMessageDirty(currentChat.id!, currentChat.message[msgIndex].chatId!, true)
             DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
         }
         if(DBState.db.ttsAutoSpeech){

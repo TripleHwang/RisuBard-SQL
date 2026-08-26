@@ -181,6 +181,8 @@ export async function runScripted(code:string, arg:{
                 const message = ScriptingEngineState.chat.message?.at(index)
                 if(message){
                     message.data = value ?? ''
+                    message.chatId ||= v4()
+                    markSqlMessageDirty(ScriptingEngineState.chat.id!, message.chatId!)
                 }
             })
             declareAPI('setChatRole', (id:string, index:number, value:string) => {
@@ -190,14 +192,20 @@ export async function runScripted(code:string, arg:{
                 const message = ScriptingEngineState.chat.message?.at(index)
                 if(message){
                     message.role = value === 'user' ? 'user' : 'char'
+                    message.chatId ||= v4()
+                    markSqlMessageDirty(ScriptingEngineState.chat.id!, message.chatId!)
                 }
             })
             declareAPI('cutChat', (id:string, start:number, end:number) => {
                 if(!ScriptingSafeIds.has(id)){
                     return
                 }
-                ScriptingEngineState.chat.message = ScriptingEngineState.chat.message.slice(start,end)
-                markSqlMessageManifestDirty(ScriptingEngineState.chat.id!)
+                const before = ScriptingEngineState.chat.message
+                const kept = before.slice(start,end)
+                const keptIds = new Set(kept.map(message => message.chatId).filter(Boolean))
+                for (const message of before) if (message.chatId && !keptIds.has(message.chatId)) markSqlMessageDeleted(ScriptingEngineState.chat.id!, message.chatId)
+                ScriptingEngineState.chat.message = kept
+                if ((ScriptingEngineState.chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(ScriptingEngineState.chat.id!)
             })
             declareAPI('removeChat', (id:string, index:number) => {
                 if(!ScriptingSafeIds.has(id)){
@@ -272,12 +280,19 @@ export async function runScripted(code:string, arg:{
                 }
                 const realValue = JSON.parse(value)
 
-                ScriptingEngineState.chat.message = realValue.map((v) => {
+                if ((ScriptingEngineState.chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false) throw new Error('Cannot replace partial chat history; load the full history first')
+                const before = ScriptingEngineState.chat.message
+                const next = realValue.map((v) => {
                     return {
                         role: v.role,
-                        data: v.data
+                        data: v.data,
+                        chatId: v4(),
                     }
                 })
+                for (const message of before) if (message.chatId) markSqlMessageDeleted(ScriptingEngineState.chat.id!, message.chatId)
+                ScriptingEngineState.chat.message = next
+                for (const message of next) markSqlMessageDirty(ScriptingEngineState.chat.id!, message.chatId!, true)
+                markSqlMessageManifestDirty(ScriptingEngineState.chat.id!)
             })
 
             declareAPI('logMain', (value:string) => {

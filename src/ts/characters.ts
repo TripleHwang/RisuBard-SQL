@@ -29,6 +29,14 @@ function markImportedChat(characterId: string, chat: Chat): void {
     if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id)
 }
 
+/** An unshift changes every sibling's SQL position, not only the imported rows. */
+function markChatOrder(characterId: string, chats: Chat[]): void {
+    for (const chat of chats) {
+        chat.id ||= uuidv4()
+        markSqlChatDirty(characterId, chat.id)
+    }
+}
+
 export function createNewCharacter() {
     let db = getDatabase()
     const character = createBlankChar()
@@ -412,6 +420,7 @@ export async function importChat(){
 
             db.characters[selectedID].chats.unshift(newChat)
             markImportedChat(db.characters[selectedID].chaId, newChat)
+            markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
             changeChatTo(0)
             notifySuccess(language.successImport)
         }
@@ -445,6 +454,7 @@ export async function importChat(){
                 const imported = chats.map(c => normalizeChat(c))
                 db.characters[selectedID].chats.unshift(...imported)
                 imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
+                markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                 notifySuccess(language.successImport)
                 return
             }
@@ -463,6 +473,7 @@ export async function importChat(){
                     })
                     db.characters[selectedID].chats.unshift(...imported)
                     imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
+                    markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                     notifySuccess(language.successImport)
                     return
                 } else {
@@ -478,6 +489,7 @@ export async function importChat(){
                     const imported = normalizeChat(das)
                     db.characters[selectedID].chats.unshift(imported)
                     markImportedChat(db.characters[selectedID].chaId, imported)
+                    markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                     notifySuccess(language.successImport)
                     return
                 }
@@ -499,6 +511,7 @@ export async function importChat(){
                 const imported = normalizeChat(json)
                 db.characters[selectedID].chats.unshift(imported)
                 markImportedChat(db.characters[selectedID].chaId, imported)
+                markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                 notifySuccess(language.successImport)
             }
             else{
@@ -756,6 +769,8 @@ export async function removeChar(identifier:string|number,name:string, type:'nor
         // Mark before removal: the dirty builder emits an explicit row delete.
         markSqlCharacterDirty(chars[index].chaId)
         chars.splice(index, 1)
+        // Every trailing character receives a new SQL position after removal.
+        for (const character of chars.slice(index)) markSqlCharacterDirty(character.chaId)
     }
     checkCharOrder()
     db.characters = chars

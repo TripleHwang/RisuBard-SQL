@@ -15,12 +15,12 @@
     import { onDestroy, onMount } from "svelte"
     import { type Unsubscriber } from "svelte/store"
     import { v4 as uuidv4, v4 } from 'uuid'
-    import { markSqlMessageDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime'
+    import { markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime'
     import { language } from "../../lang"
     import { alertClear, alertConfirm, alertConfirmMulti, alertInput, alertRequestData, alertWait, notifyError, notifyInfo, notifySuccess, type AlertAction } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
     import { getLLMCache, setLLMCache } from "../../ts/translator/translator"
-    import { getCurrentCharacter, getCurrentChat, setCurrentChat, type MessageGenerationInfo, type StreamingDisplayOptimizationMode } from "../../ts/storage/database.svelte"
+    import { getCurrentCharacter, getCurrentChat, setCurrentChat, type Chat, type MessageGenerationInfo, type StreamingDisplayOptimizationMode } from "../../ts/storage/database.svelte"
     import { selectedCharID } from "../../ts/stores.svelte"
     import { HideIconStore, ReloadGUIPointer, selIdState } from "../../ts/stores.svelte"
     import AutoresizeArea from "../UI/GUI/TextAreaResizable.svelte"
@@ -173,6 +173,8 @@
             notifySuccess(language.messageRemoved)
         }
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message = msg
+        for (const removed of removedMessages) if (removed?.chatId) markSqlMessageDeleted(currentChat.id!, removed.chatId)
+        if ((currentChat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(currentChat.id!)
     }
 
     async function edit(){
@@ -181,6 +183,8 @@
         if (msg.swipes && msg.swipeId !== undefined) {
             msg.swipes[msg.swipeId] = message
         }
+        msg.chatId ||= uuidv4()
+        markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, msg.chatId!, true)
     }
 
     function handlePartialEditSave(e: CustomEvent<{ newData: string }>) {
@@ -191,6 +195,8 @@
             if (msg.swipes && msg.swipeId !== undefined) {
                 msg.swipes[msg.swipeId] = e.detail.newData
             }
+            msg.chatId ||= uuidv4()
+            markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, msg.chatId!, true)
             displaya(e.detail.newData)
         }
     }
@@ -406,6 +412,7 @@
         }
 
         chat.bookmarks = [...chat.bookmarks];
+        markSqlMessageDirty(chat.id!, messageId, true)
     }
 </script>
 
@@ -1171,6 +1178,8 @@
         await sleep(1)
         const currentMessage = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].disabled = !currentMessage.disabled
+        currentMessage.chatId ||= uuidv4()
+        markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, currentMessage.chatId!, true)
     }}>
         <PowerOff size={20}/>
         {#if showNames}
@@ -1182,6 +1191,8 @@
         await sleep(1)
         const currentMessage = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].disabled = currentMessage.disabled === 'allBefore' ? false : 'allBefore'
+        currentMessage.chatId ||= uuidv4()
+        markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, currentMessage.chatId!, true)
     }}>
         <Scissors size={20}/>
         {#if showNames}
