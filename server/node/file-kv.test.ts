@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 const { createFileKv } = require('./file-kv.cjs')
+const { atomicWriteJson } = require('./file-store.cjs')
 
 const roots: string[] = []
 function root() {
@@ -74,6 +75,64 @@ describe('file-native KV compatibility projection', () => {
         const reopened = createFileKv({ dataRoot })
         expect(reopened.kvList('assets/')).toEqual(['assets/existing'])
         expect(reopened.kvGet('assets/existing')?.toString()).toBe('existing')
+    })
+
+    it('serializes overlapping staged-file manifest commits without losing either batch', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const firstPath = path.join(stagingRoot, 'first.bin')
+        const secondPath = path.join(stagingRoot, 'second.bin')
+        fs.writeFileSync(firstPath, Buffer.from('first'))
+        fs.writeFileSync(secondPath, Buffer.from('second'))
+        let releaseFirstWriter!: () => void
+        let firstWriterStarted!: () => void
+        const firstWriterStartedPromise = new Promise<void>(resolve => { firstWriterStarted = resolve })
+        const firstWriterRelease = new Promise<void>(resolve => { releaseFirstWriter = resolve })
+        let writes = 0
+        const store = createFileKv({
+            dataRoot,
+            manifestWriter: async next => {
+                if (writes++ === 0) {
+                    firstWriterStarted()
+                    await firstWriterRelease
+                }
+                atomicWriteJson(dataRoot, 'kv/manifest.json', next)
+            },
+        })
+
+        const first = store.kvSetManyFromFilesAsync([{ key: 'assets/first', sourcePath: firstPath }])
+        await firstWriterStartedPromise
+        const second = store.kvSetManyFromFilesAsync([{ key: 'assets/second', sourcePath: secondPath }])
+        await new Promise(resolve => setTimeout(resolve, 25))
+        releaseFirstWriter()
+        await Promise.all([first, second])
+
+        expect(store.kvList('assets/')).toEqual(['assets/first', 'assets/second'])
+        expect(createFileKv({ dataRoot }).kvList('assets/')).toEqual(['assets/first', 'assets/second'])
+    })
+
+    it('continues queued staged-file commits after a manifest write failure', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const failedPath = path.join(stagingRoot, 'failed.bin')
+        const laterPath = path.join(stagingRoot, 'later.bin')
+        fs.writeFileSync(failedPath, Buffer.from('failed'))
+        fs.writeFileSync(laterPath, Buffer.from('later'))
+        let writes = 0
+        const store = createFileKv({
+            dataRoot,
+            manifestWriter: next => {
+                if (writes++ === 0) throw new Error('manifest write failed')
+                atomicWriteJson(dataRoot, 'kv/manifest.json', next)
+            },
+        })
+
+        await expect(store.kvSetManyFromFilesAsync([{ key: 'assets/failed', sourcePath: failedPath }]))
+            .rejects.toThrow('manifest write failed')
+        await store.kvSetManyFromFilesAsync([{ key: 'assets/later', sourcePath: laterPath }])
+
+        expect(store.kvList('assets/')).toEqual(['assets/later'])
+        expect(createFileKv({ dataRoot }).kvList('assets/')).toEqual(['assets/later'])
     })
 
     it('publishes replacement values from staged files without loading them into entry buffers', async () => {

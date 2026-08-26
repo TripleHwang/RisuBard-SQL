@@ -149,10 +149,17 @@ function createFileKv(options = {}) {
     const manifestWriter = options.manifestWriter ?? (next => atomicWriteJson(dataRoot, MANIFEST_PATH, next, {
         validate: value => value?.schemaVersion === 1 && typeof value?.entries === 'object',
     }));
+    let manifestCommitTail = Promise.resolve();
 
     async function commitManifest(next) {
         await manifestWriter(next);
         manifest = next;
+    }
+
+    function queueManifestCommit(commit) {
+        const queued = manifestCommitTail.then(commit);
+        manifestCommitTail = queued.catch(() => {});
+        return queued;
     }
 
     function saveManifest() {
@@ -208,9 +215,11 @@ function createFileKv(options = {}) {
     async function kvSetManyFromFilesAsync(entries) {
         const prepared = await prepareFileEntriesAsync(entries);
         if (!entries.length) return;
-        const next = { schemaVersion: 1, updatedAt: Date.now(), entries: { ...manifest.entries } };
-        for (const [key, entry] of prepared) next.entries[key] = entry;
-        await commitManifest(next);
+        await queueManifestCommit(async () => {
+            const next = { schemaVersion: 1, updatedAt: Date.now(), entries: { ...manifest.entries } };
+            for (const [key, entry] of prepared) next.entries[key] = entry;
+            await commitManifest(next);
+        });
     }
 
     function kvSetMany(entries) {
