@@ -61,7 +61,7 @@
 
 </script>
 
-<div class="absolute w-full h-full z-40 bg-black/50 flex justify-center items-center">
+<div class="absolute w-full h-full z-40 bg-overlay/50 flex justify-center items-center">
     <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl w-124 max-h-full overflow-y-auto">
         <div class="flex items-center text-textcolor mb-4">
             <h2 class="mt-0 mb-0">{language.themePresets}</h2>
@@ -75,9 +75,9 @@
             <div class="w-full transition-all duration-200"
                 class:h-0.5={!isDragging || dragOverIndex !== i}
                 class:h-1={isDragging && dragOverIndex === i}
-                class:bg-blue-500={isDragging && dragOverIndex === i}
+                class:bg-info={isDragging && dragOverIndex === i}
                 class:shadow-lg={isDragging && dragOverIndex === i}
-                class:hover:bg-gray-600={!isDragging}
+                class:hover:bg-darkbutton={!isDragging}
                 role="listitem"
                 ondragover={(e) => {
                     e.preventDefault()
@@ -168,7 +168,7 @@
                     }}>
                         <Share2Icon size={18} />
                     </div>
-                    <div class="text-textcolor2 hover:text-red-400 cursor-pointer" role="button" tabindex="0" onclick={async (e) => {
+                    <div class="text-textcolor2 hover:text-danger/80 cursor-pointer" role="button" tabindex="0" onclick={async (e) => {
                         e.stopPropagation()
                         if(DBState.db.themePresets.length === 1){
                             notifyError(language.errors.onlyOneChat)
@@ -198,9 +198,9 @@
         <div class="w-full transition-all duration-200"
             class:h-0.5={!isDragging || dragOverIndex !== DBState.db.themePresets.length}
             class:h-1={isDragging && dragOverIndex === DBState.db.themePresets.length}
-            class:bg-blue-500={isDragging && dragOverIndex === DBState.db.themePresets.length}
+            class:bg-info={isDragging && dragOverIndex === DBState.db.themePresets.length}
             class:shadow-lg={isDragging && dragOverIndex === DBState.db.themePresets.length}
-            class:hover:bg-gray-600={!isDragging}
+            class:hover:bg-darkbutton={!isDragging}
             role="listitem"
             ondragover={(e) => {
                 e.preventDefault()

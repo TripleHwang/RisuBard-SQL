@@ -351,7 +351,7 @@
 </script>
 
 <div
-  class="flex flex-col p-2 border rounded-lg sm:p-4 border-zinc-700 bg-zinc-800/50 {isSelected() ? 'ring-2 ring-blue-500' : ''}"
+  class="flex flex-col p-2 border rounded-lg sm:p-4 border-darkborderc bg-selected/50 {isSelected() ? 'ring-2 ring-info' : ''}"
 >
   <!-- Original Summary Header -->
   <div class="flex items-center justify-between">
@@ -361,13 +361,13 @@
       {#if bulkEditState?.isEnabled}
         <input
           type="checkbox"
-          class="w-4 h-4 text-blue-600 bg-zinc-900 border-zinc-600 rounded-sm focus:ring-blue-500"
+          class="w-4 h-4 text-info bg-darkbg border-darkborderc rounded-sm focus:ring-info"
           checked={isSelected()}
           onchange={() => onToggleSummarySelection?.(summaryIndex)}
         />
       {/if}
 
-      <span class="text-sm text-zinc-400"
+      <span class="text-sm text-textcolor2"
         >{language.hypaV3Modal.summaryNumberLabel.replace(
           "{0}",
           (summaryIndex + 1).toString()
@@ -375,7 +375,7 @@
       >
 
       <!-- Category Tag -->
-      <span class="px-2 py-1 text-xs rounded-full bg-zinc-700 text-zinc-300">
+      <span class="px-2 py-1 text-xs rounded-full bg-darkbutton text-textcolor">
         <TagIcon class="w-3 h-3 inline mr-1" />
         {getCategoryName(summary.categoryId, categories)}
       </span>
@@ -384,7 +384,7 @@
       {#if summary.tags && summary.tags.length > 0}
         {#each summary.tags as tag}
           <button
-            class="px-2 py-1 text-xs rounded-full bg-primary hover:bg-primary/90 text-white transition-colors"
+            class="px-2 py-1 text-xs rounded-full bg-primary hover:bg-primary/90 text-accenttext transition-colors"
             onclick={() => onOpenTagManager?.(summaryIndex)}
           >
             #{tag}
@@ -394,7 +394,7 @@
 
       <!-- Add Tag Button -->
       <button
-        class="px-2 py-1 text-xs rounded-full bg-zinc-600 hover:bg-zinc-500 text-zinc-300 transition-colors"
+        class="px-2 py-1 text-xs rounded-full bg-darkbutton hover:bg-darkbutton text-textcolor transition-colors"
         onclick={() => onOpenTagManager?.(summaryIndex)}
         title={language.hypaV3Modal.tagManager}
       >
@@ -405,28 +405,28 @@
         <div class="flex flex-wrap gap-1">
           {#if hypaV3Data.metrics.lastImportantSummaries.includes(summaryIndex)}
             <span
-              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-purple-200 bg-purple-900/70"
+              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-secondary bg-secondary-bg"
             >
               Important
             </span>
           {/if}
           {#if hypaV3Data.metrics.lastRecentSummaries.includes(summaryIndex)}
             <span
-              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-blue-200 bg-blue-900/70"
+              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-info bg-info-bg"
             >
               Recent
             </span>
           {/if}
           {#if hypaV3Data.metrics.lastSimilarSummaries.includes(summaryIndex)}
             <span
-              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-green-200 bg-green-900/70"
+              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-success bg-success-bg"
             >
               Similar
             </span>
           {/if}
           {#if hypaV3Data.metrics.lastRandomSummaries.includes(summaryIndex)}
             <span
-              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-yellow-200 bg-yellow-900/70"
+              class="px-1.5 py-0.5 rounded-full text-xs whitespace-nowrap text-warning bg-warning-bg"
             >
               Random
             </span>
@@ -439,7 +439,7 @@
     <div class="flex items-center gap-2">
       <!-- Translate Button -->
       <button
-        class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+        class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
         tabindex="-1"
         use:handleDualAction={{
           onMainAction: () => toggleTranslate(false),
@@ -452,8 +452,8 @@
       <!-- Important Button -->
       <button
         class="p-2 transition-colors {summary.isImportant
-          ? 'text-yellow-400 hover:text-yellow-300'
-          : 'text-zinc-400 hover:text-zinc-200'}"
+          ? 'text-warning hover:text-warning/80'
+          : 'text-textcolor2 hover:text-textcolor'}"
         tabindex="-1"
         onclick={toggleImportant}
       >
@@ -462,7 +462,7 @@
 
       <!-- Reroll Button -->
       <button
-        class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+        class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
         tabindex="-1"
         disabled={isOrphan()}
         onclick={async () => await toggleReroll()}
@@ -472,7 +472,7 @@
 
       <!-- Delete This Button -->
       <button
-        class="p-2 transition-colors text-zinc-400 hover:text-rose-300"
+        class="p-2 transition-colors text-textcolor2 hover:text-danger/80"
         tabindex="-1"
         onclick={async () => await deleteThis()}
       >
@@ -481,7 +481,7 @@
 
       <!-- Delete After Button -->
       <button
-        class="p-2 transition-colors text-zinc-400 hover:text-rose-300"
+        class="p-2 transition-colors text-textcolor2 hover:text-danger/80"
         tabindex="-1"
         onclick={async () => await deleteAfter()}
       >
@@ -493,7 +493,7 @@
   <!-- Original Summary -->
   <div class="mt-2 sm:mt-4">
     <textarea
-      class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-zinc-500 text-zinc-200 bg-zinc-900"
+      class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-darkborderc focus:outline-hidden focus:ring-2 focus:ring-borderc text-textcolor bg-darkbg"
       bind:this={summaryItemState.originalRef}
       bind:value={summary.text}
       onfocus={() => {
@@ -508,12 +508,12 @@
   <!-- Original Summary Translation -->
   {#if translation}
     <div class="mt-2 sm:mt-4">
-      <div class="mb-2 text-sm sm:mb-4 text-zinc-400">
+      <div class="mb-2 text-sm sm:mb-4 text-textcolor2">
         {language.hypaV3Modal.translationLabel}
       </div>
 
       <textarea
-        class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-zinc-700 focus:outline-hidden text-zinc-200 bg-zinc-900"
+        class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-darkborderc focus:outline-hidden text-textcolor bg-darkbg"
         readonly
         tabindex="-1"
         bind:this={summaryItemState.translationRef}
@@ -526,13 +526,13 @@
     <!-- Rerolled Summary Header -->
     <div class="mt-2 sm:mt-4">
       <div class="flex items-center justify-between">
-        <span class="text-sm text-zinc-400"
+        <span class="text-sm text-textcolor2"
           >{language.hypaV3Modal.rerolledSummaryLabel}</span
         >
         <div class="flex items-center gap-2">
           <!-- Translate Rerolled Button -->
           <button
-            class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+            class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
             tabindex="-1"
             use:handleDualAction={{
               onMainAction: () => toggleTranslateRerolled(false),
@@ -544,7 +544,7 @@
 
           <!-- Cancel Button -->
           <button
-            class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+            class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
             tabindex="-1"
             onclick={cancelRerolled}
           >
@@ -553,7 +553,7 @@
 
           <!-- Apply Button -->
           <button
-            class="p-2 transition-colors text-zinc-400 hover:text-rose-300"
+            class="p-2 transition-colors text-textcolor2 hover:text-danger/80"
             tabindex="-1"
             onclick={applyRerolled}
           >
@@ -566,7 +566,7 @@
     <!-- Rerolled Summary -->
     <div class="mt-2 sm:mt-4">
       <textarea
-        class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-zinc-500 text-zinc-200 bg-zinc-900"
+        class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-darkborderc focus:outline-hidden focus:ring-2 focus:ring-borderc text-textcolor bg-darkbg"
         tabindex="-1"
         bind:value={rerolled}
       >
@@ -576,12 +576,12 @@
     <!-- Rerolled Summary Translation -->
     {#if rerolledTranslation}
       <div class="mt-2 sm:mt-4">
-        <div class="mb-2 text-sm sm:mb-4 text-zinc-400">
+        <div class="mb-2 text-sm sm:mb-4 text-textcolor2">
           {language.hypaV3Modal.rerolledTranslationLabel}
         </div>
 
         <textarea
-          class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-zinc-700 focus:outline-hidden text-zinc-200 bg-zinc-900"
+          class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-darkborderc focus:outline-hidden text-textcolor bg-darkbg"
           readonly
           tabindex="-1"
           bind:this={summaryItemState.rerolledTranslationRef}
@@ -595,7 +595,7 @@
   <div class="mt-2 sm:mt-4">
     <div class="flex items-center justify-between">
       <button
-        class="flex items-center gap-2 text-sm text-zinc-400 hover:text-zinc-200 transition-colors"
+        class="flex items-center gap-2 text-sm text-textcolor2 hover:text-textcolor transition-colors"
         tabindex="-1"
         onclick={toggleSummaryCollapse}
       >
@@ -613,7 +613,7 @@
       <div class="flex items-center gap-2">
         <!-- Translate Message Button -->
         <button
-          class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+          class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
           tabindex="-1"
           use:handleDualAction={{
             onMainAction: () => toggleTranslateExpandedMessage(false),
@@ -632,10 +632,10 @@
       {#key summary.chatMemos.length}
         {#each summary.chatMemos as chatMemo, memoIndex (chatMemo)}
           <button
-            class="px-3 py-2 rounded-full text-xs text-zinc-200 hover:bg-zinc-700 transition-colors bg-zinc-900 {isMessageExpanded(
+            class="px-3 py-2 rounded-full text-xs text-textcolor hover:bg-darkbutton transition-colors bg-darkbg {isMessageExpanded(
               chatMemo
             )
-              ? 'ring-2 ring-zinc-500'
+              ? 'ring-2 ring-borderc'
               : ''}"
             tabindex="-1"
             bind:this={summaryItemState.chatMemoRefs[memoIndex]}
@@ -655,7 +655,7 @@
         {#await getMessageFromChatMemo(expandedMessageState.selectedChatMemo) then expandedMessage}
           {#if expandedMessage}
             <!-- Role -->
-            <div class="mb-2 text-sm sm:mb-4 text-zinc-400">
+            <div class="mb-2 text-sm sm:mb-4 text-textcolor2">
               {language.hypaV3Modal.connectedMessageRoleLabel.replace(
                 "{0}",
                 expandedMessage.role
@@ -664,18 +664,18 @@
 
             <!-- Content -->
             <textarea
-              class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-zinc-700 focus:outline-hidden text-zinc-200 bg-zinc-900"
+              class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-darkborderc focus:outline-hidden text-textcolor bg-darkbg"
               readonly
               tabindex="-1"
               value={expandedMessage.data}
             ></textarea>
           {:else}
-            <span class="text-sm text-red-400"
+            <span class="text-sm text-danger"
               >{language.hypaV3Modal.connectedMessageNotFoundLabel}</span
             >
           {/if}
         {:catch error}
-          <span class="text-sm text-red-400"
+          <span class="text-sm text-danger"
             >{language.hypaV3Modal.connectedMessageLoadingError.replace(
               "{0}",
               error.message
@@ -687,12 +687,12 @@
       <!-- Expanded Message Translation -->
       {#if expandedMessageState.translation}
         <div class="mt-2 sm:mt-4">
-          <div class="mb-2 text-sm sm:mb-4 text-zinc-400">
+          <div class="mb-2 text-sm sm:mb-4 text-textcolor2">
             {language.hypaV3Modal.connectedMessageTranslationLabel}
           </div>
 
           <textarea
-            class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-zinc-700 focus:outline-hidden text-zinc-200 bg-zinc-900"
+            class="w-full p-2 transition-colors border rounded-sm sm:p-4 min-h-40 sm:min-h-56 resize-vertical border-darkborderc focus:outline-hidden text-textcolor bg-darkbg"
             readonly
             tabindex="-1"
             bind:this={expandedMessageState.translationRef}

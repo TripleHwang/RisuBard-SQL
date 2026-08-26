@@ -28,6 +28,7 @@
         ensureCharacterPersonas,
         getCharacterPersonas,
         type PersonaScope,
+        type PersonaSelection,
     } from 'src/ts/personaScopes'
     import type { RisuPersona } from 'src/ts/storage/database.svelte'
     import { sortableOptions } from 'src/ts/util'
@@ -40,7 +41,10 @@
     const MIN_DESCRIPTION_HEIGHT = 160
     const MAX_DESCRIPTION_HEIGHT = 720
 
-    let { embedded = false }: { embedded?: boolean } = $props()
+    let { embedded = false, onSelect }: {
+        embedded?: boolean
+        onSelect?: (selection: PersonaSelection) => void
+    } = $props()
     let activeScope = $state<PersonaManagerScope>('global')
     let characterSelectedIndex = $state(0)
     let editingPersona = $state<RisuPersona | null>(null)
@@ -100,6 +104,18 @@
             if (bindToChat) bindCharacterPersona(store[safeIndex])
         }
         editingPersona = store[safeIndex]
+        void requestImmediateSave()
+    }
+
+    function choosePersona(index: number): void {
+        if (!onSelect) {
+            selectPersona(index)
+            return
+        }
+        const persona = activeStore()[index]
+        if (!persona) return
+        persona.id ??= v4()
+        onSelect({ persona, index, scope: activeScope })
         void requestImmediateSave()
     }
 
@@ -393,7 +409,7 @@
         <div class="persona-grid-shell">
             <div data-persona-grid class="persona-grid" style:height={`${personaGridHeight}px`} bind:this={gridElement}>
                 {#each activeStore() as persona, i (persona.id ?? i)}
-                    <button data-risu-idx={i} class="persona-tile" class:selected={i === selectedIndex()} aria-label={persona.name} title={persona.name} use:tooltip={persona.name} onclick={() => selectPersona(i)}>
+                    <button data-risu-idx={i} class="persona-tile" class:selected={i === selectedIndex()} aria-label={persona.name} title={persona.name} use:tooltip={persona.name} onclick={() => choosePersona(i)}>
                         {#if persona.icon}
                             {#await getCharImage(persona.icon, 'plain')}
                                 <span class="persona-placeholder"></span>
@@ -588,7 +604,7 @@
     .persona-grid-resizer { width: 100%; height: .75rem; display: grid; place-items: center; cursor: row-resize; touch-action: none; }
     .persona-grid-resizer span { width: 2.75rem; height: .2rem; border-radius: 999px; background: var(--color-darkborderc); transition: width .15s ease, background .15s ease; }
     .persona-grid-resizer:hover span, .persona-grid-resizer:focus-visible span { width: 3.5rem; background: var(--color-borderc); }
-    .persona-tile, .persona-create { flex: 0 0 auto; width: 5rem; height: 5rem; overflow: hidden; border: 2px solid transparent; border-radius: .55rem; background: var(--color-textcolor2); box-shadow: 0 .4rem 1rem rgb(0 0 0 / .12); transition: border-color .16s ease, transform .16s ease, background .16s ease; }
+    .persona-tile, .persona-create { flex: 0 0 auto; width: 5rem; height: 5rem; overflow: hidden; border: 2px solid transparent; border-radius: .55rem; background: var(--color-textcolor2); box-shadow: 0 .4rem 1rem color-mix(in srgb, var(--color-shadow) 12%, transparent); transition: border-color .16s ease, transform .16s ease, background .16s ease; }
     .persona-tile:hover, .persona-create:hover { transform: translateY(-1px); }
     .persona-tile.selected { border-color: var(--color-primary); }
     .persona-create { display: grid; place-items: center; border-color: var(--color-darkborderc); color: var(--color-textcolor2); background: color-mix(in srgb, var(--color-selected) 34%, var(--color-darkbg)); box-shadow: none; }
@@ -599,8 +615,8 @@
     .portrait-column { min-width: 0; }
     .portrait-wrap { position: relative; width: 8.5rem; height: 8.5rem; }
     .portrait-button, .persona-placeholder.large { width: 8.5rem; height: 8.5rem; overflow: hidden; border-radius: .6rem; }
-    .portrait-button { display: block; box-shadow: 0 .5rem 1.5rem rgb(0 0 0 / .16); }
-    .portrait-mode-button { position: absolute; right: .45rem; bottom: .45rem; width: 2rem; height: 2rem; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--color-textcolor) 26%, transparent); border-radius: .5rem; color: var(--color-textcolor); background: color-mix(in srgb, var(--color-darkbg) 86%, transparent); box-shadow: 0 .3rem .8rem rgb(0 0 0 / .28); backdrop-filter: blur(6px); }
+    .portrait-button { display: block; box-shadow: 0 .5rem 1.5rem color-mix(in srgb, var(--color-shadow) 16%, transparent); }
+    .portrait-mode-button { position: absolute; right: .45rem; bottom: .45rem; width: 2rem; height: 2rem; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--color-textcolor) 26%, transparent); border-radius: .5rem; color: var(--color-textcolor); background: color-mix(in srgb, var(--color-darkbg) 86%, transparent); box-shadow: 0 .3rem .8rem color-mix(in srgb, var(--color-shadow) 28%, transparent); backdrop-filter: blur(6px); }
     .portrait-mode-button:hover { background: var(--color-selected); }
     .fields { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: .75rem; }
     .field-row { display: grid; grid-template-columns: 4.25rem minmax(0, 1fr); align-items: center; gap: .75rem; }

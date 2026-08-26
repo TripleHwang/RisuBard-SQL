@@ -201,7 +201,7 @@
 <div class="flex gap-1 mt-1 items-stretch">
     {#if isPinned}
         <span class="flex-1 min-w-0 flex" use:tooltip={language.togglePinRemove}>
-            <ShButton variant="primary" className="w-full" onclick={pinToChat}>
+            <ShButton variant="binding" className="w-full" onclick={pinToChat}>
                 <PinIcon size={16} />
                 <span class="truncate">{language.togglePinLabel}</span>
             </ShButton>

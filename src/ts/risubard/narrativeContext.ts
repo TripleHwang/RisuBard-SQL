@@ -429,7 +429,6 @@ export function normalizeNarrativeWorkingMessageLimit(
 ): number {
     return Number.isSafeInteger(value)
         && (value as number) >= 1
-        && (value as number) <= 100
         ? value as number
         : fallback
 }

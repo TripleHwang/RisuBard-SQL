@@ -266,13 +266,13 @@
                 <span class="text-textcolor text-sm font-semibold">{language.usageChartTitle}</span>
                 <div class="flex items-center gap-3 text-xs text-textcolor2">
                     <span class="flex items-center gap-1">
-                        <span class="w-2 h-2 rounded-full inline-block bg-[oklch(0.63_0.19_295)]"></span>{language.usageInputTokens}
+                        <span class="w-2 h-2 rounded-full inline-block bg-secondary"></span>{language.usageInputTokens}
                     </span>
                     <span class="flex items-center gap-1">
-                        <span class="w-2 h-2 rounded-full inline-block bg-[oklch(0.66_0.13_265)]"></span>{language.usageCachedTokens}
+                        <span class="w-2 h-2 rounded-full inline-block bg-info"></span>{language.usageCachedTokens}
                     </span>
                     <span class="flex items-center gap-1">
-                        <span class="w-2 h-2 rounded-full inline-block bg-[oklch(0.80_0.15_85)]"></span>{language.usageOutputTokens}
+                        <span class="w-2 h-2 rounded-full inline-block bg-warning"></span>{language.usageOutputTokens}
                     </span>
                 </div>
             </div>
@@ -286,9 +286,9 @@
                                 style:height="{CHART_H}px"
                                 title="{d.day} · {language.usageRequests} {d.requests} · {formatTokens(total)}"
                             >
-                                <div class="w-full bg-[oklch(0.80_0.15_85)]" style:height="{barHeight(d.output)}px"></div>
-                                <div class="w-full bg-[oklch(0.66_0.13_265)]" style:height="{barHeight(d.cached)}px"></div>
-                                <div class="w-full bg-[oklch(0.63_0.19_295)]" style:height="{barHeight(d.input)}px"></div>
+                                <div class="w-full bg-warning" style:height="{barHeight(d.output)}px"></div>
+                                <div class="w-full bg-info" style:height="{barHeight(d.cached)}px"></div>
+                                <div class="w-full bg-secondary" style:height="{barHeight(d.input)}px"></div>
                             </div>
                             <span class="text-textcolor2 text-[10px] tabular-nums">{dayTick(d.day)}</span>
                         </div>

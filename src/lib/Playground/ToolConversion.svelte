@@ -33,9 +33,9 @@
         <div class="flex justify-between items-center">
             <div class="flex items-center justify-start">
                 {#if file.type !== 'NOTSUPPORTED'}
-                    <span class="bg-blue-500 rounded-md text-white mr-2 font-bold px-2 py-1">{file.type}</span>
+                    <span class="bg-info rounded-md text-on-info mr-2 font-bold px-2 py-1">{file.type}</span>
                 {:else}
-                    <span class="bg-red-500 rounded-md text-white mr-2 font-bold px-2 py-1">NOTSUPPORTED</span>
+                    <span class="bg-danger rounded-md text-on-danger mr-2 font-bold px-2 py-1">NOTSUPPORTED</span>
                 {/if}
                 <span>{file.name}</span>
             </div>

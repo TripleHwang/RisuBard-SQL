@@ -50,7 +50,11 @@ describe('RisuBard mode settings', () => {
             '!resolvedRisuBardSettings(currentChat).risuBardResponseExcludeUserMessages'
         )
         expect(chatPage).toContain('min: 1')
-        expect(chatPage).toContain('max: 100')
+        expect(chatPage).not.toMatch(/max:\s*\d+/)
+        const currentChatSettings = readFileSync(
+            resolve(process.cwd(), 'src/lib/Others/RisuBardCurrentChatSettings.svelte'), 'utf8',
+        )
+        expect(currentChatSettings).not.toMatch(/\bmax="\d+"/)
         expect(memoryWiki).not.toContain('data-memory-recent-message-count')
         expect(memoryWiki).not.toContain('data-response-recent-message-count')
         expect(memoryWiki).not.toContain('data-response-include-user-messages')

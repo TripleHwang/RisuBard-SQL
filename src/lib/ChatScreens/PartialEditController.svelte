@@ -807,29 +807,29 @@
         width: 32px;
         height: 32px;
         padding: 8px;
-        background: rgba(255, 255, 255, 0.95);
-        border: 1px solid rgba(0, 0, 0, 0.15);
+        background: var(--color-bgcolor);
+        border: 1px solid var(--color-darkborderc);
         border-radius: 6px;
         cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--color-shadow) 15%, transparent);
         transition: all 0.15s ease;
-        color: #666;
+        color: var(--color-textcolor2);
     }
 
     :global(.partial-edit-btn-edit:hover) {
-        background: #e0f2fe;
-        border-color: #3b82f6;
-        color: #3b82f6;
+        background: color-mix(in srgb, var(--color-primary) 12%, var(--color-bgcolor));
+        border-color: var(--color-primary);
+        color: var(--color-primary);
     }
 
     :global(.partial-edit-btn-delete:hover) {
-        background: #fee2e2;
-        border-color: #ef4444;
-        color: #ef4444;
+        background: var(--color-danger-bg);
+        border-color: var(--color-danger-border);
+        color: var(--color-danger);
     }
 
     .partial-match-failed-modal {
-        background: var(--risu-theme-bgcolor, #fff);
+        background: var(--color-bgcolor);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;
@@ -838,7 +838,7 @@
         display: flex;
         flex-direction: column;
         gap: 16px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--color-shadow) 20%, transparent);
     }
 
     .partial-match-failed-header {
@@ -850,18 +850,18 @@
     .partial-match-failed-title {
         font-weight: 600;
         font-size: 16px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
     }
 
     .partial-match-failed-message {
         font-size: 14px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
         margin: 0;
         line-height: 1.5;
     }
 
     .partial-delete-modal {
-        background: var(--risu-theme-bgcolor, #fff);
+        background: var(--color-bgcolor);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;
@@ -870,7 +870,7 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--color-shadow) 20%, transparent);
     }
 
     .partial-delete-header {
@@ -882,21 +882,21 @@
     .partial-delete-title {
         font-weight: 600;
         font-size: 16px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
     }
 
     .partial-delete-message {
         font-size: 14px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
         margin: 0;
     }
 
     .partial-delete-preview {
         padding: 12px;
-        background: var(--risu-theme-darkbg, #f5f5f5);
+        background: var(--color-darkbg);
         border-radius: 8px;
         font-size: 13px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
         max-height: 100px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -913,12 +913,12 @@
         font-weight: 500;
         cursor: pointer;
         transition: all 0.15s ease;
-        background: #ef4444;
-        color: white;
+        background: var(--color-danger);
+        color: var(--color-on-danger);
     }
 
     .partial-delete-confirm-btn:hover {
-        background: #dc2626;
+        background: color-mix(in srgb, var(--color-danger) 85%, var(--color-textcolor));
     }
 
     .partial-edit-overlay {
@@ -927,7 +927,7 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.4);
+        background: color-mix(in srgb, var(--color-overlay) 40%, transparent);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -935,7 +935,7 @@
     }
 
     .partial-edit-modal {
-        background: var(--risu-theme-bgcolor, #fff);
+        background: var(--color-bgcolor);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;
@@ -945,7 +945,7 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--color-shadow) 20%, transparent);
     }
 
     .partial-edit-header {
@@ -957,7 +957,7 @@
     .partial-edit-title {
         font-weight: 600;
         font-size: 16px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
     }
 
     .partial-match-meta {
@@ -968,7 +968,7 @@
 
     .partial-match-hint {
         font-size: 12px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
     }
 
     .partial-match-confidence {
@@ -976,12 +976,13 @@
         font-weight: 600;
         padding: 2px 6px;
         border-radius: 4px;
-        background: #10b981;
-        color: white;
+        background: var(--color-success);
+        color: var(--color-on-success);
     }
 
     .partial-match-confidence.low-confidence {
-        background: #f59e0b;
+        background: var(--color-warning);
+        color: var(--color-on-warning);
     }
 
     .partial-edit-textarea {
@@ -989,10 +990,10 @@
         min-height: 120px;
         max-height: 50vh;
         padding: 12px;
-        border: 1px solid var(--risu-theme-darkborderc, #ddd);
+        border: 1px solid var(--color-darkborderc);
         border-radius: 8px;
-        background: var(--risu-theme-darkbg, #f5f5f5);
-        color: var(--risu-theme-textcolor, #000);
+        background: var(--color-darkbg);
+        color: var(--color-textcolor);
         font-family: inherit;
         resize: vertical;
         box-sizing: border-box;
@@ -1000,8 +1001,8 @@
 
     .partial-edit-textarea:focus {
         outline: none;
-        border-color: #3b82f6;
-        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 15%, transparent);
     }
 
     .partial-edit-buttons {
@@ -1025,26 +1026,26 @@
     }
 
     .partial-edit-save-btn {
-        background: #3b82f6;
-        color: white;
+        background: var(--color-primary);
+        color: var(--color-accenttext);
     }
 
     .partial-edit-save-btn:hover {
-        background: #2563eb;
+        background: color-mix(in srgb, var(--color-primary) 85%, var(--color-textcolor));
     }
 
     .partial-edit-cancel-btn {
-        background: #6b7280;
-        color: white;
+        background: var(--color-selected);
+        color: var(--color-textcolor);
     }
 
     .partial-edit-cancel-btn:hover {
-        background: #4b5563;
+        background: color-mix(in srgb, var(--color-selected) 85%, var(--color-primary));
     }
 
     /* Match Selection Modal */
     .partial-match-selection-modal {
-        background: var(--risu-theme-bgcolor, #fff);
+        background: var(--color-bgcolor);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;
@@ -1054,7 +1055,7 @@
         display: flex;
         flex-direction: column;
         gap: 16px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 8px 32px color-mix(in srgb, var(--color-shadow) 20%, transparent);
     }
 
     .match-selection-header {
@@ -1062,13 +1063,13 @@
         justify-content: space-between;
         align-items: center;
         padding-bottom: 12px;
-        border-bottom: 1px solid var(--risu-theme-darkborderc, #ddd);
+        border-bottom: 1px solid var(--color-darkborderc);
     }
 
     .match-selection-title {
         font-weight: 600;
         font-size: 16px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
     }
 
     .match-count {
@@ -1076,8 +1077,8 @@
         font-weight: 500;
         padding: 4px 10px;
         border-radius: 12px;
-        background: var(--risu-theme-darkbg, #f5f5f5);
-        color: var(--risu-theme-textcolor, #000);
+        background: var(--color-darkbg);
+        color: var(--color-textcolor);
     }
 
     .match-list {
@@ -1094,17 +1095,17 @@
         flex-direction: column;
         gap: 8px;
         padding: 16px;
-        border: 1px solid var(--risu-theme-darkborderc, #ddd);
+        border: 1px solid var(--color-darkborderc);
         border-radius: 8px;
-        background: var(--risu-theme-darkbg, #f9f9f9);
+        background: var(--color-darkbg);
         cursor: pointer;
         transition: all 0.15s ease;
     }
 
     .match-item:hover {
-        background: var(--risu-theme-bgcolor, #fff);
-        border-color: #3b82f6;
-        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+        background: var(--color-bgcolor);
+        border-color: var(--color-primary);
+        box-shadow: 0 2px 8px color-mix(in srgb, var(--color-primary) 20%, transparent);
         transform: translateY(-1px);
     }
 
@@ -1118,8 +1119,8 @@
     .match-line {
         font-size: 12px;
         font-weight: 500;
-        color: var(--risu-theme-textcolor, #000);
-        background: var(--risu-theme-bgcolor, #fff);
+        color: var(--color-textcolor);
+        background: var(--color-bgcolor);
         padding: 2px 8px;
         border-radius: 4px;
     }
@@ -1129,19 +1130,22 @@
         font-weight: 600;
         padding: 3px 8px;
         border-radius: 4px;
-        color: white;
+        color: var(--color-accenttext);
     }
 
     .match-confidence.high-confidence {
-        background: #10b981;
+        background: var(--color-success);
+        color: var(--color-on-success);
     }
 
     .match-confidence.medium-confidence {
-        background: #3b82f6;
+        background: var(--color-info);
+        color: var(--color-on-info);
     }
 
     .match-confidence.low-confidence {
-        background: #f59e0b;
+        background: var(--color-warning);
+        color: var(--color-on-warning);
     }
 
     .match-method {
@@ -1149,19 +1153,19 @@
         font-weight: 500;
         padding: 2px 6px;
         border-radius: 4px;
-        background: var(--risu-theme-bgcolor, #fff);
-        color: var(--risu-theme-textcolor, #000);
+        background: var(--color-bgcolor);
+        color: var(--color-textcolor);
         font-family: monospace;
     }
 
     .match-context-before,
     .match-context-after {
         font-size: 12px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
         padding: 8px 12px;
-        background: var(--risu-theme-bgcolor, #fff);
+        background: var(--color-bgcolor);
         border-radius: 6px;
-        border-left: 3px solid var(--risu-theme-darkborderc, #ddd);
+        border-left: 3px solid var(--color-darkborderc);
         line-height: 1.5;
         font-style: italic;
         white-space: pre-line;
@@ -1169,11 +1173,11 @@
 
     .match-text {
         font-size: 13px;
-        color: var(--risu-theme-textcolor, #000);
+        color: var(--color-textcolor);
         padding: 10px 12px;
-        background: var(--risu-theme-bgcolor, #fff);
+        background: var(--color-bgcolor);
         border-radius: 6px;
-        border-left: 3px solid #3b82f6;
+        border-left: 3px solid var(--color-primary);
         line-height: 1.5;
         font-weight: 500;
         white-space: pre-line;

@@ -2,6 +2,7 @@
     import { language } from 'src/lang';
     import { DBState } from 'src/ts/stores.svelte';
     import ShSwitch from 'src/lib/UI/GUI/ShSwitch.svelte';
+    import { updateTextThemeAndCSS } from 'src/ts/gui/colorscheme';
 
     interface Props {
         field: 'textScreenColor' | 'textScreenBorder';
@@ -28,6 +29,7 @@
                 value={currentValue}
                 oninput={(e) => {
                     DBState.db[field] = e.currentTarget.value;
+                    if (field === 'textScreenColor') updateTextThemeAndCSS();
                 }}
             />
         {/if}
@@ -35,6 +37,7 @@
             checked={!!currentValue}
             onCheckedChange={(v) => {
                 DBState.db[field] = v ? defaultColor : null;
+                if (field === 'textScreenColor') updateTextThemeAndCSS();
             }}
         />
     </div>

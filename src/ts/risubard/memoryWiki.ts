@@ -898,8 +898,8 @@ export async function snapshotWikiBeforeTurn(input: {
             requiredMutationString(id, 'Source message ID', 1_024)
         ),
     }
-    if (body.sourceMessageIds.length < 1 || body.sourceMessageIds.length > 12) {
-        throw new Error('Wiki snapshot requires 1-12 source messages')
+    if (body.sourceMessageIds.length < 1) {
+        throw new Error('Wiki snapshot requires at least one source message')
     }
     const response = await invokeBrowserFetch(
         input.fetchImpl,

@@ -36,7 +36,6 @@ function validInquiryTokenBudget(value) {
         && Number.isSafeInteger(value.target)
         && Number.isSafeInteger(value.maximum)
         && value.target >= 256
-        && value.maximum <= 32_768
         && value.target <= value.maximum
 }
 
@@ -69,6 +68,7 @@ function registerRisuBardMemoryRoutes(app, options) {
                 req, 'x-risubard-source-chat-id'
             )
             const saveId = requestHeader(req, 'x-risubard-save-id')
+            const overwrite = requestHeader(req, 'x-risubard-save-overwrite')
             const sourceChatName = decodeBoundedHeaderText(requestHeader(
                 req, 'x-risubard-chat-name'
             ))
@@ -81,6 +81,7 @@ function registerRisuBardMemoryRoutes(app, options) {
             if (!hasBoundedId(characterId)
                 || !hasBoundedId(sourceChatId)
                 || !hasBoundedId(saveId)
+                || (overwrite !== undefined && overwrite !== 'true')
                 || !sourceChatName
                 || !Number.isSafeInteger(turnCount)
                 || turnCount < 0
@@ -96,6 +97,7 @@ function registerRisuBardMemoryRoutes(app, options) {
                 characterId,
                 sourceChatId,
                 saveId,
+                ...(overwrite === 'true' ? { overwrite: true } : {}),
                 sourceChatName,
                 turnCount,
                 ...(latestMessageId ? { latestMessageId } : {}),
@@ -499,7 +501,6 @@ function registerRisuBardMemoryRoutes(app, options) {
                 || !hasBoundedId(req.body.chatId)
                 || !Array.isArray(req.body.sourceMessageIds)
                 || req.body.sourceMessageIds.length < 1
-                || req.body.sourceMessageIds.length > 12
                 || !req.body.sourceMessageIds.every(hasBoundedId)
                 || typeof req.body.markdown !== 'string'
                 || req.body.markdown.trim().length === 0
@@ -555,7 +556,6 @@ function registerRisuBardMemoryRoutes(app, options) {
                     || req.body.title.length > 160
                     || !Array.isArray(req.body.sourceMessageIds)
                     || req.body.sourceMessageIds.length < 1
-                    || req.body.sourceMessageIds.length > 12
                     || !req.body.sourceMessageIds.every(hasBoundedId)
                     || typeof req.body.markdown !== 'string'
                     || req.body.markdown.trim().length === 0
@@ -692,7 +692,6 @@ function registerRisuBardMemoryRoutes(app, options) {
                     || !hasBoundedId(req.body.chatId)
                     || !Array.isArray(req.body.sourceMessageIds)
                     || req.body.sourceMessageIds.length === 0
-                    || req.body.sourceMessageIds.length > 100
                     || !req.body.sourceMessageIds.every(hasBoundedId)) {
                     res.status(400).send({
                         error: 'Invalid Markdown wiki source retraction request',
@@ -794,7 +793,6 @@ function registerRisuBardMemoryRoutes(app, options) {
                     || !hasBoundedId(req.body.chatId)
                     || !Array.isArray(req.body.sourceMessageIds)
                     || req.body.sourceMessageIds.length < 1
-                    || req.body.sourceMessageIds.length > 12
                     || !req.body.sourceMessageIds.every(hasBoundedId)) {
                     res.status(400).send({
                         error: 'Invalid Markdown wiki snapshot request',
@@ -818,7 +816,6 @@ function registerRisuBardMemoryRoutes(app, options) {
                     ? []
                     : ['eventId']
                 const validChanges = Array.isArray(req.body?.changes)
-                    && req.body.changes.length <= 8
                     && req.body.changes.every((change) => isRecord(change)
                         && hasExactKeys(change, [
                             'documentId', 'type', 'title',
@@ -845,11 +842,9 @@ function registerRisuBardMemoryRoutes(app, options) {
                         && !hasBoundedId(req.body.eventId))
                     || !Array.isArray(req.body.sourceMessageIds)
                     || req.body.sourceMessageIds.length < 1
-                    || req.body.sourceMessageIds.length > 12
                     || !req.body.sourceMessageIds.every(hasBoundedId)
                     || !validChanges
                     || !Array.isArray(req.body.warnings)
-                    || req.body.warnings.length > 32
                     || !req.body.warnings.every((warning) =>
                         typeof warning === 'string'
                         && warning.length > 0

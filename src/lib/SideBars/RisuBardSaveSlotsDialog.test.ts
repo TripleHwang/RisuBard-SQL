@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { mount, unmount } from 'svelte'
 import RisuBardSaveSlotsDialog from './RisuBardSaveSlotsDialog.svelte'
+import type { MemorySaveSlotSummary } from 'src/ts/risubard/memorySaveSlots'
 
 const mocks = vi.hoisted(() => ({
     listMemorySaveSlots: vi.fn(),
@@ -58,7 +59,10 @@ describe('RisuBardSaveSlotsDialog', () => {
         document.body.replaceChildren()
     })
 
-    function render(onLoad = vi.fn(async () => undefined)) {
+    function render(onLoad = vi.fn(async () => undefined), saveProps: {
+        mode?: 'save' | 'load'
+        onSave?: (saveId?: string) => Promise<MemorySaveSlotSummary>
+    } = {}) {
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardSaveSlotsDialog, {
             target,
@@ -69,6 +73,7 @@ describe('RisuBardSaveSlotsDialog', () => {
                 currentLatestMessageId: 'unsaved-message',
                 onOpenChange: vi.fn(),
                 onLoad,
+                ...saveProps,
             },
         })
         return onLoad
@@ -87,6 +92,116 @@ describe('RisuBardSaveSlotsDialog', () => {
             .toContain('성문이 열렸다.'))
         expect(document.body.querySelector('[data-save-file-load]')
             ?.className).toContain('save-slot__load')
+        expect(document.body.querySelector('[data-save-file-new]')).toBeNull()
+    })
+
+    test.each(['save', 'load'] as const)('switches both ways from %s without losing the selected preview or writing data', async (initialMode) => {
+        const onSave = vi.fn(async () => ({
+            saveId: 'save-1', sourceChatId: 'chat-1', sourceChatName: '성문 앞',
+            createdAt: '2026-08-26T08:00:00.000Z', turnCount: 8,
+        }))
+        const onLoad = render(undefined, { mode: initialMode, onSave })
+        await vi.waitFor(() => expect(document.body.textContent).toContain('성문이 열렸다.'))
+        const switcher = document.body.querySelector('[data-save-mode-switcher]')
+        expect(switcher).not.toBeNull()
+        const dialog = document.body.querySelector('[role="dialog"]')!
+        const title = document.getElementById(dialog.getAttribute('aria-labelledby')!)!
+        expect(title).not.toBeNull()
+        expect(switcher!.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING)
+            .not.toBe(0)
+        expect(title.contains(switcher)).toBe(false)
+
+        const otherMode = initialMode === 'save' ? 'load' : 'save'
+        for (const nextMode of [otherMode, initialMode]) {
+            document.body.querySelector<HTMLButtonElement>(`[data-save-mode="${nextMode}"]`)!.click()
+            await vi.waitFor(() => expect(title.textContent).toBe(
+                nextMode === 'save' ? '채팅 저장하기' : '채팅 불러오기'
+            ))
+            for (const mode of ['save', 'load']) {
+                expect(document.body.querySelector(`[data-save-mode="${mode}"]`)
+                    ?.getAttribute('aria-pressed')).toBe(String(mode === nextMode))
+            }
+            expect(document.body.querySelector(nextMode === 'save'
+                ? '[data-save-file-overwrite]' : '[data-save-file-load]')).not.toBeNull()
+            expect(document.body.querySelector('.save-slot__select[aria-pressed="true"]')
+                ?.textContent).toContain('성문 앞')
+            expect(document.body.querySelector('[data-save-file-preview]')
+                ?.textContent).toContain('성문이 열렸다.')
+        }
+        expect(onSave).not.toHaveBeenCalled()
+        expect(onLoad).not.toHaveBeenCalled()
+        expect(mocks.listMemorySaveSlots).toHaveBeenCalledOnce()
+        expect(mocks.previewMemorySaveSlot).toHaveBeenCalledOnce()
+    })
+
+    test('disables save mode when the caller cannot save', async () => {
+        render()
+        await vi.waitFor(() => expect(document.body.querySelector('[data-save-mode="save"]')).not.toBeNull())
+        expect(document.body.querySelector<HTMLButtonElement>('[data-save-mode="save"]')!.disabled).toBe(true)
+        expect(document.body.querySelector<HTMLButtonElement>('[data-save-mode="load"]')!.disabled).toBe(false)
+    })
+
+    test('opens save mode without saving and creates a slot from an empty list', async () => {
+        mocks.listMemorySaveSlots.mockResolvedValue([])
+        const onSave = vi.fn(async () => ({
+            saveId: 'new-save', sourceChatId: 'chat-1', sourceChatName: '새 저장',
+            createdAt: '2026-08-26T08:00:00.000Z', turnCount: 8,
+        }))
+        render(undefined, { mode: 'save', onSave })
+        await vi.waitFor(() => expect(document.body.textContent).toContain('아직 저장된 채팅이 없습니다.'))
+        expect(onSave).not.toHaveBeenCalled()
+        const button = document.body.querySelector<HTMLButtonElement>('[data-save-file-new]')
+        expect(button).not.toBeNull()
+        button!.click()
+        await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith(undefined))
+        await vi.waitFor(() => expect(document.body.textContent).toContain('새 저장'))
+        expect(document.body.querySelectorAll('.save-slot')).toHaveLength(1)
+        expect(mocks.alertConfirm).not.toHaveBeenCalled()
+    })
+
+    test('confirms overwrite, keeps one slot, and refreshes its preview', async () => {
+        const onSave = vi.fn(async () => ({
+            saveId: 'save-1', sourceChatId: 'chat-1', sourceChatName: '성문 앞',
+            createdAt: '2026-08-26T08:00:00.000Z', turnCount: 8,
+        }))
+        render(undefined, { mode: 'save', onSave })
+        await vi.waitFor(() => expect(document.body.textContent).toContain('성문이 열렸다.'))
+        const overwrite = document.body.querySelector<HTMLButtonElement>('[aria-label="성문 앞 덮어쓰기"]')
+        expect(overwrite).not.toBeNull()
+        expect(document.body.querySelector('[data-save-file-load]')).toBeNull()
+        mocks.alertConfirm.mockResolvedValueOnce(false)
+        overwrite!.click()
+        await vi.waitFor(() => expect(mocks.alertConfirm).toHaveBeenCalledOnce())
+        await vi.waitFor(() => expect(overwrite!.disabled).toBe(false))
+        expect(onSave).not.toHaveBeenCalled()
+        mocks.previewMemorySaveSlot.mockResolvedValue([{ role: 'char', data: '새로운 장면' }])
+        overwrite!.click()
+        await vi.waitFor(() => expect(onSave).toHaveBeenCalledWith('save-1'))
+        await vi.waitFor(() => expect(document.body.textContent).toContain('새로운 장면'))
+        expect(document.body.querySelectorAll('.save-slot')).toHaveLength(1)
+        expect(document.body.textContent).toContain('[턴 8]')
+    })
+
+    test('blocks duplicate saves and preserves the list on save failure', async () => {
+        let rejectSave!: (reason: Error) => void
+        const onSave = vi.fn(() => new Promise<MemorySaveSlotSummary>((_resolve, reject) => {
+            rejectSave = reject
+        }))
+        render(undefined, { mode: 'save', onSave })
+        await vi.waitFor(() => expect(document.body.textContent).toContain('성문 앞'))
+        const button = document.body.querySelector<HTMLButtonElement>('[data-save-file-new]')
+        expect(button).not.toBeNull()
+        button!.click()
+        button!.click()
+        await vi.waitFor(() => expect(onSave).toHaveBeenCalledOnce())
+        for (const selector of ['[data-save-file-new]', '[data-save-file-overwrite]', '[data-save-file-rename]', '[data-save-file-delete]', '[data-save-mode="save"]', '[data-save-mode="load"]']) {
+            expect(document.body.querySelector<HTMLButtonElement>(selector)?.disabled).toBe(true)
+        }
+        rejectSave(new Error('저장 실패 테스트'))
+        await vi.waitFor(() => expect(document.body.textContent).toContain('저장 실패 테스트'))
+        expect(document.body.querySelectorAll('.save-slot')).toHaveLength(1)
+        expect(document.body.textContent).toContain('[턴 7]')
+        expect(button!.disabled).toBe(false)
     })
 
     test('adjusts the file and preview distribution from the separator', async () => {

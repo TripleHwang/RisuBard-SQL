@@ -78,7 +78,6 @@ export const memoryWriterDraftSchema = JSON.stringify({
         },
         canonicalUpdateCandidates: {
             type: 'array',
-            maxItems: 8,
             items: {
                 type: 'object',
                 additionalProperties: false,
@@ -147,14 +146,13 @@ export const canonicalBatchSchema = JSON.stringify({
         schemaVersion: { const: 1 },
         documents: {
             type: 'array',
-            maxItems: 8,
             items: {
                 type: 'object',
                 additionalProperties: false,
                 required: ['candidateIndex', 'markdown'],
                 properties: {
                     candidateIndex: {
-                        type: 'integer', minimum: 0, maximum: 7,
+                        type: 'integer', minimum: 0,
                     },
                     markdown: {
                         type: 'string', minLength: 1, maxLength: 12_000,
@@ -253,7 +251,7 @@ function text(value: unknown, label: string, maximum = 500): string {
 function boundedArray(
     value: unknown,
     label: string,
-    maximum: number
+    maximum = Number.MAX_SAFE_INTEGER
 ): unknown[] {
     if (!Array.isArray(value) || value.length > maximum) {
         throw new Error(`${label} must be an array of at most ${maximum} items`)
@@ -318,8 +316,7 @@ export function parseMemoryWriterDraft(output: string): MemoryWriterDraft {
     const openContinuity = strings(parsed.openContinuity, 'openContinuity')
     const canonicalUpdateCandidates = boundedArray(
         parsed.canonicalUpdateCandidates,
-        'canonicalUpdateCandidates',
-        8
+        'canonicalUpdateCandidates'
     ).map((item, index) => {
         if (!isRecord(item)) throw new Error(`canonicalUpdateCandidates[${index}] must be an object`)
         const candidate = !Object.prototype.hasOwnProperty.call(item, 'action')
@@ -466,7 +463,7 @@ export function parseCanonicalBatch(
         throw new Error('Canonical batch schemaVersion must be 1')
     }
     if (!Number.isSafeInteger(candidateCount)
-        || candidateCount < 0 || candidateCount > 8) {
+        || candidateCount < 0) {
         throw new Error('Canonical batch candidate count is invalid')
     }
     const used = new Set<number>()

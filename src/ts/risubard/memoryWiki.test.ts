@@ -233,7 +233,7 @@ describe('loadNarrativeMemoryWiki', () => {
 
         await expect(snapshotWikiBeforeTurn({
             characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['user-1', 'assistant-1'],
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
             fetchImpl, createAuth: async () => 'token',
         })).resolves.toEqual({ snapshotId: 'turn-stable', canonicalCount: 2 })
         expect(fetchImpl).toHaveBeenCalledWith(

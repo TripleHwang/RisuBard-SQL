@@ -4,7 +4,7 @@
     import { getCurrentChat } from "src/ts/storage/database.svelte";
     import { alertConfirmMulti, alertSelect, notifySuccess } from "src/ts/alert";
     import { PinIcon, PinOffIcon } from "@lucide/svelte";
-    import { openPersonaList, personaSelectCallback } from "src/ts/stores.svelte";
+    import { openPersonaManager, personaSelectCallback } from "src/ts/stores.svelte";
     import { v4 } from "uuid";
     import ShButton from "../UI/GUI/ShButton.svelte";
     import type { Chat } from "src/ts/storage/database.svelte";
@@ -63,7 +63,7 @@
             )
             if (sel === 0) {
                 personaSelectCallback.set(bindPersona)
-                openPersonaList.set(true)
+                openPersonaManager.set(true)
             } else if (sel === 1) {
                 unbindPersona()
             }
@@ -78,7 +78,7 @@
                 if (current) bindPersona(current)
             } else if (sel === 1) {
                 personaSelectCallback.set(bindPersona)
-                openPersonaList.set(true)
+                openPersonaManager.set(true)
             }
         }
     }
@@ -87,22 +87,17 @@
 <div class="text-[11px] text-textcolor2 mt-4 px-1">{language.personaBindingLabel}</div>
 <div class="flex gap-1 mt-1 items-stretch">
     <ShButton
+        variant={isPersonaBound ? 'binding' : 'default'}
         className={`flex-1 min-w-0 justify-start ${isPersonaBound
-            ? 'border-selected text-textcolor'
+            ? ''
             : 'text-textcolor2 opacity-75 hover:opacity-100'}`}
         onclick={handlePersonaBindClick}
     >
-        <span class="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-darkbg">
-            {#if displayPersona?.icon}
-                {#await getCharImage(displayPersona.icon, 'plain')}
-                    <PinIcon size={15} />
-                {:then personaImage}
-                    <img src={personaImage} alt="" class="h-full w-full object-cover object-top" />
-                {/await}
-            {:else}
-                <PinIcon size={15} />
-            {/if}
-        </span>
+        {#if displayPersona?.icon}
+            {#await getCharImage(displayPersona.icon, 'plain') then personaImage}
+                <img src={personaImage} alt="" class="size-8 shrink-0 rounded-lg object-cover object-top" />
+            {/await}
+        {/if}
         {#if isPersonaBound}
             <PinIcon size={16} class="shrink-0" />
         {:else}

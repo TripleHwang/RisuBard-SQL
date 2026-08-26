@@ -98,8 +98,9 @@
 <div class="text-[11px] text-textcolor2 mt-4 px-1">{language.promptBindingLabel}</div>
 <div class="flex gap-1 mt-1 items-stretch">
     <ShButton
+        variant={isPresetBound ? 'binding' : 'default'}
         className={`flex-1 min-w-0 justify-start ${isPresetBound
-            ? 'border-selected text-textcolor'
+            ? ''
             : 'text-textcolor2 opacity-75 hover:opacity-100'}`}
         onclick={handlePresetBindClick}
     >
@@ -112,7 +113,7 @@
     </ShButton>
     <ShButton
         size="icon"
-        variant={promptParamsOn ? 'primary' : 'default'}
+        variant={promptParamsOn ? 'binding' : 'default'}
         className="shrink-0"
         onclick={() => { paramsExpanded = !paramsExpanded }}
         title={language.promptPresetParamsUse}

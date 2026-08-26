@@ -178,12 +178,12 @@
         <div class="shrink-0 flex items-center justify-end gap-0.5 px-1.5 py-1 border-t border-darkborderc text-textcolor2">
             <button type="button" class="p-1 rounded hover:text-textcolor transition-colors" title={language.copy} aria-label={language.copy} onclick={copyValue}>
                 {#if copied}
-                    <CheckIcon size={16} class="text-green-500" />
+                    <CheckIcon size={16} class="text-success" />
                 {:else}
                     <CopyIcon size={16} />
                 {/if}
             </button>
-            <button type="button" class="p-1 rounded hover:text-red-500 transition-colors" title={language.reset} aria-label={language.reset} onclick={resetValue}>
+            <button type="button" class="p-1 rounded hover:text-danger/80 transition-colors" title={language.reset} aria-label={language.reset} onclick={resetValue}>
                 <RefreshCwIcon size={16} />
             </button>
             <button type="button" class="p-1 rounded hover:text-textcolor transition-colors" title={language.hotkeyDesc.popupEditor} aria-label={language.hotkeyDesc.popupEditor} onclick={openPopupEditor}>
@@ -193,7 +193,7 @@
     {/if}
     <div class="hidden absolute z-100 bg-bgcolor border border-darkborderc p-2 flex-col" bind:this={autoCompleteDom}>
         {#each autocompleteContents as content, i}
-            <button class="w-full text-left py-1 px-2 bg-bgcolor" class:text-blue-500={selectingAutoComplete === i} onclick={() => {
+            <button class="w-full text-left py-1 px-2 bg-bgcolor" class:text-info={selectingAutoComplete === i} onclick={() => {
                 insertContent(content)
             }}>{content}</button>
         {/each}

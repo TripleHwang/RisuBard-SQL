@@ -19,7 +19,7 @@
             labelKey: 'risuBardInquiryTargetTokenBudget',
             helpKey: 'risuBardInquiryTargetTokenBudget',
             bindKey: 'risuBardInquiryTargetTokenBudget',
-            options: { min: 256, max: 32768, step: 256 },
+            options: { min: 256, step: 256 },
             keywords: ['inquiry', 'target', 'token', '검색', '목표', '토큰'],
         },
         {
@@ -28,7 +28,7 @@
             labelKey: 'risuBardInquiryMaximumTokenBudget',
             helpKey: 'risuBardInquiryMaximumTokenBudget',
             bindKey: 'risuBardInquiryMaximumTokenBudget',
-            options: { min: 256, max: 32768, step: 256 },
+            options: { min: 256, step: 256 },
             keywords: ['inquiry', 'maximum', 'token', '검색', '상한', '토큰'],
         },
         {
@@ -37,7 +37,7 @@
             labelKey: 'risuBardAnalysisTokenLimit',
             helpKey: 'risuBardAnalysisTokenLimit',
             bindKey: 'risuBardAnalysisTokenLimit',
-            options: { min: 3072, max: 32768, step: 1024 },
+            options: { min: 3072, step: 1024 },
             keywords: ['analysis', 'token', 'budget', '분석', '토큰', '상한'],
         },
         {
@@ -46,7 +46,7 @@
             labelKey: 'risuBardAdditionalSearchLimit',
             helpKey: 'risuBardAdditionalSearchLimit',
             bindKey: 'risuBardAdditionalSearchLimit',
-            options: { min: 0, max: 4, step: 1 },
+            options: { min: 0, step: 1 },
             keywords: ['wiki', 'search', 'fallback', '위키', '추가 검색'],
         },
         {
@@ -55,7 +55,7 @@
             labelKey: 'risuBardCanonicalTargetLimit',
             helpKey: 'risuBardCanonicalTargetLimit',
             bindKey: 'risuBardCanonicalTargetLimit',
-            options: { min: 1, max: 8, step: 1 },
+            options: { min: 1, step: 1 },
             keywords: ['canonical', 'target', 'limit', '정본', '대상', '한도'],
         },
         {
@@ -64,7 +64,7 @@
             labelKey: 'risuBardRecentMessages',
             helpKey: 'risuBardRecentMessages',
             bindKey: 'risuBardRecentMessageCount',
-            options: { min: 1, max: 100, step: 1 },
+            options: { min: 1, step: 1 },
             keywords: ['analysis', 'wiki', 'recent messages', '분석', '위키', '최근 대화'],
         },
         {
@@ -73,7 +73,7 @@
             labelKey: 'risuBardResponseRecentMessages',
             helpKey: 'risuBardResponseRecentMessages',
             bindKey: 'risuBardResponseMessageCount',
-            options: { min: 1, max: 100, step: 1 },
+            options: { min: 1, step: 1 },
             keywords: ['recent messages', 'chat history', '최근 채팅', '대화 내역'],
         },
         {

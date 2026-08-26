@@ -947,7 +947,7 @@
         overflow: hidden;
         border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 28%, var(--risu-theme-darkborderc));
         background: var(--risu-theme-darkbg);
-        box-shadow: -.8rem 0 2.4rem rgb(0 0 0 / .18);
+        box-shadow: -.8rem 0 2.4rem color-mix(in srgb, var(--color-shadow) 18%, transparent);
         animation: dock-enter .18s ease-out;
         container-type: inline-size;
     }
@@ -987,7 +987,7 @@
         gap: .45rem;
         padding: .5rem .65rem .6rem .8rem;
         border-bottom: 1px solid var(--risu-theme-darkborderc);
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, black);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
     }
     .dock-titlebar { display: flex; width: 100%; min-width: 0; align-items: center; gap: .65rem; }
     .dock-identity {
@@ -1049,7 +1049,7 @@
         list-style: none;
     }
     .dock-views button, .dock-views summary { width: 2.35rem; min-height: 2.25rem; padding: .35rem; }
-    .dock-views .force-update-button { position: relative; flex: 0 0 52px; width: 52px; height: 52px; min-height: 52px; padding: 2px; overflow: hidden; border-color: color-mix(in srgb, var(--risu-theme-primary) 42%, var(--risu-theme-darkborderc)); border-radius: .72rem; background: color-mix(in srgb, var(--risu-theme-primary) 13%, var(--risu-theme-darkbg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--risu-theme-primary) 10%, transparent), 0 .22rem .6rem rgb(0 0 0 / .16); }
+    .dock-views .force-update-button { position: relative; flex: 0 0 52px; width: 52px; height: 52px; min-height: 52px; padding: 2px; overflow: hidden; border-color: color-mix(in srgb, var(--risu-theme-primary) 42%, var(--risu-theme-darkborderc)); border-radius: .72rem; background: color-mix(in srgb, var(--risu-theme-primary) 13%, var(--risu-theme-darkbg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--risu-theme-primary) 10%, transparent), 0 .22rem .6rem color-mix(in srgb, var(--color-shadow) 16%, transparent); }
     .dock-views .reboot-button,
     .dock-views .reboot-cancel-button {
         width: auto;
@@ -1084,7 +1084,7 @@
         border-color: color-mix(in srgb, var(--risu-theme-primary) 24%, var(--risu-theme-darkborderc));
         background: color-mix(in srgb, var(--risu-theme-primary) 12%, transparent);
     }
-    .dock-views button.active { color: white; border-color: color-mix(in srgb, var(--risu-theme-primary) 72%, transparent); background: var(--risu-theme-primary); }
+    .dock-views button.active { color: var(--color-accenttext); border-color: color-mix(in srgb, var(--risu-theme-primary) 72%, transparent); background: var(--risu-theme-primary); }
     .dock-views button:disabled { opacity: .48; cursor: default; }
     .dock-settings { position: relative; }
     .settings-popover {
@@ -1098,7 +1098,7 @@
         border: 1px solid var(--risu-theme-darkborderc);
         border-radius: .42rem;
         background: var(--risu-theme-bgcolor);
-        box-shadow: 0 .6rem 1.5rem rgb(0 0 0 / .28);
+        box-shadow: 0 .6rem 1.5rem color-mix(in srgb, var(--color-shadow) 28%, transparent);
     }
     .find-replace-overlay {
         position: absolute;
@@ -1107,7 +1107,7 @@
         display: grid;
         place-items: start center;
         padding: clamp(4rem, 12vh, 7rem) 1rem 1rem;
-        background: rgb(0 0 0 / .18);
+        background: color-mix(in srgb, var(--color-overlay) 18%, transparent);
     }
     .find-replace-dialog {
         width: min(27rem, 100%);
@@ -1116,7 +1116,7 @@
         border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 24%, var(--risu-theme-darkborderc));
         border-radius: .65rem;
         background: var(--risu-theme-bgcolor);
-        box-shadow: 0 1rem 2.8rem rgb(0 0 0 / .38);
+        box-shadow: 0 1rem 2.8rem color-mix(in srgb, var(--color-shadow) 38%, transparent);
     }
     .dock-close { flex: 0 0 auto; padding-inline: .38rem; }
     .reboot-choice-intro {
@@ -1355,7 +1355,7 @@
             grid-template-rows: 2.75rem minmax(0, 1fr);
             padding: 0;
             border-top: 1px solid var(--risu-theme-darkborderc);
-            background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, black);
+            background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, var(--color-bgcolor));
         }
         .portrait-command-header {
             display: block;
@@ -1466,7 +1466,7 @@
         border: 1px solid var(--risu-theme-darkborderc);
         border-radius: .5rem;
         background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, transparent);
-        box-shadow: 0 10px 28px rgb(0 0 0 / 12%);
+        box-shadow: 0 10px 28px color-mix(in srgb, var(--color-shadow) 12%, transparent);
     }
     .ledger-section h3 {
         display: flex;

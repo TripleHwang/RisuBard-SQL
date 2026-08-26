@@ -57,18 +57,18 @@
         </div>
 
         {#if data.insufficient}
-            <div class="bg-draculared/20 border border-draculared/40 rounded-md px-4 py-3 mt-3 flex items-center gap-2.5 text-red-300">
-                <TriangleAlertIcon class="size-4 shrink-0 text-red-400" />
+            <div class="bg-draculared/20 border border-draculared/40 rounded-md px-4 py-3 mt-3 flex items-center gap-2.5 text-danger">
+                <TriangleAlertIcon class="size-4 shrink-0 text-danger" />
                 <span class="leading-relaxed text-sm">{language.backupServerInsufficient}</span>
             </div>
         {:else if diskUsageLevel === 'crit' && diskUsedPct != null}
-            <div class="bg-draculared/20 border border-draculared/40 rounded-md px-4 py-3 mt-3 flex items-center gap-2.5 text-red-300">
-                <TriangleAlertIcon class="size-4 shrink-0 text-red-400" />
+            <div class="bg-draculared/20 border border-draculared/40 rounded-md px-4 py-3 mt-3 flex items-center gap-2.5 text-danger">
+                <TriangleAlertIcon class="size-4 shrink-0 text-danger" />
                 <span class="leading-relaxed text-sm">{language.storageDiskUsageHighWarning(diskUsedPct)}</span>
             </div>
         {:else if diskUsageLevel === 'warn' && diskUsedPct != null}
-            <div class="bg-yellow-900/30 border border-yellow-700/40 rounded-md px-4 py-3 mt-3 flex items-center gap-2.5 text-yellow-300">
-                <TriangleAlertIcon class="size-4 shrink-0 text-yellow-400" />
+            <div class="bg-warning-bg border border-warning-border/40 rounded-md px-4 py-3 mt-3 flex items-center gap-2.5 text-warning">
+                <TriangleAlertIcon class="size-4 shrink-0 text-warning" />
                 <span class="leading-relaxed text-sm">{language.storageDiskUsageHighWarning(diskUsedPct)}</span>
             </div>
         {/if}

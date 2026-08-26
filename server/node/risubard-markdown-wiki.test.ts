@@ -16,6 +16,46 @@ afterEach(async () => {
 })
 
 describe('Markdown narrative wiki', () => {
+    test('persists and undoes every canonical change beyond the old source and receipt limits', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const scope = {
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+        }
+        const snapshot = await wiki.snapshotBeforeTurn(scope)
+        const event = await wiki.saveConfirmedTurn({ ...scope, markdown: '# 사건\n\n새 사건.' })
+        const documents = []
+        for (let index = 0; index < 10; index++) {
+            documents.push(await wiki.saveCanonicalDocument({
+                ...scope, type: 'character', title: `인물 ${index}`,
+                markdown: `# 인물 ${index}\n\n새 상태.`,
+            }))
+        }
+        const warnings = Array.from({ length: 40 }, (_, index) => `주의 ${index}`)
+        const receipt = await wiki.recordTurnReceipt({
+            ...scope, snapshotId: snapshot.snapshotId, eventId: event.id,
+            changes: documents.map((document) => ({
+                documentId: document.id, type: document.type, title: document.title,
+                relativePath: document.relativePath, afterHash: document.contentHash,
+            })),
+            warnings,
+        })
+        expect(receipt.sourceMessageIds).toEqual(scope.sourceMessageIds)
+        expect(receipt.changes).toHaveLength(10)
+        expect(receipt.warnings).toEqual(warnings)
+        const reloaded = createMarkdownNarrativeWiki(root)
+        expect((await reloaded.loadView('character', 'chat')).documents).toHaveLength(11)
+        const undone = await reloaded.undoTurnReceipt({
+            characterId: 'character', chatId: 'chat', snapshotId: snapshot.snapshotId,
+        })
+        expect(undone.changes).toHaveLength(10)
+        expect(undone.changes.every((change) => change.undoneAt)).toBe(true)
+        expect(undone.warnings).toEqual(warnings)
+        expect((await reloaded.loadView('character', 'chat')).documents).toHaveLength(0)
+    })
+
     test('restores an interrupted reboot batch or returns its completed receipt', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
@@ -750,7 +790,10 @@ describe('Markdown narrative wiki', () => {
 
         await expect(wiki.retractEventsBySourceMessages({
             characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['assistant-1'],
+            sourceMessageIds: [
+                ...Array.from({ length: 100 }, (_, index) => `message-${index}`),
+                'assistant-1',
+            ],
         })).resolves.toEqual({ retractedIds: [removed.id] })
         const view = await wiki.loadView('character', 'chat')
         expect(view.documents.some((item) => item.id === removed.id)).toBe(false)

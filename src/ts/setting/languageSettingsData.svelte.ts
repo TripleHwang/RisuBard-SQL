@@ -81,7 +81,7 @@ export const languageSettingsItems: SettingItem[] = [
         type: 'header',
         fallbackLabel: 'Close the settings to take effect',
         options: { level: 'span' },
-        classes: 'bg-red-500 text-sm',
+        classes: 'bg-warning-bg text-warning text-sm',
         condition: () => langState.changed,
     },
 

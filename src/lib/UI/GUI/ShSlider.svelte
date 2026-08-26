@@ -170,7 +170,7 @@
                     data-slot="slider-thumb"
                     index={thumb.index}
                     class={
-                        'block size-4 shrink-0 rounded-full border-2 border-primary bg-white shadow-sm ' +
+                        'block size-4 shrink-0 rounded-full border-2 border-primary bg-switch-thumb shadow-sm ' +
                         'transition-[box-shadow,transform] cursor-grab active:cursor-grabbing ' +
                         'focus-visible:outline-hidden focus-visible:ring-3 focus-visible:ring-borderc/50 ' +
                         'disabled:pointer-events-none disabled:opacity-50'

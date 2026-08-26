@@ -22,11 +22,11 @@ function nodeObserve(node:HTMLElement){
 
             const menu = document.createElement('div')
             menu.id = 'code-contextmenu'
-            menu.setAttribute('class', 'fixed z-50 min-w-[160px] py-2 bg-gray-800 rounded-lg border border-gray-700')
+            menu.setAttribute('class', 'fixed z-50 min-w-[160px] py-2 bg-selected rounded-lg border border-darkborderc')
 
             const copyOption = document.createElement('div')
             copyOption.textContent = 'Copy'
-            copyOption.setAttribute('class', 'px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 cursor-pointer')
+            copyOption.setAttribute('class', 'px-4 py-2 text-sm text-textcolor hover:bg-darkbutton cursor-pointer')
             copyOption.addEventListener('click', ()=>{
                 navigator.clipboard.writeText(node.textContent ?? '')
                 menu.remove()
@@ -34,7 +34,7 @@ function nodeObserve(node:HTMLElement){
 
             const downloadOption = document.createElement('div');
             downloadOption.textContent = 'Download';
-            downloadOption.setAttribute('class', 'px-4 py-2 text-sm text-gray-300 hover:bg-gray-700 cursor-pointer')
+            downloadOption.setAttribute('class', 'px-4 py-2 text-sm text-textcolor hover:bg-darkbutton cursor-pointer')
             downloadOption.addEventListener('click', ()=>{
                 const a = document.createElement('a')
                 a.href = URL.createObjectURL(new Blob([node.textContent ?? ''], {type: 'text/plain'}))

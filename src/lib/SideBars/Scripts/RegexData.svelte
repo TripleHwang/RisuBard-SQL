@@ -182,7 +182,7 @@ interface Props {
 
 <style>
     .valuer:hover{
-        color: rgba(16, 185, 129, 1);
+        color: var(--color-success);
         cursor: pointer;
     }
 

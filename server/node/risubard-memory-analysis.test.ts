@@ -1,6 +1,7 @@
 import * as fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { get_encoding } from '@dqbd/tiktoken'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import type {
     MemoryAnalysisInput,
@@ -39,6 +40,40 @@ afterEach(async () => {
 })
 
 describe('memory analysis runner', () => {
+    test('fits initial character registration within the minimum analysis token budget', async () => {
+        const analyze = vi.fn(async (_request: MemoryAnalysisModelRequest) => JSON.stringify({
+            schemaVersion: 1, title: '동료 소개', establishedEvents: [],
+            stateChanges: [], characterKnowledge: [], persistentFacts: [],
+            openContinuity: [], canonicalUpdateCandidates: [],
+        }))
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                saveConfirmedTurn: vi.fn(async () => undefined),
+            },
+            analyze,
+            onError: vi.fn(),
+        })
+        await runner.run({
+            characterId: 'character', chatId: 'chat', analysisTokenLimit: 3_072,
+            messages: [{
+                messageId: 'accepted', role: 'assistant',
+                content: '지휘자 라비안과 동료 세라가 탐색대의 역할을 설명했다.',
+            }],
+        })
+        const request = analyze.mock.calls[0][0]
+        const tokenizer = get_encoding('cl100k_base')
+        try {
+            expect(tokenizer.encode(`${request.system}\n${request.input}`).length)
+                .toBeLessThanOrEqual(request.inputTokenLimit!)
+        }
+        finally {
+            tokenizer.free()
+        }
+    })
+
     test('retries a malformed reboot batch with its explicit field contract', async () => {
         const formats: Array<string | undefined> = []
         const sessions: Array<string | undefined> = []
@@ -182,7 +217,7 @@ describe('memory analysis runner', () => {
                 canonicalUpdateCandidates: [],
             }),
         })
-        const longContext = `앞부분-${'가'.repeat(5_000)}-끝부분`
+        const longContext = `앞부분-${'가'.repeat(128_001)}-끝부분`
 
         await runner.run({
             characterId: 'character',
@@ -202,6 +237,57 @@ describe('memory analysis runner', () => {
         const currentInput = inquire.mock.calls[0]?.[0].currentInput
         expect(currentInput).toHaveLength(4_096)
         expect(currentInput).toBe(longContext.slice(-4_096))
+    })
+
+    test.each([
+        { label: 'confirmed text above 64000 characters', count: 1, content: '긴 원문 '.repeat(14_000), contextCount: 1 },
+        { label: 'more than twelve confirmed messages', count: 13, content: '확정 원문', contextCount: 1 },
+        { label: 'more than one hundred context messages', count: 1, content: '확정 원문', contextCount: 101 },
+    ])('accepts $label without changing the evidence', async ({ count, content, contextCount }) => {
+        const messages = Array.from({ length: count }, (_, index) => ({
+            messageId: `accepted-${index}`, role: 'assistant' as const, content,
+        }))
+        const contextMessages = Array.from({ length: contextCount }, (_, index) => ({
+            messageId: `context-${index}`, role: 'assistant' as const, content: `문맥 ${index}`,
+        }))
+        const analyze = vi.fn(async (_request: MemoryAnalysisModelRequest) => JSON.stringify({
+            schemaVersion: 1, title: '확정', establishedEvents: ['사건이 확정되었다.'],
+            stateChanges: [], characterKnowledge: [], persistentFacts: [],
+            openContinuity: [], canonicalUpdateCandidates: [],
+        }))
+        const inquire = vi.fn(async (_request: { currentInput: string }) => ({ graphRevision: 0, sources: [] }))
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: { inquire, saveConfirmedTurn: vi.fn(async () => undefined) },
+            analyze, onError: vi.fn(),
+        })
+        await runner.run({ characterId: 'character', chatId: 'chat', messages, contextMessages })
+        expect(JSON.parse(analyze.mock.calls[0][0].input).confirmedMessages).toEqual(messages)
+        expect(inquire.mock.calls[0][0].currentInput)
+            .toBe(contextMessages.map((message) => message.content).join('\n').slice(-4096))
+    })
+
+    test('accepts valid structured output above the former character ceiling', async () => {
+        const saveConfirmedTurn = vi.fn(async (_request: { markdown: string }) => undefined)
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                saveConfirmedTurn,
+            },
+            analyze: async () => ' '.repeat(64_001) + JSON.stringify({
+                schemaVersion: 1, title: '확정', establishedEvents: ['사건이 확정되었다.'],
+                stateChanges: [], characterKnowledge: [], persistentFacts: [],
+                openContinuity: [], canonicalUpdateCandidates: [],
+            }),
+            onError: vi.fn(),
+        })
+        await runner.run({ characterId: 'character', chatId: 'chat', messages: [
+            { messageId: 'accepted', role: 'assistant', content: '사건이 확정되었다.' },
+        ] })
+        expect(saveConfirmedTurn.mock.calls[0][0].markdown).toContain('사건이 확정되었다.')
     })
 
     test('writes confirmed turns through the Markdown wiki without graph operations', async () => {
@@ -989,7 +1075,10 @@ describe('memory analysis runner', () => {
             messages: [{ messageId: 'assistant-1', role: 'assistant',
                 content: '폐촌 상태를 확인했다.' }],
             additionalAnalysis: true,
-            excludeCanonicalDocumentIds: ['location.ruins'],
+            excludeCanonicalDocumentIds: [
+                ...Array.from({ length: 64 }, (_, index) => `character.applied-${index}`),
+                'location.ruins',
+            ],
             additionalSearchLimit: 0,
         })
         expect(saveCanonicalDocument).not.toHaveBeenCalled()
@@ -1508,16 +1597,7 @@ describe('memory analysis runner', () => {
         {
             label: 'no messages',
             messages: [],
-            error: 'Analysis messages must contain between 1 and 12 items',
-        },
-        {
-            label: 'too many messages',
-            messages: Array.from({ length: 13 }, (_, index) => ({
-                messageId: `message-${index}`,
-                role: 'user' as const,
-                content: 'content',
-            })),
-            error: 'Analysis messages must contain between 1 and 12 items',
+            error: 'Analysis messages must contain at least one item',
         },
         {
             label: 'empty message ID',
@@ -1543,15 +1623,6 @@ describe('memory analysis runner', () => {
                 },
             ],
             error: 'Duplicate analysis message ID: message-1',
-        },
-        {
-            label: 'content over budget',
-            messages: [{
-                messageId: 'message-1',
-                role: 'user' as const,
-                content: 'x'.repeat(64_001),
-            }],
-            error: 'Analysis message content exceeds 64000 characters',
         },
     ])('rejects $label before calling the analyzer', async ({
         messages,

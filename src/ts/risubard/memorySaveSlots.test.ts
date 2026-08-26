@@ -3,6 +3,7 @@ import type { Chat } from '../storage/database.svelte'
 import {
     countChatTurns,
     createMemorySaveSlot,
+    decodeMemorySaveChat,
     encodeMemorySaveChat,
     listMemorySaveSlots,
     deleteMemorySaveSlot,
@@ -56,7 +57,15 @@ describe('memory save slot client', () => {
         }])).toBe(true)
     })
 
-    test('sends a binary full-chat snapshot with bounded metadata headers', async () => {
+    test.each([false, true])('saves story state without prompt preferences with overwrite=%s', async (overwrite) => {
+        const currentChat: Chat = {
+            ...chat,
+            bindedBotPreset: 'current-prompt', usePromptPresetParams: true,
+            useLocallySetGlobalVariables: true,
+            savedToggleValues: { toggle_style: 'legacy-style' },
+            GLGlobalVariables: { toggle_style: 'new-style', toggle_words: '700', chapter: '2' },
+        }
+        const before = structuredClone(currentChat)
         const calls: Array<{ url: string; init?: RequestInit }> = []
         const fetchImpl = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
             calls.push({ url: String(url), init })
@@ -67,17 +76,28 @@ describe('memory save slot client', () => {
         }) as unknown as typeof fetch
 
         await expect(createMemorySaveSlot({
-            characterId: 'character', chat,
+            characterId: 'character', chat: currentChat, overwrite,
             saveId: 'save-1', fetchImpl, createAuth: async () => 'auth',
         })).resolves.toEqual(summary)
         expect(calls[0].url).toBe('/api/risubard/memory/save-slot')
         const headers = calls[0].init?.headers as Record<string, string>
         expect(headers['x-risubard-turn-count']).toBe('1')
+        expect(headers['x-risubard-save-overwrite']).toBe(overwrite ? 'true' : undefined)
         expect(headers['x-risubard-latest-message-id']).toBe('assistant-1')
         const encodedName = headers['x-risubard-chat-name']
             .replaceAll('-', '+').replaceAll('_', '/')
         expect(Buffer.from(encodedName, 'base64').toString('utf8')).toBe('성문 앞')
         expect(calls[0].init?.body).toBeInstanceOf(ArrayBuffer)
+        const snapshot = decodeMemorySaveChat(
+            new Uint8Array(calls[0].init?.body as ArrayBuffer)
+        ) as Chat
+        expect(snapshot.scriptstate).toEqual(chat.scriptstate)
+        expect(snapshot.message).toEqual(chat.message)
+        expect(snapshot.GLGlobalVariables).toEqual({ chapter: '2' })
+        for (const key of ['bindedBotPreset', 'usePromptPresetParams', 'useLocallySetGlobalVariables', 'savedToggleValues']) {
+            expect(snapshot).not.toHaveProperty(key)
+        }
+        expect(currentChat).toEqual(before)
     })
 
     test('lists strict summaries and decodes a prepared chat load', async () => {
@@ -107,6 +127,11 @@ describe('memory save slot client', () => {
         })
         const loaded = await prepareMemorySaveLoad({
             characterId: 'character', saveId: 'save-1',
+            currentChat: {
+                ...chat, bindedBotPreset: 'current-prompt',
+                useLocallySetGlobalVariables: true,
+                GLGlobalVariables: { toggle_language: 'ko' },
+            },
             destinationChatId: 'loaded-chat', fetchImpl,
             createAuth: async () => 'auth',
         })
@@ -115,6 +140,9 @@ describe('memory save slot client', () => {
             chat: {
                 id: 'chat-1', name: '성문 앞',
                 scriptstate: { '$trust': 3 },
+                bindedBotPreset: 'current-prompt',
+                useLocallySetGlobalVariables: true,
+                GLGlobalVariables: { toggle_language: 'ko' },
             },
         })
         expect(loaded.chat.message.map((message) => message.chatId)).toEqual([
@@ -130,9 +158,72 @@ describe('memory save slot client', () => {
 
         await expect(prepareMemorySaveLoad({
             characterId: 'character', saveId: 'save-1',
+            currentChat: chat,
             destinationChatId: 'loaded-chat', fetchImpl,
             createAuth: async () => 'auth',
         })).rejects.toThrow('fork token')
+    })
+
+    test.each([
+        { name: 'pinned', current: {
+            bindedBotPreset: 'new-prompt', usePromptPresetParams: false,
+            useLocallySetGlobalVariables: true,
+            GLGlobalVariables: { toggle_style: '', toggle_words: '1000', toggle_new: '1', chapter: '9' },
+        } },
+        { name: 'unpinned', current: { useLocallySetGlobalVariables: false } },
+        { name: 'global defaults', current: {} },
+        { name: 'legacy current pin', current: {
+            savedToggleValues: { toggle_style: 'current-legacy', toggle_words: '' },
+        } },
+    ])('ignores saved prompt settings and preserves $name preferences', async ({ name, current }) => {
+        const savedChat: Chat = {
+            ...chat,
+            bindedBotPreset: 'old-prompt', usePromptPresetParams: true,
+            useLocallySetGlobalVariables: true,
+            GLGlobalVariables: { toggle_style: 'old-style', toggle_words: '700', toggle_removed: '1', chapter: '2' },
+            savedToggleValues: { toggle_style: 'old-legacy' },
+        }
+        const currentChat: Chat = {
+            ...chat, scriptstate: { '$trust': 9 }, ...current,
+        }
+        const before = structuredClone(currentChat)
+        const fetchImpl = vi.fn(async () => new Response(
+            Uint8Array.from(encodeMemorySaveChat(savedChat)).buffer,
+            { headers: { 'x-risubard-fork-token': 'load-token' } },
+        )) as unknown as typeof fetch
+        const loaded = await prepareMemorySaveLoad({
+            characterId: 'character', saveId: 'save-1', currentChat,
+            destinationChatId: 'chat-1', fetchImpl, createAuth: async () => 'auth',
+        })
+        expect(loaded.chat.bindedBotPreset).toBe(currentChat.bindedBotPreset)
+        expect(loaded.chat.usePromptPresetParams).toBe(currentChat.usePromptPresetParams)
+        expect(loaded.chat.useLocallySetGlobalVariables).toBe(
+            name === 'legacy current pin' ? true : currentChat.useLocallySetGlobalVariables
+        )
+        const currentToggles = Object.fromEntries(Object.entries(
+            currentChat.GLGlobalVariables ?? currentChat.savedToggleValues ?? {}
+        ).filter(([key]) => key.startsWith('toggle_')))
+        expect(loaded.chat.GLGlobalVariables).toEqual({ chapter: '2', ...currentToggles })
+        expect(loaded.chat.savedToggleValues).toBeUndefined()
+        expect(loaded.chat.scriptstate).toEqual({ '$trust': 3 })
+        expect(loaded.chat.message).toEqual(chat.message)
+        expect(currentChat).toEqual(before)
+    })
+
+    test('ignores a legacy toggle-only save without repinning the current chat', async () => {
+        const fetchImpl = vi.fn(async () => new Response(
+            Uint8Array.from(encodeMemorySaveChat({
+                ...chat, savedToggleValues: { toggle_style: 'old-legacy' },
+            })).buffer,
+            { headers: { 'x-risubard-fork-token': 'load-token' } },
+        )) as unknown as typeof fetch
+        const loaded = await prepareMemorySaveLoad({
+            characterId: 'character', saveId: 'save-1', currentChat: chat,
+            destinationChatId: 'chat-1', fetchImpl, createAuth: async () => 'auth',
+        })
+        expect(loaded.chat.savedToggleValues).toBeUndefined()
+        expect(loaded.chat.GLGlobalVariables).toBeUndefined()
+        expect(loaded.chat.useLocallySetGlobalVariables).toBeUndefined()
     })
 
     test('renames and deletes a saved file through bounded JSON requests', async () => {

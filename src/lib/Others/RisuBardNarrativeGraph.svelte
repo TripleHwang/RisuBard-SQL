@@ -595,7 +595,7 @@
             radial-gradient(circle at center, transparent 0 13%, var(--graph-line) 13.2% 13.4%, transparent 13.6% 27%, var(--graph-line) 27.2% 27.4%, transparent 27.6%),
             linear-gradient(90deg, var(--graph-line) 1px, transparent 1px),
             linear-gradient(var(--graph-line) 1px, transparent 1px),
-            color-mix(in srgb, var(--risu-theme-darkbg) 88%, #071017);
+            color-mix(in srgb, var(--risu-theme-darkbg) 88%, var(--color-bgcolor));
         background-size: auto, 32px 32px, 32px 32px, auto;
     }
     .constellation::after {
@@ -636,8 +636,8 @@
         border-left-width: 3px;
         border-radius: .28rem;
         color: var(--graph-ink);
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, #071017);
-        box-shadow: 0 .6rem 1.2rem rgb(0 0 0 / 24%);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, var(--color-bgcolor));
+        box-shadow: 0 .6rem 1.2rem color-mix(in srgb, var(--color-shadow) 24%, transparent);
         text-align: left;
         cursor: pointer;
         opacity: 0;
@@ -651,23 +651,23 @@
         transform: translate(-50%, -50%) scale(1.05);
         outline: none;
         border-color: var(--node-accent);
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-accent) 20%, transparent), 0 1rem 2rem rgb(0 0 0 / 32%);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-accent) 20%, transparent), 0 1rem 2rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
     }
     .memory-node.selected {
         z-index: 3;
         border-color: var(--node-accent);
         background: color-mix(in srgb, var(--node-accent) 13%, var(--risu-theme-darkbg));
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-accent) 26%, transparent), 0 1rem 2rem rgb(0 0 0 / 28%);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--node-accent) 26%, transparent), 0 1rem 2rem color-mix(in srgb, var(--color-shadow) 28%, transparent);
     }
     .memory-node.inactive {
         opacity: .64;
         filter: saturate(.55);
     }
-    .memory-node.kind-entity { --node-accent: #66d9c8; }
-    .memory-node.kind-event { --node-accent: #f1b45d; }
-    .memory-node.kind-state { --node-accent: #7ea7f7; }
-    .memory-node.kind-claim { --node-accent: #e58fbd; }
-    .memory-node.kind-thread { --node-accent: #c8a5ff; }
+    .memory-node.kind-entity { --node-accent: var(--color-success); }
+    .memory-node.kind-event { --node-accent: var(--color-warning); }
+    .memory-node.kind-state { --node-accent: var(--color-info); }
+    .memory-node.kind-claim { --node-accent: var(--color-danger); }
+    .memory-node.kind-thread { --node-accent: var(--color-secondary); }
     .memory-node span,
     .memory-node small {
         display: block;
@@ -705,7 +705,7 @@
         border-right: 1px solid var(--risu-theme-darkborderc);
         background:
             linear-gradient(90deg, color-mix(in srgb, var(--risu-theme-primary) 5%, transparent) 1px, transparent 1px),
-            color-mix(in srgb, var(--risu-theme-darkbg) 91%, #071017);
+            color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
         background-size: 28px 28px, auto;
     }
     .wiki-group + .wiki-group {
@@ -769,11 +769,11 @@
         font: 800 .65rem/1 monospace;
         text-transform: uppercase;
     }
-    .wiki-node-mark.kind-entity { color: #66d9c8; }
-    .wiki-node-mark.kind-event { color: #f1b45d; }
-    .wiki-node-mark.kind-state { color: #7ea7f7; }
-    .wiki-node-mark.kind-claim { color: #e58fbd; }
-    .wiki-node-mark.kind-thread { color: #c8a5ff; }
+    .wiki-node-mark.kind-entity { color: var(--color-success); }
+    .wiki-node-mark.kind-event { color: var(--color-warning); }
+    .wiki-node-mark.kind-state { color: var(--color-info); }
+    .wiki-node-mark.kind-claim { color: var(--color-danger); }
+    .wiki-node-mark.kind-thread { color: var(--color-secondary); }
     .wiki-node-copy {
         min-width: 0;
     }
@@ -814,7 +814,7 @@
         border: 1px solid var(--risu-theme-darkborderc);
         border-radius: 999px;
     }
-    .status-active { color: #66d9c8; }
+    .status-active { color: var(--color-success); }
     .status-invalidated { color: var(--risu-theme-draculared); }
     .node-inspector h3 {
         margin: .75rem 0 .45rem;

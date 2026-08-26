@@ -61,7 +61,7 @@
                             <!-- svelte-ignore a11y_media_has_caption -->
                             <video class="w-16 h-16 m-1 rounded-md"><source src={assetFilePath[i]} type="video/mp4"></video>
                         {:else if assetFileExtensions[i] === 'mp3'}
-                            <div class='w-16 h-16 m-1 rounded-md bg-slate-500 flex flex-col justify-center items-center'>
+                            <div class='w-16 h-16 m-1 rounded-md bg-darkbutton flex flex-col justify-center items-center'>
                                 <FileMusicIcon/>
                                 <div class='w-16 px-1 text-ellipsis whitespace-nowrap overflow-hidden'>{additionalAsset[0]}</div>
                             </div>

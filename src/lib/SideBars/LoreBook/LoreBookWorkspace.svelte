@@ -22,6 +22,10 @@
     import type { LorebookLocalActivation } from './loreBookWorkspaceConnections'
     import SolarIcon from './SolarIcon.svelte'
     import LoreBookStatusIcons from './LoreBookStatusIcons.svelte'
+    import CbsConditionView from '../../UI/GUI/CbsConditionView.svelte'
+    import { lorebookVariableContext } from 'src/ts/gui/cbsVariableEditor'
+    import { resizeHandle } from 'src/ts/gui/resizeHandle'
+    import { tooltip } from 'src/ts/gui/tooltip'
     import { loreBookVisualStatus } from './loreBookVisualStatus'
     import {
         readLorebookWorkspaceSession,
@@ -81,6 +85,12 @@
     let searchTarget = $state<'name' | 'keys'>('name')
     let enabledFilter = $state<'all' | 'enabled' | 'disabled'>('all')
     let mobileView = $state<'list' | 'editor'>('list')
+    let conditionView = $state(false)
+    const editorId = $props.id()
+    const keyFields = ['key', 'secondkey'] as const
+    let expandedKeys = $state({ key: false, secondkey: false })
+    let editorGrid: HTMLElement | undefined = $state()
+    const variableContext = $derived(conditionView ? lorebookVariableContext(DBState.db, scopeKey) : undefined)
     let batchKeys = $state('')
     let targetFolderId = $state('')
     let draftEntryId = $state<string | null>(null)
@@ -740,6 +750,25 @@
         })
     }
 
+    function startListResize() {
+        const shell = workspaceElement
+        const list = shell?.querySelector<HTMLElement>('.lore-list-pane')
+        if (!shell || !list) return
+        const width = shell.getBoundingClientRect().width
+        const start = list.getBoundingClientRect().width
+        if (!width) return
+        return (dx: number) => shell.style.setProperty('--lore-list-ratio', `${Math.max(120, Math.min(width - 240, start + dx)) / width * 100}%`)
+    }
+
+    function startStateResize() {
+        const grid = editorGrid
+        const rail = grid?.querySelector<HTMLElement>('.lore-state-rail')
+        if (!grid || !rail) return
+        const width = grid.getBoundingClientRect().width
+        const start = rail.getBoundingClientRect().width
+        return (dx: number) => grid.style.setProperty('--lore-state-width', `${Math.max(96, Math.min(width - 128, start - dx))}px`)
+    }
+
     onMount(() => {
         const media = window.matchMedia?.('(max-width: 899px)')
         const sync = () => mobileViewport = media?.matches ?? false
@@ -926,7 +955,9 @@
 
     </aside>
 
-    <button type="button" class="lore-splitter" data-lorebook-splitter aria-label={language.lorebookWorkspace.resizeList}></button>
+    <button type="button" class="lore-splitter" data-lorebook-splitter aria-label={language.lorebookWorkspace.resizeList}
+        use:tooltip={language.lorebookWorkspace.resizeHint}
+        use:resizeHandle={{ start: startListResize, reset: () => workspaceElement?.style.setProperty('--lore-list-ratio', '38%') }}></button>
 
     <main
         bind:this={editorElement}
@@ -997,7 +1028,7 @@
                 </button>
             </section>
         {:else if activeEntry && activeEntry.mode !== 'folder'}
-            <div class="lore-editor-grid">
+            <div class="lore-editor-grid" bind:this={editorGrid}>
                 <div class="editor-fields">
                     <div class="editor-heading">
                         <label>{language.lorebookWorkspace.name}
@@ -1009,6 +1040,25 @@
                                 onkeydown={(event) => commitOnShortcut(event, 'comment')}
                             />
                         </label>
+                        {#each keyFields as field}
+                            {@const label = field === 'key' ? language.lorebookWorkspace.primaryKeys : language.lorebookWorkspace.secondaryKeys}
+                            <div class="key-field">
+                                <div class="key-label">
+                                    <label for={`${editorId}-compact-${field}`}>{label}</label>
+                                    <button type="button" data-lorebook-expand-key={field}
+                                        aria-label={`${expandedKeys[field] ? language.lorebookWorkspace.collapseKeys : language.lorebookWorkspace.expandKeys} · ${label}`}
+                                        aria-expanded={expandedKeys[field]} aria-controls={`${editorId}-expanded-${field}`}
+                                        use:tooltip={expandedKeys[field] ? language.lorebookWorkspace.collapseKeys : language.lorebookWorkspace.expandKeys}
+                                        onclick={() => { expandedKeys[field] = !expandedKeys[field] }}>
+                                        <SolarIcon src={expandedKeys[field] ? altArrowUpIcon : altArrowDownIcon} name={expandedKeys[field] ? 'alt-arrow-up-bold' : 'alt-arrow-down-bold'} size=".85rem" />
+                                    </button>
+                                </div>
+                                <input id={`${editorId}-compact-${field}`} data-lorebook-field={expandedKeys[field] ? undefined : field}
+                                    value={drafts[field]}
+                                    oninput={(event) => markDraftDirty(field, event.currentTarget.value)}
+                                    onblur={() => commitDraft(field)} onkeydown={(event) => commitOnShortcut(event, field)} />
+                            </div>
+                        {/each}
                         <label>{language.lorebookWorkspace.order}
                             <input
                                 type="number"
@@ -1020,35 +1070,52 @@
                             />
                         </label>
                     </div>
-                    <label>{language.lorebookWorkspace.primaryKeys}
-                        <input
-                            data-lorebook-field="key"
-                            value={drafts.key}
-                            oninput={(event) => markDraftDirty('key', event.currentTarget.value)}
-                            onblur={() => commitDraft('key')}
-                            onkeydown={(event) => commitOnShortcut(event, 'key')}
-                        />
-                    </label>
-                    <label>{language.lorebookWorkspace.secondaryKeys}
-                        <input
-                            data-lorebook-field="secondkey"
-                            value={drafts.secondkey}
-                            oninput={(event) => markDraftDirty('secondkey', event.currentTarget.value)}
-                            onblur={() => commitDraft('secondkey')}
-                            onkeydown={(event) => commitOnShortcut(event, 'secondkey')}
-                        />
-                    </label>
-                    <label class="content-field">{language.lorebookWorkspace.content}
+                    {#if expandedKeys.key || expandedKeys.secondkey}
+                        <div class="expanded-key-fields">
+                            {#each keyFields as field}
+                                {#if expandedKeys[field]}
+                                    <label>{field === 'key' ? language.lorebookWorkspace.primaryKeys : language.lorebookWorkspace.secondaryKeys}
+                                        <textarea id={`${editorId}-expanded-${field}`} data-lorebook-expanded-key={field}
+                                            data-lorebook-field={field} rows="3" value={drafts[field]} spellcheck="false"
+                                            oninput={(event) => markDraftDirty(field, event.currentTarget.value)}
+                                            onblur={() => commitDraft(field)} onkeydown={(event) => commitOnShortcut(event, field)}></textarea>
+                                    </label>
+                                {/if}
+                            {/each}
+                        </div>
+                    {/if}
+                    <div class="content-field">
+                        <div class="content-heading">
+                            <span>{language.lorebookWorkspace.content}</span>
+                            <button type="button" data-cbs-view-toggle aria-pressed={conditionView} onclick={() => {
+                                commitDraft('content')
+                                conditionView = !conditionView
+                            }}>{conditionView ? language.cbsEditor.source : language.cbsEditor.view}</button>
+                        </div>
+                        {#if conditionView}
+                            <CbsConditionView
+                                value={drafts.content}
+                                {variableContext}
+                                onInput={(value) => markDraftDirty('content', value)}
+                                onblur={() => commitDraft('content')}
+                                onkeydown={(event) => commitOnShortcut(event, 'content')}
+                            />
+                        {:else}
                         <textarea
                             class="lore-content"
+                            aria-label={language.lorebookWorkspace.content}
                             data-lorebook-field="content"
                             value={drafts.content}
                             oninput={(event) => markDraftDirty('content', event.currentTarget.value)}
                             onblur={() => commitDraft('content')}
                             onkeydown={(event) => commitOnShortcut(event, 'content')}
                         ></textarea>
-                    </label>
+                        {/if}
+                    </div>
                 </div>
+                <button type="button" class="state-splitter" data-lorebook-state-splitter aria-label={language.lorebookWorkspace.resizeSettings}
+                    use:tooltip={language.lorebookWorkspace.resizeHint}
+                    use:resizeHandle={{ start: startStateResize, reset: () => editorGrid?.style.removeProperty('--lore-state-width') }}></button>
                 <aside class="lore-state-rail" aria-label={language.lorebookWorkspace.loreState}>
                     {#if localActivation?.visible}
                         <label><input
@@ -1164,15 +1231,15 @@
         --lore-selection: color-mix(in srgb, var(--color-selected) 70%, var(--color-darkbg));
         --lore-drop-target: var(--color-primary);
         --lore-list-ratio: 38%;
-        --lore-list-width: clamp(26%, var(--lore-list-ratio, 38%), 52%);
-        --lore-effective-list-width: max(19rem, var(--lore-list-width, 38%));
+        --lore-list-width: clamp(7.5rem, var(--lore-list-ratio, 38%), calc(100% - 15rem));
+        --lore-effective-list-width: var(--lore-list-width);
         position: relative;
         display: grid;
         container-type: inline-size;
         container-name: lore-workbench;
         grid-template-rows: auto minmax(0, 1fr);
         grid-template-columns:
-            minmax(19rem, var(--lore-list-width, 38%))
+            var(--lore-effective-list-width)
             minmax(0, 1fr);
         min-width: 0;
         height: 100%;
@@ -1228,10 +1295,10 @@
     .folder .row-title strong { font-size: .88rem; font-weight: 650; letter-spacing: 0; }
     .row-main small { padding-left: 1.42rem; color: var(--color-textcolor2); font-size: .69rem; font-weight: 400; }
     .row-actions { display: inline-flex; align-items: center; gap: .36rem; }
-    .row-delete { display: inline-grid; width: 1.8rem; height: 1.8rem; padding: 0; place-items: center; border: 0; background: transparent; color: var(--color-danger-500, #dc2626); opacity: 0; pointer-events: none; transition: opacity 140ms ease, background-color 140ms ease; }
+    .row-delete { display: inline-grid; width: 1.8rem; height: 1.8rem; padding: 0; place-items: center; border: 0; background: transparent; color: var(--color-danger); opacity: 0; pointer-events: none; transition: opacity 140ms ease, background-color 140ms ease; }
     [data-lorebook-row]:hover .row-delete, [data-lorebook-row]:focus-within .row-delete { opacity: 1; pointer-events: auto; }
-    .row-delete:hover { background: color-mix(in srgb, var(--color-danger-500, #dc2626) 12%, transparent); }
-    [data-lorebook-row].unreachable-entry .row-title strong { color: var(--color-danger-500, #dc2626); }
+    .row-delete:hover { background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
+    [data-lorebook-row].unreachable-entry .row-title strong { color: var(--color-danger); }
     [data-lorebook-row].hidden-entry .row-title strong { color: var(--color-textcolor2); opacity: .56; }
     .empty { padding: 2rem; color: var(--color-textcolor2); text-align: center; }
     .batch-editor { display: grid; align-content: start; gap: 1rem; min-height: 100%; padding: 1.2rem; background: var(--lore-surface-root); }
@@ -1253,22 +1320,35 @@
     .batch-key-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .45rem; }
     .batch-key-actions button { min-height: 2.4rem; padding: .45rem; }
     .lore-splitter { position: absolute; top: 0; bottom: 0; left: calc(var(--lore-effective-list-width) - .25rem); z-index: 5; width: .5rem; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
-    .lore-splitter:hover, .lore-splitter:focus-visible { background: color-mix(in srgb, var(--color-borderc) 45%, transparent); box-shadow: none; }
+    .lore-splitter::after, .state-splitter::after { position: absolute; top: calc(50% - 1rem); bottom: calc(50% - 1rem); left: 3px; border-left: 2px solid var(--color-borderc); content: ''; }
+    .lore-splitter:hover, .lore-splitter:focus-visible, .lore-splitter:global([data-resizing]), .state-splitter:hover, .state-splitter:focus-visible, .state-splitter:global([data-resizing]) { background: color-mix(in srgb, var(--color-borderc) 45%, transparent); box-shadow: none; }
     .lore-editor-pane { display: flex; grid-row: 2; grid-column: 2; flex-direction: column; background: var(--color-darkbg); }
     .mobile-back { display: none; }
     .lore-editor-grid {
+        --lore-effective-state-width: clamp(6rem, var(--lore-state-width, 12rem), calc(100% - 8rem));
+        position: relative;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 12rem;
+        grid-template-columns: minmax(0, 1fr) var(--lore-effective-state-width);
         min-height: 0;
         height: 100%;
     }
-    .editor-fields { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: .7rem; padding: .9rem; }
-    .editor-heading { display: grid; grid-template-columns: minmax(0, 1fr) 7rem; gap: .7rem; }
+    .state-splitter { position: absolute; top: 0; bottom: 0; right: calc(var(--lore-effective-state-width) - .25rem); z-index: 5; width: .5rem; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: col-resize; touch-action: none; }
+    .editor-fields { display: flex; min-width: 0; min-height: 0; overflow: auto; flex-direction: column; gap: .5rem; padding: .65rem; }
+    .editor-heading { display: grid; flex-shrink: 0; grid-template-columns: minmax(3rem, 1fr) repeat(2, minmax(4rem, 1fr)) minmax(4rem, .35fr); gap: .5rem; align-items: end; overflow-x: auto; }
+    .editor-heading > label, .key-field { min-width: 0; }
+    .key-field { display: grid; gap: .3rem; }
+    .key-label { display: flex; align-items: center; gap: .3rem; }
+    .key-label button { display: grid; flex-shrink: 0; width: 1.2rem; height: 1.1rem; padding: 0; place-items: center; }
+    .expanded-key-fields { display: grid; flex-shrink: 0; gap: .4rem; max-height: 45%; overflow: auto; }
+    .expanded-key-fields textarea { min-height: 3rem; resize: vertical; }
     .editor-fields label { display: grid; gap: .3rem; color: var(--color-textcolor2); font-size: .74rem; font-weight: 650; letter-spacing: .02em; }
-    .editor-fields input, .editor-fields textarea { width: 100%; padding: .48rem .55rem; color: var(--color-textcolor); }
-    .content-field { min-height: 0; flex: 1; grid-template-rows: auto minmax(0, 1fr); }
+    .editor-fields input, .editor-fields textarea { min-width: 0; width: 100%; padding: .48rem .55rem; color: var(--color-textcolor); }
+    .content-field { display: grid; min-height: 6rem; flex: 1; gap: .3rem; grid-template-rows: auto minmax(0, 1fr); }
+    .content-heading { display: flex; align-items: center; justify-content: space-between; gap: .5rem; color: var(--color-textcolor2); font-size: .74rem; font-weight: 650; }
+    .content-heading button { padding: .25rem .6rem; border: 1px solid var(--color-darkborderc); border-radius: .35rem; color: var(--color-textcolor); font-size: .72rem; font-weight: 500; }
+    .content-heading button:hover, .content-heading button[aria-pressed='true'] { background: var(--color-selected); }
     .lore-content {
-        min-height: 18rem;
+        min-height: 0;
         height: 100%;
         resize: none;
         font-family: inherit;
@@ -1276,7 +1356,9 @@
         font-weight: 400;
         line-height: 1.6;
     }
-    .lore-state-rail { display: flex; min-height: 0; flex-direction: column; gap: .5rem; padding: .9rem; border-left: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-selected) 15%, transparent); }
+    .lore-state-rail { display: flex; min-width: 0; min-height: 0; overflow: auto; flex-direction: column; gap: .5rem; padding: .65rem; border-left: 1px solid var(--color-darkborderc); background: color-mix(in srgb, var(--color-selected) 15%, transparent); }
+    .lore-state-rail input, .lore-state-rail select { min-width: 0; }
+    .lore-state-rail input[type='checkbox'] { flex-shrink: 0; }
     .lore-state-rail label { display: flex; align-items: center; gap: .48rem; font-size: .77rem; }
     .lore-state-rail button, .lore-state-rail select { width: 100%; min-height: 2.15rem; padding: .42rem; }
     .entry-actions { margin-top: .3rem; padding-top: .7rem; border-top: 1px solid var(--color-darkborderc); }
@@ -1285,8 +1367,8 @@
     .entry-action-list { display: grid; gap: .45rem; padding-top: .55rem; }
     .activation-control { display: grid !important; align-items: stretch !important; gap: .24rem !important; }
     .activation-control input { width: 100%; padding: .35rem; }
-    .danger { background: color-mix(in srgb, var(--color-danger-600) 52%, var(--color-darkbg)); color: var(--color-danger-50); }
-    .danger:hover { background: color-mix(in srgb, var(--color-danger-600) 76%, var(--color-darkbg)); }
+    .danger { background: var(--color-danger); color: var(--color-on-danger); }
+    .danger:hover { background: color-mix(in srgb, var(--color-danger) 85%, var(--color-darkbg)); }
     .editor-empty, .folder-editor, .child-link-editor { display: grid; height: 100%; place-content: center; gap: .35rem; padding: 2rem; color: var(--color-textcolor2); text-align: center; }
     .editor-empty span { font-size: 2rem; opacity: .35; }
     .editor-empty strong, .child-link-editor strong { color: var(--color-textcolor); font-weight: 600; }
@@ -1311,7 +1393,7 @@
         .lore-pane[data-mobile-hidden='true'] { display: none; }
         .lore-list-pane { border-right: 0; }
         .lore-toolbar .search-box { flex-basis: 100%; }
-        .lore-splitter { display: none; }
+        .lore-splitter, .state-splitter { display: none; }
         .mobile-back { display: inline-flex; margin: .65rem .75rem 0; padding: .5rem .68rem; align-items: center; align-self: flex-start; gap: .4rem; }
         .lore-editor-grid { grid-template-columns: 1fr; height: calc(100% - 3rem); overflow-y: auto; }
         .editor-fields { min-height: 42rem; }

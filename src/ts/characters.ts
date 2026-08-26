@@ -218,6 +218,7 @@ export async function exportChat(page:number){
         else if(mode === '2'){
 
             let chatContentHTML = ''
+            const exportTheme = getComputedStyle(document.documentElement)
 
             let i = 0
             for(const v of chat.message){
@@ -237,6 +238,8 @@ export async function exportChat(page:number){
                         <style>
                             body{
                                 font-family: Arial, sans-serif;
+                                color: ${exportTheme.getPropertyValue('--color-textcolor').trim()};
+                                background: ${exportTheme.getPropertyValue('--color-bgcolor').trim()};
                                 display: flex;
                                 justify-content: center;
                             }
@@ -249,7 +252,7 @@ export async function exportChat(page:number){
                                 gap: 1rem;
                             }
                             .chat{
-                                background: #f0f0f0;
+                                background: ${exportTheme.getPropertyValue('--color-darkbg').trim()};
                                 padding: 1rem;
                                 border-radius: 10px;
                                 display: flex;

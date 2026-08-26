@@ -46,10 +46,12 @@ function boundedInteger(
     value: unknown,
     fallback: number,
     minimum: number,
-    maximum: number
+    maximum = Number.MAX_SAFE_INTEGER
 ): number {
     if (!Number.isFinite(value) || typeof value !== 'number') return fallback
-    return Math.max(minimum, Math.min(maximum, Math.round(value)))
+    const rounded = Math.round(value)
+    if (!Number.isSafeInteger(rounded)) return fallback
+    return Math.max(minimum, Math.min(maximum, rounded))
 }
 
 export function resolveRisuBardChatSettings(
@@ -77,10 +79,10 @@ export function resolveRisuBardChatSettings(
             value('risuBardCanonicalTargetLimit')
         ),
         risuBardRecentMessageCount: boundedInteger(
-            value('risuBardRecentMessageCount'), 12, 1, 100
+            value('risuBardRecentMessageCount'), 12, 1
         ),
         risuBardResponseMessageCount: boundedInteger(
-            value('risuBardResponseMessageCount'), 12, 1, 100
+            value('risuBardResponseMessageCount'), 12, 1
         ),
         risuBardResponseExcludeUserMessages:
             value('risuBardResponseExcludeUserMessages') === true,
@@ -97,8 +99,7 @@ export function normalizeRisuBardAnalysisTokenLimit(value: unknown): number {
     return boundedInteger(
         value,
         RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT,
-        3_072,
-        32_768
+        3_072
     )
 }
 
@@ -106,8 +107,7 @@ export function normalizeRisuBardAdditionalSearchLimit(value: unknown): number {
     return boundedInteger(
         value,
         RISUBARD_ADDITIONAL_SEARCH_LIMIT_DEFAULT,
-        0,
-        4
+        0
     )
 }
 
@@ -115,8 +115,7 @@ export function normalizeRisuBardCanonicalTargetLimit(value: unknown): number {
     return boundedInteger(
         value,
         RISUBARD_CANONICAL_TARGET_LIMIT_DEFAULT,
-        1,
-        8
+        1
     )
 }
 
@@ -127,8 +126,7 @@ export function normalizeRisuBardInquiryTokenBudget(
     const normalizedMaximum = boundedInteger(
         maximum,
         RISUBARD_INQUIRY_MAXIMUM_TOKEN_BUDGET_DEFAULT,
-        256,
-        32_768
+        256
     )
     return {
         target: boundedInteger(

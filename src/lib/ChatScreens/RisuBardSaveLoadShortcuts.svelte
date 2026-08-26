@@ -269,7 +269,7 @@
         border: 1px solid color-mix(in srgb, var(--color-primary) 34%, var(--color-darkborderc));
         border-radius: .65rem;
         background: color-mix(in srgb, var(--color-darkbg) 92%, transparent);
-        box-shadow: 0 .45rem 1.25rem rgb(0 0 0 / 24%);
+        box-shadow: 0 .45rem 1.25rem color-mix(in srgb, var(--color-shadow) 24%, transparent);
         backdrop-filter: blur(.55rem);
         cursor: grab;
         touch-action: none;
@@ -278,7 +278,7 @@
     }
     .save-load-shortcuts.dragging {
         cursor: grabbing;
-        box-shadow: 0 .7rem 1.6rem rgb(0 0 0 / 32%);
+        box-shadow: 0 .7rem 1.6rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
     }
     .shortcut-action {
         display: grid;

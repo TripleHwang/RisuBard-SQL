@@ -841,12 +841,10 @@ export function setDatabase(data:Database){
     data.showRisuBardSaveLoadShortcuts ??= true
     data.risuBardRecentMessageCount = Number.isSafeInteger(data.risuBardRecentMessageCount)
         && data.risuBardRecentMessageCount! >= 1
-        && data.risuBardRecentMessageCount! <= 100
         ? data.risuBardRecentMessageCount
         : 12
     data.risuBardResponseMessageCount = Number.isSafeInteger(data.risuBardResponseMessageCount)
         && data.risuBardResponseMessageCount! >= 1
-        && data.risuBardResponseMessageCount! <= 100
         ? data.risuBardResponseMessageCount
         : 12
     data.risuBardResponseExcludeUserMessages =
@@ -1340,6 +1338,7 @@ export interface Database{
     swipe:boolean
     confirmReroll:boolean
     textTheme: string
+    textThemeAutoContrast?: boolean
     customTextTheme: {
         FontColorStandard: string,
         FontColorBold : string,
@@ -2202,6 +2201,7 @@ export interface themePreset{
     colorSchemeName: string
     colorScheme: ColorScheme
     textTheme: string
+    textThemeAutoContrast?: boolean
     customTextTheme: {
         FontColorStandard: string
         FontColorBold: string
@@ -3039,6 +3039,7 @@ export function saveCurrentThemePreset(){
         colorSchemeName: db.colorSchemeName,
         colorScheme: safeStructuredClone(db.colorScheme),
         textTheme: db.textTheme,
+        textThemeAutoContrast: db.textThemeAutoContrast !== false,
         customTextTheme: safeStructuredClone(db.customTextTheme),
         font: db.font,
         customFont: db.customFont,
@@ -3107,6 +3108,7 @@ export function changeToThemePreset(id = 0, savecurrent = true){
     db.colorSchemeName = p.colorSchemeName ?? db.colorSchemeName
     db.colorScheme = safeStructuredClone(p.colorScheme ?? db.colorScheme)
     db.textTheme = p.textTheme ?? db.textTheme
+    db.textThemeAutoContrast = p.textThemeAutoContrast !== false
     db.customTextTheme = safeStructuredClone(p.customTextTheme ?? db.customTextTheme)
     db.font = p.font ?? db.font
     db.customFont = p.customFont ?? db.customFont

@@ -30,6 +30,7 @@
         resizable?: boolean;
         contentStyle?: string;
         contentElement?: HTMLElement | null;
+        headerActions?: Snippet;
         title?: Snippet;
         description?: Snippet;
         footer?: Snippet;
@@ -58,6 +59,7 @@
         resizable = false,
         contentStyle = '',
         contentElement = $bindable(null),
+        headerActions,
         title,
         description,
         footer,
@@ -94,7 +96,7 @@
 <Dialog.Root bind:open {onOpenChange}>
     <Dialog.Portal>
         <Dialog.Overlay
-            class={cn('fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier], overlayClass)}
+            class={cn('fixed inset-0 bg-overlay/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier], overlayClass)}
         />
         <Dialog.Content
             bind:ref={contentElement}
@@ -110,8 +112,9 @@
             escapeKeydownBehavior={closeOnEscape ? 'close' : 'ignore'}
             interactOutsideBehavior={closeOnOutsideClick ? 'close' : 'ignore'}
         >
-            {#if title || description || closable}
+            {#if headerActions || title || description || closable}
                 <div class="flex flex-col gap-1 pr-8 relative">
+                    {@render headerActions?.()}
                     {#if title}
                         <Dialog.Title class="text-lg font-semibold text-textcolor leading-tight">
                             {@render title()}

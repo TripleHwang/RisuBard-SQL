@@ -16,7 +16,9 @@ describe('inline collection organizer list', () => {
         expect(component).toContain("import type { Snippet }")
         expect(component).toContain('itemContent')
         expect(component).toContain('{@render itemContent(item.id)}')
-        expect(component).toContain("md:grid-cols-[13rem_minmax(0,1fr)]")
+        expect(component).toContain('data-collection-splitter')
+        expect(component).toContain('container-type: inline-size')
+        expect(component).toContain('@container collection-manager (min-width: 720px)')
     })
 
     test('keeps folder deletion, immediate persistence, bulk movement, and accessible reorder controls inline', () => {

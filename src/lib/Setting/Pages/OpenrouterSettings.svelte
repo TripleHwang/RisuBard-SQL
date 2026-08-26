@@ -48,7 +48,7 @@
                     value.push('')
                     DBState.db.openrouterProvider.order = value
             }}><PlusIcon /></button>
-                <button class="bg-red-500 text-white p-2 rounded-md" onclick={() => {
+                <button class="bg-danger text-on-danger p-2 rounded-md" onclick={() => {
                     let value = DBState.db.openrouterProvider.order ?? []
                     value.pop()
                     DBState.db.openrouterProvider.order = value
@@ -69,7 +69,7 @@
                     value.push('')
                     DBState.db.openrouterProvider.only = value
             }}><PlusIcon /></button>
-                <button class="bg-red-500 text-white p-2 rounded-md" onclick={() => {
+                <button class="bg-danger text-on-danger p-2 rounded-md" onclick={() => {
                     let value = DBState.db.openrouterProvider.only ?? []
                     value.pop()
                     DBState.db.openrouterProvider.only = value
@@ -90,7 +90,7 @@
                     value.push('')
                     DBState.db.openrouterProvider.ignore = value
             }}><PlusIcon /></button>
-                <button class="bg-red-500 text-white p-2 rounded-md" onclick={() => {
+                <button class="bg-danger text-on-danger p-2 rounded-md" onclick={() => {
                     let value = DBState.db.openrouterProvider.ignore ?? []
                     value.pop()
                     DBState.db.openrouterProvider.ignore = value

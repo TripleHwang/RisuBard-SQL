@@ -138,12 +138,12 @@
     <div class="flex items-center justify-between gap-2">
         <span class="text-sm text-textcolor flex items-center gap-1">
             {schemaField.label}
-            {#if schemaField.required}<span class="text-red-400">*</span>{/if}
+            {#if schemaField.required}<span class="text-danger">*</span>{/if}
         </span>
         {#if showReset}
             <button
                 type="button"
-                class="text-textcolor2 hover:text-red-400 transition-colors flex items-center gap-1 text-xs"
+                class="text-textcolor2 hover:text-danger/80 transition-colors flex items-center gap-1 text-xs"
                 title={language.reset}
                 onclick={resetField}
             >
@@ -236,7 +236,7 @@
             height="32"
         />
         {#if jsonError}
-            <span class="text-xs text-red-400">{jsonError}</span>
+            <span class="text-xs text-danger">{jsonError}</span>
         {/if}
     {/if}
 </div>

@@ -15,7 +15,6 @@ import { findCharacterbyId, getPersonaPrompt, getUserIcon, getUserName, pickHash
 import { getInlayInfosBatch } from '../process/files/inlays';
 import { getModuleAssets, getModuleLorebooks, getModules } from '../process/modules';
 import hljs from 'highlight.js/lib/core'
-import 'highlight.js/styles/atom-one-dark.min.css'
 import { language } from 'src/lang';
 import katex from 'katex'
 import { getModelInfo } from '../model/modellist';
@@ -581,7 +580,7 @@ async function parseAdditionalAssets(data:string, char:simpleCharacterArgument|c
                 return `<audio controls autoplay loop><source src="${p}" type="audio/mpeg"></audio>\n`
             case 'bg':
                 if(mode === 'back'){
-                    return `<div style="width:100%;height:100%;background: linear-gradient(rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0.8)),url(${p}); background-size: cover;"></div>`
+                    return `<div style="width:100%;height:100%;background: linear-gradient(color-mix(in srgb, var(--color-overlay) 80%, transparent), color-mix(in srgb, var(--color-overlay) 80%, transparent)),url(${p}); background-size: cover;"></div>`
                 }
                 break
             case 'asset':{
@@ -714,7 +713,7 @@ export function parseInlayAssets(data:string){
             let cached = blobUrlCache.get(id)
             if(!cached){
                 // If not in memory cache, inject placeholder
-                const placeholder = `${prefix}<div data-inlay-id="${id}" data-inlay-type="${inlayType}" class="risu-inlay-placeholder risu-loading-spinner" style="width: 100%; min-height: 100px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.1); border-radius: 8px;"></div>${postfix}`
+                const placeholder = `${prefix}<div data-inlay-id="${id}" data-inlay-type="${inlayType}" class="risu-inlay-placeholder risu-loading-spinner" style="width: 100%; min-height: 100px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--color-selected) 20%, transparent); border-radius: 8px;"></div>${postfix}`
                 data = data.replace(inlay, placeholder)
                 continue
             }

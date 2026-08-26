@@ -41,6 +41,51 @@ function createHarness() {
 }
 
 describe('RisuBard memory routes', () => {
+    test.each([
+        { route: 'inquiry', method: 'inquireNarrative', extra: {
+            currentInput: '현재 사건', tokenBudget: { target: 50_000, maximum: 99_999 },
+        } },
+        { route: 'wiki/save', method: 'saveMarkdownWikiTurn', extra: {
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+            markdown: '# 사건\n\n새 사건.',
+        } },
+        { route: 'wiki/document/save', method: 'saveCanonicalWikiDocument', extra: {
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+            type: 'character', title: '인물', markdown: '# 인물\n\n새 상태.',
+        } },
+        { route: 'wiki/snapshot', method: 'snapshotWikiBeforeTurn', extra: {
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+        } },
+        { route: 'wiki/event/retract-sources', method: 'retractWikiEventsBySourceMessages', extra: {
+            sourceMessageIds: Array.from({ length: 101 }, (_, index) => `message-${index}`),
+        } },
+        { route: 'wiki/receipt', method: 'recordWikiTurnReceipt', extra: {
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+            snapshotId: 'turn-stable',
+            changes: Array.from({ length: 10 }, (_, index) => ({
+                documentId: `character.person-${index}`, type: 'character',
+                title: `인물 ${index}`, relativePath: `characters/person-${index}.md`,
+                afterHash: `hash-${index}`,
+            })),
+            warnings: Array.from({ length: 40 }, (_, index) => `주의 ${index}`),
+        } },
+    ])('accepts configured analysis sizes through $route', async ({ route, method, extra }) => {
+        const { registerRisuBardMemoryRoutes } = require('./risubard-memory-routes.cjs')
+        const harness = createHarness()
+        const persist = vi.fn(async () => ({ ok: true }))
+        registerRisuBardMemoryRoutes(harness.app, {
+            auth: async () => true, service: { [method]: persist },
+        })
+        const body = { characterId: 'character', chatId: 'chat', ...extra }
+        const next = vi.fn()
+        await harness.routes.get(`/api/risubard/memory/${route}`)!(
+            { body }, harness.response, next,
+        )
+        expect(harness.response.statusCode).toBe(200)
+        expect(next).not.toHaveBeenCalled()
+        expect(persist).toHaveBeenCalledWith(body)
+    })
+
     test('validates reboot replacement, cleanup, and recovery operations', async () => {
         const service = {
             replaceMemory: vi.fn(async () => ({
@@ -105,7 +150,7 @@ describe('RisuBard memory routes', () => {
         expect(harness.response.statusCode).toBe(400)
     })
 
-    test('validates binary save creation and save list requests', async () => {
+    test.each([false, true])('validates binary save creation with overwrite=%s and save list requests', async (overwrite) => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'
         )
@@ -131,6 +176,7 @@ describe('RisuBard memory routes', () => {
                 'x-risubard-chat-name': Buffer.from('모험').toString('base64url'),
                 'x-risubard-turn-count': '7',
                 'x-risubard-latest-message-id': 'assistant-7',
+                ...(overwrite ? { 'x-risubard-save-overwrite': 'true' } : {}),
             },
             body: Buffer.from([1, 2, 3]),
         }, harness.response, vi.fn())
@@ -138,6 +184,7 @@ describe('RisuBard memory routes', () => {
             characterId: 'character', sourceChatId: 'chat-1',
             saveId: 'save-1', sourceChatName: '모험', turnCount: 7,
             latestMessageId: 'assistant-7',
+            ...(overwrite ? { overwrite: true } : {}),
             chatBytes: Buffer.from([1, 2, 3]),
         })
         expect(harness.response.body).toEqual(summary)

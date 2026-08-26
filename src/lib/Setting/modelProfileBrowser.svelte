@@ -279,7 +279,7 @@
     }
 </script>
 
-<div class="absolute w-full h-full z-40 bg-black/50 flex justify-center items-center">
+<div class="absolute w-full h-full z-40 bg-overlay/50 flex justify-center items-center">
     <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl w-124 max-h-full overflow-hidden">
         <div class="flex items-center text-textcolor mb-4 shrink-0">
             <h2 class="mt-0 mb-0">{language.selectProfile}</h2>
@@ -319,7 +319,7 @@
                         {#if profile.profileStatus !== 'current'}
                             <span
                                 class="text-[10px] leading-none px-1.5 py-0.5 rounded shrink-0
-                                {profile.profileStatus === 'deprecated' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-500'}"
+                                {profile.profileStatus === 'deprecated' ? 'bg-danger-bg text-danger' : 'bg-warning-bg text-warning'}"
                             >
                                 {profile.profileStatus === 'deprecated' ? language.profileStatusDeprecated : language.profileStatusOutdated}
                             </span>
@@ -344,7 +344,7 @@
                         <DownloadIcon size={18}/>
                     </button>
                     {#if activeTab === 'custom'}
-                        <button class="text-textcolor2 hover:text-red-400 cursor-pointer" title={language.profileDelete} onclick={() => deleteCustom(profile)}>
+                        <button class="text-textcolor2 hover:text-danger/80 cursor-pointer" title={language.profileDelete} onclick={() => deleteCustom(profile)}>
                             <TrashIcon size={18}/>
                         </button>
                     {/if}

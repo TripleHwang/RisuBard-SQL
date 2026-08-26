@@ -1,5 +1,7 @@
 <script lang="ts">
     import type { Snippet } from 'svelte'
+    import { onMount } from 'svelte'
+    import { resizeHandle } from 'src/ts/gui/resizeHandle'
     import {
         ChevronDownIcon,
         ChevronUpIcon,
@@ -58,6 +60,43 @@
     let draggedItemIds = $state<string[]>([])
     let primaryDraggedItemId = $state<string | null>(null)
     let draggedFolderId = $state<string | null>(null)
+    let organizerElement: HTMLDivElement
+    let folderElement: HTMLElement
+    let compact = $state(false)
+    let folderSize = $state(272)
+    let paneLimit = $state(680)
+    const paneId = $props.id()
+
+    onMount(() => {
+        const observer = new ResizeObserver(([entry]) => {
+            compact = entry.contentRect.width < 720
+            paneLimit = Math.max(0, compact ? entry.contentRect.height - 252 : entry.contentRect.width - 332)
+            const rect = folderElement.getBoundingClientRect()
+            folderSize = compact ? rect.height : rect.width
+        })
+        observer.observe(organizerElement)
+        return () => observer.disconnect()
+    })
+
+    function startPaneResize() {
+        const { width, height } = organizerElement.getBoundingClientRect()
+        const vertical = width < 720
+        const rect = folderElement.getBoundingClientRect()
+        const initial = vertical ? rect.height : rect.width
+        const limit = Math.max(0, vertical ? height - 252 : width - 332)
+        const minimum = Math.min(vertical ? 128 : 208, limit)
+        return (dx: number, dy: number) => {
+            folderSize = Math.min(limit, Math.max(minimum, initial + (vertical ? dy : dx)))
+            organizerElement.style.setProperty(vertical ? '--collection-folder-height' : '--collection-folder-width', `${folderSize}px`)
+        }
+    }
+
+    function resetPanes() {
+        organizerElement.style.removeProperty('--collection-folder-width')
+        organizerElement.style.removeProperty('--collection-folder-height')
+        const rect = folderElement.getBoundingClientRect()
+        folderSize = compact ? rect.height : rect.width
+    }
 
     const itemIds = $derived(items.map((item) => item.id))
     const organizerState = $derived(normalizeCollectionOrganizerState(
@@ -222,10 +261,12 @@
 </script>
 
 <div
-    class="grid min-h-72 overflow-hidden rounded-md border border-darkborderc md:grid-cols-[13rem_minmax(0,1fr)]"
+    bind:this={organizerElement}
+    class="collection-organizer overflow-hidden rounded-md border border-darkborderc"
     data-collection-organizer-list={kind}
 >
-    <aside class="flex max-h-60 min-h-0 flex-col border-b border-darkborderc p-2 md:max-h-none md:border-b-0 md:border-r">
+  <div class="collection-organizer-layout">
+    <aside bind:this={folderElement} id={`${paneId}-folders`} class="flex min-h-0 min-w-0 flex-col p-2">
         <div class="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-textcolor2">{collectionLabel}</div>
         <div class="min-h-0 grow overflow-y-auto">
             <button
@@ -249,7 +290,7 @@
             <div class="flex flex-col gap-1" role="list" aria-label={copy.folders}>
                 {#each organizerState.folders as folder, folderIndex (folder.id)}
                     <div
-                        class="group flex min-h-10 items-center rounded-md hover:bg-selected/30"
+                        class="collection-folder group flex min-h-10 flex-wrap items-center rounded-md hover:bg-selected/30"
                         class:bg-selected={selectedFolderId === folder.id}
                         role="listitem"
                         draggable="true"
@@ -265,12 +306,12 @@
                             else dropItemsOnFolder(event, folder.id)
                         }}
                     >
-                        <button class="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left" onclick={() => selectFolder(folder.id)}>
-                            <FolderIcon size={15} />
+                        <button class="flex min-w-0 flex-1 basis-24 items-center gap-2 px-2 py-2 text-left" title={folder.name} onclick={() => selectFolder(folder.id)}>
+                            <FolderIcon size={15} class="shrink-0" />
                             <span class="min-w-0 flex-1 truncate">{folder.name}</span>
                             <span class="text-xs text-textcolor2 group-hover:hidden">{folderCounts.byFolderId[folder.id] ?? 0}</span>
                         </button>
-                        <div class="flex shrink-0 pr-1">
+                        <div class="collection-folder-actions ml-auto flex shrink-0 pr-1">
                             <ShButton variant="ghost" size="icon-xs" aria-label={copy.moveFolderUp} disabled={folderIndex === 0} onclick={() => reorderFolder(folder.id, -1)}><ChevronUpIcon /></ShButton>
                             <ShButton variant="ghost" size="icon-xs" aria-label={copy.moveFolderDown} disabled={folderIndex === organizerState.folders.length - 1} onclick={() => reorderFolder(folder.id, 1)}><ChevronDownIcon /></ShButton>
                             <ShButton variant="ghost" size="icon-xs" aria-label={copy.renameFolder} onclick={() => renameFolder(folder.id, folder.name)}><PencilIcon /></ShButton>
@@ -293,21 +334,28 @@
         </div>
     </aside>
 
-    <section class="flex min-h-0 min-w-0 flex-col gap-2 p-3">
-        <div class="flex flex-col gap-2 sm:flex-row">
-            <TextInput className="min-w-0 grow" bind:value={search} placeholder={copy.searchPlaceholder} />
+    <!-- A focusable ARIA separator is the keyboard-operable window splitter pattern. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div role="separator" tabindex="0" class="collection-splitter" data-collection-splitter
+        aria-label={copy.resizePanes} aria-controls={`${paneId}-folders`} aria-orientation={compact ? 'horizontal' : 'vertical'}
+        aria-valuemin={Math.min(compact ? 128 : 208, paneLimit)} aria-valuemax={paneLimit} aria-valuenow={Math.round(Math.min(folderSize, paneLimit))}
+        title={copy.resizeHint} use:resizeHandle={{ start: startPaneResize, reset: resetPanes }}><span></span></div>
+
+    <section class="collection-items-pane flex min-h-0 min-w-0 flex-col gap-2 overflow-auto p-3">
+        <div class="collection-toolbar flex min-w-0 shrink-0 flex-wrap gap-2">
+            <TextInput className="min-w-0 flex-1 basis-48" bind:value={search} placeholder={copy.searchPlaceholder} />
             {#if toolbar}{@render toolbar(selectedFolderId)}{/if}
         </div>
 
-        <div class="flex flex-wrap items-center gap-2 rounded-md bg-selected/10 px-2 py-1.5">
+        <div class="collection-bulk-actions flex min-w-0 shrink-0 flex-wrap items-center gap-2 rounded-md bg-selected/10 px-2 py-1.5">
             <ShButton variant="ghost" size="sm" onclick={() => {
                 selectedItemIds = Array.from(new Set([...selectedItemIds, ...visibleItems.map((item) => item.id)]))
             }}>{copy.selectVisible}</ShButton>
             <ShButton variant="ghost" size="sm" disabled={!selectedItemIds.length} onclick={() => { selectedItemIds = [] }}>{copy.clearSelection}</ShButton>
             <span class="text-xs text-textcolor2">{copy.selectedCount.replace('{}', String(selectedItemIds.length))}</span>
-            <div class="min-w-8 grow"></div>
+            <div class="min-w-0 grow"></div>
             <select
-                class="min-h-8 min-w-36 rounded-md border border-darkborderc bg-darkbg px-2 text-sm text-textcolor focus:outline-none focus:ring-2 focus:ring-borderc/50"
+                class="min-h-8 min-w-0 max-w-full basis-36 rounded-md border border-darkborderc bg-darkbg px-2 text-sm text-textcolor focus:outline-none focus:ring-2 focus:ring-borderc/50"
                 bind:value={moveTarget}
                 aria-label={copy.moveTarget}
             >
@@ -320,13 +368,13 @@
             <ShButton variant="outline" size="sm" disabled={!selectedItemIds.length || !moveTarget} onclick={bulkMove}>{copy.moveSelected}</ShButton>
         </div>
 
-        <div class="flex min-h-40 flex-col divide-y divide-darkborderc overflow-y-auto rounded-md border border-darkborderc" role="list" aria-label={copy.items}>
+        <div class="collection-items flex min-h-40 flex-1 flex-col divide-y divide-darkborderc overflow-y-auto rounded-md border border-darkborderc" role="list" aria-label={copy.items}>
             {#if visibleItems.length === 0}
                 <p class="m-auto p-6 text-sm text-textcolor2">{copy.noItems}</p>
             {:else}
                 {#each visibleItems as item, itemIndex (item.id)}
                     <div
-                        class="flex min-w-0 items-start gap-2 p-2 hover:bg-selected/20"
+                        class="collection-item flex min-w-0 shrink-0 items-start gap-2 p-2 hover:bg-selected/20"
                         role="listitem"
                         ondragover={(event) => { if (draggedItemIds.length) event.preventDefault() }}
                         ondrop={(event) => dropItemForReorder(event, item.id)}
@@ -351,8 +399,8 @@
                                 primaryDraggedItemId = null
                             }}
                         ><GripVerticalIcon size={16} /></button>
-                        <div class="min-w-0 grow">{@render itemContent(item.id)}</div>
-                        <div class="flex shrink-0 pt-1">
+                        <div class="collection-item-content min-w-0 grow">{@render itemContent(item.id)}</div>
+                        <div class="collection-item-order flex shrink-0 pt-1">
                             <ShButton variant="ghost" size="icon-sm" aria-label={copy.moveItemUp} disabled={itemIndex === 0} onclick={() => moveVisibleItem(item.id, -1)}><ChevronUpIcon /></ShButton>
                             <ShButton variant="ghost" size="icon-sm" aria-label={copy.moveItemDown} disabled={itemIndex === visibleItems.length - 1} onclick={() => moveVisibleItem(item.id, 1)}><ChevronDownIcon /></ShButton>
                         </div>
@@ -361,4 +409,30 @@
             {/if}
         </div>
     </section>
+  </div>
 </div>
+
+<style>
+    .collection-organizer { container-name: collection-manager; container-type: inline-size; width: 100%; height: min(70dvh, 46rem); min-height: 0; flex: 1; }
+    .collection-organizer-layout { display: grid; height: 100%; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: clamp(6rem, var(--collection-folder-height, 16rem), max(6rem, calc(100% - 15rem))) .75rem minmax(0, 1fr); }
+    .collection-splitter { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; padding: 0; border: 0; background: var(--color-darkbg); cursor: row-resize; touch-action: none; }
+    .collection-splitter span { width: 2rem; height: 3px; border-radius: 3px; background: var(--color-borderc); }
+    .collection-splitter:hover, .collection-splitter:focus-visible, .collection-splitter:global([data-resizing]) { outline: none; background: color-mix(in srgb, var(--color-borderc) 25%, var(--color-darkbg)); }
+    .collection-items-pane { container-name: collection-items; container-type: inline-size; }
+    @container collection-manager (min-width: 720px) {
+        .collection-organizer-layout { grid-template-rows: minmax(0, 1fr); grid-template-columns: clamp(13rem, var(--collection-folder-width, 17rem), calc(100% - 21rem)) .75rem minmax(0, 1fr); }
+        .collection-splitter { cursor: col-resize; }
+        .collection-splitter span { width: 3px; height: 2rem; }
+    }
+    @container collection-items (max-width: 520px) {
+        .collection-item { display: grid; grid-template-columns: 1.5rem 2rem minmax(0, 1fr); }
+        .collection-item-content { grid-column: 1 / -1; grid-row: 2; }
+        .collection-item-order { grid-column: 3; grid-row: 1; justify-self: end; }
+        .collection-toolbar :global(input) { flex-basis: 100%; }
+        .collection-bulk-actions :global(button) { height: auto; min-height: 2.25rem; max-width: 100%; white-space: normal; }
+    }
+    @media (pointer: coarse) {
+        .collection-folder-actions :global(button), .collection-item-order :global(button), .collection-toolbar :global(button) { min-width: 2.5rem; min-height: 2.5rem; }
+        .collection-splitter span { border-radius: 0; box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-borderc) 25%, transparent); }
+    }
+</style>

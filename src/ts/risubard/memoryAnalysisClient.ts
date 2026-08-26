@@ -466,7 +466,7 @@ export function projectRecentMemoryMessages(
     throughMessageId?: string
 ): MemoryAnalysisMessage[] {
     const boundedLimit = Number.isSafeInteger(limit)
-        ? Math.min(100, Math.max(1, limit))
+        ? Math.max(1, limit)
         : 12
     const throughIndex = throughMessageId === undefined
         ? storedMessages.length - 1
@@ -784,7 +784,7 @@ export function createStoredResponseMemoryAnalysis(
                 noMultiGen: true,
                 tools: [],
                 maxTokens: request.format === 'canonical-batch'
-                    ? Math.min(request.inputTokenLimit ?? 12_000, 32_768)
+                    ? request.inputTokenLimit ?? 12_000
                     : 4_096,
                 temperature: 0,
                 bias: {},

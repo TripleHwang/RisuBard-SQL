@@ -123,21 +123,21 @@
 
 <!-- Category Manager Modal -->
 {#if categoryManagerState.isOpen}
-  <div class="fixed inset-0 z-50 p-4 bg-black/70 flex items-center justify-center">
-    <div class="bg-zinc-900 rounded-lg p-6 w-full max-w-md">
+  <div class="fixed inset-0 z-50 p-4 bg-overlay/70 flex items-center justify-center">
+    <div class="bg-darkbg rounded-lg p-6 w-full max-w-md">
       <div class="flex justify-between items-center mb-6">
-        <h2 class="text-lg font-semibold text-zinc-300">{language.hypaV3Modal.categoryManager}</h2>
+        <h2 class="text-lg font-semibold text-textcolor">{language.hypaV3Modal.categoryManager}</h2>
         <div class="flex items-center gap-2">
           <!-- Add Category Button -->
           <button
-            class="p-2 text-zinc-400 hover:text-green-400 transition-colors"
+            class="p-2 text-textcolor2 hover:text-success/80 transition-colors"
             onclick={startAddCategory}
           >
             <PlusIcon class="w-5 h-5" />
           </button>
           <!-- Close Button -->
           <button
-            class="p-2 text-zinc-400 hover:text-zinc-200 transition-colors"
+            class="p-2 text-textcolor2 hover:text-textcolor transition-colors"
             onclick={closeCategoryManager}
           >
             <XIcon class="w-5 h-5" />
@@ -150,8 +150,8 @@
         <!-- All Categories -->
         <button
           class="w-full flex items-center gap-3 px-3 py-2.5 rounded transition-colors text-left {categoryManagerState.selectedCategoryFilter === 'all'
-            ? 'bg-blue-600 text-white'
-            : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'}"
+            ? 'bg-info text-on-info'
+            : 'bg-selected text-textcolor hover:bg-darkbutton'}"
           onclick={() => selectCategory('all')}
         >
           <span class="flex-1 text-sm">{language.hypaV3Modal.allCategories} ({hypaV3Data.summaries.length})</span>
@@ -166,24 +166,24 @@
           {@const count = hypaV3Data.summaries.filter(s => (s.categoryId || '') === category.id).length}
           <div
             class="flex items-center gap-3 px-3 py-2.5 rounded transition-colors {categoryManagerState.selectedCategoryFilter === category.id
-              ? 'bg-blue-600 text-white'
-              : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'}"
+              ? 'bg-info text-on-info'
+              : 'bg-selected text-textcolor hover:bg-darkbutton'}"
           >
             {#if categoryManagerState.editingCategory?.id === category.id}
               <input
                 type="text"
-                class="flex-1 px-3 py-1.5 text-sm rounded-sm border border-zinc-600 bg-zinc-900 text-zinc-200 focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                class="flex-1 px-3 py-1.5 text-sm rounded-sm border border-darkborderc bg-darkbg text-textcolor focus:outline-hidden focus:ring-2 focus:ring-info"
                 bind:value={categoryManagerState.editingCategory.name}
                 placeholder={language.hypaV3Modal.categoryName}
               />
               <button
-                class="p-1.5 text-green-400 hover:text-green-300 transition-colors"
+                class="p-1.5 text-success hover:text-success/80 transition-colors"
                 onclick={saveEditingCategory}
               >
                 <CheckIcon class="w-4 h-4" />
               </button>
               <button
-                class="p-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"
+                class="p-1.5 text-textcolor2 hover:text-textcolor transition-colors"
                 onclick={cancelEditingCategory}
               >
                 <XIcon class="w-4 h-4" />
@@ -197,13 +197,13 @@
               </button>
               {#if category.id !== ""}
                 <button
-                  class="p-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"
+                  class="p-1.5 text-textcolor2 hover:text-textcolor transition-colors"
                   onclick={() => startEditCategory(category)}
                 >
                   <SquarePenIcon class="w-4 h-4" />
                 </button>
                 <button
-                  class="p-1.5 text-red-400 hover:text-red-300 transition-colors"
+                  class="p-1.5 text-danger hover:text-danger/80 transition-colors"
                   onclick={() => deleteCategory(category.id)}
                 >
                   <Trash2Icon class="w-4 h-4" />
@@ -221,7 +221,7 @@
 
         <!-- Empty State -->
         {#if categories.filter(c => c.id !== "").length === 0 && !categoryManagerState.editingCategory}
-          <div class="text-center py-8 text-zinc-500 text-sm">
+          <div class="text-center py-8 text-textcolor2 text-sm">
             {language.hypaV3Modal.noCategoriesYet}<br>
             <span class="text-xs">{language.hypaV3Modal.addNewCategoryHint}</span>
           </div>

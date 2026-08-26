@@ -674,8 +674,8 @@ export function createMarkdownNarrativeWiki(
             const sourceMessageIds = input.sourceMessageIds.map((id) =>
                 required(id, 'sourceMessageId')
             )
-            if (sourceMessageIds.length === 0 || sourceMessageIds.length > 12) {
-                throw new Error('Wiki snapshot requires 1-12 sources')
+            if (sourceMessageIds.length === 0) {
+                throw new Error('Wiki snapshot requires at least one source')
             }
             const workspace = workspaceFor(input.characterId, input.chatId)
             const documents = await loadDocuments(input.characterId, input.chatId)
@@ -803,7 +803,7 @@ export function createMarkdownNarrativeWiki(
                     change,
                 ])
             )
-            for (const change of input.changes.slice(0, 8)) {
+            for (const change of input.changes) {
                 const documentId = required(change.documentId, 'Document ID')
                 const baseline = manifest.documents.find((document) =>
                     document.id === documentId && document.type !== 'event'
@@ -837,7 +837,7 @@ export function createMarkdownNarrativeWiki(
                     ...input.warnings.map((warning) =>
                         required(warning, 'Receipt warning').slice(0, 500)
                     ),
-                ])].slice(0, 32),
+                ])],
                 recordedAt: previous?.recordedAt ?? now().toISOString(),
             }
             manifest.receipt = receipt
@@ -990,8 +990,8 @@ export function createMarkdownNarrativeWiki(
             const sourceMessageIds = input.sourceMessageIds.map((id) =>
                 required(id, 'sourceMessageId')
             )
-            if (sourceMessageIds.length === 0 || sourceMessageIds.length > 12) {
-                throw new Error('Markdown memory requires 1-12 sources')
+            if (sourceMessageIds.length === 0) {
+                throw new Error('Markdown memory requires at least one source')
             }
             const workspace = workspaceFor(input.characterId, input.chatId)
             await fileSystem.mkdir(workspace.eventsDirectory, {
@@ -1063,8 +1063,8 @@ export function createMarkdownNarrativeWiki(
             const incomingSources = input.sourceMessageIds.map((id) =>
                 required(id, 'sourceMessageId')
             )
-            if (incomingSources.length === 0 || incomingSources.length > 12) {
-                throw new Error('Canonical wiki document requires 1-12 sources')
+            if (incomingSources.length === 0) {
+                throw new Error('Canonical wiki document requires at least one source')
             }
             const workspace = workspaceFor(input.characterId, input.chatId)
             const documents = await loadDocuments(
@@ -1534,8 +1534,8 @@ export function createMarkdownNarrativeWiki(
             const sources = new Set(input.sourceMessageIds.map((id) =>
                 required(id, 'Source message ID')
             ))
-            if (sources.size === 0 || sources.size > 100) {
-                throw new Error('Event retraction requires 1-100 source messages')
+            if (sources.size === 0) {
+                throw new Error('Event retraction requires at least one source message')
             }
             const workspace = workspaceFor(input.characterId, input.chatId)
             const matches = (await loadDocuments(

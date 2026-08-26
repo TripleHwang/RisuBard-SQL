@@ -5,8 +5,11 @@ import { BufferToText, selectSingleFile } from "../util";
 import { notifyError } from "../alert";
 import { isLite } from "../lite";
 import { CustomCSSStore, SafeModeStore } from "../stores.svelte";
+import { resolveUiThemeColors, type UiThemeColors } from './uiThemeTokens';
+import { resolveChatTextSurface, resolveTextTheme } from './textTheme';
 import {
     builtInColorSchemes,
+    copyColorSchemeForEdit,
     darkColorScheme,
     normalizeColorSchemeName,
     resolveBuiltInColorScheme,
@@ -24,6 +27,9 @@ export interface ColorScheme{
     darkbutton: string;
     primary: string;
     accentText: string;
+    // Keep palette-specific surface foregrounds when a built-in skin is customized.
+    baseScheme?: 'dark' | 'light' | 'pastel-pop';
+    uiColors?: Partial<UiThemeColors>;
     type:'light'|'dark';
 }
 
@@ -48,6 +54,8 @@ export function changeColorScheme(colorScheme: string){
         const normalizedName = normalizeColorSchemeName(colorScheme)
         if(normalizedName !== 'custom'){
             db.colorScheme = safeStructuredClone(colorShemes[normalizedName])
+        } else if(db.colorSchemeName !== 'custom'){
+            db.colorScheme = copyColorSchemeForEdit(db.colorSchemeName, db.colorScheme)
         }
         db.colorSchemeName = normalizedName
         updateColorScheme()   
@@ -77,6 +85,9 @@ export function updateColorScheme(){
 
         //set css variables
         document.documentElement.dataset.risuColorScheme = appliedSchemeName
+        document.documentElement.dataset.risuBaseScheme = appliedSchemeName === 'custom'
+            ? colorScheme.baseScheme ?? 'custom' : appliedSchemeName
+        document.documentElement.style.colorScheme = colorScheme.type
         document.documentElement.style.setProperty("--risu-theme-bgcolor", colorScheme.bgcolor);
         document.documentElement.style.setProperty("--risu-theme-darkbg", colorScheme.darkbg);
         document.documentElement.style.setProperty("--risu-theme-borderc", colorScheme.borderc);
@@ -90,7 +101,12 @@ export function updateColorScheme(){
         // the toggle/CTA fill stays usable until the user picks a custom value.
         document.documentElement.style.setProperty("--risu-theme-primary", colorScheme.primary ?? defaultColorScheme.primary);
         document.documentElement.style.setProperty("--risu-theme-accenttext", colorScheme.accentText ?? colorScheme.textcolor);
+        for (const [token, color] of Object.entries(resolveUiThemeColors(colorScheme))) {
+            document.documentElement.style.setProperty(`--risu-theme-${token}`, color);
+        }
         ColorSchemeTypeStore.set(colorScheme.type)
+        // Chat text uses separate CSS variables and must follow every palette change.
+        updateTextThemeAndCSS()
     } catch (error) {}
 }
 
@@ -99,7 +115,6 @@ export function changeColorSchemeType(type: 'light'|'dark'){
         let db = getDatabase()
         db.colorScheme.type = type
         updateColorScheme()
-        updateTextThemeAndCSS()
     } catch (error) {}
 }
 
@@ -128,7 +143,7 @@ export async function importColorScheme(){
             typeof colorScheme.textcolor2 !== 'string' ||
             typeof colorScheme.darkBorderc !== 'string' ||
             typeof colorScheme.darkbutton !== 'string' ||
-            typeof colorScheme.type !== 'string'
+            (colorScheme.type !== 'light' && colorScheme.type !== 'dark')
         ){
             notifyError('Invalid color scheme')
             return
@@ -159,55 +174,14 @@ export function updateTextThemeAndCSS(){
     if(!root){
         return
     }
-    let textTheme = get(isLite) ? 'standard' : db.textTheme
-    let colorScheme = get(isLite) ? 'dark' : db.colorScheme.type
-    switch(textTheme){
-        case "standard":{
-            if(colorScheme === 'dark'){
-                root.style.setProperty('--FontColorStandard', '#fafafa');
-                root.style.setProperty('--FontColorItalic', '#8C8D93');
-                root.style.setProperty('--FontColorBold', '#fafafa');
-                root.style.setProperty('--FontColorItalicBold', '#8C8D93');
-                root.style.setProperty('--FontColorQuote1', '#8BE9FD');
-                root.style.setProperty('--FontColorQuote2', '#FFB86C');
-            }else{
-                root.style.setProperty('--FontColorStandard', '#0f172a');
-                root.style.setProperty('--FontColorItalic', '#8C8D93');
-                root.style.setProperty('--FontColorBold', '#0f172a');
-                root.style.setProperty('--FontColorItalicBold', '#8C8D93');
-                root.style.setProperty('--FontColorQuote1', '#8BE9FD');
-                root.style.setProperty('--FontColorQuote2', '#FFB86C');
-            }
-            break
-        }
-        case "highcontrast":{
-            if(colorScheme === 'dark'){
-                root.style.setProperty('--FontColorStandard', '#f8f8f2');
-                root.style.setProperty('--FontColorItalic', '#F1FA8C');
-                root.style.setProperty('--FontColorBold', '#8BE9FD');
-                root.style.setProperty('--FontColorItalicBold', '#FFB86C');
-                root.style.setProperty('--FontColorQuote1', '#8BE9FD');
-                root.style.setProperty('--FontColorQuote2', '#FFB86C');
-            }
-            else{
-                root.style.setProperty('--FontColorStandard', '#0f172a');
-                root.style.setProperty('--FontColorItalic', '#F1FA8C');
-                root.style.setProperty('--FontColorBold', '#8BE9FD');
-                root.style.setProperty('--FontColorItalicBold', '#FFB86C');
-                root.style.setProperty('--FontColorQuote1', '#8BE9FD');
-                root.style.setProperty('--FontColorQuote2', '#FFB86C');
-            }
-            break
-        }
-        case "custom":{
-            root.style.setProperty('--FontColorStandard', db.customTextTheme.FontColorStandard);
-            root.style.setProperty('--FontColorItalic', db.customTextTheme.FontColorItalic);
-            root.style.setProperty('--FontColorBold', db.customTextTheme.FontColorBold);
-            root.style.setProperty('--FontColorItalicBold', db.customTextTheme.FontColorItalicBold);
-            root.style.setProperty('--FontColorQuote1', db.customTextTheme.FontColorQuote1 ?? '#8BE9FD');
-            root.style.setProperty('--FontColorQuote2', db.customTextTheme.FontColorQuote2 ?? '#FFB86C');
-            break
-        }
+    const lite = get(isLite)
+    const scheme = lite ? darkColorScheme : db.colorScheme
+    const textColors = resolveTextTheme(lite ? 'standard' : db.textTheme, scheme.type, db.customTextTheme, {
+        autoContrast: db.textThemeAutoContrast !== false,
+        backgrounds: resolveChatTextSurface(scheme, db).backgrounds,
+    })
+    for (const [token, color] of Object.entries(textColors)) {
+        root.style.setProperty(`--${token}`, color)
     }
 
     switch(db.font){

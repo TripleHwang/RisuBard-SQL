@@ -709,7 +709,7 @@
 <style>
     .wiki-editor { display: grid; grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr); min-height: 27rem; border-bottom: 1px solid var(--risu-theme-darkborderc); }
     .portrait-panel-header, .editor-section-resizer { display: none; }
-    .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black); }
+    .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor)); }
     .tree-toolbar, .editor-title-row { display: flex; align-items: center; gap: .5rem; }
     .tree-toolbar { justify-content: space-between; padding: .2rem .25rem .6rem; }
     .wiki-health { display: flex; flex-wrap: wrap; gap: .3rem; padding: 0 .25rem .55rem; color: var(--risu-theme-textcolor2); font-size: .65rem; }
@@ -722,7 +722,7 @@
     .folder-children { margin-left: .7rem; padding-left: .35rem; border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, var(--risu-theme-darkborderc)); }
     .root-file:hover, .folder-children button:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
     .root-file span, .folder-children span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, black); }
+    .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, var(--color-bgcolor)); }
     .editor-header { min-width: 0; border-bottom: 1px solid var(--risu-theme-darkborderc); }
     .editor-title-row { min-width: 0; padding: .65rem .75rem; }
     .editor-title-row label { display: grid; min-width: 0; gap: .2rem; color: var(--risu-theme-textcolor2); font-size: .62rem; font-weight: 700; }
@@ -755,7 +755,7 @@
     .markdown-preview :global(th) { background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); font-weight: 750; }
     .markdown-preview :global(blockquote) { margin: .75rem 0; padding: .15rem .8rem; border-left: 3px solid var(--risu-theme-primary); color: var(--risu-theme-textcolor2); }
     .markdown-preview :global(code) { padding: .08rem .28rem; border-radius: .25rem; background: color-mix(in srgb, var(--risu-theme-primary) 14%, transparent); font: .76rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .markdown-preview :global(pre) { overflow-x: auto; padding: .75rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .4rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, black); }
+    .markdown-preview :global(pre) { overflow-x: auto; padding: .75rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .4rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, var(--color-bgcolor)); }
     .markdown-preview :global(pre code) { padding: 0; background: transparent; }
     .markdown-preview :global(a) { color: var(--risu-theme-primary); text-decoration: underline; text-underline-offset: .15em; }
     .editor-status { min-height: 1.8rem; padding: .35rem .75rem; color: var(--risu-theme-textcolor2); font-size: .66rem; }
@@ -769,8 +769,8 @@
         padding: .28rem;
         border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 28%, var(--risu-theme-darkborderc));
         border-radius: .45rem;
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black);
-        box-shadow: 0 .75rem 2rem rgb(0 0 0 / .32);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor));
+        box-shadow: 0 .75rem 2rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
     }
     .file-context-menu button {
         display: flex;
@@ -811,7 +811,7 @@
             display: flex;
             min-width: 0;
             border-bottom: 1px solid var(--risu-theme-darkborderc);
-            background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, black);
+            background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
         }
         .portrait-panel-header > button {
             display: flex;

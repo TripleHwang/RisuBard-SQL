@@ -111,27 +111,27 @@
     }
 
     .settings-alert--destructive {
-        --alert-accent: #ef4444;
-        background: color-mix(in srgb, #ef4444 8%, var(--risu-theme-bgcolor));
-        border-color: color-mix(in srgb, #ef4444 28%, transparent);
+        --alert-accent: var(--color-danger);
+        background: var(--color-danger-bg);
+        border-color: var(--color-danger-border);
     }
 
     .settings-alert--warning {
-        --alert-accent: #d97706;
-        background: color-mix(in srgb, #f59e0b 8%, var(--risu-theme-bgcolor));
-        border-color: color-mix(in srgb, #f59e0b 28%, transparent);
+        --alert-accent: var(--color-warning);
+        background: var(--color-warning-bg);
+        border-color: var(--color-warning-border);
     }
 
     .settings-alert--info {
-        --alert-accent: var(--risu-theme-primary);
-        background: color-mix(in srgb, var(--risu-theme-primary) 7%, var(--risu-theme-bgcolor));
-        border-color: color-mix(in srgb, var(--risu-theme-primary) 26%, transparent);
+        --alert-accent: var(--color-info);
+        background: var(--color-info-bg);
+        border-color: var(--color-info-border);
     }
 
     .settings-alert--success {
-        --alert-accent: var(--risu-theme-success);
-        background: color-mix(in srgb, var(--risu-theme-success) 8%, var(--risu-theme-bgcolor));
-        border-color: color-mix(in srgb, var(--risu-theme-success) 28%, transparent);
+        --alert-accent: var(--color-success);
+        background: var(--color-success-bg);
+        border-color: var(--color-success-border);
     }
 
     [data-slot="alert-icon"] {

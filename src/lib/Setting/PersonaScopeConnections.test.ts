@@ -5,6 +5,22 @@ import { describe, expect, test } from 'vitest'
 const source = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8')
 
 describe('persona scope UI connections', () => {
+    test('centers the manager and returns a selected persona to the binding caller', () => {
+        const dialog = source('src/lib/Others/PersonaManager.svelte')
+        const manager = source('src/lib/Setting/Pages/PersonaSettings.svelte')
+        const binding = source('src/lib/SideBars/PersonaBind.svelte')
+
+        expect(binding).not.toContain('openPersonaList')
+        expect(dialog).toMatch(/\.persona-manager-backdrop\s*\{[^}]*justify-content:\s*center/s)
+        expect(dialog).toMatch(/\.persona-manager-backdrop\s*\{[^}]*align-items:\s*center/s)
+        expect(dialog).toContain('personaSelectCallback.set(null)')
+        expect(dialog).toContain('onSelect={$personaSelectCallback ? selectPersona : undefined}')
+        expect(dialog).toMatch(/function selectPersona\([^)]*\)[^{]*\{\s*\$personaSelectCallback\?\.\(selection\)\s*close\(\)/)
+        expect(manager).toContain('onSelect?: (selection: PersonaSelection) => void')
+        expect(manager).toContain('onclick={() => choosePersona(i)}')
+        expect(manager).toMatch(/onSelect\(\{ persona, index, scope: activeScope \}\)/)
+    })
+
     test('uses a compact persona header with hover and click help', () => {
         const dialog = source('src/lib/Others/PersonaManager.svelte')
 

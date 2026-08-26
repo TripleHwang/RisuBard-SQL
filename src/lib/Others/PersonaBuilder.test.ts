@@ -5,6 +5,19 @@ import { describe, expect, test } from 'vitest'
 const source = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8')
 
 describe('persona builder UI connections', () => {
+    test('matches character lore for each send using the captured input and draft before generating', () => {
+        const builder = source('src/lib/Others/PersonaBuilder.svelte')
+        const send = builder.slice(builder.indexOf('async function sendRequest()'), builder.indexOf('function undoDraft()'))
+        expect(send).toContain("sources: { ...sources, characterLorebook: '' }")
+        expect(send).toContain('requestInput.selections.characterLorebook')
+        expect(send).toContain('await matchPersonaBuilderCharacterLorebook(')
+        expect(send).toContain('userInstruction: requestInput.userInstruction')
+        expect(send).toContain('draft: requestInput.draft')
+        expect(send).toContain('requestInput.sources.characterLorebook = matched.content')
+        expect(send).toContain('requestInput.sources.characterLorebookSources = matched.sources')
+        expect(send).toMatch(/await matchPersonaBuilderCharacterLorebook[\s\S]*if \(controller.signal.aborted\) return[\s\S]*buildPersonaBuilderMessages\(requestInput\)[\s\S]*await requestChatData/)
+    })
+
     test('renders the iterative builder in a themed nested dialog', () => {
         const builder = source('src/lib/Others/PersonaBuilder.svelte')
 

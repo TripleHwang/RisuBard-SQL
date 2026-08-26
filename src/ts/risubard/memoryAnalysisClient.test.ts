@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
+import { get_encoding } from '@dqbd/tiktoken'
 import {
     createStoredResponseMemoryAnalysis,
     projectRecentMemoryMessages,
@@ -560,6 +561,17 @@ describe('stored response memory analysis', () => {
                 }
             })
         )
+    })
+
+    test('projects configured windows beyond one hundred without truncating message text', () => {
+        const messages = Array.from({ length: 151 }, (_, index) => ({
+            role: 'char', chatId: `id-${index}`, data: `message-${index}`,
+        }))
+        messages[149].data = '원문 '.repeat(45_000)
+        const projected = projectRecentMemoryMessages(messages, 150, 'id-149')
+        expect(projected).toHaveLength(150)
+        expect(projected.at(-1)?.content).toBe(messages[149].data)
+        expect(projected.some((message) => message.messageId === 'id-150')).toBe(false)
     })
 
     test('projects the configured recent raw context only through the confirmed message', () => {
@@ -1227,7 +1239,11 @@ describe('stored response memory analysis', () => {
         expect(requestModel).toHaveBeenCalledOnce()
     })
 
-    test('sends one structured canonical batch request for multiple targets', async () => {
+    test.each([
+        { analysisTokenLimit: 12_000, longEvidence: false },
+        { analysisTokenLimit: 12_000, longEvidence: true },
+        { analysisTokenLimit: 65_536, longEvidence: true },
+    ])('fits evidence with $analysisTokenLimit tokens (long: $longEvidence)', async ({ analysisTokenLimit, longEvidence }) => {
         const modelCalls: MemoryAnalysisModelCall[] = []
         const savedTitles: string[] = []
         const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {
@@ -1255,10 +1271,10 @@ describe('stored response memory analysis', () => {
                 type: 'success' as const,
                 result: JSON.stringify({
                     schemaVersion: 1,
-                    documents: ['사만다', '아만다'].map(
-                        (title, candidateIndex) => ({
+                    documents: JSON.parse(request.formated[1].content).targets.map(
+                        ({ candidateIndex, target }) => ({
                             candidateIndex,
-                            markdown: `# ${title}\n\n지속 정보.`,
+                            markdown: `# ${target.title}\n\n지속 정보.`,
                         })
                     ),
                 }),
@@ -1322,16 +1338,29 @@ describe('stored response memory analysis', () => {
             characterId: 'character', chatId: 'chat',
             messages: [{
                 messageId: 'assistant-1', role: 'assistant',
-                content: '사만다는 생물학자이고 아만다는 감사관이다.',
+                content: (longEvidence ? '확정된 사건 원문이다. '.repeat(7_000) : '')
+                    + '사만다는 생물학자이고 아만다는 감사관이다.',
             }],
-            analysisTokenLimit: 12_000,
+            analysisTokenLimit,
         })
 
-        expect(modelCalls).toHaveLength(2)
+        // Long evidence can split the rewrite into one request per target.
+        expect(modelCalls).toHaveLength(longEvidence ? 3 : 2)
         expect(modelCalls[1].schema).toContain('candidateIndex')
         expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
         expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
-        expect(modelCalls[1].maxTokens).toBe(12_000)
+        expect(modelCalls[1].maxTokens).toBe(analysisTokenLimit)
+        const tokenizer = get_encoding('cl100k_base')
+        try {
+            for (const call of modelCalls) {
+                expect(tokenizer.encode(call.formated.map((message) => message.content).join('\n')).length)
+                    .toBeLessThanOrEqual(analysisTokenLimit)
+                if (call.logPurpose === 'bardwiki-canonical-update') {
+                    expect(call.maxTokens).toBe(analysisTokenLimit)
+                }
+            }
+        }
+        finally { tokenizer.free() }
         expect(modelCalls[1].formated[1].content).toContain('confirmedMessages')
         expect(savedTitles).toEqual(['사만다', '아만다'])
     })

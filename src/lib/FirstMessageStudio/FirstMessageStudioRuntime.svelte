@@ -277,7 +277,7 @@
 </section>
 
 <style>
-    .studio-window{position:relative;width:min(34rem,100%);margin:1rem auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--studio-text) 14%,transparent);border-radius:var(--studio-radius);color:var(--studio-text);background:var(--studio-bg);box-shadow:0 1.2rem 3.5rem rgba(0,0,0,.28);font-family:ui-sans-serif,system-ui,sans-serif}
+    .studio-window{position:relative;width:min(34rem,100%);margin:1rem auto;overflow:hidden;border:1px solid color-mix(in srgb,var(--studio-text) 14%,transparent);border-radius:var(--studio-radius);color:var(--studio-text);background:var(--studio-bg);box-shadow:0 1.2rem 3.5rem color-mix(in srgb, var(--color-shadow) 28%, transparent);font-family:ui-sans-serif,system-ui,sans-serif}
     .skin-glass{border-color:color-mix(in srgb,var(--studio-accent) 35%,transparent);background:linear-gradient(145deg,color-mix(in srgb,var(--studio-bg) 88%,transparent),color-mix(in srgb,var(--studio-accent) 9%,var(--studio-bg)));backdrop-filter:blur(18px)}
     .window-header{display:flex;align-items:center;gap:1rem;padding:.85rem 1rem;border-bottom:1px solid color-mix(in srgb,var(--studio-text) 12%,transparent);background:color-mix(in srgb,var(--studio-surface) 78%,var(--studio-bg))}
     .window-header>strong{overflow:hidden;font-size:.88rem;text-overflow:ellipsis;white-space:nowrap}
@@ -306,7 +306,7 @@
     .input-panel{display:grid;gap:.3rem;padding:.55rem;border:1px dashed color-mix(in srgb,var(--studio-accent) 40%,transparent);border-radius:.35rem}
     .input-panel span{color:var(--studio-accent);font-size:.68rem;font-weight:750}
     .input-panel input{width:100%;border:1px solid color-mix(in srgb,var(--studio-text) 16%,transparent);border-radius:.3rem;padding:.5rem;color:var(--studio-text);background:var(--studio-bg)}
-    .validation{margin:.6rem 0 0;color:#ff8b79;font-size:.72rem}
+    .validation{margin:.6rem 0 0;color:var(--color-danger);font-size:.72rem}
     .complete{display:grid;min-height:14rem;place-content:center;text-align:center}
     .complete strong{color:var(--studio-accent);font-size:1.35rem}
     .complete p{font-size:.8rem}

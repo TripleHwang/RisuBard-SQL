@@ -41,13 +41,13 @@
 
 {#if withImportExport}
     <div class="flex">
-        <button class="bg-primary hover:bg-primary/90 text-white font-bold py-2 px-4 rounded" onclick={() => {
+        <button class="bg-primary hover:bg-primary/90 text-accenttext font-bold py-2 px-4 rounded" onclick={() => {
             const json = JSON.stringify(value, null, 2)
             downloadFile(`parameters-${Date.now()}.json`, json)
         }}>
             <FileDownIcon />
         </button>
-        <button class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded ml-2" onclick={async () => {
+        <button class="bg-success hover:bg-success/85 text-on-success font-bold py-2 px-4 rounded ml-2" onclick={async () => {
             const file = await selectSingleFile(['json'])
             if(!file) return
             const fileText = await (new TextDecoder()).decode(file.data)

@@ -115,7 +115,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-    class="fixed top-0 left-0 w-full h-full z-30 bg-black/50 flex justify-center items-center"
+    class="fixed top-0 left-0 w-full h-full z-30 bg-overlay/50 flex justify-center items-center"
     onclick={(event) => {
         if (event.target === event.currentTarget) {
             close();
@@ -169,7 +169,7 @@
                                 <button class="text-textcolor2 hover:text-primary" onclick={(e) => { e.stopPropagation(); editName(msg.chatId); }}>
                                     <PencilIcon size={16} />
                                 </button>
-                                <button class="text-textcolor2 hover:text-red-500" onclick={(e) => { e.stopPropagation(); removeBookmark(msg.chatId); }}>
+                                <button class="text-textcolor2 hover:text-danger/80" onclick={(e) => { e.stopPropagation(); removeBookmark(msg.chatId); }}>
                                     <TrashIcon size={16} />
                                 </button>
                             </div>

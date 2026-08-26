@@ -311,7 +311,7 @@ function scrollToSettingAnchor(itemId: string, attempt = 0) {
         el.scrollIntoView({ block: 'center' });
         el.animate(
             [
-                { boxShadow: '0 0 0 3px var(--risu-theme-primary, #fbbf24)', offset: 0.1 },
+                { boxShadow: '0 0 0 3px var(--color-primary)', offset: 0.1 },
                 { boxShadow: '0 0 0 3px transparent' },
             ],
             { duration: 1600, easing: 'ease-out' },

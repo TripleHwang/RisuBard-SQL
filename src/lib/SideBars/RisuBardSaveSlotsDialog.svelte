@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { ArrowDownIcon, ArrowUpIcon, Clock3Icon, LoaderCircleIcon, PencilIcon, Trash2Icon } from '@lucide/svelte'
+    import { ArrowDownIcon, ArrowUpIcon, Clock3Icon, LoaderCircleIcon, PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from '@lucide/svelte'
     import loadIcon from 'src/assets/solar-bold/undo-left-square-bold.svg'
     import { alertConfirm, alertInput } from 'src/ts/alert'
     import { forageStorage } from 'src/ts/globalApi.svelte'
@@ -21,8 +21,10 @@
         characterId: string
         currentChatId: string
         currentLatestMessageId?: string
+        mode?: 'save' | 'load'
         onOpenChange(open: boolean): void
         onLoad(saveId: string): Promise<void>
+        onSave?(saveId?: string): Promise<MemorySaveSlotSummary>
     }
 
     let {
@@ -30,8 +32,10 @@
         characterId,
         currentChatId,
         currentLatestMessageId,
+        mode = $bindable('load'),
         onOpenChange,
         onLoad,
+        onSave,
     }: Props = $props()
     let slots = $state<MemorySaveSlotSummary[]>([])
     let selectedId = $state('')
@@ -42,6 +46,7 @@
     let previewCache = $state<Record<string, MemorySavePreviewMessage[]>>({})
     let error = $state('')
     let requestSequence = 0
+    let previewSequence = 0
     let workspaceElement = $state<HTMLElement | null>(null)
     let previewShare = $state(45)
     const workspaceStyle = $derived(
@@ -58,6 +63,7 @@
 
     async function ensurePreview(saveId: string): Promise<void> {
         if (!saveId || previewCache[saveId] || previewLoadingId === saveId) return
+        const sequence = ++previewSequence
         previewLoadingId = saveId
         try {
             const messages = await previewMemorySaveSlot({
@@ -66,14 +72,17 @@
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
+            if (sequence !== previewSequence) return
             previewCache[saveId] = messages
             previewCache = { ...previewCache }
         }
         catch (cause) {
-            error = cause instanceof Error ? cause.message : String(cause)
+            if (sequence === previewSequence) {
+                error = cause instanceof Error ? cause.message : String(cause)
+            }
         }
         finally {
-            if (previewLoadingId === saveId) previewLoadingId = ''
+            if (sequence === previewSequence) previewLoadingId = ''
         }
     }
 
@@ -84,6 +93,11 @@
 
     async function refresh(): Promise<void> {
         const sequence = ++requestSequence
+        ++previewSequence
+        slots = []
+        selectedId = ''
+        previewCache = {}
+        previewLoadingId = ''
         loading = true
         error = ''
         try {
@@ -115,6 +129,7 @@
 
     async function load(saveId: string): Promise<void> {
         if (loadingId) return
+        const sequence = requestSequence
         loadingId = saveId
         error = ''
         try {
@@ -122,6 +137,7 @@
                 && !await alertConfirm(
                     '저장하지 않은 채팅은 사라집니다. 불러올까요?'
                 )) return
+            if (sequence !== requestSequence || !open) return
             await onLoad(saveId)
         }
         catch (cause) {
@@ -132,36 +148,79 @@
         }
     }
 
-    async function renameSelected(): Promise<void> {
-        if (!selectedSlot) return
-        const name = await alertInput('저장된 파일 이름 변경', [], selectedSlot.sourceChatName)
-        if (!name?.trim()) return
+    async function save(saveId?: string): Promise<void> {
+        if (loading || loadingId || !onSave) return
+        const target = slots.find((slot) => slot.saveId === saveId)
+        if (saveId !== undefined && !target) return
+        const sequence = requestSequence
+        loadingId = saveId ?? '#new'
+        error = ''
         try {
+            if (target && !await alertConfirm(
+                `이 슬롯에 현재 채팅을 덮어쓸까요? 기존 저장 내용은 교체됩니다.\n${target.sourceChatName}`
+            )) return
+            if (sequence !== requestSequence || !open) return
+            const saved = await onSave(saveId)
+            if (sequence !== requestSequence) return
+            slots = [...slots.filter((slot) => slot.saveId !== saved.saveId), saved]
+            selectedId = saved.saveId
+            ++previewSequence
+            previewLoadingId = ''
+            delete previewCache[saved.saveId]
+            void ensurePreview(saved.saveId)
+        }
+        catch (cause) {
+            if (sequence === requestSequence) {
+                error = cause instanceof Error ? cause.message : String(cause)
+            }
+        }
+        finally {
+            loadingId = ''
+        }
+    }
+
+    async function renameSelected(): Promise<void> {
+        if (!selectedSlot || loadingId) return
+        const target = selectedSlot
+        const sequence = requestSequence
+        loadingId = target.saveId
+        try {
+            const name = await alertInput('저장된 파일 이름 변경', [], target.sourceChatName)
+            if (!name?.trim() || sequence !== requestSequence || !open) return
             const renamed = await renameMemorySaveSlot({
                 characterId,
-                saveId: selectedSlot.saveId,
+                saveId: target.saveId,
                 name,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
+            if (sequence !== requestSequence) return
             slots = slots.map((slot) => slot.saveId === renamed.saveId ? renamed : slot)
         }
         catch (cause) {
             error = cause instanceof Error ? cause.message : String(cause)
         }
+        finally {
+            loadingId = ''
+        }
     }
 
     async function deleteSelected(): Promise<void> {
-        if (!selectedSlot) return
-        if (!await alertConfirm(`저장된 파일을 삭제할까요?\n${selectedSlot.sourceChatName}`)) return
+        if (!selectedSlot || loadingId) return
+        const target = selectedSlot
+        const sequence = requestSequence
+        loadingId = target.saveId
         try {
-            const deletedId = selectedSlot.saveId
+            if (!await alertConfirm(`저장된 파일을 삭제할까요?\n${target.sourceChatName}`)) return
+            if (sequence !== requestSequence || !open) return
+            const deletedId = target.saveId
             await deleteMemorySaveSlot({
                 characterId,
                 saveId: deletedId,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
             })
+            if (sequence !== requestSequence) return
             slots = slots.filter((slot) => slot.saveId !== deletedId)
             delete previewCache[deletedId]
             previewCache = { ...previewCache }
@@ -173,6 +232,9 @@
         }
         catch (cause) {
             error = cause instanceof Error ? cause.message : String(cause)
+        }
+        finally {
+            loadingId = ''
         }
     }
 
@@ -216,6 +278,10 @@
         if (open && characterId && currentChatId) {
             void refresh()
         }
+        return () => {
+            ++requestSequence
+            ++previewSequence
+        }
     })
 </script>
 
@@ -227,16 +293,32 @@
     contentClass="save-slot-dialog"
     bodyClass="save-slot-dialog__body"
 >
-    {#snippet title()}채팅 불러오기{/snippet}
+    {#snippet headerActions()}
+        <div data-save-mode-switcher role="group" aria-label="저장 및 불러오기 전환" class="mb-2 flex gap-2">
+            <ShButton data-save-mode="save" size="sm" variant={mode === 'save' ? 'primary' : 'outline'} aria-pressed={mode === 'save'} disabled={Boolean(loadingId) || !onSave} onclick={() => { mode = 'save' }}>
+                저장하기
+            </ShButton>
+            <ShButton data-save-mode="load" size="sm" variant={mode === 'load' ? 'primary' : 'outline'} aria-pressed={mode === 'load'} disabled={Boolean(loadingId)} onclick={() => { mode = 'load' }}>
+                불러오기
+            </ShButton>
+        </div>
+    {/snippet}
+    {#snippet title()}{mode === 'save' ? '채팅 저장하기' : '채팅 불러오기'}{/snippet}
 
     <div class="save-ledger">
         <div class="save-ledger__head">
             <strong class="save-section-title">저장된 파일</strong>
             <div data-save-file-toolbar class="save-ledger__toolbar">
-                <ShButton data-save-file-rename variant="ghost" size="icon-sm" aria-label="선택한 파일 이름 변경" title="선택한 파일 이름 변경" disabled={!selectedSlot} onclick={() => void renameSelected()}>
+                {#if mode === 'save'}
+                    <ShButton data-save-file-new variant="primary" size="sm" disabled={loading || Boolean(loadingId) || !onSave} onclick={() => void save()}>
+                        {#if loadingId === '#new'}<LoaderCircleIcon size={16} class="animate-spin" />{:else}<PlusIcon size={16} />{/if}
+                        새 슬롯에 저장
+                    </ShButton>
+                {/if}
+                <ShButton data-save-file-rename variant="ghost" size="icon-sm" aria-label="선택한 파일 이름 변경" title="선택한 파일 이름 변경" disabled={!selectedSlot || Boolean(loadingId)} onclick={() => void renameSelected()}>
                     <PencilIcon size={16} />
                 </ShButton>
-                <ShButton data-save-file-delete variant="destructive" size="icon-sm" aria-label="선택한 파일 삭제" title="선택한 파일 삭제" disabled={!selectedSlot} onclick={() => void deleteSelected()}>
+                <ShButton data-save-file-delete variant="destructive" size="icon-sm" aria-label="선택한 파일 삭제" title="선택한 파일 삭제" disabled={!selectedSlot || Boolean(loadingId)} onclick={() => void deleteSelected()}>
                     <Trash2Icon size={16} />
                 </ShButton>
                 <span class="save-ledger__divider"></span>
@@ -274,9 +356,11 @@
                                     </span>
                                 </span>
                             </button>
-                            <ShButton data-save-file-load className="save-slot__load size-14" size="icon-sm" aria-label={`${slot.sourceChatName} 불러오기`} title="선택한 저장 파일 불러오기" disabled={Boolean(loadingId)} onclick={(event) => { event.stopPropagation(); void load(slot.saveId) }}>
+                            <ShButton data-save-file-load={mode === 'load' ? true : undefined} data-save-file-overwrite={mode === 'save' ? true : undefined} className="save-slot__load size-14" size="icon-sm" aria-label={`${slot.sourceChatName} ${mode === 'save' ? '덮어쓰기' : '불러오기'}`} title={mode === 'save' ? '현재 채팅으로 덮어쓰기' : '선택한 저장 파일 불러오기'} disabled={Boolean(loadingId) || (mode === 'save' && !onSave)} onclick={(event) => { event.stopPropagation(); if (mode === 'save') void save(slot.saveId); else void load(slot.saveId) }}>
                                 {#if loadingId === slot.saveId}
                                     <LoaderCircleIcon size={32} class="animate-spin" />
+                                {:else if mode === 'save'}
+                                    <span class="flex flex-col items-center gap-1"><SaveIcon size={24} /><span class="text-xs">덮어쓰기</span></span>
                                 {:else}
                                     <SolarAssetIcon src={loadIcon} name="undo-left-square-bold" size={48} />
                                 {/if}
@@ -348,9 +432,9 @@
         display: flex;
         align-items: center;
     }
-    .save-ledger__head { justify-content: space-between; gap: 0.75rem; }
-    .save-section-title { color: #fff; font-size: 0.75rem; letter-spacing: 0.08em; }
-    .save-ledger__toolbar { gap: 0.2rem; margin-left: auto; }
+    .save-ledger__head { justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; }
+    .save-section-title { color: var(--color-textcolor); font-size: 0.75rem; letter-spacing: 0.08em; }
+    .save-ledger__toolbar { flex-wrap: wrap; gap: 0.2rem; margin-left: auto; }
     .save-ledger__divider { width: 1px; height: 1.1rem; margin: 0 0.2rem; background: var(--color-darkborderc); }
     .save-workspace {
         display: grid;
@@ -389,7 +473,7 @@
         background: color-mix(in srgb, var(--color-darkbg) 82%, var(--color-selected) 18%);
         transition: border-color 140ms ease, box-shadow 140ms ease;
     }
-    .save-slot:hover, .save-slot:focus-within { border-color: var(--color-borderc); box-shadow: 0 0.45rem 1.25rem rgb(0 0 0 / 0.18); }
+    .save-slot:hover, .save-slot:focus-within { border-color: var(--color-borderc); box-shadow: 0 0.45rem 1.25rem color-mix(in srgb, var(--color-shadow) 18%, transparent); }
     .save-slot--selected { border-color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 28%, var(--color-darkbg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent); }
     .save-slot__select {
         display: grid;
@@ -400,7 +484,7 @@
     }
     .save-slot__index { display: grid; place-items: center; border-right: 1px solid var(--color-darkborderc); color: var(--color-textcolor2); font: 600 0.68rem ui-monospace, monospace; letter-spacing: 0.06em; }
     .save-slot__body { min-width: 0; padding: 0.55rem 0.65rem; }
-    .save-slot__title-row { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; padding: 0.22rem 0.48rem; border-radius: 999px; color: #fff; background: color-mix(in srgb, var(--color-primary) 68%, var(--color-selected)); }
+    .save-slot__title-row { display: inline-flex; max-width: 100%; align-items: center; gap: 0.35rem; padding: 0.22rem 0.48rem; border-radius: 999px; color: var(--color-accenttext); background: color-mix(in srgb, var(--color-primary) 68%, var(--color-selected)); }
     .save-slot__title-row strong { overflow: hidden; min-width: 0; font-size: 0.8rem; text-overflow: ellipsis; white-space: nowrap; }
     .save-slot__title-row > span { flex: none; font-size: 0.68rem; font-weight: 700; }
     .save-slot__meta { flex-wrap: wrap; gap: 0.2rem 0.55rem; margin-top: 0.28rem; color: var(--color-textcolor2); font-size: 0.65rem; }
@@ -426,7 +510,7 @@
     .save-preview__message p { margin: 0.2rem 0 0; color: var(--color-textcolor); font-size: 0.72rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
     .save-preview__empty, .save-ledger__empty { display: flex; min-height: 8rem; align-items: center; justify-content: center; gap: 0.45rem; color: var(--color-textcolor2); font-size: 0.78rem; }
     .save-ledger__empty { border: 1px dashed var(--color-darkborderc); border-radius: 0.5rem; }
-    .save-ledger__error { margin: 0; color: #f87171; font-size: 0.76rem; }
+    .save-ledger__error { margin: 0; color: var(--color-danger); font-size: 0.76rem; }
 
     @media (max-width: 767px) {
         :global(.save-slot-dialog) { min-width: calc(100vw - 2rem); }

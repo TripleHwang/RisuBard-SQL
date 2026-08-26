@@ -541,11 +541,11 @@
       });
 
       // Highlight chatMemo
-      button.classList.add("ring-2", "ring-zinc-500");
+      button.classList.add("ring-2", "ring-borderc");
 
       // Remove highlight after a short delay
       window.setTimeout(() => {
-        button.classList.remove("ring-2", "ring-zinc-500");
+        button.classList.remove("ring-2", "ring-borderc");
       }, 1000);
     }
 
@@ -612,14 +612,14 @@
 </script>
 
 <!-- Modal Backdrop -->
-<div class="fixed inset-0 z-40 p-1 sm:p-2 bg-black/50">
+<div class="fixed inset-0 z-40 p-1 sm:p-2 bg-overlay/50">
   <!-- Modal Wrapper -->
   <div class="flex justify-center w-full h-full">
     <!-- Modal Window -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
-      class="flex flex-col w-full max-w-3xl p-3 rounded-lg sm:p-6 bg-zinc-900 {hypaV3Data
+      class="flex flex-col w-full max-w-3xl p-3 rounded-lg sm:p-6 bg-darkbg {hypaV3Data
         .summaries.length === 0
         ? 'h-fit'
         : 'h-full'}"
@@ -647,13 +647,13 @@
       <!-- Scrollable Container -->
       <div class="flex flex-col gap-2 overflow-y-auto sm:gap-4" tabindex="-1">
         {#if hypaV3Data.summaries.length === 0}
-          <div class="p-4 text-center sm:p-3 md:p-4 text-zinc-400">
+          <div class="p-4 text-center sm:p-3 md:p-4 text-textcolor2">
             {language.hypaV3Modal.noSummariesLabel}
           </div>
 
           <!-- Search Bar -->
         {:else if searchState}
-          <div class="sticky top-0 p-2 sm:p-3 bg-zinc-800">
+          <div class="sticky top-0 p-2 sm:p-3 bg-selected">
             <div class="flex items-center gap-2">
               <div class="relative flex items-center flex-1">
                 <form
@@ -664,7 +664,7 @@
                   }}
                 >
                   <input
-                    class="w-full px-2 py-2 border rounded-sm sm:px-4 sm:py-3 border-zinc-700 focus:outline-hidden focus:ring-2 focus:ring-zinc-500 text-zinc-200 bg-zinc-900"
+                    class="w-full px-2 py-2 border rounded-sm sm:px-4 sm:py-3 border-darkborderc focus:outline-hidden focus:ring-2 focus:ring-borderc text-textcolor bg-darkbg"
                     placeholder={language.hypaV3Modal.searchPlaceholder}
                     bind:this={searchState.ref}
                     bind:value={searchState.query}
@@ -680,7 +680,7 @@
 
                 {#if searchState.results.length > 0}
                   <span
-                    class="absolute right-3 top-1/2 -translate-y-1/2 px-1.5 sm:px-3 py-1 sm:py-2 rounded-sm text-sm font-semibold text-zinc-100 bg-zinc-700/65"
+                    class="absolute right-3 top-1/2 -translate-y-1/2 px-1.5 sm:px-3 py-1 sm:py-2 rounded-sm text-sm font-semibold text-textcolor bg-darkbutton/65"
                   >
                     {searchState.currentResultIndex + 1}/{searchState.results
                       .length}
@@ -690,7 +690,7 @@
 
               <!-- Previous Button -->
               <button
-                class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+                class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
                 tabindex="-1"
                 onclick={() => {
                   onSearch({ shiftKey: true, key: "Enter" } as KeyboardEvent);
@@ -701,7 +701,7 @@
 
               <!-- Next Button -->
               <button
-                class="p-2 transition-colors text-zinc-400 hover:text-zinc-200"
+                class="p-2 transition-colors text-textcolor2 hover:text-textcolor"
                 tabindex="-1"
                 onclick={() => {
                   onSearch({ key: "Enter" } as KeyboardEvent);

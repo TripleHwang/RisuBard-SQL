@@ -149,6 +149,33 @@ export function decodeMemorySaveChat(bytes: Uint8Array): unknown {
     return chatUnpacker.unpack(bytes)
 }
 
+function applyMemorySavePromptSettings(chat: Chat, currentChat?: Chat): void {
+    // Save slots rewind story state, not the current prompt preferences.
+    for (const key of [
+        'bindedBotPreset', 'usePromptPresetParams', 'useLocallySetGlobalVariables',
+    ] as const) {
+        delete chat[key]
+        if (currentChat?.[key] !== undefined) {
+            Object.assign(chat, { [key]: currentChat[key] })
+        }
+    }
+    delete chat.savedToggleValues
+    const legacyToggles = currentChat?.GLGlobalVariables === undefined
+        ? currentChat?.savedToggleValues
+        : undefined
+    const currentVariables = currentChat?.GLGlobalVariables ?? legacyToggles ?? {}
+    const variables = Object.fromEntries([
+        ...Object.entries(chat.GLGlobalVariables ?? {})
+            .filter(([key]) => !key.startsWith('toggle_')),
+        ...Object.entries(currentVariables)
+            .filter(([key]) => key.startsWith('toggle_')),
+    ])
+    if (Object.keys(variables).length > 0) chat.GLGlobalVariables = variables
+    else delete chat.GLGlobalVariables
+    // Normalize only the current chat's old pin format; never migrate saved settings.
+    if (legacyToggles) chat.useLocallySetGlobalVariables = true
+}
+
 function requestBody(bytes: Uint8Array): ArrayBuffer {
     return Uint8Array.from(bytes).buffer
 }
@@ -157,6 +184,7 @@ export async function createMemorySaveSlot(input: {
     characterId: string
     chat: Chat
     saveId: string
+    overwrite?: boolean
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
 }): Promise<MemorySaveSlotSummary> {
@@ -169,6 +197,7 @@ export async function createMemorySaveSlot(input: {
         throw new Error('Chat name must be a non-empty bounded string')
     }
     const snapshot = structuredClone(input.chat)
+    applyMemorySavePromptSettings(snapshot)
     delete snapshot._placeholder
     snapshot.isStreaming = false
     delete snapshot.activeStreamingDisplayOptimizationMode
@@ -185,6 +214,7 @@ export async function createMemorySaveSlot(input: {
                 'x-risubard-character-id': characterId,
                 'x-risubard-source-chat-id': sourceChatId,
                 'x-risubard-save-id': saveId,
+                ...(input.overwrite ? { 'x-risubard-save-overwrite': 'true' } : {}),
                 'x-risubard-chat-name': encodeBase64Url(snapshot.name),
                 'x-risubard-turn-count': String(
                     countChatTurns(snapshot.message)
@@ -370,6 +400,7 @@ export async function previewMemorySaveSlot(input: {
 export async function prepareMemorySaveLoad(input: {
     characterId: string
     saveId: string
+    currentChat: Chat
     destinationChatId: string
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
@@ -412,6 +443,7 @@ export async function prepareMemorySaveLoad(input: {
         throw new Error('Memory save load returned an invalid chat snapshot')
     }
     const chat = decoded as unknown as Chat
+    applyMemorySavePromptSettings(chat, input.currentChat)
     if (typeof chat.note !== 'string') chat.note = ''
     if (!Array.isArray(chat.localLore)) chat.localLore = []
     return { chat, forkToken }

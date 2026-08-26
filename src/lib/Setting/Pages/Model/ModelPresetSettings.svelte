@@ -411,7 +411,7 @@
 
                     {#if testResult}
                         <div class="flex flex-col gap-1 rounded-md border p-3 text-sm {testResult.ok ? 'bg-success/20 border-success/40' : 'bg-draculared/20 border-draculared/40'}">
-                            <span class="font-medium {testResult.ok ? 'text-success' : 'text-red-400'}">
+                            <span class="font-medium {testResult.ok ? 'text-success' : 'text-danger'}">
                                 {testResult.ok ? language.modelPresetTestSuccess : language.modelPresetTestFail}
                                 <span class="text-textcolor2 font-normal ml-1">({testResult.latencyMs}ms)</span>
                             </span>
@@ -470,7 +470,7 @@
                             <div class="flex flex-col min-w-0 grow">
                                 <span class="text-sm text-textcolor truncate flex items-center gap-1.5">
                                     {#if getPresetUpdateStatus(preset) === 'updatable'}
-                                        <span class="w-2 h-2 rounded-full bg-amber-500 shrink-0" title={language.profileUpdateAvailable}></span>
+                                        <span class="w-2 h-2 rounded-full bg-warning shrink-0" title={language.profileUpdateAvailable}></span>
                                     {/if}
                                     <span class="truncate">{preset.name}</span>
                                 </span>
@@ -509,7 +509,7 @@
                                 }} aria-label="duplicate">
                                     <CopyIcon size={18}/>
                                 </div>
-                                <div class="text-textcolor2 hover:text-red-400 cursor-pointer" role="button" tabindex="0" onclick={(e) => {
+                                <div class="text-textcolor2 hover:text-danger/80 cursor-pointer" role="button" tabindex="0" onclick={(e) => {
                                     e.stopPropagation()
                                     remove(i)
                                 }} onkeydown={(e) => {

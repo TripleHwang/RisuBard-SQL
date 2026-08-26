@@ -86,7 +86,7 @@
                 <button class="shrink-0 hover:text-primary" onclick={() => playSoundPreview(s.path, volume)} aria-label={language.preview}>
                     <PlayIcon size={18} />
                 </button>
-                <button class="shrink-0 text-textcolor2 hover:text-red-500" onclick={() => removeCustom(s)} aria-label={language.remove}>
+                <button class="shrink-0 text-textcolor2 hover:text-danger/80" onclick={() => removeCustom(s)} aria-label={language.remove}>
                     <Trash2Icon size={18} />
                 </button>
             </div>

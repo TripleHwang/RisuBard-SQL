@@ -903,11 +903,24 @@ export async function completeMemoryWorkspaceFork(
         }), 'utf8')
         if (input.action === 'finalize') {
             if (markerPath === stagingMarker) {
-                if (marker.hadDestination
-                    && !await exists(fileSystem, backup)) {
-                    await fileSystem.rename(destination.directory, backup)
+                try {
+                    if (marker.hadDestination
+                        && !await exists(fileSystem, backup)) {
+                        await fileSystem.rename(destination.directory, backup)
+                    }
+                    await fileSystem.rename(staging, destination.directory)
                 }
-                await fileSystem.rename(staging, destination.directory)
+                catch (error) {
+                    // A failed publish must leave the old workspace available
+                    // and allow the caller to discard the staged replacement.
+                    if (marker.hadDestination
+                        && !await exists(fileSystem, destination.directory)
+                        && await exists(fileSystem, backup)) {
+                        await fileSystem.rename(backup, destination.directory)
+                    }
+                    await fileSystem.rm(receiptPath, { force: true })
+                    throw error
+                }
                 markerPath = destinationMarker
             }
             await fileSystem.rm(markerPath, { force: false })

@@ -17,6 +17,7 @@ export const displayThemeSettingsItems: SettingItem[] = [
         helpKey: 'theme',
         bindKey: 'theme',
         classes: 'mt-4',
+        onChange: () => updateTextThemeAndCSS(),
         options: {
             selectOptions: [
                 { value: '', label: 'RisuBard Standard' },
@@ -120,8 +121,7 @@ export const displayThemeSettingsItems: SettingItem[] = [
         id: 'display.customColorScheme',
         type: 'custom',
         componentId: 'CustomColorSchemeEditor',
-        condition: (ctx) => ctx.db.colorSchemeName === 'custom',
-        keywords: ['custom', 'color', 'scheme'],
+        keywords: ['custom', 'color', 'scheme', 'binding', 'warning', '색상', '바인딩'],
     },
     {
         id: 'display.textTheme',
@@ -144,8 +144,7 @@ export const displayThemeSettingsItems: SettingItem[] = [
         id: 'display.customTextTheme',
         type: 'custom',
         componentId: 'CustomTextThemeEditor',
-        condition: (ctx) => ctx.db.textTheme === 'custom',
-        keywords: ['custom', 'text', 'color', 'theme'],
+        keywords: ['custom', 'text', 'color', 'theme', 'dialogue', 'contrast', '대사', '대비'],
     },
     {
         id: 'display.font',

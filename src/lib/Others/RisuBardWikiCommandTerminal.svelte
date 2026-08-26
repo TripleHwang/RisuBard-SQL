@@ -112,7 +112,7 @@
         border-radius: .55rem;
         background:
             linear-gradient(180deg, color-mix(in srgb, var(--risu-theme-primary) 4%, transparent), transparent 38%),
-            color-mix(in srgb, var(--risu-theme-darkbg) 96%, black);
+            color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor));
         box-shadow: inset 3px 0 0 color-mix(in srgb, var(--risu-theme-primary) 70%, transparent);
     }
     header, footer {
@@ -154,7 +154,7 @@
         padding: .2rem .38rem;
         border: 1px solid color-mix(in srgb, var(--risu-theme-draculared) 45%, transparent);
         border-radius: .25rem;
-        color: color-mix(in srgb, var(--risu-theme-draculared) 86%, white);
+        color: color-mix(in srgb, var(--risu-theme-draculared) 86%, var(--color-textcolor));
         font: 700 .58rem/1 ui-monospace, monospace;
         letter-spacing: .08em;
     }

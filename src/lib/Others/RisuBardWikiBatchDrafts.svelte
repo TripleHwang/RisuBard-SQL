@@ -175,7 +175,7 @@
 </section>
 
 <style>
-    .batch-workbench { margin-top: 1rem; padding: .8rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .65rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black); }
+    .batch-workbench { margin-top: 1rem; padding: .8rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .65rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor)); }
     header { display: flex; justify-content: space-between; gap: .6rem; }
     header div { display: grid; gap: .18rem; }
     header small, legend, label > span { color: var(--risu-theme-textcolor2); font-size: .7rem; }
@@ -188,5 +188,5 @@
     article { padding: .6rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .45rem; }
     article.resolved { opacity: .7; }
     article footer { display: flex; justify-content: flex-end; gap: .4rem; margin-top: .4rem; }
-    .error { color: #ef6b73; }
+    .error { color: var(--color-danger); }
 </style>

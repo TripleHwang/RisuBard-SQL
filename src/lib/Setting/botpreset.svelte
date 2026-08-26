@@ -14,6 +14,8 @@
     import { get } from 'svelte/store'
     import { openSettings, SettingsRoute } from 'src/ts/routing'
     import ShButton from '../UI/GUI/ShButton.svelte'
+    import ShDialog from '../UI/GUI/ShDialog.svelte'
+    import ManagerResizeHandles from '../UI/GUI/ManagerResizeHandles.svelte'
     import {
         CopyIcon,
         Share2Icon,
@@ -21,7 +23,6 @@
         HardDriveUploadIcon,
         PlusIcon,
         TrashIcon,
-        XIcon,
         GitCompare,
     } from '@lucide/svelte'
     import TextInput from '../UI/GUI/TextInput.svelte'
@@ -32,6 +33,7 @@
     import { requestImmediateSave } from 'src/ts/globalApi.svelte'
 
     let editMode = $state(false)
+    let contentElement: HTMLElement | null = $state(null)
     let selectedPresetFolder = $state<string | null | undefined>(undefined)
     const organizerPresetItems = $derived(DBState.db.botPresets.flatMap((preset) => typeof preset.id === 'string'
         ? [{ id: preset.id, title: preset.name || preset.id, detail: preset.aiModel || preset.apiType }]
@@ -105,16 +107,11 @@
     }
 </script>
 
-<div class="absolute h-full w-full z-40 bg-black/50 flex justify-center items-center">
-    <div class="bg-darkbg p-4 break-any rounded-md flex flex-col w-[min(96vw,64rem)] max-h-full overflow-y-auto">
-        <div class="mb-4 flex items-center text-textcolor">
-            <h2 class="m-0">{language.promptPresets}</h2>
-            <div class="grow flex justify-end">
-                <button class="mr-2 cursor-pointer items-center text-textcolor2 hover:text-primary" onclick={close}>
-                    <XIcon size={24}/>
-                </button>
-            </div>
-        </div>
+<ShDialog open onOpenChange={(open) => { if (!open) close() }} bind:contentElement
+    tier="base" size="xl" closeOnEscape closeOnOutsideClick={false}
+    contentClass="preset-manager" bodyClass="preset-manager-body"
+    closeAriaLabel={language.collectionOrganizer.close}>
+        {#snippet title()}{language.promptPresets}{/snippet}
         {#if !$settingsOpen}
             <ShButton variant="default" size="default" className="w-full mb-4" onclick={() => {
                 close()
@@ -166,7 +163,7 @@
                 {#if i >= 0}
                     {@const preset = DBState.db.botPresets[i]}
                     <div
-                        class="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-textcolor hover:bg-selected/30"
+                        class="preset-manager-item flex min-h-9 min-w-0 w-full flex-wrap cursor-pointer items-center gap-2 rounded-md px-2 text-textcolor hover:bg-selected/30"
                         class:bg-selected={$presetSelectActiveId ? preset.id === $presetSelectActiveId : i === DBState.db.botPresetsId}
                         role="button"
                         tabindex="0"
@@ -174,19 +171,19 @@
                         onkeydown={(event) => { if (event.key === 'Enter') selectPreset(i) }}
                     >
                         {#if editMode}
-                            <TextInput bind:value={DBState.db.botPresets[i].name} placeholder="string" padding={false}/>
+                            <TextInput className="min-w-0 max-w-full flex-1 basis-40" bind:value={DBState.db.botPresets[i].name} placeholder="string" padding={false}/>
                         {:else}
                             {#if preset.image}
                                 <img src={preset.image} alt="icon" class="size-6 shrink-0 rounded-md" decoding="async"/>
                             {/if}
-                            <span class="min-w-0 grow truncate">{preset.name}</span>
+                            <span class="min-w-0 flex-1 basis-40 wrap-anywhere">{preset.name}</span>
                         {/if}
-                        <div class="ml-auto flex shrink-0 items-center">
+                        <div class="preset-manager-actions ml-auto flex max-w-full flex-wrap items-center">
                             {#if DBState.db.showPromptComparison}
                                 <ShButton variant="ghost" size="icon-sm" aria-label={language.showPromptComparison} onclick={(event) => {
                                     event.stopPropagation()
                                     handleDiffMode(i)
-                                }}><GitCompare class={selectedDiffPreset === i ? 'text-green-500' : ''}/></ShButton>
+                                }}><GitCompare class={selectedDiffPreset === i ? 'text-success' : ''}/></ShButton>
                             {/if}
                             <ShButton variant="ghost" size="icon-sm" aria-label={language.copy} onclick={(event) => {
                                 event.stopPropagation()
@@ -227,20 +224,32 @@
                 {/if}
             {/snippet}
         </CollectionOrganizerList>
-    </div>
-</div>
-
-{#if showDiffModal && firstPresetId !== null && secondPresetId !== null}
-    <PromptDiffModal
-        firstPresetId={firstPresetId}
-        secondPresetId={secondPresetId}
-        onClose={closeDiff}
-    />
-{/if}
+        <ManagerResizeHandles target={contentElement} centered />
+        {#if showDiffModal && firstPresetId !== null && secondPresetId !== null}
+            <PromptDiffModal
+                firstPresetId={firstPresetId}
+                secondPresetId={secondPresetId}
+                onClose={closeDiff}
+            />
+        {/if}
+</ShDialog>
 
 <style>
-    .break-any {
-        word-break: normal;
-        overflow-wrap: anywhere;
+    :global(.preset-manager) {
+        width: var(--manager-width, min(96vw, 83.2rem));
+        max-width: calc(100vw - 1rem);
+        height: var(--manager-height, min(86dvh, 54rem));
+        max-height: calc(100dvh - 1rem);
+        min-width: 0;
+        min-height: min(24rem, calc(100dvh - 1rem));
+        overflow: hidden;
+    }
+    :global(.preset-manager-body) { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+    :global(.preset-manager > :first-child) { flex-shrink: 0; }
+    @media (max-width: 640px) {
+        :global(.preset-manager) { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; padding: .75rem; }
+    }
+    @media (pointer: coarse) {
+        .preset-manager-actions :global(button) { min-width: 2.5rem; min-height: 2.5rem; }
     }
 </style>

@@ -365,14 +365,14 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
             : ['modelSessionChatId']),
     ], 'analysis input')
     if (!Array.isArray(value.messages)
-        || value.messages.length < 1
-        || value.messages.length > 12) {
+        || value.messages.length < 1) {
         throw new Error(
-            'Analysis messages must contain between 1 and 12 items'
+            'Analysis messages must contain at least one item'
         )
     }
     const messageIds = new Set<string>()
-    let contentCharacters = 0
+    // Keep raw evidence intact. The model adapter fits selected input to the
+    // configured token budget; raw history size is not a model-request limit.
     const messages: MemoryAnalysisMessage[] = []
     for (let index = 0; index < value.messages.length; index += 1) {
         if (!Object.prototype.hasOwnProperty.call(value.messages, index)) {
@@ -401,12 +401,6 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
         if (typeof message.content !== 'string') {
             throw new Error('Analysis message content must be a string')
         }
-        contentCharacters += message.content.length
-        if (contentCharacters > 64_000) {
-            throw new Error(
-                'Analysis message content exceeds 64000 characters'
-            )
-        }
         messages.push({
             messageId,
             role: message.role,
@@ -416,10 +410,9 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
     let contextMessages: MemoryAnalysisMessage[] | undefined
     if (value.contextMessages !== undefined) {
         if (!Array.isArray(value.contextMessages)
-            || value.contextMessages.length < 1
-            || value.contextMessages.length > 100) {
+            || value.contextMessages.length < 1) {
             throw new Error(
-                'Analysis context messages must contain between 1 and 100 items'
+                'Analysis context messages must contain at least one item'
             )
         }
         contextMessages = value.contextMessages.map((message) => {
@@ -446,12 +439,6 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
                 content: message.content,
             }
         })
-        if (contextMessages.reduce(
-            (total, message) => total + message.content.length,
-            0
-        ) > 128_000) {
-            throw new Error('Analysis context exceeds 128000 characters')
-        }
     }
     const characterId = requireNonEmptyString(
             value.characterId,
@@ -468,8 +455,7 @@ function snapshotInput(value: MemoryAnalysisInput): MemoryAnalysisInput {
     }
     let excludeCanonicalDocumentIds: string[] | undefined
     if (value.excludeCanonicalDocumentIds !== undefined) {
-        if (!Array.isArray(value.excludeCanonicalDocumentIds)
-            || value.excludeCanonicalDocumentIds.length > 64) {
+        if (!Array.isArray(value.excludeCanonicalDocumentIds)) {
             throw new Error('Analysis excluded canonical IDs are invalid')
         }
         excludeCanonicalDocumentIds = [...new Set(
@@ -841,7 +827,7 @@ export function createMemoryAnalysisRunner(
             })
             const analyzeParsedDraft = async () => {
                 let output = await analyzeDraft()
-                if (typeof output !== 'string' || output.length > 64_000) {
+                if (typeof output !== 'string') {
                     throw new Error('Invalid structured memory analysis output')
                 }
                 try {
@@ -862,7 +848,7 @@ export function createMemoryAnalysisRunner(
                 }
                 catch (error) {
                     output = await analyzeDraft(error)
-                    if (typeof output !== 'string' || output.length > 64_000) {
+                    if (typeof output !== 'string') {
                         throw new Error('Invalid structured memory analysis output')
                     }
                     if (snapshot.rebootTurns) {

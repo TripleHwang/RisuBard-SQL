@@ -31,7 +31,7 @@
 </script>
 
 
-<div class="absolute w-full h-full z-40 bg-black/50 flex justify-center items-center">
+<div class="absolute w-full h-full z-40 bg-overlay/50 flex justify-center items-center">
     <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl w-full max-h-full overflow-y-auto">
         <div class="flex items-center text-textcolor">
             <h2 class="mt-0 mb-0 text-lg">{language.modules}</h2>
@@ -80,10 +80,10 @@
                                 </button>
                             {:else}
                                 <button class={(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].modules.includes(rmodule.id)) ?
-                                        "mr-2 cursor-pointer text-blue-500" :
+                                        "mr-2 cursor-pointer text-info" :
                                         (DBState.db.characters[$selectedCharID]?.modules?.includes(rmodule.id)) ?
-                                        "mr-2 cursor-pointer text-violet-500" :
-                                        "text-textcolor2 hover:text-blue-400 mr-2 cursor-pointer"
+                                        "mr-2 cursor-pointer text-secondary" :
+                                        "text-textcolor2 hover:text-info/80 mr-2 cursor-pointer"
                                 } onclick={async (e) => {
                                     e.stopPropagation()
                                     if(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].modules.includes(rmodule.id)){

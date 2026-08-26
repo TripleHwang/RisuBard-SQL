@@ -256,7 +256,7 @@ export const helpKo = {
         "risuBardResponseRecentMessages": "새 답변을 만들 때 참조할 최근 메시지의 최대 개수입니다. 현재 사용자 요청도 이 개수에 포함됩니다.",
         "risuBardCanonicalWritingStyle": "채팅과 소설가 모드의 사건 이야기 요약 및 정본 Markdown에 공통 적용할 한국어 문체입니다. 간결이 기본값입니다.",
         "risuBardCanonicalCustomStyle": "문체와 표현 형식만 지정할 수 있습니다. 사실 선택, 근거, 구조와 안전 규칙은 이 지시문보다 우선합니다. 최대 1,000자입니다.",
-        "risuBardAnalysisTokenLimit": "한 번의 메모리 분석과 정본 생성에 사용할 최대 출력 토큰 수입니다.",
+        "risuBardAnalysisTokenLimit": "각 메모리 분석·정본 생성 요청의 입력 토큰 예산입니다. 긴 입력은 요청 전에 이 예산에 맞춥니다. 정본 생성의 출력 토큰 예산으로도 사용합니다. 앱의 고정 최대값은 없지만 사용하는 모델의 컨텍스트·출력 한도 안에서 설정해야 합니다.",
         "risuBardInquiryTargetTokenBudget": "일반 위키 조회에서 관련 문서를 선택할 때 목표로 삼는 토큰 수입니다. 관련 문서가 적으면 이 수를 채우지 않습니다.",
         "risuBardInquiryMaximumTokenBudget": "상세 조회와 필수 문서를 포함해 한 번의 위키 조회가 절대로 넘을 수 없는 토큰 수입니다. 목표보다 작게 설정하면 목표도 이 값으로 제한됩니다.",
         "risuBardAdditionalSearchLimit": "첫 분석에서 정본 후보가 부족할 때 위키 문서를 추가로 탐색할 최대 횟수입니다.",

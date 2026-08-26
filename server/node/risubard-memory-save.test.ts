@@ -28,6 +28,95 @@ afterEach(async () => {
 })
 
 describe('memory save slots', () => {
+    async function overwriteFixture() {
+        const root = await createRoot()
+        const input = {
+            userDataDirectory: root, characterId: 'character',
+            sourceChatId: 'chat-source', saveId: 'save-1',
+            sourceChatName: '모험', turnCount: 1, chatBytes: Buffer.from('old'),
+            createdAt: '2026-08-14T08:00:00.000Z',
+        }
+        const source = resolveMemoryWorkspace(root, 'character', 'chat-source')
+        const scene = join(source.directory, 'wiki', 'current-scene.md')
+        await fs.mkdir(dirname(scene), { recursive: true })
+        await fs.writeFile(scene, 'old wiki')
+        const saved = await createMemorySaveSlot(input)
+        await fs.writeFile(scene, 'new wiki')
+        return { input, saved, source }
+    }
+
+    test('overwrites one slot with new chat and wiki while preserving its renamed label', async () => {
+        const { input } = await overwriteFixture()
+        await renameMemorySaveSlot({ ...input, name: '보스전 직전' })
+        const saved = await createMemorySaveSlot({
+            ...input, overwrite: true, chatBytes: Buffer.from('new'),
+            turnCount: 9, latestMessageId: 'message-9',
+            createdAt: '2026-08-15T08:00:00.000Z',
+        })
+        expect(saved).toMatchObject({
+            saveId: input.saveId, sourceChatName: '보스전 직전',
+            turnCount: 9, latestMessageId: 'message-9',
+            createdAt: '2026-08-15T08:00:00.000Z',
+        })
+        expect(await listMemorySaveSlots(input)).toEqual([saved])
+        expect(await readMemorySaveChat(input)).toEqual(Buffer.from('new'))
+        const prepared = await prepareMemorySaveLoad({
+            ...input, destinationChatId: 'loaded',
+        })
+        await completeMemoryWorkspaceFork({
+            ...input, destinationChatId: 'loaded',
+            forkToken: prepared.fork.forkToken, action: 'finalize',
+        })
+        const loaded = resolveMemoryWorkspace(input.userDataDirectory, 'character', 'loaded')
+        expect(await fs.readFile(join(loaded.directory, 'wiki', 'current-scene.md'), 'utf8'))
+            .toBe('new wiki')
+        expect(prepared.chatBytes).toEqual(Buffer.from('new'))
+    })
+
+    test('requires explicit overwrite of an existing slot belonging to the current chat', async () => {
+        const { input, saved } = await overwriteFixture()
+        await expect(createMemorySaveSlot(input)).rejects.toThrow('already exists')
+        await expect(createMemorySaveSlot({
+            ...input, saveId: 'missing', overwrite: true,
+        })).rejects.toThrow()
+        await expect(createMemorySaveSlot({
+            ...input, sourceChatId: 'other-chat', overwrite: true,
+        })).rejects.toThrow('different chat')
+        expect(await listMemorySaveSlots(input)).toEqual([saved])
+        expect(await readMemorySaveChat(input)).toEqual(Buffer.from('old'))
+    })
+
+    test.each(['chat.bin', 'risubard-save.json', 'publish'])(
+        'keeps the original slot and cleans staging when overwrite fails at %s', async (failure) => {
+            const { input, saved, source } = await overwriteFixture()
+            const fileSystem = {
+                ...fs,
+                writeFile: (async (path, ...args) => {
+                    if (String(path).includes('.replace-') && String(path).endsWith(failure)) {
+                        throw new Error('injected overwrite failure')
+                    }
+                    return fs.writeFile(path, ...args)
+                }) as typeof fs.writeFile,
+                rename: (async (from, to) => {
+                    if (failure === 'publish' && String(from).includes('.replace-')) {
+                        throw new Error('injected overwrite failure')
+                    }
+                    return fs.rename(from, to)
+                }) as typeof fs.rename,
+            }
+            await expect(createMemorySaveSlot({
+                ...input, overwrite: true, chatBytes: Buffer.from('new'),
+            }, { fileSystem })).rejects.toThrow('injected overwrite failure')
+            expect(await readMemorySaveChat(input)).toEqual(Buffer.from('old'))
+            expect(await listMemorySaveSlots(input)).toEqual([saved])
+            const slot = resolveMemoryWorkspace(input.userDataDirectory, 'character', 'save-slot:save-1')
+            expect(await fs.readFile(join(slot.directory, 'wiki', 'current-scene.md'), 'utf8'))
+                .toBe('old wiki')
+            const entries = await fs.readdir(dirname(source.directory))
+            expect(entries.filter((entry) => /\.(replace|restore)-/.test(entry))).toEqual([])
+        }
+    )
+
     test('stores chat bytes and a complete immutable wiki snapshot', async () => {
         const root = await createRoot()
         const source = resolveMemoryWorkspace(root, 'character', 'chat-source')

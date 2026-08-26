@@ -473,13 +473,13 @@
               <button
                 class="absolute top-1.5 left-1.5 z-10 w-5 h-5 rounded flex items-center justify-center transition-all border
                   {selection.has(item.id)
-                    ? 'bg-borderc border-borderc'
-                    : 'bg-black/50 border-white/40 opacity-0 group-hover:opacity-100'}"
+                    ? 'bg-primary border-primary'
+                    : 'bg-media-bg/50 border-media-text/40 opacity-0 group-hover:opacity-100'}"
                 onclick={(e) => { e.stopPropagation(); toggleSelect(item.id) }}
                 title={selection.has(item.id) ? language.playground.inlayDeselectAll : language.playground.inlaySelectAll}
               >
                 {#if selection.has(item.id)}
-                  <svg class="w-3 h-3 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <svg class="w-3 h-3 text-accenttext" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M2 6l3 3 5-5" />
                   </svg>
                 {/if}
@@ -487,32 +487,32 @@
 
               {#if getStatusLabel(item)}
                 <div
-                  class="absolute top-1.5 right-1.5 z-10 w-4 h-4 rounded-full bg-yellow-500 flex items-center justify-center"
+                  class="absolute top-1.5 right-1.5 z-10 w-4 h-4 rounded-full bg-warning flex items-center justify-center"
                   title={getStatusLabel(item) ?? ''}
                 >
-                  <span class="text-black text-[9px] font-bold leading-none">!</span>
+                  <span class="text-on-warning text-[9px] font-bold leading-none">!</span>
                 </div>
               {/if}
 
               <div
                 class="absolute inset-x-0 bottom-0 pt-8 pb-2 px-2
-                  bg-gradient-to-t from-black/80 via-black/40 to-transparent
+                  bg-gradient-to-t from-media-bg/80 via-media-bg/40 to-transparent
                   opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex flex-col"
               >
-                <p class="text-white text-xs font-medium truncate leading-tight">{item.name}</p>
+                <p class="text-media-text text-xs font-medium truncate leading-tight">{item.name}</p>
                 {#if getCharacterName(item)}
-                  <p class="text-white/60 text-[10px] truncate leading-tight">{getCharacterName(item)}</p>
+                  <p class="text-media-text/60 text-[10px] truncate leading-tight">{getCharacterName(item)}</p>
                 {/if}
                 <div class="flex gap-1.5 mt-1.5 justify-end">
                   <button
-                    class="w-6 h-6 rounded bg-white/15 hover:bg-white/30 flex items-center justify-center text-white transition-colors"
+                    class="w-6 h-6 rounded bg-media-text/15 hover:bg-media-text/30 flex items-center justify-center text-media-text transition-colors"
                     onclick={(e) => { e.stopPropagation(); downloadCurrent(item) }}
                     title={language.download}
                   >
                     <Download size={11} />
                   </button>
                   <button
-                    class="w-6 h-6 rounded bg-draculared/30 hover:bg-draculared/70 flex items-center justify-center text-white transition-colors"
+                    class="w-6 h-6 rounded bg-draculared/30 hover:bg-draculared/70 flex items-center justify-center text-media-text transition-colors"
                     onclick={(e) => { e.stopPropagation(); deleteAsset(item.id, item.name) }}
                     title={language.playground.inlayDelete}
                   >
@@ -536,36 +536,36 @@
 
 <!-- Fullscreen viewer -->
 {#if viewerOpen}
-  <div class="fixed inset-0 z-50 flex overflow-hidden" style="background: #09090b;">
+  <div class="fixed inset-0 z-50 flex overflow-hidden" style="background: var(--color-media-bg);">
 
     <!-- Image panel -->
     <div class="flex-1 relative flex items-center justify-center min-w-0 overflow-hidden">
 
       <!-- Top toolbar -->
-      <div class="absolute top-0 inset-x-0 z-10 flex items-center gap-3 px-4 py-3 bg-gradient-to-b from-black/70 to-transparent pointer-events-none">
+      <div class="absolute top-0 inset-x-0 z-10 flex items-center gap-3 px-4 py-3 bg-gradient-to-b from-media-bg/70 to-transparent pointer-events-none">
         <div class="flex-1 min-w-0">
-          <p class="text-white text-sm font-semibold truncate">{currentViewerItem?.name ?? viewerId}</p>
+          <p class="text-media-text text-sm font-semibold truncate">{currentViewerItem?.name ?? viewerId}</p>
           {#if viewerIndex >= 0}
-            <p class="text-white/40 text-xs">{viewerIndex + 1} / {sortedItems.length}</p>
+            <p class="text-media-text/40 text-xs">{viewerIndex + 1} / {sortedItems.length}</p>
           {/if}
         </div>
         <div class="flex gap-2 shrink-0 pointer-events-auto">
           <button
-            class="w-9 h-9 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+            class="w-9 h-9 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
             onclick={() => (infoPanelOpen = !infoPanelOpen)}
             title={language.playground.inlayInfo}
           >
             <Info size={16} />
           </button>
           <button
-            class="w-9 h-9 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+            class="w-9 h-9 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
             onclick={() => currentViewerItem && downloadCurrent(currentViewerItem)}
             title={language.download}
           >
             <Download size={16} />
           </button>
           <button
-            class="w-9 h-9 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+            class="w-9 h-9 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
             onclick={closeViewer}
             title={language.goback}
           >
@@ -577,7 +577,7 @@
       <!-- Prev arrow -->
       {#if canGoPrev}
         <button
-          class="absolute left-3 z-10 w-11 h-11 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+          class="absolute left-3 z-10 w-11 h-11 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
           onclick={() => goToNeighbor(-1)}
         >
           <ChevronLeft size={22} />
@@ -588,11 +588,11 @@
       <div class="w-full h-full flex items-center justify-center px-16 py-14">
         {#if viewerLoading}
           <div class="flex flex-col items-center gap-4">
-            <div class="w-12 h-12 border-4 border-white/15 border-t-white/80 rounded-full animate-spin"></div>
-            <p class="text-white/50 text-sm">{language.playground.inlayLoadingOriginal}</p>
+            <div class="w-12 h-12 border-4 border-media-text/15 border-t-media-text/80 rounded-full animate-spin"></div>
+            <p class="text-media-text/50 text-sm">{language.playground.inlayLoadingOriginal}</p>
           </div>
         {:else if viewerError}
-          <p class="text-red-300 text-sm">{viewerError}</p>
+          <p class="text-danger text-sm">{viewerError}</p>
         {:else if viewerUrl}
           <img
             alt={currentViewerItem?.name ?? viewerId}
@@ -606,7 +606,7 @@
       <!-- Next arrow -->
       {#if canGoNext}
         <button
-          class="absolute right-3 z-10 w-11 h-11 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+          class="absolute right-3 z-10 w-11 h-11 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
           onclick={() => goToNeighbor(1)}
         >
           <ChevronRight size={22} />
@@ -615,7 +615,7 @@
 
       <!-- Status badge at bottom -->
       {#if getStatusLabel(currentViewerItem)}
-        <div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-yellow-500/90 text-black text-xs font-medium">
+        <div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-warning/90 text-on-warning text-xs font-medium">
           {getStatusLabel(currentViewerItem)}
         </div>
       {/if}
@@ -623,12 +623,12 @@
 
     <!-- Info panel -->
     {#if infoPanelOpen}
-      <div class="w-72 xl:w-80 shrink-0 flex flex-col overflow-hidden border-l border-white/10" style="background: #18181b;">
+      <div class="w-72 xl:w-80 shrink-0 flex flex-col overflow-hidden border-l border-media-text/10" style="background: color-mix(in srgb, var(--color-media-bg) 94%, var(--color-media-text));">
 
         <!-- Panel header -->
-        <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
-          <span class="text-white/80 text-sm font-semibold">{language.playground.inlayInfo}</span>
-          <button class="text-white/40 hover:text-white transition-colors" onclick={() => (infoPanelOpen = false)}>
+        <div class="flex items-center justify-between px-4 py-3 border-b border-media-text/10">
+          <span class="text-media-text/80 text-sm font-semibold">{language.playground.inlayInfo}</span>
+          <button class="text-media-text/40 hover:text-media-text transition-colors" onclick={() => (infoPanelOpen = false)}>
             <X size={16} />
           </button>
         </div>
@@ -636,46 +636,46 @@
         <div class="flex-1 overflow-y-auto">
 
           <!-- File info -->
-          <div class="px-4 py-3 space-y-1.5 border-b border-white/10">
-            <p class="text-white text-sm font-medium break-all leading-snug" title={currentViewerItem?.name}>
+          <div class="px-4 py-3 space-y-1.5 border-b border-media-text/10">
+            <p class="text-media-text text-sm font-medium break-all leading-snug" title={currentViewerItem?.name}>
               {currentViewerItem?.name ?? viewerId}
             </p>
-            <p class="text-white/30 text-xs font-mono break-all leading-snug">{viewerId}</p>
+            <p class="text-media-text/30 text-xs font-mono break-all leading-snug">{viewerId}</p>
             {#if currentViewerItem?.ext}
-              <p class="text-white/50 text-xs uppercase font-mono">.{currentViewerItem.ext}</p>
+              <p class="text-media-text/50 text-xs uppercase font-mono">.{currentViewerItem.ext}</p>
             {/if}
             {#if currentViewerItem?.width && currentViewerItem?.height}
-              <p class="text-white/50 text-xs">{currentViewerItem.width} × {currentViewerItem.height} px</p>
+              <p class="text-media-text/50 text-xs">{currentViewerItem.width} × {currentViewerItem.height} px</p>
             {/if}
             {#if getCharacterName(currentViewerItem)}
-              <p class="text-white/60 text-xs">{language.character}: {getCharacterName(currentViewerItem)}</p>
+              <p class="text-media-text/60 text-xs">{language.character}: {getCharacterName(currentViewerItem)}</p>
             {/if}
             {#if getChatName(currentViewerItem)}
-              <p class="text-white/60 text-xs">{language.Chat}: {getChatName(currentViewerItem)}</p>
+              <p class="text-media-text/60 text-xs">{language.Chat}: {getChatName(currentViewerItem)}</p>
             {/if}
             {#if formatTimestamp(currentViewerItem?.meta?.createdAt)}
-              <p class="text-white/35 text-xs">{language.playground.inlayCreatedAt} {formatTimestamp(currentViewerItem?.meta?.createdAt)}</p>
+              <p class="text-media-text/35 text-xs">{language.playground.inlayCreatedAt} {formatTimestamp(currentViewerItem?.meta?.createdAt)}</p>
             {/if}
             {#if formatTimestamp(currentViewerItem?.meta?.updatedAt)}
-              <p class="text-white/35 text-xs">{language.playground.inlayUpdatedAt} {formatTimestamp(currentViewerItem?.meta?.updatedAt)}</p>
+              <p class="text-media-text/35 text-xs">{language.playground.inlayUpdatedAt} {formatTimestamp(currentViewerItem?.meta?.updatedAt)}</p>
             {/if}
           </div>
 
           <!-- Actions -->
           <div class="px-4 py-4 space-y-2">
-            <h3 class="text-white/50 text-[11px] font-semibold uppercase tracking-wider">
+            <h3 class="text-media-text/50 text-[11px] font-semibold uppercase tracking-wider">
               {language.playground.inlayActions}
             </h3>
             <button
               onclick={() => currentViewerItem && downloadCurrent(currentViewerItem)}
-              class="w-full flex items-center gap-2 px-3 py-2 rounded border border-white/15 hover:bg-white/5 text-white/70 hover:text-white text-sm transition-colors"
+              class="w-full flex items-center gap-2 px-3 py-2 rounded border border-media-text/15 hover:bg-media-text/5 text-media-text/70 hover:text-media-text text-sm transition-colors"
             >
               <Download size={14} />
               {language.download}
             </button>
             <button
               onclick={() => currentViewerItem && deleteAsset(currentViewerItem.id, currentViewerItem.name)}
-              class="w-full flex items-center gap-2 px-3 py-2 rounded border border-draculared/40 hover:bg-draculared/15 text-red-400 hover:text-red-300 text-sm transition-colors"
+              class="w-full flex items-center gap-2 px-3 py-2 rounded border border-draculared/40 hover:bg-draculared/15 text-danger hover:text-danger/80 text-sm transition-colors"
             >
               <Trash2 size={14} />
               {language.playground.inlayDelete}

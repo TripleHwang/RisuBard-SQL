@@ -26,13 +26,15 @@ describe('RisuBard analysis settings', () => {
             .toBe(RISUBARD_CANONICAL_TARGET_LIMIT_DEFAULT)
     })
 
-    test('clamps integer values to the supported bounded ranges', () => {
+    test('retains minimums without imposing arbitrary setting maxima', () => {
         expect(normalizeRisuBardAnalysisTokenLimit(12)).toBe(3_072)
-        expect(normalizeRisuBardAnalysisTokenLimit(99_999)).toBe(32_768)
+        expect(normalizeRisuBardAnalysisTokenLimit(99_999)).toBe(99_999)
         expect(normalizeRisuBardAdditionalSearchLimit(-3)).toBe(0)
-        expect(normalizeRisuBardAdditionalSearchLimit(99)).toBe(4)
+        expect(normalizeRisuBardAdditionalSearchLimit(99)).toBe(99)
         expect(normalizeRisuBardCanonicalTargetLimit(0)).toBe(1)
-        expect(normalizeRisuBardCanonicalTargetLimit(99)).toBe(8)
+        expect(normalizeRisuBardCanonicalTargetLimit(99)).toBe(99)
+        expect(normalizeRisuBardAnalysisTokenLimit(Infinity)).toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
+        expect(normalizeRisuBardAnalysisTokenLimit(Number.MAX_SAFE_INTEGER + 1)).toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
     })
 
     test('normalizes configurable inquiry target and maximum budgets', () => {
@@ -44,7 +46,15 @@ describe('RisuBard analysis settings', () => {
         expect(normalizeRisuBardInquiryTokenBudget(8_000, 4_000))
             .toEqual({ target: 4_000, maximum: 4_000 })
         expect(normalizeRisuBardInquiryTokenBudget(1, 99_999))
-            .toEqual({ target: 256, maximum: 32_768 })
+            .toEqual({ target: 256, maximum: 99_999 })
+    })
+
+    test('keeps configured message windows above one hundred', () => {
+        const settings = resolveRisuBardChatSettings({
+            risuBardRecentMessageCount: 250, risuBardResponseMessageCount: 300,
+        })
+        expect(settings.risuBardRecentMessageCount).toBe(250)
+        expect(settings.risuBardResponseMessageCount).toBe(300)
     })
 
     test('normalizes the shared canonical writing policy', () => {

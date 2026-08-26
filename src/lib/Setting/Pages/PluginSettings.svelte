@@ -60,8 +60,8 @@
     }
 </script>
 
-<SettingPage title={language.plugin}>
-<span class="text-draculared text-xs mb-4">{language.pluginWarn}</span>
+<SettingPage resizable title={language.plugin}>
+<span class="block min-w-0 text-draculared text-xs mb-4 [overflow-wrap:anywhere]">{language.pluginWarn}</span>
 
 <CollectionOrganizerList
     kind="plugins"
@@ -96,7 +96,7 @@
         {#if i >= 0}
             {@const plugin = DBState.db.plugins[i]}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div class="flex gap-2" aria-labelledby="show-params" role='button' tabindex="0" onclick={() => {
+        <div class="plugin-item-header" aria-labelledby="show-params" role='button' tabindex="0" onclick={() => {
             if(showParams.includes(plugin.name)){
                 showParams.splice(showParams.indexOf(plugin.name),1)
             }
@@ -105,18 +105,19 @@
             }
             showParams = showParams
         }}>
-            <div class="font-bold grow">
+            <div class="plugin-item-title font-bold">
                 <span>
                     {plugin.displayName ?? plugin.name}
                 </span>
                 {#if hotReloading.includes(plugin.name)}
-                    <span class="text-sm rounded bg-amber-700 ml-2 px-2 py-1 text-white">
+                    <span class="text-sm rounded bg-warning ml-2 px-2 py-1 text-on-warning">
                         Hot
                     </span>
                 {/if}
             </div>
+            <div class="plugin-item-actions">
             {#if plugin.version === 2 || plugin.version === "2.1"}
-                <button class="text-yellow-400 hover:gray-200 cursor-pointer" onclick={(e) => {
+                <button class="text-warning hover:text-warning/80 cursor-pointer" onclick={(e) => {
                     e.stopPropagation()
                     alertMd(language.pluginV2Warning);
                 }} >
@@ -145,7 +146,7 @@
                 {#await checkPluginUpdate(plugin) then updateInfo}
                     {#if updateInfo}
                         <button
-                            class="text-green-400 hover:gray-200 cursor-pointer"
+                            class="text-success hover:text-success/80 cursor-pointer"
                             disabled={updatingPlugins.includes(plugin.name)}
                             onclick={async (e) => {
                                 e.stopPropagation()
@@ -221,26 +222,25 @@
             >
                 <TrashIcon />
             </button>
+            </div>
         </div>
         {#if plugin.version === 1}
-            <span class="text-draculared text-xs">
+            <span class="block min-w-0 text-draculared text-xs [overflow-wrap:anywhere]">
                 {language.pluginVersionWarn
                     .replace("{{plugin_version}}", "API V1")
                     .replace("{{required_version}}", "API V3")}
             </span>
             <!--List up args-->
         {:else if Object.keys(plugin.arguments).filter((i) => !i.startsWith("hidden_")).length > 0 && showParams.includes(plugin.name)}
-            <div class="flex flex-col mt-2 bg-dark-900/50 p-3">
+            <div class="plugin-arguments flex flex-col mt-2 bg-dark-900/50 p-3">
                 {#each Object.keys(plugin.arguments) as arg}
                     {#if !arg.startsWith("hidden_")}
                         {#if typeof(plugin?.argMeta?.[arg]?.divider) === 'string'}
                             {#if plugin?.argMeta?.[arg]?.divider}
-                                <div class="flex items-center mt-6">
-                                    <div aria-hidden="true" class="w-full border-t border-darkborderc"></div>
-                                    <div class="relative flex justify-center">
-                                        <span class="px-2 text-sm text-textarea text-nowrap">{plugin?.argMeta?.[arg]?.divider}</span>
-                                    </div>
-                                    <div aria-hidden="true" class="w-full border-t border-darkborderc"></div>
+                                <div class="plugin-argument-divider mt-6">
+                                    <div aria-hidden="true" class="min-w-2 flex-1 border-t border-darkborderc"></div>
+                                    <span class="min-w-0 px-2 text-center text-sm text-textarea">{plugin?.argMeta?.[arg]?.divider}</span>
+                                    <div aria-hidden="true" class="min-w-2 flex-1 border-t border-darkborderc"></div>
                                 </div>
                             {:else}
                                 <div aria-hidden="true" class="w-full border-t border-darkborderc mt-6"></div>
@@ -252,7 +252,7 @@
                         {/if}
                         {#if Array.isArray(plugin.arguments[arg])}
                             <SelectInput
-                                className="mt-2 mb-4"
+                                className="mt-2 mb-4 min-w-0 w-full max-w-full"
                                 bind:value={
                                     DBState.db.plugins[i].realArg[arg] as string
                                 }
@@ -265,7 +265,7 @@
 
                             {#if plugin?.argMeta?.[arg]?.textarea}
                                 <TextAreaInput
-                                    className="mt-2"
+                                    className="mt-2 min-w-0 w-full max-w-full"
                                     bind:value={
                                         DBState.db.plugins[i].realArg[arg] as string
                                     }
@@ -274,6 +274,7 @@
                             {:else if plugin?.argMeta?.[arg]?.radio}
                                 {#each plugin?.argMeta?.[arg]?.radio?.split(",") as radioOption}
                                     <CheckInput
+                                        className="min-w-0 w-full max-w-full"
                                         check={DBState.db.plugins[i].realArg[arg] === (radioOption.split('|').at(-1))}
                                         onChange={(e) => {
                                             if(e){
@@ -286,7 +287,7 @@
                                 {/each}
                             {:else}
                                 <TextInput
-                                    className="mt-2"
+                                    className="mt-2 min-w-0 w-full max-w-full"
                                     bind:value={
                                         DBState.db.plugins[i].realArg[arg] as string
                                     }
@@ -296,6 +297,7 @@
                         {:else if plugin.arguments[arg] === "int"}
                             {#if plugin?.argMeta?.[arg]?.checkbox}
                                 <CheckInput
+                                    className="min-w-0 w-full max-w-full"
                                     check={DBState.db.plugins[i].realArg[arg] === '1'}
                                     onChange={(e) => {
                                         DBState.db.plugins[i].realArg[arg] = e ? '1' : '0'
@@ -308,6 +310,7 @@
                             {:else if plugin?.argMeta?.[arg]?.radio}
                                 {#each plugin?.argMeta?.[arg]?.radio?.split(",") as radioOption}
                                     <CheckInput
+                                        className="min-w-0 w-full max-w-full"
                                         check={DBState.db.plugins[i].realArg[arg] === parseInt(radioOption.split('|').at(-1))}
                                         onChange={(e) => {
                                             if(e){
@@ -320,7 +323,7 @@
                                 {/each}
                             {:else}
                                 <NumberInput
-                                    className="mt-2"
+                                    className="mt-2 min-w-0 w-full max-w-full"
                                     bind:value={
                                         DBState.db.plugins[i].realArg[arg] as number
                                     }
@@ -336,3 +339,46 @@
     {/snippet}
 </CollectionOrganizerList>
 </SettingPage>
+
+<style>
+    .plugin-item-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 0;
+    }
+
+    .plugin-item-title {
+        flex: 1 1 12rem;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .plugin-item-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 0.5rem;
+        min-width: 0;
+        max-width: 100%;
+        margin-left: auto;
+    }
+
+    .plugin-item-actions > button,
+    .plugin-item-actions > a {
+        flex-shrink: 0;
+    }
+
+    .plugin-arguments {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .plugin-argument-divider {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+    }
+</style>

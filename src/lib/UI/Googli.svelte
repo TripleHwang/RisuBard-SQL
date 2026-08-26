@@ -24,7 +24,7 @@
             class={className}
         >
             <div
-                class="bg-slate-500"
+                class="bg-darkbutton"
                 style={window.innerWidth > 728 ? "display:block !important;width:728px;height:90px" : "display:block !important;width:300px;height:100px"}
             >TEST</div>
         </div>

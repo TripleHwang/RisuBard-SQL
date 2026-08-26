@@ -56,15 +56,15 @@
     }
 
     function barColor(v: number): string {
-        if (v >= 0.8) return 'bg-red-600'
-        if (v >= 0.6) return 'bg-yellow-600'
-        return 'bg-green-600'
+        if (v >= 0.8) return 'bg-danger'
+        if (v >= 0.6) return 'bg-warning'
+        return 'bg-success'
     }
 
     function stateColor(state: string): string {
-        if (state === 'active') return 'bg-green-600'
-        if (state === 'grace')  return 'bg-yellow-600'
-        return 'bg-zinc-600'
+        if (state === 'active') return 'bg-success-bg text-success'
+        if (state === 'grace')  return 'bg-warning-bg text-warning'
+        return 'bg-selected text-textcolor2'
     }
 </script>
 
@@ -92,7 +92,7 @@
             {#if subscription}
                 <div class="flex items-center gap-2">
                     <span class="text-textcolor">{language.nanoGPTSubscription}</span>
-                    <span class="inline-flex items-center justify-center rounded-full px-2.5 pb-[2px] pt-[4px] text-sm font-bold leading-none text-white {stateColor(subscription.state)}">
+                    <span class="inline-flex items-center justify-center rounded-full px-2.5 pb-[2px] pt-[4px] text-sm font-bold leading-none {stateColor(subscription.state)}">
                         {subscription.state.toUpperCase()}
                     </span>
                     {#if subscription.state === 'grace' && subscription.graceUntil}
@@ -104,7 +104,7 @@
                     <p class="text-xs text-textcolor">{language.nanoGPTNoActiveSubscription}</p>
                 {:else}
                     {#if subscription.cancelAtPeriodEnd}
-                        <p class="text-xs text-yellow-400">{language.nanoGPTCancelsAtPeriodEnd(fmtDate(subscription.period?.currentPeriodEnd))}</p>
+                        <p class="text-xs text-warning">{language.nanoGPTCancelsAtPeriodEnd(fmtDate(subscription.period?.currentPeriodEnd))}</p>
                     {/if}
 
                 {#if subscription.weeklyInputTokens}

@@ -53,13 +53,13 @@
     </label>
     <label class="check"><input type="checkbox" checked={settings.showRequestStatus}
         onchange={(event) => setValue('showRequestStatus', (event.currentTarget as HTMLInputElement).checked)} /> 요청 컨텍스트 상태 표시</label>
-    <label><span>검색 목표 토큰</span><input type="number" min="256" max="32768" step="256" value={settings.risuBardInquiryTargetTokenBudget} onchange={(event) => setNumber('risuBardInquiryTargetTokenBudget', event)} /></label>
-    <label><span>검색 최대 토큰</span><input type="number" min="256" max="32768" step="256" value={settings.risuBardInquiryMaximumTokenBudget} onchange={(event) => setNumber('risuBardInquiryMaximumTokenBudget', event)} /></label>
-    <label><span>분석 토큰 한도</span><input type="number" min="3072" max="32768" step="1024" value={settings.risuBardAnalysisTokenLimit} onchange={(event) => setNumber('risuBardAnalysisTokenLimit', event)} /></label>
-    <label><span>추가 검색 횟수</span><input type="number" min="0" max="4" step="1" value={settings.risuBardAdditionalSearchLimit} onchange={(event) => setNumber('risuBardAdditionalSearchLimit', event)} /></label>
-    <label><span>정본 대상 한도</span><input type="number" min="1" max="8" step="1" value={settings.risuBardCanonicalTargetLimit} onchange={(event) => setNumber('risuBardCanonicalTargetLimit', event)} /></label>
-    <label><span>분석 최근 메시지</span><input type="number" min="1" max="100" step="1" value={settings.risuBardRecentMessageCount} onchange={(event) => setNumber('risuBardRecentMessageCount', event)} /></label>
-    <label><span>응답 최근 메시지</span><input type="number" min="1" max="100" step="1" value={settings.risuBardResponseMessageCount} onchange={(event) => setNumber('risuBardResponseMessageCount', event)} /></label>
+    <label><span>검색 목표 토큰</span><input type="number" min="256" step="256" value={settings.risuBardInquiryTargetTokenBudget} onchange={(event) => setNumber('risuBardInquiryTargetTokenBudget', event)} /></label>
+    <label><span>검색 최대 토큰</span><input type="number" min="256" step="256" value={settings.risuBardInquiryMaximumTokenBudget} onchange={(event) => setNumber('risuBardInquiryMaximumTokenBudget', event)} /></label>
+    <label><span>분석 토큰 한도</span><input type="number" min="3072" step="1024" value={settings.risuBardAnalysisTokenLimit} onchange={(event) => setNumber('risuBardAnalysisTokenLimit', event)} /></label>
+    <label><span>추가 검색 횟수</span><input type="number" min="0" step="1" value={settings.risuBardAdditionalSearchLimit} onchange={(event) => setNumber('risuBardAdditionalSearchLimit', event)} /></label>
+    <label><span>정본 대상 한도</span><input type="number" min="1" step="1" value={settings.risuBardCanonicalTargetLimit} onchange={(event) => setNumber('risuBardCanonicalTargetLimit', event)} /></label>
+    <label><span>분석 최근 메시지</span><input type="number" min="1" step="1" value={settings.risuBardRecentMessageCount} onchange={(event) => setNumber('risuBardRecentMessageCount', event)} /></label>
+    <label><span>응답 최근 메시지</span><input type="number" min="1" step="1" value={settings.risuBardResponseMessageCount} onchange={(event) => setNumber('risuBardResponseMessageCount', event)} /></label>
     <label class="check"><input type="checkbox" checked={settings.risuBardResponseExcludeUserMessages}
         onchange={(event) => setValue('risuBardResponseExcludeUserMessages', (event.currentTarget as HTMLInputElement).checked)} /> 사용자 메시지 제외</label>
     <label>
@@ -84,7 +84,7 @@
     label { display: grid; gap: .22rem; min-width: 0; color: var(--risu-theme-textcolor2); font-size: calc(.63rem + 4px); }
     label.check { display: flex; align-items: center; gap: .38rem; }
     label.wide { grid-column: 1 / -1; }
-    input, select, textarea { min-width: 0; padding: .34rem .42rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .3rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, black); font-size: calc(.66rem + 4px); }
+    input, select, textarea { min-width: 0; padding: .34rem .42rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .3rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, var(--color-bgcolor)); font-size: calc(.66rem + 4px); }
     input[type='checkbox'] { width: .9rem; height: .9rem; padding: 0; accent-color: var(--risu-theme-primary); }
     textarea { resize: vertical; }
     @media (max-width: 34rem) { .chat-settings { grid-template-columns: 1fr; } .settings-head, label.wide { grid-column: 1; } }

@@ -94,7 +94,7 @@
     .crop-frame.frame-contain{max-height:18rem;padding:.4rem}.crop-frame.frame-square{width:min(100%,22rem);aspect-ratio:1}.crop-frame.frame-landscape{aspect-ratio:16/9}.crop-frame.frame-portrait{width:min(100%,18rem);aspect-ratio:3/4}
     .crop-frame img{display:block;pointer-events:none;-webkit-user-drag:none}.crop-frame.frame-contain img{width:auto;height:auto;max-width:100%;max-height:17rem;object-fit:contain}.crop-frame:not(.frame-contain) img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
     .crop-frame.draggable{cursor:grab}.crop-frame.dragging{cursor:grabbing}
-    .crop-guide{position:absolute;z-index:1;inset:0;border:2px solid var(--risu-theme-primary);box-shadow:inset 0 0 0 1px color-mix(in srgb,#fff 62%,transparent),inset 0 0 2rem color-mix(in srgb,#000 16%,transparent);pointer-events:none}
+    .crop-guide{position:absolute;z-index:1;inset:0;border:2px solid var(--risu-theme-primary);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-media-text) 62%,transparent),inset 0 0 2rem color-mix(in srgb,var(--color-shadow) 16%,transparent);pointer-events:none}
     .crop-guide::before,.crop-guide::after{position:absolute;content:'';inset:0;opacity:.58}.crop-guide::before{background:linear-gradient(90deg,transparent 33.1%,var(--risu-theme-primary) 33.2% 33.5%,transparent 33.6% 66.4%,var(--risu-theme-primary) 66.5% 66.8%,transparent 66.9%)}.crop-guide::after{background:linear-gradient(transparent 33.1%,var(--risu-theme-primary) 33.2% 33.5%,transparent 33.6% 66.4%,var(--risu-theme-primary) 66.5% 66.8%,transparent 66.9%)}
     output{justify-self:center;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 </style>

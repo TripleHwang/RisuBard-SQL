@@ -1,7 +1,7 @@
 import { get } from "svelte/store";
 import { getChatVar, setChatVar } from '../parser/chatVar.svelte';
 import {selectedCharID} from '../stores.svelte'
-import { type Message, type loreBook } from "../storage/database.svelte";
+import { type Message, type character, type loreBook } from "../storage/database.svelte";
 import { DBState } from '../stores.svelte';
 import { tokenize } from "../tokenizer";
 import { risuChatParser } from "../parser/parser.svelte";
@@ -79,25 +79,27 @@ export function addLorebookFolder(type:number) {
     }
 }
 
-export async function loadLoreBookV3Prompt(){
-    const selectedID = get(selectedCharID)
-    const char = DBState.db.characters[selectedID]
+// An explicit search uses only the supplied text and character lore, without
+// reading chat history/local lore or changing persistent activation flags.
+export async function loadLoreBookV3Prompt(search?: { character: character; text: string }){
+    const char = search?.character ?? DBState.db.characters[get(selectedCharID)]
     const page = char.chatPage
     const loreSources = [
         ...(char.globalLore ?? []).map((entry) => ({
             scopeId: `character:${char.chaId}`,
             entry,
         })),
-        ...(char.chats[page].localLore ?? []).map((entry) => ({
+        ...(search ? [] : (char.chats[page].localLore ?? []).map((entry) => ({
             scopeId: `chat:${char.chats[page].id ?? page}`,
             entry,
-        })),
-        ...getModuleLorebooksWithSources(),
-    ].filter((source) => isLorebookEntryEnabled(source.entry))
+        }))),
+        ...(search ? [] : getModuleLorebooksWithSources()),
+    ].filter((source) => isLorebookEntryEnabled(source.entry)
+        && (!search || (source.entry.mode !== 'folder' && source.entry.content.trim().length > 0)))
     const fullLore = safeStructuredClone(loreSources.map((source) => source.entry))
     const loreScopes = loreSources.map((source) => source.scopeId)
-    const currentChat = char.chats[page].message
-    const loreDepth = char.loreSettings?.scanDepth ?? DBState.db.loreBookDepth
+    const currentChat: Message[] = search ? [{ role: 'user', data: search.text }] : char.chats[page].message
+    const loreDepth = search ? 1 : (char.loreSettings?.scanDepth ?? DBState.db.loreBookDepth)
     const loreToken = char.loreSettings?.tokenBudget ?? DBState.db.loreBookToken
     const matchingModeSetting = resolveLorebookMatchingMode(
         char.loreSettings?.matchingMode,
@@ -331,7 +333,7 @@ export async function loadLoreBookV3Prompt(){
                         return
                     }
                     case 'keep_activate_after_match':{
-                        const vara = getChatVar('__internal_ka_' + (fullLore[i].id ?? pickHashRand(5555,fullLore[i].content).toString()))
+                        const vara = search ? 'null' : getChatVar('__internal_ka_' + (fullLore[i].id ?? pickHashRand(5555,fullLore[i].content).toString()))
                         if(vara === 'true'){
                             forceState = 'activate'
                         }
@@ -341,7 +343,7 @@ export async function loadLoreBookV3Prompt(){
                         return false
                     }
                     case 'dont_activate_after_match': {
-                        const vara = getChatVar('__internal_da_' + (fullLore[i].id ?? pickHashRand(5555,fullLore[i].content).toString()))
+                        const vara = search ? 'null' : getChatVar('__internal_da_' + (fullLore[i].id ?? pickHashRand(5555,fullLore[i].content).toString()))
                         if(vara === 'true'){
                             forceState = 'deactivate'
                         }
@@ -382,7 +384,7 @@ export async function loadLoreBookV3Prompt(){
                         if(Number.isNaN(int)){
                             return false
                         }
-                        if(((char.chats[page].fmIndex ?? -1) + 1) !== int){
+                        if(search || ((char.chats[page].fmIndex ?? -1) + 1) !== int){
                             activated = false
                         }
                         return
@@ -595,10 +597,10 @@ export async function loadLoreBookV3Prompt(){
                 })
                 activatedIndexes.push(i)
 
-                if(keepActivateAfterMatch){
+                if(keepActivateAfterMatch && !search){
                     setChatVar('__internal_ka_' + (fullLore[i].id ?? pickHashRand(5555,fullLore[i].content).toString()), 'true')
                 }
-                if(dontActivateAfterMatch){
+                if(dontActivateAfterMatch && !search){
                     setChatVar('__internal_da_' + (fullLore[i].id ?? pickHashRand(5555,fullLore[i].content).toString()), 'true')
                 }
 

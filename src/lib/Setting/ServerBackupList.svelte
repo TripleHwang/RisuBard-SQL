@@ -133,7 +133,7 @@
                         onclick={() => downloadBackup(backup)}>
                         <DownloadIcon size={18}/>
                     </button>
-                    <button class="text-textcolor2 hover:text-red-400 cursor-pointer" title={language.serverBackupDelete} aria-label={language.serverBackupDelete}
+                    <button class="text-textcolor2 hover:text-danger/80 cursor-pointer" title={language.serverBackupDelete} aria-label={language.serverBackupDelete}
                         onclick={() => deleteBackup(backup)}>
                         <TrashIcon size={18}/>
                     </button>

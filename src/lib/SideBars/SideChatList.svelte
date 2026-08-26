@@ -417,7 +417,7 @@
                             if(e.key === 'Enter'){
                                 e.currentTarget.click()
                             }
-                        }} class="text-textcolor2 hover:text-red-400 cursor-pointer" onclick={async (e) => {
+                        }} class="text-textcolor2 hover:text-danger/80 cursor-pointer" onclick={async (e) => {
                             e.stopPropagation()
                             const d = await alertConfirm(`${language.removeConfirm}${folder.name}`)
                             if (d) {

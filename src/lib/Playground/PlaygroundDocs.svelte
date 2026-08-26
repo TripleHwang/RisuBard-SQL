@@ -67,9 +67,9 @@
     
     {#if !doc || doc.length === 0}
         <div class="text-center py-12">
-            <div class="text-gray-400 text-6xl mb-4">📚</div>
-            <h3 class="text-xl text-gray-600 mb-2">No documentation found</h3>
-            <p class="text-gray-500">Documentation will appear here when available.</p>
+            <div class="text-textcolor2 text-6xl mb-4">📚</div>
+            <h3 class="text-xl text-textcolor2 mb-2">No documentation found</h3>
+            <p class="text-textcolor2">Documentation will appear here when available.</p>
         </div>
     {/if}
 </div>

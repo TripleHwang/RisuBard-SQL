@@ -93,9 +93,9 @@
     li small { opacity: .65; min-width: 2.8rem; }
     button { border: 1px solid var(--color-darkborderc); border-radius: .4rem; padding: .2rem .4rem; }
     button:disabled, .undone { opacity: .5; }
-    .conflicted { color: #d6a84b; }
+    .conflicted { color: var(--color-warning); }
     .conflict { min-width: 0; }
     p { margin: .4rem 0 0; opacity: .72; }
-    .warning { color: #d6a84b; }
-    .error { color: #ef6b73; }
+    .warning { color: var(--color-warning); }
+    .error { color: var(--color-danger); }
 </style>

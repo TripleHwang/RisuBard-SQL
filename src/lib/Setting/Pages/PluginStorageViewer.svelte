@@ -450,7 +450,7 @@
                 <span class="text-textcolor2 text-[10px] uppercase tracking-wide shrink-0 opacity-70">{entry.type}</span>
                 <span class="text-textcolor2 text-xs shrink-0 tabular-nums">{formatSize(entry.size)}</span>
                 <button
-                    class="shrink-0 text-textcolor2 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
+                    class="shrink-0 text-textcolor2 hover:text-danger/80 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer p-1"
                     aria-label={language.remove}
                     onclick={(e) => { e.stopPropagation(); removeEntry(entry) }}
                 >
@@ -478,11 +478,11 @@
         {#if editing}
             <textarea
                 bind:value={editText}
-                class="w-full h-[50vh] resize-none rounded-md border border-darkborderc bg-black/40 p-3 font-mono text-xs leading-relaxed text-textcolor outline-none focus-visible:border-borderc whitespace-pre"
+                class="w-full h-[50vh] resize-none rounded-md border border-darkborderc bg-bgcolor/40 p-3 font-mono text-xs leading-relaxed text-textcolor outline-none focus-visible:border-borderc whitespace-pre"
                 spellcheck="false"
             ></textarea>
         {:else}
-            <pre class="w-full h-[50vh] overflow-auto rounded-md border border-darkborderc bg-black/40 p-3 font-mono text-xs leading-relaxed text-textcolor2 whitespace-pre-wrap break-all">{prettyPrint(selected.str)}</pre>
+            <pre class="w-full h-[50vh] overflow-auto rounded-md border border-darkborderc bg-bgcolor/40 p-3 font-mono text-xs leading-relaxed text-textcolor2 whitespace-pre-wrap break-all">{prettyPrint(selected.str)}</pre>
         {/if}
     {/if}
     {#snippet footer()}
