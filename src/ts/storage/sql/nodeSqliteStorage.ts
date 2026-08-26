@@ -272,7 +272,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   }
 
   async loadCharacterHydration(characterId: string): Promise<character | null> {
-    runtimeMetrics.start("character-hydration");
+    const metric = runtimeMetrics.start("character-hydration");
     try {
     const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}`);
     if (response.status === 404) return null;
@@ -285,7 +285,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     this.acceptReadRevision(payload.revision);
     return payload.character;
     } finally {
-      runtimeMetrics.end("character-hydration");
+      runtimeMetrics.end(metric);
     }
   }
 
@@ -294,7 +294,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     before: number | undefined,
     limit: number,
   ): Promise<SqlReverseMessagePage> {
-    runtimeMetrics.start("message-page");
+    const metric = runtimeMetrics.start("message-page");
     try {
     const params = new URLSearchParams({ limit: String(Math.min(100, Math.max(1, Math.floor(limit)))) });
     if (before !== undefined) params.set("before", String(before));
@@ -313,7 +313,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     this.acceptReadRevision(page.revision);
     return page;
     } finally {
-      runtimeMetrics.end("message-page");
+      runtimeMetrics.end(metric);
     }
   }
 

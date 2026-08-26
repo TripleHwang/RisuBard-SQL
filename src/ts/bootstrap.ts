@@ -102,7 +102,7 @@ async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) 
 export async function loadData() {
     if (get(loadedStore) || dataLoading) return
     dataLoading = true
-    runtimeMetrics.start('bootstrap')
+    const bootstrapMetric = runtimeMetrics.start('bootstrap')
     try {
             applyEarlyLanguage()
             let createdFreshDatabase = false
@@ -265,7 +265,7 @@ export async function loadData() {
         alertError(error)
     } finally {
         dataLoading = false
-        runtimeMetrics.end('bootstrap')
+        runtimeMetrics.end(bootstrapMetric)
     }
 }
 

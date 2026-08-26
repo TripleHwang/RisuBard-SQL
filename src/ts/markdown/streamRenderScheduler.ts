@@ -96,11 +96,11 @@ export class StreamRenderScheduler<Value> {
     }
 
     private async renderWithMetrics(value: Value): Promise<void> {
-        runtimeMetrics.start('stream-render')
+        const metric = runtimeMetrics.start('stream-render')
         try {
             await this.render(value)
         } finally {
-            runtimeMetrics.end('stream-render')
+            runtimeMetrics.end(metric)
         }
     }
 

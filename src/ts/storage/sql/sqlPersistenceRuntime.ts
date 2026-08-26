@@ -134,11 +134,11 @@ async function commitDirtyScopes(): Promise<void> {
 
 /** One metric pair per actual row-commit attempt, including the conflict retry. */
 async function commitWithMetrics(storage: ISqlStorage, commit: ReturnType<typeof buildSqlDirtyCommit>): Promise<void> {
-    runtimeMetrics.start('dirty-commit')
+    const metric = runtimeMetrics.start('dirty-commit')
     try {
         await storage.commit(commit)
     } finally {
-        runtimeMetrics.end('dirty-commit')
+        runtimeMetrics.end(metric)
     }
 }
 

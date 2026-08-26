@@ -8,7 +8,14 @@ export type RuntimeMetricName =
 export type RuntimePerformanceApi = {
     mark(name: string): unknown
     measure(name: string, startMark?: string, endMark?: string): unknown
+    clearMarks?(name?: string): unknown
 }
+
+export type RuntimeMetricHandle = Readonly<{
+    name: RuntimeMetricName
+    invocation: number
+    startMark: string
+}>
 
 function currentPerformance(): RuntimePerformanceApi | undefined {
     try {
@@ -24,21 +31,31 @@ function currentPerformance(): RuntimePerformanceApi | undefined {
  * loading, hydration, or persistence.
  */
 export function createRuntimeMetrics(api: RuntimePerformanceApi | undefined = currentPerformance()) {
+    let invocation = 0
     const mark = (name: string) => {
         try { api?.mark(name) } catch { /* optional browser API */ }
     }
     const measure = (name: string, start: string, end: string) => {
         try { api?.measure(name, start, end) } catch { /* optional browser API */ }
     }
+    const clearMark = (name: string) => {
+        try { api?.clearMarks?.(name) } catch { /* optional browser API */ }
+    }
     const metric = (name: RuntimeMetricName) => `risu:${name}`
     return {
-        start(name: RuntimeMetricName): void {
-            mark(`${metric(name)}:start`)
+        start(name: RuntimeMetricName): RuntimeMetricHandle {
+            const id = ++invocation
+            const startMark = `${metric(name)}:start:${id}`
+            mark(startMark)
+            return { name, invocation: id, startMark }
         },
-        end(name: RuntimeMetricName): void {
-            const base = metric(name)
-            mark(`${base}:end`)
-            measure(base, `${base}:start`, `${base}:end`)
+        end(handle: RuntimeMetricHandle): void {
+            const base = metric(handle.name)
+            const endMark = `${base}:end:${handle.invocation}`
+            mark(endMark)
+            measure(base, handle.startMark, endMark)
+            clearMark(handle.startMark)
+            clearMark(endMark)
         },
     }
 }
