@@ -50,6 +50,12 @@ describe('standalone release updater target', () => {
         expect(sourceUpdater).not.toContain('REPO="rpaddict/RisuBard"')
     })
 
+    test('accepts RisuVault source archive roots', () => {
+        const sourceUpdater = readFileSync(sourceUpdaterSource, 'utf8')
+
+        expect(sourceUpdater).toContain("-name 'RisuVault-*")
+    })
+
     test('does not expose inherited upstream public statistics', () => {
         const server = readFileSync(serverSource, 'utf8')
         const mainMenu = readFileSync(mainMenuSource, 'utf8')

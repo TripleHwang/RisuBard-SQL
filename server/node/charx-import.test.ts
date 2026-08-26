@@ -12,6 +12,14 @@ async function* chunks(bytes: Uint8Array, size = 13) {
   for (let at = 0; at < bytes.length; at += size) yield bytes.subarray(at, at + size);
 }
 
+function withJpegPreamble(archive: Uint8Array, length = 326_838) {
+  const preamble = new Uint8Array(length).fill(0);
+  preamble.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]);
+  const prefixed = new Uint8Array(preamble.length + archive.length);
+  prefixed.set(preamble); prefixed.set(archive, preamble.length);
+  return prefixed;
+}
+
 async function writeLargeCharX(destination: string) {
   await new Promise<void>((resolve, reject) => {
     const output = createWriteStream(destination);
@@ -67,6 +75,37 @@ async function rootDuplicateZip(rootName: 'card.json' | 'module.risum') {
 }
 
 describe('importCharXStream', () => {
+  test('imports a ZIP with a JPEG preamble whose offsets remain ZIP-relative', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    const card = { spec: 'chara_card_v3', name: 'Ada' };
+    const archive = withJpegPreamble(zipSync({ 'card.json': strToU8(JSON.stringify(card)), 'a.png': strToU8('pixels') }));
+    const calls: unknown[] = [];
+    try {
+      const result = await importCharXStream(chunks(archive), {
+        stagingRoot,
+        publishAssets: async (entries: unknown[]) => calls.push(entries),
+      });
+      expect(result.card).toEqual(card);
+      expect(Object.keys(result.assets)).toEqual(['a.png']);
+      expect(calls).toHaveLength(1);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('rejects a corrupted central local offset in a JPEG-prefixed ZIP before publishing', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    const archive = withJpegPreamble(zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('pixels') }));
+    const view = new DataView(archive.buffer, archive.byteOffset, archive.byteLength);
+    const eocdOffset = archive.length - 22;
+    const actualCentralOffset = eocdOffset - view.getUint32(eocdOffset + 12, true);
+    view.setUint32(actualCentralOffset + 42, view.getUint32(actualCentralOffset + 42, true) + 1, true);
+    let published = 0;
+    try {
+      await expect(importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => { published++; } }))
+        .rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      expect(published).toBe(0);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test('imports a valid card-only archive and publishes only after validation', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const card = { spec: 'chara_card_v3', name: 'Ada' };
