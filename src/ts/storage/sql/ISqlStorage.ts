@@ -40,6 +40,27 @@ export interface SqlMessagePage {
 
 export type StoredBotPreset = botPreset & { id: string };
 
+export interface SqlBootstrapPayload {
+  status: "ready" | "empty";
+  revision: number;
+  settings: Record<string, unknown>;
+  pluginCustomStorage: Record<string, unknown>;
+  botPresets: StoredBotPreset[];
+  characters: character[];
+  selectedCharacterId: string | null;
+  selectedChatId: string | null;
+}
+
+export interface SqlReverseMessagePage {
+  revision: number;
+  chatId: string;
+  messages: Message[];
+  before: number | null;
+  nextBefore: number | null;
+  total: number;
+  hasMore: boolean;
+}
+
 export interface BotPresetSummary {
   id: string;
   position: number;
@@ -155,4 +176,16 @@ export interface ISqlStorage {
   getBotChatStats(): Promise<SqlBotChatStats[]>;
   searchCharactersByTag(tag: string, limit?: number): Promise<SqlCharacterSearchResult[]>;
   searchCharactersByName(name: string, limit?: number): Promise<SqlCharacterSearchResult[]>;
+}
+
+/** Additive bounded read contract used only by the Node SQL client. */
+export interface SqlBootstrapStorage extends ISqlStorage {
+  loadBootstrap(): Promise<SqlBootstrapPayload>;
+  loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null>;
+  loadCharacterHydration(characterId: string): Promise<character | null>;
+  loadChatMessageReversePage(
+    chatId: string,
+    before: number | undefined,
+    limit: number,
+  ): Promise<SqlReverseMessagePage>;
 }

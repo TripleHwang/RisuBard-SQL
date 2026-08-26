@@ -1,7 +1,7 @@
 import { safeStructuredClone } from "../../polyfill";
 import { isNodeServer } from "../../platform";
 import type { Database } from "../database.svelte";
-import type { ISqlStorage } from "./ISqlStorage";
+import type { ISqlStorage, SqlBootstrapStorage } from "./ISqlStorage";
 import { buildSqlDeltaCommit } from "./sqlDelta";
 import { WebSqliteStorage } from "./webSqliteStorage";
 
@@ -12,6 +12,11 @@ export interface SqlBootstrapResult {
   migrated: boolean;
   error?: unknown;
 }
+
+export type ExistingSqlOpenResult = SqlBootstrapResult & {
+  mode: "metadata-first" | "degraded";
+  recoveryStorage?: SqlBootstrapStorage;
+};
 
 export interface SqlBootstrapOptions {
   beforeMigrate?: () => void | Promise<void>;
@@ -49,7 +54,9 @@ export async function selectCanonicalDatabase(
     );
     if (!imported) throw new Error("SQL storage rejected the legacy database");
 
-    const verified = await storage.loadDatabase({ shallow: false });
+    const verified = storage.backendKind === "server-sql" && "loadRecoverySnapshot" in storage
+      ? await (storage as SqlBootstrapStorage).loadRecoverySnapshot()
+      : await storage.loadDatabase({ shallow: false });
     if (verified?.status !== "ready" || !verified.database) {
       throw new Error("SQL migration could not be verified by reloading it");
     }
@@ -100,11 +107,11 @@ function activateSqlStorage(storage: ISqlStorage, database: Database): void {
 /** Open an already-migrated SQL graph before touching its legacy projection. */
 export async function openExistingStandaloneSql(
   storage?: ISqlStorage,
-): Promise<SqlBootstrapResult | null> {
+): Promise<ExistingSqlOpenResult | null> {
   try {
     storage ??= await createDefaultSqlStorage();
     if (!(await storage.init())) return null;
-    const loaded = await storage.loadDatabase({ shallow: false });
+    const loaded = await storage.loadDatabase({ shallow: true });
     if (loaded?.status === "ready" && loaded.database) {
       pendingSqlStorage = null;
       activateSqlStorage(storage, loaded.database);
@@ -113,6 +120,7 @@ export async function openExistingStandaloneSql(
         storage,
         usingSql: true,
         migrated: false,
+        mode: "metadata-first",
       };
     }
     pendingSqlStorage = storage;
@@ -120,6 +128,17 @@ export async function openExistingStandaloneSql(
   } catch (error) {
     console.error("Could not open existing standalone SQL database", error);
     pendingSqlStorage = null;
+    if (storage?.backendKind === "server-sql" && "loadRecoverySnapshot" in storage) {
+      return {
+        database: {} as Database,
+        storage: null,
+        usingSql: false,
+        migrated: false,
+        mode: "degraded",
+        recoveryStorage: storage as SqlBootstrapStorage,
+        error,
+      };
+    }
     return null;
   }
 }
