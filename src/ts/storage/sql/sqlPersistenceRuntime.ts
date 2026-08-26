@@ -264,7 +264,7 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
         }
         for (const id of current.order) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
         for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
-        if (prior.complete && current.complete && prior.order.join('\u0000') !== current.order.join('\u0000')) {
+        if (current.complete && prior.order.join('\u0000') !== current.order.join('\u0000')) {
             for (const id of current.order) markSqlMessageDirty(chatId, id)
             markSqlMessageManifestDirty(chatId)
         }
