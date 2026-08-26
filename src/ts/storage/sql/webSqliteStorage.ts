@@ -424,6 +424,7 @@ export class WebSqliteStorage implements ISqlStorage {
       return { revision };
     } catch (error) {
       this.run("ROLLBACK");
+      if (error instanceof SqlRevisionConflictError) this.revision = error.currentRevision;
       throw error;
     }
   }

@@ -5,6 +5,7 @@ import { beginHydration, endHydration } from '../hydrationState'
 import { SqlRevisionConflictError } from './sqlCommit'
 import {
     activateSqlPersistenceRuntime,
+    auditSqlCompatibilityDatabase,
     flushSqlDirtyChanges,
     markSqlMessageDirty,
     startSqlMetadataPersistence,
@@ -95,5 +96,19 @@ describe('SQL persistence runtime', () => {
 
         expect(database.characters[0].chats[0].message.at(-1)).toMatchObject({ chatId: 'm-local', data: 'local' })
         expect((storage.commit as any).mock.calls[1][0].messages).toEqual([expect.objectContaining({ id: 'm-local' })])
+    })
+
+    it('uses the first compatibility audit as a baseline and writes only a changed root', async () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = fixtureDatabaseWithMessages(0)
+        database.theme = 'dark'
+        activateSqlPersistenceRuntime(storage, database)
+        auditSqlCompatibilityDatabase(database)
+        await flushSqlDirtyChanges()
+        expect(storage.commit).not.toHaveBeenCalled()
+        database.theme = 'light'
+        auditSqlCompatibilityDatabase(database)
+        await flushSqlDirtyChanges()
+        expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ root: { upserts: [{ key: 'theme', value: 'light' }], deletes: [] } }))
     })
 })

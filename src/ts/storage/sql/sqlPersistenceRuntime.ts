@@ -10,6 +10,12 @@ let activeDatabase: Database | null = null
 let compatibilityTimer: ReturnType<typeof setTimeout> | undefined
 let compatibilityAuditScheduled = false
 let metadataRuntimeStarted = false
+type CompatibilityBaseline = {
+    roots: Map<string, string>; plugins: Map<string, string>; presets: Map<string, string>
+    characters: Map<string, string>; chats: Map<string, { characterId: string; signature: string }>
+    characterOrder: string[]; presetOrder: string[]
+}
+let compatibilityBaseline: CompatibilityBaseline | null = null
 
 const registry = new DirtyRegistry(async () => {
     await commitDirtyScopes()
@@ -152,6 +158,51 @@ export function scheduleSqlCompatibilityAudit(run?: () => Promise<void> | void):
     }
 }
 
+function fingerprint(value: unknown): string {
+    try { return JSON.stringify(value, (key, item) => key === 'message' ? undefined : item) ?? 'undefined' }
+    catch { return String(value) }
+}
+
+function snapshotCompatibility(database: Database): CompatibilityBaseline {
+    const roots = new Map<string, string>()
+    for (const key of Object.keys(database)) if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) roots.set(key, fingerprint((database as any)[key]))
+    const plugins = new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
+    const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, fingerprint(preset)]))
+    const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>()
+    for (const character of database.characters ?? []) {
+        if (!character?.chaId) continue
+        characters.set(character.chaId, fingerprint({ ...character, chats: undefined }))
+        for (const chat of character.chats ?? []) if (chat?.id) chats.set(chat.id, { characterId: character.chaId, signature: fingerprint(chat) })
+    }
+    return { roots, plugins, presets, characters, chats, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean) }
+}
+
+function changedKeys(before: Map<string, string>, after: Map<string, string>): Set<string> {
+    return new Set([...before.keys(), ...after.keys()].filter(key => before.get(key) !== after.get(key)))
+}
+
+/** Idle compatibility audit: baseline first, then only explicitly changed scopes. */
+export function auditSqlCompatibilityDatabase(database: Database): void {
+    const next = snapshotCompatibility(database)
+    const previous = compatibilityBaseline
+    compatibilityBaseline = next
+    if (!previous) return
+    for (const key of changedKeys(previous.roots, next.roots)) markSqlRootDirty(key)
+    for (const key of changedKeys(previous.plugins, next.plugins)) markSqlPluginStorageDirty(key)
+    for (const id of changedKeys(previous.presets, next.presets)) markSqlPresetDirty(id)
+    if (previous.presetOrder.join('\u0000') !== next.presetOrder.join('\u0000')) markSqlRootDirty('botPresets')
+    for (const id of changedKeys(previous.characters, next.characters)) markSqlCharacterDirty(id)
+    const characterOrderChanged = previous.characterOrder.join('\u0000') !== next.characterOrder.join('\u0000')
+    const changedChats = changedKeys(new Map([...previous.chats].map(([id, value]) => [id, `${value.characterId}\u0000${value.signature}`])), new Map([...next.chats].map(([id, value]) => [id, `${value.characterId}\u0000${value.signature}`])))
+    for (const chatId of changedChats) {
+        const info = next.chats.get(chatId) ?? previous.chats.get(chatId)
+        if (info) markSqlChatDirty(info.characterId, chatId, true)
+    }
+    if (characterOrderChanged) {
+        for (const character of database.characters ?? []) for (const chat of character?.chats ?? []) if (character.chaId && chat?.id) markSqlChatDirty(character.chaId, chat.id, true)
+    }
+}
+
 /** Metadata-first startup deliberately avoids saveDb and its reactive encoder path. */
 export function startSqlMetadataPersistence(
     eventTarget: Pick<Window, 'addEventListener'> = window,
@@ -171,5 +222,6 @@ export function resetSqlPersistenceRuntimeForTesting(): void {
     compatibilityTimer = undefined
     compatibilityAuditScheduled = false
     metadataRuntimeStarted = false
+    compatibilityBaseline = null
     deactivateSqlPersistenceRuntime()
 }

@@ -33,7 +33,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { flushSqlDirtyChanges, markSqlCharacterDirty, markSqlChatDirty, markSqlPluginStorageDirty, markSqlPresetDirty, markSqlRootDirty, scheduleSqlCompatibilityAudit, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
+import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, scheduleSqlCompatibilityAudit, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 
 export const forageStorage = new AutoStorage()
 
@@ -1197,17 +1197,8 @@ export async function startMetadataPersistence() {
     const audit = () => {
         const db = getDatabase()
         try { deepTouch(db) } catch (error) { console.warn('[SQL compatibility audit] deepTouch failed', error) }
-        for (const key of Object.keys(db)) {
-            if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) markSqlRootDirty(key)
-        }
-        for (const key of Object.keys(db.pluginCustomStorage ?? {})) markSqlPluginStorageDirty(key)
-        for (const preset of db.botPresets ?? []) if (preset.id) markSqlPresetDirty(preset.id)
-        for (const character of db.characters ?? []) {
-            if (!character?.chaId) continue
-            markSqlCharacterDirty(character.chaId)
-            for (const chat of character.chats ?? []) if (chat?.id) markSqlChatDirty(character.chaId, chat.id, true)
-        }
-        setTimeout(() => scheduleSqlCompatibilityAudit(audit), 1_000)
+        auditSqlCompatibilityDatabase(db)
+        setTimeout(() => scheduleSqlCompatibilityAudit(audit), 5_000)
     }
     scheduleSqlCompatibilityAudit(audit)
 }
