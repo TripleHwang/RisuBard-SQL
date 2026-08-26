@@ -30,6 +30,7 @@
     import { tokenize } from "src/ts/tokenizer";
     import TextAreaInput from "../UI/GUI/TextAreaInput.svelte";
     import ModuleChatMenu from "../Setting/Pages/Module/ModuleChatMenu.svelte";
+    import { pluginStateStore } from 'src/ts/plugins/plugins.svelte';
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme";
     import Help from "./Help.svelte";
     import { getChatBranches } from "src/ts/gui/branches";
@@ -537,12 +538,18 @@
     </div>
 
 {:else if $alertStore.type === 'selectModule'}
-    <ModuleChatMenu alertMode close={(d) => {
-        alertStore.set({
-            type: 'none',
-            msg: d
-        })
-    }} />
+    {#if $pluginStateStore === 'ready'}
+        <ModuleChatMenu alertMode close={(d) => {
+            alertStore.set({ type: 'none', msg: d })
+        }} />
+    {:else if $pluginStateStore === 'failed'}
+        <div class="absolute inset-0 z-50 flex flex-col gap-3 items-center justify-center bg-black/60 text-textcolor">
+            <span>Plugin initialization failed. Module tools are unavailable.</span>
+            <Button onclick={() => alertStore.set({ type: 'none', msg: '' })}>Close</Button>
+        </div>
+    {:else}
+        <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/60 text-textcolor">Loading plugins…</div>
+    {/if}
 {:else if $alertStore.type === 'pukmakkurit'}
     <!-- Log Generator by dootaang, GPL3 -->
     <!-- Svelte, Typescript version by Kwaroran -->

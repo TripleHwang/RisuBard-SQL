@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(resolve(process.cwd(), 'src/ts/plugins/plugins.svelte.ts'), 'utf8')
 const chatScreenSource = readFileSync(resolve(process.cwd(), 'src/lib/ChatScreens/ChatScreen.svelte'), 'utf8')
+const alertSource = readFileSync(resolve(process.cwd(), 'src/lib/Others/AlertComp.svelte'), 'utf8')
 
 describe('plugin readiness with metadata bootstrap', () => {
     it('publishes readiness after plugin loading settles', () => {
@@ -17,12 +18,18 @@ describe('plugin readiness with metadata bootstrap', () => {
         expect(chatScreenSource).toContain('$pluginStateStore === \'idle\' || $pluginStateStore === \'loading\'')
         expect(chatScreenSource).toContain("$pluginStateStore === 'failed'")
         expect(chatScreenSource).toContain('Plugin initialization failed')
+        expect(alertSource).toContain("$pluginStateStore === 'ready'")
+        expect(alertSource).toContain('Plugin initialization failed')
     })
 
     it('does not expose or replace metadata-only characters through v2 plugin APIs', () => {
-        expect(source).toContain("character?.detailsLoaded === false ? null : character")
+        expect(source).toContain("isPluginCharacterComplete(character) ? character : null")
         expect(source).toContain("throw new Error('Character details are still loading')")
         expect(source).toContain("prop === 'characters' && hasMetadataOnlyCharacters(target)")
         expect(source).toMatch(/isPluginCharacterComplete[\s\S]*character\.chats\.every\(isPluginChatComplete\)/)
+        expect(source).toContain("chat._stub !== true")
+        expect(source).toContain("Array.isArray(chat.message)")
+        expect(source).toMatch(/getChar:[\s\S]*isPluginCharacterComplete\(character\)/)
+        expect(source).toMatch(/setChar:[\s\S]*isPluginCharacterComplete\(db\.characters\[charid\]\)/)
     })
 })

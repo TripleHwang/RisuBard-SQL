@@ -24,7 +24,7 @@ export function hasMetadataOnlyCharacters(db: { characters?: any[] }): boolean {
 }
 
 export function isPluginChatComplete(chat: any): boolean {
-    return !!chat && chat._placeholder !== true && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
+    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
 }
 
 export function isPluginCharacterComplete(character: any): boolean {
@@ -592,12 +592,12 @@ export const getV2PluginAPIs = () => {
         },
         getChar: () => {
             const character = getCurrentCharacter({ snapshot: true }) as any
-            return character?.detailsLoaded === false ? null : character
+            return isPluginCharacterComplete(character) ? character : null
         },
         setChar: (char: any) => {
             const db = getDatabase()
             const charid = get(selectedCharID)
-            if ((db.characters[charid] as any)?.detailsLoaded === false) {
+            if (!isPluginCharacterComplete(db.characters[charid])) {
                 throw new Error('Character details are still loading')
             }
             db.characters[charid] = char
