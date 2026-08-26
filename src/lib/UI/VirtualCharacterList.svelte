@@ -29,6 +29,7 @@
     }
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -- virtual scroller delegates keyboard focus to child buttons -->
 <div bind:this={viewport} class="h-full w-full overflow-y-auto" role="region" aria-label="Character list" onscroll={() => scrollTop = viewport.scrollTop} onkeydown={onKeydown} onfocusin={(event) => {
     const index = Number((event.target as HTMLElement).dataset.virtualIndex)
     if (Number.isInteger(index)) focusedIndex = index
