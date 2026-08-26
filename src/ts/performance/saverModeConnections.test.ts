@@ -18,4 +18,16 @@ describe('saver mode runtime connections', () => {
         expect(process.slice(snapshot, snapshot + 250)).toContain("? 'strong'")
         expect(process.slice(snapshot, snapshot + 250)).toContain('streamingDisplayOptimizationMode')
     })
+
+    it('keeps every remaining heavy import/export entrypoint inside an outer saver scope', () => {
+        const cards = source('src/ts/characterCards.ts')
+        const modules = source('src/ts/process/modules.ts')
+        const packages = source('src/ts/characterPackage.ts')
+        const characters = source('src/ts/characters.ts')
+        expect(cards).toContain("withSaverScope('export', () => exportCharacterCardInner")
+        expect(modules).toContain("withSaverScope('export', () => exportModuleInner")
+        expect(modules).toContain("withSaverScope('export', () => exportModuleLegacyInner")
+        expect(packages).toContain("withSaverScope('import', () => importPackageToCharacterInner")
+        expect(characters).toContain("withSaverScope('import', async () =>")
+    })
 })

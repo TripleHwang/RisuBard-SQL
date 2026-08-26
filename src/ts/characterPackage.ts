@@ -717,7 +717,7 @@ export async function importCharacterPackage(): Promise<void> {
 
 // ── Import to existing character ──
 
-export async function importPackageToCharacter(charIndex: number): Promise<void> {
+async function importPackageToCharacterInner(charIndex: number): Promise<void> {
     try {
         const file = await selectSingleFile(['zip'])
         if (!file) return
@@ -772,4 +772,8 @@ export async function importPackageToCharacter(charIndex: number): Promise<void>
     } catch (error) {
         alertError(error)
     }
+}
+
+export async function importPackageToCharacter(charIndex: number): Promise<void> {
+    return withSaverScope('import', () => importPackageToCharacterInner(charIndex))
 }

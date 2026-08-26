@@ -121,6 +121,30 @@ describe('SaverModeCoordinator', () => {
         expect(await saver.tryLeave()).toBe(true)
     })
 
+    it('restores saver state and rearms leave when the normal DOM window fails', async () => {
+        let now = 0
+        const timers: Array<() => void> = []
+        const windows: number[] = []
+        const saver = new SaverModeCoordinator({
+            flush: async () => undefined,
+            evictChats: async () => undefined,
+            setWindow: limit => {
+                windows.push(limit)
+                if (limit === 60) throw new Error('window restore failed')
+            },
+            clearCaches: () => undefined,
+            now: () => now,
+            setTimer: callback => { timers.push(callback); return timers.length as unknown as ReturnType<typeof setTimeout> },
+            clearTimer: () => undefined,
+        })
+        await saver.enter('background')
+        now = 30_000
+        await expect(saver.tryLeave()).rejects.toThrow('window restore failed')
+        expect(saver.state).toBe('saver')
+        expect(windows).toEqual([40, 60])
+        expect(timers.length).toBeGreaterThan(1)
+    })
+
     it('enters after two supported long tasks above 100ms in one minute', async () => {
         let now = 0
         const enter = vi.fn(async () => undefined)

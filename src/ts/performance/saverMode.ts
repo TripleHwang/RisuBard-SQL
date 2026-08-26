@@ -125,11 +125,20 @@ export class SaverModeCoordinator {
             this.visibleFocusedSince ??= this.now()
             if (this.now() - this.visibleFocusedSince < 30_000) return false
             this.setState('leaving')
-            this.actions.setWindow(60)
-            this.setState('normal')
-            this.clearTimer(this.leaveTimer)
-            this.leaveTimer = null
-            return true
+            try {
+                this.actions.setWindow(60)
+                this.setState('normal')
+                this.clearTimer(this.leaveTimer)
+                this.leaveTimer = null
+                return true
+            } catch (error) {
+                // The saver DOM/store remains authoritative until the normal
+                // window can be restored successfully.
+                this.setState('saver')
+                this.visibleFocusedSince = this.now()
+                this.scheduleLeave()
+                throw error
+            }
         })
     }
 

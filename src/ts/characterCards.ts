@@ -1263,7 +1263,7 @@ export function createBaseV2(char:character) {
 }
 
 
-export async function exportCharacterCard(char:character, type:'png'|'json'|'charx'|'charxJpeg' = 'png', arg:{
+async function exportCharacterCardInner(char:character, type:'png'|'json'|'charx'|'charxJpeg' = 'png', arg:{
     password?:string
     writer?:LocalWriter|VirtualWriter,
     spec?:'v2'|'v3'
@@ -1528,6 +1528,15 @@ export async function exportCharacterCard(char:character, type:'png'|'json'|'cha
     catch(e){
         alertError(e)
     }
+}
+
+export async function exportCharacterCard(char: character, type: 'png' | 'json' | 'charx' | 'charxJpeg' = 'png', arg: {
+    password?: string
+    writer?: LocalWriter | VirtualWriter
+    spec?: 'v2' | 'v3'
+    onProgress?: (msg: string, pct: number) => void
+} = {}): Promise<void> {
+    return withSaverScope('export', () => exportCharacterCardInner(char, type, arg))
 }
 
 // Extended LorebookEntry with Risuai specific fields

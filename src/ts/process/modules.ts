@@ -46,7 +46,7 @@ export interface ModuleFolder {
     color: string
 }
 
-export async function exportModule(module:RisuModule, arg:{
+async function exportModuleInner(module:RisuModule, arg:{
     alertEnd?:boolean
 } = {}){
     const alertEnd = arg.alertEnd ?? true
@@ -70,7 +70,11 @@ export async function exportModule(module:RisuModule, arg:{
     }
 }
 
-export async function exportModuleLegacy(module:RisuModule, arg:{
+export async function exportModule(module: RisuModule, arg: { alertEnd?: boolean } = {}): Promise<void> {
+    return withSaverScope('export', () => exportModuleInner(module, arg))
+}
+
+async function exportModuleLegacyInner(module:RisuModule, arg:{
     alertEnd?:boolean
     saveData?:boolean
 } = {}){
@@ -322,6 +326,10 @@ async function readModuleScoped(buf:Buffer):Promise<RisuModule> {
 
     module.id = v4()
     return module
+}
+
+export async function exportModuleLegacy(module: RisuModule, arg: { alertEnd?: boolean; saveData?: boolean } = {}): Promise<Uint8Array> {
+    return withSaverScope('export', () => exportModuleLegacyInner(module, arg))
 }
 
 /** Module archives can transiently hold decoded assets; release caches around the full read. */

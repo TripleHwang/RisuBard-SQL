@@ -373,7 +373,7 @@ export async function exportChat(page:number){
     }
 }
 
-export async function importChat(){
+async function importChatInner(){
     const dat =await selectSingleFile(['json','jsonl','txt','html'])
     if(!dat){
         return
@@ -524,6 +524,10 @@ export async function importChat(){
     } catch (error) {
         alertError(error)
     }
+}
+
+export async function importChat(): Promise<void> {
+    return withSaverScope('import', async () => importChatInner())
 }
 
 export async function exportAllChats() {
