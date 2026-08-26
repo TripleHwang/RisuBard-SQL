@@ -33,7 +33,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { flushSqlDirtyChanges, scheduleSqlCompatibilityAudit } from './storage/sql/sqlPersistenceRuntime'
+import { flushSqlDirtyChanges, markSqlCharacterDirty, markSqlChatDirty, markSqlPluginStorageDirty, markSqlPresetDirty, markSqlRootDirty, scheduleSqlCompatibilityAudit, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 
 export const forageStorage = new AutoStorage()
 
@@ -1188,7 +1188,28 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
 
 /** Installs reactive persistence without encoding metadata-only SQL summaries. */
 export async function startMetadataPersistence() {
-    return saveDb({ metadataOnly: true })
+    startSqlMetadataPersistence(window, () => {
+        try { void fetch('/api/db/flush', { method: 'POST', keepalive: true, credentials: 'same-origin' }) } catch { /* best effort */ }
+    })
+
+    // Plugin code can mutate the legacy object graph directly. This scan is
+    // explicitly idle/coalesced: it is never a reactive typing/streaming path.
+    const audit = () => {
+        const db = getDatabase()
+        try { deepTouch(db) } catch (error) { console.warn('[SQL compatibility audit] deepTouch failed', error) }
+        for (const key of Object.keys(db)) {
+            if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) markSqlRootDirty(key)
+        }
+        for (const key of Object.keys(db.pluginCustomStorage ?? {})) markSqlPluginStorageDirty(key)
+        for (const preset of db.botPresets ?? []) if (preset.id) markSqlPresetDirty(preset.id)
+        for (const character of db.characters ?? []) {
+            if (!character?.chaId) continue
+            markSqlCharacterDirty(character.chaId)
+            for (const chat of character.chats ?? []) if (chat?.id) markSqlChatDirty(character.chaId, chat.id, true)
+        }
+        setTimeout(() => scheduleSqlCompatibilityAudit(audit), 1_000)
+    }
+    scheduleSqlCompatibilityAudit(audit)
 }
 
 /**

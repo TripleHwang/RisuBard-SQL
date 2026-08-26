@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ISqlStorage } from './ISqlStorage'
+import { beginHydration, endHydration } from '../hydrationState'
+import { SqlRevisionConflictError } from './sqlCommit'
 import {
     activateSqlPersistenceRuntime,
     flushSqlDirtyChanges,
     markSqlMessageDirty,
+    startSqlMetadataPersistence,
     resetSqlPersistenceRuntimeForTesting,
     scheduleSqlCompatibilityAudit,
 } from './sqlPersistenceRuntime'
@@ -58,5 +61,39 @@ describe('SQL persistence runtime', () => {
         await flushSqlDirtyChanges()
 
         expect(storage.commit).toHaveBeenCalledTimes(2)
+    })
+
+    it('installs one metadata lifecycle runtime without doing a legacy save', () => {
+        const add = vi.fn()
+        const keepalive = vi.fn()
+        startSqlMetadataPersistence({ addEventListener: add } as any, keepalive)
+        startSqlMetadataPersistence({ addEventListener: add } as any, keepalive)
+        expect(add).toHaveBeenCalledTimes(2)
+        expect(keepalive).not.toHaveBeenCalled()
+    })
+
+    it('does not mark a message while its character/chat hydration is active', async () => {
+        const storage = fakeStorageAtRevision(3)
+        activateSqlPersistenceRuntime(storage, fixtureDatabaseWithMessages(1))
+        beginHydration('character-a/chat-a')
+        markSqlMessageDirty('chat-a', 'm-0', true)
+        await Promise.resolve()
+        endHydration('character-a/chat-a')
+        expect(storage.commit).not.toHaveBeenCalled()
+    })
+
+    it('retries a conflict without replacing the dirty local append', async () => {
+        const database = fixtureDatabaseWithMessages(1)
+        database.characters[0].chats[0].message.push({ chatId: 'm-local', role: 'char', data: 'local' })
+        const storage = fakeStorageAtRevision(3)
+        ;(storage.commit as any).mockRejectedValueOnce(new SqlRevisionConflictError(4)).mockResolvedValueOnce({ revision: 5 })
+        ;(storage.loadChatMessages as any) = vi.fn(async () => [{ chatId: 'm-0', role: 'char', data: 'remote' }])
+        activateSqlPersistenceRuntime(storage, database)
+        markSqlMessageDirty('chat-a', 'm-local')
+
+        await flushSqlDirtyChanges()
+
+        expect(database.characters[0].chats[0].message.at(-1)).toMatchObject({ chatId: 'm-local', data: 'local' })
+        expect((storage.commit as any).mock.calls[1][0].messages).toEqual([expect.objectContaining({ id: 'm-local' })])
     })
 })

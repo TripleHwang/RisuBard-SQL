@@ -24,3 +24,9 @@ export function endHydrationApply(key: string): void {
 export function isHydrationActive(key: string): boolean {
   return inFlight.has(key) || justApplied.has(key);
 }
+
+/** Message mutation APIs carry a chat id, while hydration owns character/chat keys. */
+export function isChatHydrationActive(chatId: string): boolean {
+  const suffix = `/${chatId}`;
+  return [...inFlight.keys(), ...justApplied.keys()].some(key => key.endsWith(suffix));
+}
