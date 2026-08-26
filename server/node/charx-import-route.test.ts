@@ -156,6 +156,23 @@ describe('createCharXImportHandler', () => {
         ])
     })
 
+    it('emits the final extraction progress event even inside the throttle window', async () => {
+        const { server } = makeApp({
+            importCharXStream: async (_source: AsyncIterable<Uint8Array>, options: any) => {
+                options.onProgress({ phase: 'extracting', completed: 0, total: 2 })
+                options.onProgress({ phase: 'extracting', completed: 1, total: 2 })
+                options.onProgress({ phase: 'extracting', completed: 2, total: 2 })
+                return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
+            },
+        })
+        const response = await request(server, 'x')
+        const progress = response.body.split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(event => event.type === 'progress')
+        expect(progress).toEqual([
+            { type: 'progress', completed: 0, total: 2 },
+            { type: 'progress', completed: 2, total: 2 },
+        ])
+    })
+
     it('does not abort a normally completed response when Express closes it', async () => {
         let signal: AbortSignal | undefined
         const { server } = makeApp({

@@ -106,6 +106,31 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
+  test('reports bounded extraction progress only after the source is consumed and finishes complete', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('pixels') });
+    let sourceConsumed = false;
+    const extractionProgress: any[] = [];
+    async function* source() {
+      yield archive;
+      sourceConsumed = true;
+    }
+    try {
+      await importCharXStream(source(), {
+        stagingRoot,
+        publishAssets: async () => {},
+        onProgress: progress => {
+          if (progress.phase === 'extracting') {
+            expect(sourceConsumed).toBe(true);
+            extractionProgress.push(progress);
+          }
+        },
+      });
+      expect(extractionProgress[0]).toMatchObject({ phase: 'extracting', completed: 0, total: expect.any(Number) });
+      expect(extractionProgress.at(-1)).toMatchObject({ phase: 'extracting', completed: extractionProgress.at(-1).total });
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test.each([
     ['missing card', { 'x.png': strToU8('x') }],
     ['non-v3 card', { 'card.json': strToU8('{"spec":"v2"}') }],
@@ -161,7 +186,7 @@ describe('importCharXStream', () => {
       const result = await importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {}, onProgress: (p: any) => progress.push(p) });
       expect(result.assets['nested/a.png']).toMatch(/^assets\/[a-f0-9]{64}\.png$/);
       expect(progress.length).toBeGreaterThan(1);
-      expect(progress.at(-1).compressedBytes).toBe(archive.length);
+      expect(progress.filter((event) => !event.phase).at(-1).compressedBytes).toBe(archive.length);
       expect(await (await import('node:fs/promises')).readdir(stagingRoot)).toEqual([]);
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });

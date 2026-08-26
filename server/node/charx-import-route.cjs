@@ -94,6 +94,7 @@ function createCharXImportHandler(deps) {
       let lastProgressAt = 0;
       let lastCompleted = 0;
       let lastTotal = contentLength > 0 ? contentLength : 0;
+      let lastProgressPhase = 'uploading';
       const result = await importCharXStream(req, {
         stagingRoot,
         publishAssets,
@@ -103,11 +104,20 @@ function createCharXImportHandler(deps) {
         signal: controller.signal,
         onProgress: progress => {
           const now = Date.now();
-          if (now - lastProgressAt < 200) return;
+          const phase = progress && progress.phase === 'extracting' ? 'extracting' : 'uploading';
+          if (phase !== lastProgressPhase) {
+            lastProgressPhase = phase;
+            lastProgressAt = 0;
+            lastCompleted = 0;
+            lastTotal = 0;
+          }
+          const completed = phase === 'extracting' ? Number(progress.completed) : Number(progress && progress.compressedBytes);
+          const total = phase === 'extracting' ? Number(progress.total) : contentLength;
+          lastCompleted = Math.max(lastCompleted, Number.isFinite(completed) ? Math.max(0, completed) : 0);
+          lastTotal = Math.max(lastTotal, Number.isFinite(total) ? Math.max(0, total) : 0, lastCompleted);
+          const finalExtractionProgress = phase === 'extracting' && lastCompleted === lastTotal;
+          if (!finalExtractionProgress && now - lastProgressAt < 200) return;
           lastProgressAt = now;
-          const compressedBytes = Number(progress && progress.compressedBytes);
-          lastCompleted = Math.max(lastCompleted, Number.isFinite(compressedBytes) ? Math.max(0, compressedBytes) : 0);
-          lastTotal = Math.max(lastTotal, lastCompleted);
           writeEvent({ type: 'progress', completed: lastCompleted, total: lastTotal });
         },
       });

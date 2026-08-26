@@ -263,6 +263,11 @@ async function importCharXStream(source, options) {
     const readFd = fs.openSync(archivePath, 'r');
     let entries;
     try { entries = validateCentralDirectory(readFd, compressed, eocdAbsolute, limits.entries); } finally { fs.closeSync(readFd); }
+    const extractionTotal = entries.reduce((total, entry) => total + entry.originalSize, 0);
+    let extractionCompleted = 0;
+    // Source upload is finished and ZIP metadata is valid; now report bounded
+    // per-entry work that the browser can render as server-side processing.
+    onProgress({ phase: 'extracting', completed: 0, total: extractionTotal });
     const extractFd = fs.openSync(archivePath, 'r');
     try {
       for (const entry of entries) {
@@ -277,12 +282,19 @@ async function importCharXStream(source, options) {
           unzip.push(readExact(extractFd, position, length), false);
           position += length; remaining -= length; checkAbort();
         }
+        extractionCompleted += entry.originalSize;
+        onProgress({ phase: 'extracting', completed: extractionCompleted, total: extractionTotal });
       }
       extractingEntry = undefined;
       unzip.push(new Uint8Array(0), true);
     } catch (e) { throw currentError || normalizeError(e, invalid('Invalid or unsupported ZIP archive')); } finally { fs.closeSync(extractFd); }
     checkAbort();
     if (active.size) throw invalid('Truncated ZIP archive');
+    // Preserve a terminal event if extraction ever finishes without an entry
+    // completion reaching the declared archive total.
+    if (extractionCompleted !== extractionTotal) {
+      onProgress({ phase: 'extracting', completed: extractionTotal, total: extractionTotal });
+    }
     if (cardCount !== 1 || cards.length !== 1) throw invalid('Archive must contain exactly one card.json');
     const card = utf8Json(cards[0]);
     if (!card || card.spec !== 'chara_card_v3') throw invalid('card.json must be a chara_card_v3 card');
