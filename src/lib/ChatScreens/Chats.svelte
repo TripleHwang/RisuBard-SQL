@@ -6,6 +6,7 @@
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
+    import { estimateSpacerHeight, getChatWindow } from 'src/ts/chatWindow';
     
     const getCurrentChatRoomId = () => {
         const charId = get(selectedCharID);
@@ -28,6 +29,7 @@
         userIcon,
         pageStart,
         pageEnd,
+        saverMode = false,
         userIconPortrait,
         hasNewUnreadMessage = $bindable(false)
     }:{
@@ -46,12 +48,13 @@
         userIcon: string
         pageStart: number
         pageEnd: number
+        saverMode?: boolean
         userIconPortrait?: boolean
         hasNewUnreadMessage?: boolean
     } = $props();
 
     let chatBody: HTMLDivElement;
-    let hashes: Set<number> = new Set();
+    let messageHost: HTMLDivElement;
     type ChatInstance = {
         updateStreamingDisplay?: (state: {
             isOptimizedStreamingMessage: boolean
@@ -59,20 +62,20 @@
             rawStreamingText: string
         }) => void
     }
-    let mountInstances: Map<number, ChatInstance> = new Map();
+    type MountedChat = { instance: ChatInstance, element: HTMLDivElement, signature: string }
+    let mountInstances: Map<string, MountedChat> = new Map();
+    let legacyMessageIds = new WeakMap<object, string>();
+    let measuredRowHeights: number[] = [];
 
-    //Non-cryptographic hash function to generate a unique hash for each message
-    function hashCode(str:string):number {
-        let hash = 0;
-        for (let i = 0, len = str.length; i < len; i++) {
-            let chr = str.charCodeAt(i);
-            hash = (hash << 5) - hash + chr;
-            hash |= 0; // Convert to 32bit integer
+    function stableMessageId(message: Message, index: number): string {
+        if (message.chatId) return message.chatId;
+        const objectMessage = message as object;
+        let id = legacyMessageIds.get(objectMessage);
+        if (!id) {
+            id = `legacy:${crypto.randomUUID?.() ?? `${index}:${message.role}`}`;
+            legacyMessageIds.set(objectMessage, id);
         }
-        if(hash == 0){
-            hash = 1; // Ensure hash is not zero
-        }
-        return hash;
+        return id;
     }
 
     const updateChatBody = () => {
@@ -80,13 +83,12 @@
             return
         }
 
-        let nextHash = 0;
-        let currentHashes: Set<number> = new Set();
+        if (!messageHost) return;
+        const currentIds = new Set<string>();
+        let nextRow: Element | null = null;
         const charImage = getCharImage(currentCharacter.image, 'css')
         const userImage = getCharImage(userIcon, 'css')
         const simpleChar = createSimpleCharacter(currentCharacter);
-        let loadStart = pageEnd - 1
-        let loadEnd = pageStart
         const currentChat = currentCharacter.chats?.[currentCharacter.chatPage]
         const configuredPerformanceMode = DBState.db.streamingDisplayOptimizationMode ?? 'off';
         const performanceMode = currentChat?.isStreaming
@@ -95,7 +97,25 @@
         const activeStreamingIndex = performanceMode !== 'off' && currentChat?.isStreaming
             ? messages.length - 1
             : -1
-
+        const domLimit: 60 | 40 = saverMode ? 40 : 60;
+        const pageAnchor = Math.max(pageStart, Math.min(pageEnd - 1, Math.floor((pageStart + pageEnd - 1) / 2)));
+        let domWindow = getChatWindow({ total: messages.length, anchorIndex: pageAnchor, limit: domLimit });
+        // A live stream stays mounted even when the user has paged away from its tail.
+        if (currentChat?.isStreaming && activeStreamingIndex >= 0 && (activeStreamingIndex < domWindow.start || activeStreamingIndex >= domWindow.end)) {
+            const end = messages.length;
+            const start = Math.max(0, end - domLimit);
+            domWindow = { start, end, beforeCount: start, afterCount: 0 };
+        }
+        const loadStart = domWindow.end - 1
+        const loadEnd = domWindow.start
+        measuredRowHeights = Array.from(messageHost.querySelectorAll('[data-chat-row]'))
+            .map((element) => (element as HTMLElement).getBoundingClientRect().height)
+            .filter(height => height > 0);
+        const spacerHeight = (count: number) => estimateSpacerHeight(measuredRowHeights, count);
+        const afterSpacer = chatBody.querySelector('[data-chat-spacer="after"]') as HTMLElement | null;
+        const beforeSpacer = chatBody.querySelector('[data-chat-spacer="before"]') as HTMLElement | null;
+        if (afterSpacer) afterSpacer.style.height = `${spacerHeight(domWindow.afterCount)}px`;
+        if (beforeSpacer) beforeSpacer.style.height = `${spacerHeight(domWindow.beforeCount)}px`;
         // Find the last real (non-comment, non-disabled) char message index
         // Only show reroll if it's the actual last non-disabled message
         let lastRealCharIdx = -1;
@@ -120,12 +140,19 @@
             const isRerollTarget = i === lastRealCharIdx;
             const activeStreamingMessage = i === activeStreamingIndex && message.role === 'char';
             const hashMessageData = activeStreamingMessage ? '' : message.data;
-            let hashd = hashMessageData + (message.chatId ?? '') + i.toString() + messageLargePortrait.toString() + message.disabled?.toString() + reloadPointer.toString() + (message.swipeId ?? 0).toString() + (message.swipes?.length ?? 0).toString() + isRerollTarget.toString() + (message.risubardMemoryConfirmed ?? false).toString() + JSON.stringify(message.risubardCanonicalReceipt ?? null);
-            const currentHash = hashCode(hashd);
-            currentHashes.add(currentHash);
-            if(!hashes.has(currentHash)){
+            const messageId = stableMessageId(message, i);
+            const signature = `${hashMessageData}|${messageLargePortrait}|${message.disabled}|${reloadPointer}|${message.swipeId ?? 0}|${message.swipes?.length ?? 0}|${isRerollTarget}|${message.risubardMemoryConfirmed ?? false}|${JSON.stringify(message.risubardCanonicalReceipt ?? null)}`;
+            currentIds.add(messageId);
+            const mounted = mountInstances.get(messageId);
+            if (!mounted || mounted.signature !== signature) {
+                if (mounted) {
+                    unmount(mounted.instance);
+                    mounted.element.remove();
+                    mountInstances.delete(messageId);
+                }
                 const b = document.createElement('div');
-                b.setAttribute('x-hashed', currentHash.toString());
+                b.setAttribute('data-chat-row', messageId);
+                b.setAttribute('data-chat-id', messageId);
                 b.classList.add('chat-message-container');
                 const swipes = message.swipes;
                 const swipeId = message.swipeId ?? 0;
@@ -135,6 +162,7 @@
                         message: message.data,
                         isLastMemory: false,
                         idx: i,
+                        messageId,
                         totalLength: messages.length,
                         img: message.role === 'user' ? userImage : charImage,
                         onReroll: onReroll,
@@ -164,46 +192,36 @@
                     },
 
                 })
-                mountInstances.set(currentHash, inst);
-                const nextElement = nextHash === 0 ? null : chatBody.querySelector(`[x-hashed="${nextHash}"]`);
-                if(nextElement){
-                    chatBody.insertBefore(b, nextElement?.nextSibling);
+                mountInstances.set(messageId, { instance: inst, element: b, signature });
+                if(nextRow){
+                    messageHost.insertBefore(b, nextRow.nextSibling);
                 }
                 else{
-                    chatBody.prepend(b);
+                    messageHost.prepend(b);
                 }
             }
             else{
-                mountInstances.get(currentHash)?.updateStreamingDisplay?.({
+                mounted.instance.updateStreamingDisplay?.({
                     isOptimizedStreamingMessage: activeStreamingMessage,
                     streamingOptimizationMode: performanceMode,
                     rawStreamingText: message.data,
                 })
             }
-            nextHash = currentHash;
-
+            nextRow = mountInstances.get(messageId)?.element ?? nextRow;
         }
 
-        //@ts-expect-error Set<T> requires type arg, and Set.difference needs 'esnext' lib (polyfilled by Core-js)
-        const toRemove:Set = hashes.difference(currentHashes);
-        toRemove.forEach((hash) => {
-            const inst = mountInstances.get(hash);
-            if(inst){
-                unmount(inst);
-                mountInstances.delete(hash);
+        for (const [id, mounted] of mountInstances) {
+            if (!currentIds.has(id)) {
+                unmount(mounted.instance);
+                mounted.element.remove();
+                mountInstances.delete(id);
             }
-            const element = chatBody.querySelector(`[x-hashed="${hash}"]`);
-            if(element){
-                chatBody.removeChild(element);
-            }
-        });
-
-        hashes = currentHashes;
+        }
     };
 
     onDestroy(() => {
         console.log('Unmounting Chats');
-        hashes.clear();
+        legacyMessageIds = new WeakMap();
         mountInstances.forEach((inst) => {
             unmount(inst);
         });
@@ -264,4 +282,9 @@
 
 </script>
 
-<div class="flex flex-col-reverse" bind:this={chatBody}></div>
+<div class="flex flex-col-reverse" bind:this={chatBody}>
+    <!-- In reverse flex order, newer omitted rows belong first (visual bottom). -->
+    <div data-chat-spacer="after" aria-hidden="true"></div>
+    <div class="contents" bind:this={messageHost}></div>
+    <div data-chat-spacer="before" aria-hidden="true"></div>
+</div>

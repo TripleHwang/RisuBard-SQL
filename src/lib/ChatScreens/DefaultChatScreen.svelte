@@ -115,6 +115,8 @@ import { isMobile } from 'src/ts/platform'
     let memoryWikiOpen = $state(false)
     let chatPage = $state(0)
     let paginationKey = $state('')
+    // Cancels DOM restoration when a different chat becomes active mid-fetch.
+    let chatWindowVersion = $state(0)
     let paginationMessageCount = $state(0)
     let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
     let doingChatInputTranslate = false
@@ -152,6 +154,7 @@ import { isMobile } from 'src/ts/platform'
 
         if (nextKey !== paginationKey) {
             paginationKey = nextKey
+            chatWindowVersion += 1
             chatPage = latestPage
         } else if (chatPageSize !== paginationPageSize) {
             const anchorIndex = chatPage * paginationPageSize
@@ -303,12 +306,32 @@ import { isMobile } from 'src/ts/platform'
         if (chatPage > 0) return selectChatPage(chatPage - 1)
         const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
         if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return
+        const container = document.querySelector('.default-chat-screen') as HTMLElement | null
+        const firstVisible = container
+            ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-id]'))
+                .map((element) => ({ element, top: element.getBoundingClientRect().top }))
+                .filter(({ element }) => element.getBoundingClientRect().bottom >= container.getBoundingClientRect().top)
+                .sort((left, right) => left.top - right.top)[0]
+            : undefined
+        const anchor = firstVisible?.element.dataset.chatId
+            ? { id: firstVisible.element.dataset.chatId, top: firstVisible.top }
+            : null
+        const requestKey = paginationKey
+        const requestVersion = chatWindowVersion
         const formerFirstId = currentChat[0]?.chatId
         await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
-        const anchor = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
-        chatPage = getChatPageForMessage(Math.max(0, anchor), currentChat.length, chatPageSize)
+        // The fetch may finish after selection changed. It may update its old
+        // object, but must never mutate this screen's scroll position.
+        if (requestKey !== paginationKey || requestVersion !== chatWindowVersion) return
+        const anchorIndex = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
+        chatPage = getChatPageForMessage(Math.max(0, anchorIndex), currentChat.length, chatPageSize)
         await tick()
-        scrollToLoadedTop()
+        if (container && anchor) {
+            const restored = container.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(anchor.id)}"]`)
+            if (restored) container.scrollTop += restored.getBoundingClientRect().top - anchor.top
+        } else {
+            scrollToLoadedTop()
+        }
     }
 
     // Literal bottom of the scroll (end of the latest message).

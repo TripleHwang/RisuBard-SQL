@@ -53,6 +53,8 @@
         isLastMemory: boolean;
         img?: string|Promise<string>;
         idx?: number;
+        /** Stable ownership across prepended pages; indexes are resolved at action time. */
+        messageId?: string;
         messageGenerationInfo?: MessageGenerationInfo|null;
         rerollIcon?: boolean|'dynamic'|'force';
         role?: string;
@@ -86,7 +88,8 @@
         largePortrait = false,
         isLastMemory,
         img = '',
-        idx = -1,
+        idx: initialIdx = -1,
+        messageId = '',
         rerollIcon = false,
         messageGenerationInfo = null,
         role = null,
@@ -110,6 +113,12 @@
         streamingOptimizationMode = 'off',
         rawStreamingText = message,
     }: Props = $props();
+
+    // A mounted row must never keep acting on the numeric position it had before
+    // an older page was prepended. Greetings intentionally retain index -1.
+    let idx = $derived(messageId
+        ? DBState.db.characters[selIdState.selId]?.chats?.[DBState.db.characters[selIdState.selId]?.chatPage]?.message.findIndex((candidate) => candidate.chatId === messageId) ?? -1
+        : initialIdx)
 
     let msgDisplay = $state('')
     let translated = $state(false)
