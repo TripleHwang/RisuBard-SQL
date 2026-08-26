@@ -108,6 +108,21 @@ describe("RisuVault SQL row commits", () => {
     ]);
   });
 
+  it("deletes only explicitly named character rows", async () => {
+    const commit = createEmptySqlCommit(1);
+    commit.characterDeletes = ["character-removed"];
+    const statements: { sql: string; bind: unknown[] }[] = [];
+
+    await applySqliteCommit(commit, (sql, bind = []) => {
+      statements.push({ sql, bind });
+    });
+
+    expect(statements).toContainEqual({
+      sql: "DELETE FROM characters WHERE id IN (?)",
+      bind: ["character-removed"],
+    });
+  });
+
   it("generates stable ids for legacy chats and messages that lack them", () => {
     const database = {
       characters: [{ chaId: "character-1", name: "C", chats: [{ message: [{ role: "char", data: "A" }] }] }],

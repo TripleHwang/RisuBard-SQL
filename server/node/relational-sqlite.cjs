@@ -316,6 +316,9 @@ function createRelationalSqlite(options) {
             const limit = Math.min(MAX_MESSAGE_PAGE_LIMIT, Math.max(1,
                 Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : DEFAULT_MESSAGE_PAGE_LIMIT));
             const total = Number(database.prepare('SELECT COUNT(*) AS total FROM messages WHERE chat_id = ?').get(chatId).total);
+            const nextPosition = Number(database.prepare(
+                'SELECT COALESCE(MAX(position) + 1, 0) AS cursor FROM messages WHERE chat_id = ?',
+            ).get(chatId).cursor);
             const normalizedBefore = before ?? Number(database.prepare(
                 'SELECT COALESCE(MAX(position) + 1, 0) AS cursor FROM messages WHERE chat_id = ?',
             ).get(chatId).cursor);
@@ -336,9 +339,10 @@ function createRelationalSqlite(options) {
             const messages = rows.map((row) => ({
                 ...(rebuildRelationalValue(byId.get(row.id) || []) || {}), chatId: row.id,
             }));
+            const positions = rows.map((row) => Number(row.position));
             const nextBefore = rows.length ? Math.min(...rows.map((row) => Number(row.position))) : null;
             return {
-                revision: revision(), chatId, messages, before: normalizedBefore, nextBefore, total,
+                revision: revision(), chatId, messages, positions, nextPosition, before: normalizedBefore, nextBefore, total,
                 hasMore: nextBefore !== null && nextBefore > 0,
             };
         });

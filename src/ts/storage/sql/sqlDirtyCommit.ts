@@ -18,9 +18,10 @@ const ROOT_EXCLUSIONS = new Set([
 type RuntimeChat = Chat & {
   messagesLoaded?: boolean;
   messagesFullyLoaded?: boolean;
-  _sqlWindow?: { hasOlder?: boolean };
+  _sqlWindow?: { hasOlder?: boolean; nextPosition?: number };
 };
 type PositionedMessage = Message & { _sqlPosition?: number };
+type MessageLookup = { message: PositionedMessage; localPosition: number };
 
 function findCharacter(database: Database, characterId: string): [character, number] | undefined {
   const position = (database.characters ?? []).findIndex((item) => item.chaId === characterId);
@@ -41,11 +42,39 @@ function messageWindowIsIncomplete(chat: RuntimeChat): boolean {
     chat._sqlWindow?.hasOlder === true;
 }
 
-function canonicalMessagePosition(chat: RuntimeChat, message: PositionedMessage, localPosition: number): number {
+function canonicalMessagePosition(
+  chat: RuntimeChat,
+  message: PositionedMessage,
+  localPosition: number,
+): number {
   if (!messageWindowIsIncomplete(chat)) return localPosition;
   if (Number.isSafeInteger(message._sqlPosition) && message._sqlPosition! >= 0)
     return message._sqlPosition!;
   throw new Error(`Dirty message ${message.chatId ?? "(missing id)"} is missing its canonical SQL position`);
+}
+
+function messageLookup(chat: RuntimeChat): Map<string, MessageLookup> {
+  const lookup = new Map<string, MessageLookup>();
+  for (const [localPosition, message] of (chat.message ?? []).entries()) {
+    if (message.chatId) lookup.set(message.chatId, { message, localPosition });
+  }
+  return lookup;
+}
+
+function allocateAppendedPositions(chat: RuntimeChat, lookup: Map<string, MessageLookup>): void {
+  if (!messageWindowIsIncomplete(chat)) return;
+  const entries = [...lookup.values()].sort((left, right) => left.localPosition - right.localPosition);
+  const firstUnpositioned = entries.findIndex(({ message }) => !Number.isSafeInteger(message._sqlPosition));
+  if (firstUnpositioned < 0) return;
+  if (entries.slice(firstUnpositioned).some(({ message }) => Number.isSafeInteger(message._sqlPosition))) return;
+  const nextPosition = chat._sqlWindow?.nextPosition;
+  if (!Number.isSafeInteger(nextPosition) || nextPosition! < 0) return;
+  for (const [offset, { message }] of entries.slice(firstUnpositioned).entries()) {
+    Object.defineProperty(message, "_sqlPosition", {
+      configurable: true, enumerable: false, writable: true, value: nextPosition! + offset,
+    });
+  }
+  if (chat._sqlWindow) chat._sqlWindow.nextPosition = nextPosition! + entries.length - firstUnpositioned;
 }
 
 /**
@@ -69,14 +98,26 @@ export function buildSqlDirtyCommit(
 
   for (const characterId of dirty.characterIds) {
     const found = findCharacter(database, characterId);
-    if (!found) continue;
+    if (!found) {
+      commit.characterDeletes!.push(characterId);
+      continue;
+    }
     const [currentCharacter, position] = found;
     commit.characters.push({ id: characterId, position, data: sqlCharacterData(currentCharacter) });
   }
 
   for (const dirtyChat of dirty.chats) {
     const found = findChat(database, dirtyChat.chatId);
-    if (!found || found[0].chaId !== dirtyChat.characterId) continue;
+    if (!found || found[0].chaId !== dirtyChat.characterId) {
+      const parent = findCharacter(database, dirtyChat.characterId)?.[0];
+      if (dirtyChat.manifest && parent) {
+        commit.chatManifests.push({
+          characterId: dirtyChat.characterId,
+          ids: (parent.chats ?? []).map((item) => item.id).filter((id): id is string => Boolean(id)),
+        });
+      }
+      continue;
+    }
     const [, chat, , position] = found;
     commit.chats.push({
       id: dirtyChat.chatId,
@@ -96,14 +137,17 @@ export function buildSqlDirtyCommit(
     const found = findChat(database, group.chatId);
     if (!found) continue;
     const [, chat] = found;
+    const runtimeChat = chat as RuntimeChat;
+    const lookup = messageLookup(runtimeChat);
+    allocateAppendedPositions(runtimeChat, lookup);
     for (const messageId of group.messageIds) {
-      const localPosition = (chat.message ?? []).findIndex((message) => message.chatId === messageId);
-      if (localPosition < 0) continue;
-      const message = chat.message[localPosition] as PositionedMessage;
+      const current = lookup.get(messageId);
+      if (!current) continue;
+      const { message, localPosition } = current;
       commit.messages.push({
         id: messageId,
         chatId: group.chatId,
-        position: canonicalMessagePosition(chat as RuntimeChat, message, localPosition),
+        position: canonicalMessagePosition(runtimeChat, message, localPosition),
         data: sqlMessageData(message),
       });
     }
@@ -132,14 +176,22 @@ export function buildSqlDirtyCommit(
     commit.pluginStorage = { upserts, deletes };
   }
 
-  if (dirty.presetIds.length) {
+  const presetRootsDirty = dirty.rootKeys.includes("botPresets") || dirty.rootKeys.includes("botPresetsId");
+  if (dirty.presetIds.length || presetRootsDirty) {
     const presets = database.botPresets ?? [];
     const upserts = dirty.presetIds.flatMap((id) => {
       const position = presets.findIndex((preset) => preset.id === id);
       return position < 0 ? [] : [{ id, position, data: presets[position] }];
     });
     const deletes = dirty.presetIds.filter((id) => !presets.some((preset) => preset.id === id));
-    commit.presets = { upserts, deletes };
+    const ids = presets.map((preset) => preset.id).filter((id): id is string => Boolean(id));
+    const activeIndex = Math.max(0, Math.min(Number(database.botPresetsId) || 0, ids.length - 1));
+    commit.presets = {
+      upserts,
+      deletes,
+      order: ids,
+      ...(ids.length ? { activeId: ids[activeIndex] } : {}),
+    };
   }
 
   return commit;

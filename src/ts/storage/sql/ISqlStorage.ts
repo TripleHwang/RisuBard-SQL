@@ -55,6 +55,10 @@ export interface SqlReverseMessagePage {
   revision: number;
   chatId: string;
   messages: Message[];
+  /** Exact persisted positions, parallel to messages. They are not local window indexes. */
+  positions: number[];
+  /** First unused persisted position, safe for appending after a sparse page. */
+  nextPosition: number;
   before: number | null;
   nextBefore: number | null;
   total: number;

@@ -55,6 +55,7 @@ export interface SqlCommit {
     activeId?: string;
   };
   characters: SqlEntityUpsert[];
+  characterDeletes?: string[];
   characterIds?: string[];
   chats: SqlChatUpsert[];
   chatManifests: { characterId: string; ids: string[] }[];
@@ -83,6 +84,7 @@ export function createEmptySqlCommit(
     action,
     root: { upserts: [], deletes: [] },
     characters: [],
+    characterDeletes: [],
     chats: [],
     chatManifests: [],
     messages: [],
@@ -103,6 +105,7 @@ export function hasSqlCommitChanges(commit: SqlCommit): boolean {
       commit.presets?.order ||
       commit.presets?.activeId !== undefined ||
       commit.characters.length ||
+      commit.characterDeletes?.length ||
       commit.characterIds ||
       commit.chats.length ||
       commit.chatManifests.length ||

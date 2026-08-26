@@ -73,15 +73,16 @@ describe("Node SQL runtime hydration", () => {
 
   it("attaches canonical SQL positions to the tail and prepended older page", async () => {
     const reverse = vi.fn()
-      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m3" }, { chatId: "m4" }], before: 5, nextBefore: 3, total: 5, hasMore: true })
-      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m1" }, { chatId: "m2" }], before: 3, nextBefore: 1, total: 5, hasMore: true });
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m3" }, { chatId: "m4" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 5, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m1" }, { chatId: "m2" }], positions: [1, 4], nextPosition: 13, before: 8, nextBefore: 1, total: 5, hasMore: true });
     activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
     const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
 
     await ensureChatMessageWindow(character, 0, 2);
-    expect(character.chats[0].message.map((message: any) => message._sqlPosition)).toEqual([3, 4]);
+    expect(character.chats[0].message.map((message: any) => message._sqlPosition)).toEqual([8, 12]);
     await loadOlderChatMessages(character, 0, 2);
-    expect(character.chats[0].message.map((message: any) => message._sqlPosition)).toEqual([1, 2, 3, 4]);
+    expect(character.chats[0].message.map((message: any) => message._sqlPosition)).toEqual([1, 4, 8, 12]);
+    expect((character.chats[0] as any)._sqlWindow.nextPosition).toBe(13);
     expect(Object.keys(character.chats[0].message[0])).not.toContain("_sqlPosition");
   });
 

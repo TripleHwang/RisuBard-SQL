@@ -346,6 +346,12 @@ export async function applySqliteCommit(
           );
       }
   }
+  if (commit.characterDeletes?.length) {
+    await execute(
+      `DELETE FROM characters WHERE id IN (${commit.characterDeletes.map(() => "?").join(",")})`,
+      commit.characterDeletes,
+    );
+  }
   if (commit.characterIds !== undefined) {
     if (!commit.characterIds.length) await execute("DELETE FROM characters");
     else

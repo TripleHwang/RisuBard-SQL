@@ -295,6 +295,9 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     const page = await response.json() as SqlReverseMessagePage;
     if (!Number.isSafeInteger(page.revision) || page.revision < 0 ||
       page.chatId !== chatId || !Array.isArray(page.messages) ||
+      !Array.isArray(page.positions) || page.positions.length !== page.messages.length ||
+      !page.positions.every((position) => Number.isSafeInteger(position) && position >= 0) ||
+      !Number.isSafeInteger(page.nextPosition) || page.nextPosition < 0 ||
       !Number.isSafeInteger(page.total) || page.total < 0 ||
       typeof page.hasMore !== "boolean") {
       throw new Error("Invalid SQL message page payload");
