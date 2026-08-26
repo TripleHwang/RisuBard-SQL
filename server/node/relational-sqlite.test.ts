@@ -109,8 +109,9 @@ describe('server relational SQLite', () => {
   it('bounds message search to its newest-row scan budget before filtering', () => {
     const source = readFileSync('server/node/relational-sqlite.cjs', 'utf8')
 
-    expect(source).toContain('const MAX_MESSAGE_SEARCH_SCAN = 50_000')
-    expect(source).toContain('FROM messages ORDER BY sent_time DESC, position DESC LIMIT ?) m')
+    expect(source).toContain('const MAX_MESSAGE_SEARCH_SCAN_ROWS = 50_000')
+    expect(source).toContain('FROM messages ORDER BY rowid DESC LIMIT ?) m')
+    expect(source).not.toContain('FROM messages ORDER BY sent_time DESC, position DESC LIMIT ?) m')
     expect(source).toContain("LIKE ? ESCAPE '\\\\'")
   })
 

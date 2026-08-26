@@ -31,7 +31,10 @@ const MAX_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
 const MAX_SQL_READ_KEY_LENGTH = 256;
 const MAX_SQL_READ_LIMIT = 100;
-const MAX_MESSAGE_SEARCH_SCAN = 50_000;
+// `messages` has no timestamp index in schema v3. rowid DESC is an implicit
+// SQLite primary-key traversal, so this candidate cap cannot trigger a full
+// table sort before the limit; final relevance ordering happens afterward.
+const MAX_MESSAGE_SEARCH_SCAN_ROWS = 50_000;
 
 function statementTable(sql) {
     const normalized = String(sql || '').trim();
@@ -410,11 +413,11 @@ function createRelationalSqlite(options) {
                 `SELECT m.chat_id, m.id, m.position, m.role, m.sent_time, m.sender_name, m.content_text,
                         c.character_id, c.name AS chat_name, ch.name AS character_name
                  FROM (SELECT chat_id, id, position, role, sent_time, sender_name, content_text
-                       FROM messages ORDER BY sent_time DESC, position DESC LIMIT ?) m
+                       FROM messages ORDER BY rowid DESC LIMIT ?) m
                  JOIN chats c ON c.id = m.chat_id
                  JOIN characters ch ON ch.id = c.character_id
                  WHERE m.content_text LIKE ? ESCAPE '\\' ORDER BY m.sent_time DESC, m.position DESC LIMIT ?`,
-            ).all(MAX_MESSAGE_SEARCH_SCAN, `%${escapeSqlLike(phrase)}%`, boundedReadLimit(requestedLimit, 50));
+            ).all(MAX_MESSAGE_SEARCH_SCAN_ROWS, `%${escapeSqlLike(phrase)}%`, boundedReadLimit(requestedLimit, 50));
             return rows.map((row) => ({
                 storageState: 'active', archiveId: null,
                 characterId: row.character_id, characterName: row.character_name,
