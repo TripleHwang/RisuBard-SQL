@@ -6,12 +6,6 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let index = 0; index < table.length; index++) { let value = index; for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (0xedb88320 & -(value & 1)); table[index] = value >>> 0; }
-  return table;
-})();
-
 const DEFAULT_CHARX_LIMITS = Object.freeze({
   compressedBytes: 256 * 1024 * 1024,
   decompressedBytes: 2 * 1024 * 1024 * 1024,
@@ -66,17 +60,15 @@ function readExact(fd, position, length) {
 }
 function u16(b, at) { return b[at] | (b[at + 1] << 8); }
 function u32(b, at) { return b[at] + b[at + 1] * 0x100 + b[at + 2] * 0x10000 + b[at + 3] * 0x1000000; }
-function crc32Byte(crc, byte) { return (CRC32_TABLE[(crc ^ byte) & 255] ^ (crc >>> 8)) >>> 0; }
-function crc32Update(crc, bytes) { for (const byte of bytes) crc = crc32Byte(crc, byte); return crc; }
 function zipName(bytes) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC'); }
   catch { throw invalid('Invalid UTF-8 ZIP entry name'); }
 }
-function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
+function validateCentralDirectory(fd, archiveSize, eocdOffset) {
   const e = readExact(fd, eocdOffset, 22);
   const centralSize = u32(e, 12), centralOffset = u32(e, 16), count = u16(e, 10);
-  if (u16(e, 4) || u16(e, 6) || u16(e, 8) !== count || count !== entryCount || centralOffset + centralSize !== eocdOffset) throw invalid('Invalid ZIP central directory');
-  let at = centralOffset; const names = new Set();
+  if (u16(e, 4) || u16(e, 6) || u16(e, 8) !== count || centralOffset + centralSize !== eocdOffset) throw invalid('Invalid ZIP central directory');
+  let at = centralOffset; const names = new Set(), entries = [];
   for (let i = 0; i < count; i++) {
     if (at + 46 > eocdOffset) throw invalid('Truncated ZIP central directory');
     const h = readExact(fd, at, 46);
@@ -92,66 +84,20 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
     const localNameLength = u16(local, 26), localExtraLength = u16(local, 28);
     const dataEnd = localOffset + 30 + localNameLength + localExtraLength + compressedSize;
     if (dataEnd > centralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
+    let descriptorLength = 0;
     if (flags & 8) {
       const first = readExact(fd, dataEnd, 4);
       const signed = u32(first, 0) === 0x08074b50;
       const descriptor = signed ? Buffer.concat([first, readExact(fd, dataEnd + 4, 12)]) : Buffer.concat([first, readExact(fd, dataEnd + 4, 8)]);
       const base = signed ? 4 : 0;
       if (dataEnd + (signed ? 16 : 12) > centralOffset || u32(descriptor, base) !== u32(h, 16) || u32(descriptor, base + 4) !== compressedSize || u32(descriptor, base + 8) !== originalSize) throw invalid('Invalid ZIP data descriptor');
+      descriptorLength = signed ? 16 : 12;
     }
+    entries.push({ name, flags, method, crc: u32(h, 16), compressedSize, originalSize, localOffset, headerLength: 30 + localNameLength + localExtraLength, dataOffset: localOffset + 30 + localNameLength + localExtraLength, descriptorLength });
     at = end;
   }
   if (at !== centralOffset + centralSize) throw invalid('Invalid ZIP central directory');
-}
-
-function normalizeUnsignedDescriptorsForUnzip() {
-  let pending = Buffer.alloc(0), phase = 'header', remaining = 0, descriptor = false, unknownCompressed = 0, unknownCrc = 0xffffffff, unknownMethod = 0;
-  const emitUnknown = (output) => {
-    let candidateCrc = unknownCrc;
-    for (let at = 0; at + 12 <= pending.length; at++) {
-      const size = unknownCompressed + at;
-      const signed = at + 16 <= pending.length && u32(pending, at) === 0x08074b50 && u32(pending, at + 8) === size && (unknownMethod !== 0 || (u32(pending, at + 4) === (candidateCrc ^ 0xffffffff) >>> 0 && u32(pending, at + 12) === size));
-      const unsigned = u32(pending, at + 4) === size && (unknownMethod !== 0 || (u32(pending, at) === (candidateCrc ^ 0xffffffff) >>> 0 && u32(pending, at + 8) === size));
-      if (!signed && !unsigned) { candidateCrc = crc32Byte(candidateCrc, pending[at]); continue; }
-      if (at) { const data = pending.subarray(0, at); output.push(data); unknownCompressed += at; unknownCrc = crc32Update(unknownCrc, data); }
-      if (unsigned) output.push(Buffer.from([0x50, 0x4b, 0x07, 0x08]));
-      const length = signed ? 16 : 12;
-      output.push(pending.subarray(at, at + length)); pending = pending.subarray(at + length); phase = 'header'; return true;
-    }
-    const keep = Math.min(15, pending.length);
-    if (pending.length > keep) { const data = pending.subarray(0, pending.length - keep); output.push(data); unknownCompressed += data.length; unknownCrc = crc32Update(unknownCrc, data); pending = pending.subarray(pending.length - keep); }
-    return false;
-  };
-  return (chunk, final) => {
-    pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
-    const output = [];
-    while (pending.length) {
-      if (phase === 'unknown') { if (!emitUnknown(output)) break; }
-      else if (phase === 'data') {
-        const take = Math.min(remaining, pending.length);
-        output.push(pending.subarray(0, take)); pending = pending.subarray(take); remaining -= take;
-        if (remaining) break;
-        phase = descriptor ? 'descriptor' : 'header';
-      } else if (phase === 'descriptor') {
-        if (pending.length < 4) break;
-        const length = u32(pending, 0) === 0x08074b50 ? 16 : 12;
-        if (pending.length < length) break;
-        output.push(pending.subarray(0, length)); pending = pending.subarray(length); phase = 'header';
-      } else {
-        if (pending.length < 4) break;
-        if (u32(pending, 0) !== 0x04034b50) { output.push(pending); pending = Buffer.alloc(0); break; }
-        if (pending.length < 30) break;
-        const headerLength = 30 + u16(pending, 26) + u16(pending, 28);
-        if (pending.length < headerLength) break;
-        const header = pending.subarray(0, headerLength);
-        descriptor = !!(u16(header, 6) & 8); remaining = u32(header, 18); unknownMethod = u16(header, 8);
-        output.push(header); pending = pending.subarray(headerLength);
-        if (descriptor && !remaining) { unknownCompressed = 0; unknownCrc = 0xffffffff; phase = 'unknown'; } else phase = 'data';
-      }
-    }
-    if (final && pending.length) output.push(pending);
-    return output;
-  };
+  return entries;
 }
 
 async function importCharXStream(source, options) {
@@ -262,7 +208,6 @@ async function importCharXStream(source, options) {
     } catch (e) { currentError = normalizeError(e, invalid('Unable to read archive entry')); }
   });
   unzip.register(UnzipInflate);
-  const normalizeUnzipChunk = normalizeUnsignedDescriptorsForUnzip();
   try {
     for await (const input of source) {
       checkAbort();
@@ -277,13 +222,10 @@ async function importCharXStream(source, options) {
       if (compressed > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
       checkSpace('archive-write', chunk.length);
       fs.writeSync(archiveFd, chunk);
-      try { for (const unzipChunk of normalizeUnzipChunk(chunk, false)) unzip.push(unzipChunk, false); } catch (e) { throw currentError || invalid('Invalid or unsupported ZIP archive'); }
       checkAbort();
       onProgress({ compressedBytes: compressed, decompressedBytes: decompressed });
     }
-    try { for (const unzipChunk of normalizeUnzipChunk(new Uint8Array(0), true)) unzip.push(unzipChunk, true); } catch { throw currentError || invalid('Truncated or invalid ZIP archive'); }
     checkAbort();
-    // fflate can finish a local-file stream without its central directory; CharX requires a complete ZIP.
     let eocd = -1;
     for (let i = zipTailLength - 22; i >= 0; i--) {
       if (zipTail[i] === 0x50 && zipTail[i + 1] === 0x4b && zipTail[i + 2] === 0x05 && zipTail[i + 3] === 0x06 && i + 22 + zipTail[i + 20] + (zipTail[i + 21] << 8) === zipTailLength) { eocd = i; break; }
@@ -292,7 +234,24 @@ async function importCharXStream(source, options) {
     const eocdAbsolute = compressed - zipTailLength + eocd;
     fs.fsyncSync(archiveFd); fs.closeSync(archiveFd); archiveFd = undefined;
     const readFd = fs.openSync(archivePath, 'r');
-    try { validateCentralDirectory(readFd, compressed, eocdAbsolute, entryCount); } finally { fs.closeSync(readFd); }
+    let entries;
+    try { entries = validateCentralDirectory(readFd, compressed, eocdAbsolute); } finally { fs.closeSync(readFd); }
+    const extractFd = fs.openSync(archivePath, 'r');
+    try {
+      for (const entry of entries) {
+        checkAbort();
+        const header = readExact(extractFd, entry.localOffset, entry.headerLength);
+        header[6] &= ~8; header.writeUInt32LE(entry.crc, 14); header.writeUInt32LE(entry.compressedSize, 18); header.writeUInt32LE(entry.originalSize, 22);
+        unzip.push(header, false);
+        for (let position = entry.dataOffset, remaining = entry.compressedSize; remaining;) {
+          const length = Math.min(remaining, 64 * 1024);
+          unzip.push(readExact(extractFd, position, length), false);
+          position += length; remaining -= length; checkAbort();
+        }
+      }
+      unzip.push(new Uint8Array(0), true);
+    } catch (e) { throw currentError || normalizeError(e, invalid('Invalid or unsupported ZIP archive')); } finally { fs.closeSync(extractFd); }
+    checkAbort();
     if (active.size) throw invalid('Truncated ZIP archive');
     if (cardCount !== 1 || cards.length !== 1) throw invalid('Archive must contain exactly one card.json');
     const card = utf8Json(cards[0]);

@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { zipSync, strToU8, Zip, ZipPassThrough } from 'fflate';
+import { zipSync, strToU8, deflateSync, Zip, ZipPassThrough } from 'fflate';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -41,14 +41,14 @@ function crc32(bytes: Uint8Array) {
 }
 function u16le(value: number) { const out = new Uint8Array(2); new DataView(out.buffer).setUint16(0, value, true); return out; }
 function u32le(value: number) { const out = new Uint8Array(4); new DataView(out.buffer).setUint32(0, value, true); return out; }
-function zipWithDescriptors(signed: boolean, assetText = 'pixels') {
+function zipWithDescriptors(signed: boolean, assetText = 'pixels', method = 0) {
   const records: Uint8Array[] = [], central: Uint8Array[] = []; let offset = 0;
   for (const [name, text] of [['card.json', '{"spec":"chara_card_v3"}'], ['a.png', assetText]] as const) {
-    const nameBytes = strToU8(name), data = strToU8(text), crc = crc32(data);
+    const nameBytes = strToU8(name), data = strToU8(text), compressed = method ? deflateSync(data, { level: 0 }) : data, crc = crc32(data);
     // Bit 3 means the local CRC and sizes are intentionally unknown until the data descriptor.
-    const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(0), u32le(0), u32le(0), u16le(nameBytes.length), u16le(0), nameBytes, data, ...(signed ? [Buffer.from([0x50, 0x4b, 0x07, 0x08])] : []), u32le(crc), u32le(data.length), u32le(data.length)]);
+    const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), u16le(20), u16le(8), u16le(method), u16le(0), u16le(0), u32le(0), u32le(0), u32le(0), u16le(nameBytes.length), u16le(0), nameBytes, compressed, ...(signed ? [Buffer.from([0x50, 0x4b, 0x07, 0x08])] : []), u32le(crc), u32le(compressed.length), u32le(data.length)]);
     records.push(local);
-    central.push(Buffer.concat([Buffer.from([0x50, 0x4b, 0x01, 0x02]), u16le(20), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBytes.length), u16le(0), u16le(0), u16le(0), u16le(0), u32le(0), u32le(offset), nameBytes]));
+    central.push(Buffer.concat([Buffer.from([0x50, 0x4b, 0x01, 0x02]), u16le(20), u16le(20), u16le(8), u16le(method), u16le(0), u16le(0), u32le(crc), u32le(compressed.length), u32le(data.length), u16le(nameBytes.length), u16le(0), u16le(0), u16le(0), u16le(0), u32le(0), u32le(offset), nameBytes]));
     offset += local.length;
   }
   const centralBytes = Buffer.concat(central);
@@ -287,6 +287,16 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
+  test('extracts a deflated unknown-size descriptor entry without interpreting compressed payload bytes', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); const payload = Buffer.alloc(64, 65); let published = Buffer.alloc(0);
+    // level-0 DEFLATE has a five-byte stored-block prefix, so byte 20 begins at compressed offset 25.
+    payload.writeUInt32LE(25, 24); payload.writeUInt32LE(25, 28);
+    try {
+      await expect(importCharXStream(chunks(zipWithDescriptors(false, payload.toString('latin1'), 8), 64), { stagingRoot, publishAssets: async (entries: any[]) => { published = await readFile(entries[0].sourcePath); } })).resolves.toMatchObject({ assets: { 'a.png': expect.any(String) } });
+      expect(published).toEqual(payload);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test('rejects duplicate normalized central names before their unchanged local headers diverge', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0;
     const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('a'), 'b.png': strToU8('b') });
@@ -349,7 +359,7 @@ describe('importCharXStream', () => {
       expect(finalized).toBe(true); expect(published).toBe(0);
       expect(events.indexOf('write')).toBeGreaterThan(events.indexOf('source:1'));
       expect(events.indexOf('source:2')).toBeGreaterThan(events.indexOf('write'));
-      expect(events.slice(0, events.indexOf('source:2')).filter((event) => event === 'write')).toHaveLength(2);
+      expect(events.slice(0, events.indexOf('source:2')).filter((event) => event === 'write')).toHaveLength(1);
       expect(sourceChunkSize).toBeLessThanOrEqual(DEFAULT_CHARX_LIMITS.queuedWriteBytes);
       expect(await (await import('node:fs/promises')).readdir(stagingRoot)).toEqual([]);
     } finally { writeSpy.mockRestore(); await rm(stagingRoot, { recursive: true, force: true }); }
