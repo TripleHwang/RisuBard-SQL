@@ -14,6 +14,15 @@ export type StartupMetricMark =
 
 const prefix = (name: string) => `risu:${name}`
 
+function bestEffort(callback: () => void): void {
+    try {
+        callback()
+    }
+    catch {
+        // Instrumentation must never affect application behavior.
+    }
+}
+
 function getPerformance(): Performance | undefined {
     try {
         return globalThis.performance
@@ -24,12 +33,12 @@ function getPerformance(): Performance | undefined {
 }
 
 export function markPerformance(name: StartupMetricMark): void {
-    try {
-        getPerformance()?.mark(prefix(name))
-    }
-    catch {
-        // Some browser implementations expose Performance without mark support.
-    }
+    const performance = getPerformance()
+    if (!performance) return
+
+    const markName = prefix(name)
+    bestEffort(() => performance.clearMarks?.(markName))
+    bestEffort(() => performance.mark(markName))
 }
 
 export function measurePerformance(
@@ -40,9 +49,17 @@ export function measurePerformance(
     try {
         const performance = getPerformance()
         if (!performance) return null
-        return end === undefined
+        const measureName = prefix(name)
+        const startName = prefix(start)
+        const endName = end === undefined ? undefined : prefix(end)
+        const measure = endName === undefined
             ? performance.measure(prefix(name), prefix(start))
-            : performance.measure(prefix(name), prefix(start), prefix(end))
+            : performance.measure(measureName, startName, endName)
+
+        bestEffort(() => performance.clearMeasures?.(measureName))
+        bestEffort(() => performance.clearMarks?.(startName))
+        if (endName !== undefined) bestEffort(() => performance.clearMarks?.(endName))
+        return measure
     }
     catch {
         return null
@@ -57,7 +74,7 @@ export function observeLongTasks(callback: (entry: PerformanceEntry) => void): {
 
         const observer = new globalThis.PerformanceObserver((entries) => {
             for (const entry of entries.getEntries()) {
-                if (entry.duration > 100) callback(entry)
+                if (entry.duration > 100) bestEffort(() => callback(entry))
             }
         })
         observer.observe({ type: 'longtask', buffered: true })
