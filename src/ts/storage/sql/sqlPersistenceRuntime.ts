@@ -5,6 +5,7 @@ import { DirtyRegistry, type DirtySnapshot } from './dirtyRegistry'
 import { buildSqlDirtyCommit } from './sqlDirtyCommit'
 import { hasSqlCommitChanges, SqlRevisionConflictError } from './sqlCommit'
 import { v4 as uuidv4 } from 'uuid'
+import { runtimeMetrics } from '../../performance/runtimeMetrics'
 
 let activeStorage: ISqlStorage | null = null
 let activeDatabase: Database | null = null
@@ -114,7 +115,7 @@ async function commitDirtyScopes(): Promise<void> {
         return
     }
     try {
-        await storage.commit(commit)
+        await commitWithMetrics(storage, commit)
         registry.acknowledge(snapshot)
     } catch (error) {
         if (!(error instanceof SqlRevisionConflictError)) throw error
@@ -126,8 +127,18 @@ async function commitDirtyScopes(): Promise<void> {
             registry.acknowledge(snapshot)
             return
         }
-        await storage.commit(commit)
+        await commitWithMetrics(storage, commit)
         registry.acknowledge(snapshot)
+    }
+}
+
+/** One metric pair per actual row-commit attempt, including the conflict retry. */
+async function commitWithMetrics(storage: ISqlStorage, commit: ReturnType<typeof buildSqlDirtyCommit>): Promise<void> {
+    runtimeMetrics.start('dirty-commit')
+    try {
+        await storage.commit(commit)
+    } finally {
+        runtimeMetrics.end('dirty-commit')
     }
 }
 

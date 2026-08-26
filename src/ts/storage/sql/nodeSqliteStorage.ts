@@ -14,6 +14,7 @@ import type {
   StoredBotPreset,
 } from "./ISqlStorage";
 import { markPerformance } from "../../performance/startupMetrics";
+import { runtimeMetrics } from "../../performance/runtimeMetrics";
 import type {
   character,
   Chat,
@@ -271,6 +272,8 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   }
 
   async loadCharacterHydration(characterId: string): Promise<character | null> {
+    runtimeMetrics.start("character-hydration");
+    try {
     const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}`);
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`SQL character load failed (${response.status})`);
@@ -281,6 +284,9 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     }
     this.acceptReadRevision(payload.revision);
     return payload.character;
+    } finally {
+      runtimeMetrics.end("character-hydration");
+    }
   }
 
   async loadChatMessageReversePage(
@@ -288,6 +294,8 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     before: number | undefined,
     limit: number,
   ): Promise<SqlReverseMessagePage> {
+    runtimeMetrics.start("message-page");
+    try {
     const params = new URLSearchParams({ limit: String(Math.min(100, Math.max(1, Math.floor(limit)))) });
     if (before !== undefined) params.set("before", String(before));
     const response = await this.request(`/api/sql/chats/${encodeURIComponent(chatId)}/messages?${params}`);
@@ -304,6 +312,9 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     }
     this.acceptReadRevision(page.revision);
     return page;
+    } finally {
+      runtimeMetrics.end("message-page");
+    }
   }
 
   private async listAncillaryKeys(

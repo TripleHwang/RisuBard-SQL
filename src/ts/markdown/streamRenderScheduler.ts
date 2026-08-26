@@ -1,6 +1,7 @@
 type Render<Value> = (value: Value) => void | Promise<void>
 type RequestFrame = (callback: FrameRequestCallback) => number
 type CancelFrame = (handle: number) => void
+import { runtimeMetrics } from '../performance/runtimeMetrics'
 
 function browserlessRequestFrame(callback: FrameRequestCallback): number {
     return setTimeout(() => callback(Date.now()), 0) as unknown as number
@@ -50,7 +51,7 @@ export class StreamRenderScheduler<Value> {
             if (this.error !== null) throw this.error
             if (!this.hasPending || this.cancelled) return
             const value = this.takePending()
-            await this.render(value)
+            await this.renderWithMetrics(value)
         }
     }
 
@@ -79,7 +80,7 @@ export class StreamRenderScheduler<Value> {
     private runFrame(): void {
         if (this.cancelled || !this.hasPending || this.running !== null) return
         const value = this.takePending()
-        this.running = Promise.resolve().then(() => this.render(value)).catch((error) => {
+        this.running = Promise.resolve().then(() => this.renderWithMetrics(value)).catch((error) => {
             this.error ??= error
             this.cancel()
         }).finally(() => {
@@ -92,6 +93,15 @@ export class StreamRenderScheduler<Value> {
     private takePending(): Value {
         this.hasPending = false
         return this.pending as Value
+    }
+
+    private async renderWithMetrics(value: Value): Promise<void> {
+        runtimeMetrics.start('stream-render')
+        try {
+            await this.render(value)
+        } finally {
+            runtimeMetrics.end('stream-render')
+        }
     }
 
     private clearFrame(): void {

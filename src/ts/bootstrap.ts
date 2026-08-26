@@ -35,6 +35,7 @@ import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
 import { markPerformance } from './performance/startupMetrics'
+import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
 import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
@@ -101,6 +102,7 @@ async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) 
 export async function loadData() {
     if (get(loadedStore) || dataLoading) return
     dataLoading = true
+    runtimeMetrics.start('bootstrap')
     try {
             applyEarlyLanguage()
             let createdFreshDatabase = false
@@ -263,6 +265,7 @@ export async function loadData() {
         alertError(error)
     } finally {
         dataLoading = false
+        runtimeMetrics.end('bootstrap')
     }
 }
 
