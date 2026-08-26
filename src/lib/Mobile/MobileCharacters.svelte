@@ -50,9 +50,9 @@
 </script>
 <div class="flex flex-col items-center w-full h-full">
     <VirtualCharacterList count={characters.length} rowHeight={68} overscan={8} getKey={(index) => characters[index].chaId}>
-        {#snippet children(index)}
+        {#snippet children(index, focusedIndex)}
             {@const char = characters[index]}
-            <button class="flex p-2 border-t-darkborderc gap-2 w-full h-[68px]" class:border-t={index !== 0} onclick={() => {
+            <button data-virtual-index={index} tabindex={focusedIndex === index ? 0 : -1} class="flex p-2 border-t-darkborderc gap-2 w-full h-[68px]" class:border-t={index !== 0} onclick={() => {
                 void changeChar(char.i)
                 endGrid()
             }}>

@@ -23,12 +23,30 @@ function createAssetThumbnailService(options) {
     const maxBytes = options.maxBytes ?? 32 * 1024 * 1024
     const maxSourceBytes = options.maxSourceBytes ?? 32 * 1024 * 1024
     const maxPixels = options.maxPixels ?? 40_000_000
+    const maxConcurrent = options.maxConcurrent ?? 2
+    const maxQueue = options.maxQueue ?? 32
+    const transformVersion = options.transformVersion ?? TRANSFORM_VERSION
     const cache = new Map()
     const inFlight = new Map()
     let bytes = 0
+    let active = 0
+    const queue = []
 
-    const etag = updatedAt => `"thumb-${updatedAt}-${TRANSFORM_VERSION}"`
-    const cacheKey = (key, updatedAt, source) => crypto.createHash('sha256').update(`${key}\0${updatedAt}\0${TRANSFORM_VERSION}\0`).update(source).digest('hex')
+    const runBounded = (operation) => new Promise((resolve, reject) => {
+        const start = () => {
+            active++
+            Promise.resolve(operation()).then(resolve, reject).finally(() => {
+                active--
+                queue.shift()?.()
+            })
+        }
+        if (active < maxConcurrent) return start()
+        if (queue.length >= maxQueue) return reject(httpError(429, 'Thumbnail queue is full'))
+        queue.push(start)
+    })
+    const assetHash = source => crypto.createHash('sha256').update(source).digest('hex')
+    const etag = hash => `"thumb-${transformVersion}-${hash}"`
+    const cacheKey = (key, updatedAt, hash) => crypto.createHash('sha256').update(`${key}\0${updatedAt}\0${transformVersion}\0${options.maxSide ?? 320}\0${options.quality ?? 75}\0${hash}`).digest('hex')
     const trim = () => {
         while (cache.size > maxEntries || bytes > maxBytes) {
             const first = cache.entries().next().value
@@ -37,38 +55,41 @@ function createAssetThumbnailService(options) {
         }
     }
 
+    async function resolve(key) {
+        let operation = inFlight.get(key)
+        if (operation) return operation
+        operation = runBounded(async () => {
+            const updatedAt = options.getUpdatedAt(key)
+            if (updatedAt === null || updatedAt === undefined) throw httpError(404, 'Asset not found')
+            const source = options.get(key)
+            if (!source) throw httpError(404, 'Asset not found')
+            if (source.length > maxSourceBytes) throw httpError(422, 'Image exceeds source byte limit')
+            if (options.inspect) {
+                const meta = await options.inspect(source)
+                if (!meta || !Number.isFinite(meta.width) || !Number.isFinite(meta.height) || meta.width * meta.height > maxPixels) throw httpError(422, 'Image exceeds decoded pixel limit')
+            }
+            const hash = assetHash(source)
+            const id = cacheKey(key, updatedAt, hash)
+            let image = cache.get(id)
+            if (image) {
+                cache.delete(id); cache.set(id, image)
+            } else {
+                image = Buffer.from(await options.transform(source))
+                if (!image.length || image.length > maxBytes) throw httpError(422, 'Invalid thumbnail output')
+                cache.set(id, image); bytes += image.length; trim()
+            }
+            return { etag: etag(hash), image }
+        }).finally(() => inFlight.delete(key))
+        inFlight.set(key, operation)
+        return operation
+    }
+
     async function get(key, ifNoneMatch) {
         if (!key.startsWith('assets/') || !IMAGE_EXTENSIONS.has(key.split('.').pop().toLowerCase())) throw httpError(404, 'Asset not found')
-        const updatedAt = options.getUpdatedAt(key)
-        if (updatedAt === null || updatedAt === undefined) throw httpError(404, 'Asset not found')
-        const tag = etag(updatedAt)
+        const result = await resolve(key)
+        const tag = result.etag
         if (ifNoneMatch === tag) return { status: 304, etag: tag }
-
-        const source = options.get(key)
-        if (!source) throw httpError(404, 'Asset not found')
-        if (source.length > maxSourceBytes) throw httpError(422, 'Image exceeds source byte limit')
-        if (options.inspect) {
-            const meta = await options.inspect(source)
-            if (!meta || !Number.isFinite(meta.width) || !Number.isFinite(meta.height) || meta.width * meta.height > maxPixels) throw httpError(422, 'Image exceeds decoded pixel limit')
-        }
-        const id = cacheKey(key, updatedAt, source)
-        let image = cache.get(id)
-        if (image) {
-            cache.delete(id); cache.set(id, image)
-        } else {
-            let operation = inFlight.get(id)
-            if (!operation) {
-                operation = Promise.resolve(options.transform(source)).then(result => {
-                    const output = Buffer.from(result)
-                    if (!output.length || output.length > maxBytes) throw httpError(422, 'Invalid thumbnail output')
-                    cache.set(id, output); bytes += output.length; trim()
-                    return output
-                }).finally(() => inFlight.delete(id))
-                inFlight.set(id, operation)
-            }
-            image = await operation
-        }
-        return { status: 200, etag: tag, image }
+        return { status: 200, etag: tag, image: result.image }
     }
 
     return { get, stats: () => ({ entries: cache.size, bytes }), clear: () => { cache.clear(); bytes = 0 } }

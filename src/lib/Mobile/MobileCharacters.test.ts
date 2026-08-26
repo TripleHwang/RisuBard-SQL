@@ -8,6 +8,8 @@ it('uses a fixed-height virtual list with stable character identity', () => {
   expect(source).toContain('VirtualCharacterList count={characters.length} rowHeight={68} overscan={8}')
   expect(source).toContain('chaId: c.chaId')
   expect(source).toContain('getKey={(index) => characters[index].chaId}')
+  expect(source).toContain('data-virtual-index={index}')
+  expect(source).toContain('tabindex={focusedIndex === index ? 0 : -1}')
   expect(source).toContain('h-[68px]')
 })
 

@@ -3219,6 +3219,9 @@ const assetThumbnailService = createAssetThumbnailService({
     get: kvGet,
     inspect: inspectThumbnailSource,
     transform: generateThumbnail,
+    transformVersion: 'webp-v1',
+    maxSide: THUMB_MAX_SIDE,
+    quality: THUMB_QUALITY,
     maxEntries: 128,
     maxBytes: 32 * 1024 * 1024,
     maxSourceBytes: 32 * 1024 * 1024,
@@ -3229,7 +3232,8 @@ app.get('/api/asset/:hexKey/thumb', sessionAuthMiddleware, async (req, res) => {
     try {
         const key = decodeCanonicalHexKey(req.params.hexKey)
         const result = await assetThumbnailService.get(key, req.headers['if-none-match'])
-        res.set({ 'Cache-Control': 'public, max-age=31536000, immutable', 'ETag': result.etag })
+        // URL is stable, so force ETag revalidation before reuse after overwrites.
+        res.set({ 'Cache-Control': 'public, max-age=0, must-revalidate', 'ETag': result.etag })
         if (result.status === 304) return res.status(304).end()
         return res.type('image/webp').send(result.image)
     } catch (error) {

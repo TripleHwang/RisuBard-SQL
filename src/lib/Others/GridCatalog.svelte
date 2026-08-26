@@ -59,8 +59,8 @@
 </script>
 
 <div class="h-full w-full flex justify-center">
-    <div class="h-full p-6 bg-darkbg max-w-full w-2xl flex flex-col overflow-y-auto">
-        <div class="mx-4 mb-6 flex flex-col">
+    <div class="h-full min-h-0 p-6 bg-darkbg max-w-full w-2xl flex flex-col">
+        <div class="mx-4 mb-6 flex flex-col shrink-0">
             <div class="flex items-center gap-3 mb-2">
                 <button 
                     class="flex items-center justify-center p-2 rounded-lg hover:bg-selected transition-colors shrink-0"
@@ -92,6 +92,7 @@
                 </span>
             </div>
         </div>
+        <div class="flex-1 min-h-0" class:overflow-y-auto={selected !== 3}>
         {#if selected === 0}
             <div class="w-full flex justify-center">
                 <div class="flex flex-wrap gap-2 w-full justify-center">
@@ -160,5 +161,6 @@
         {:else if selected === 3}
             <MobileCharacters {search} gridMode endGrid={endGrid} />
         {/if}
+        </div>
     </div>
 </div>
