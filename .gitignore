@@ -57,6 +57,8 @@ dist.zip
 !/scripts/check-standalone-release.mjs
 !/scripts/generate-update-manifest.mjs
 !/scripts/generate-update-manifest.test.ts
+!/scripts/perf/
+!/scripts/perf/**
 .env
 /server/node/ssl/certificate
 /bin/

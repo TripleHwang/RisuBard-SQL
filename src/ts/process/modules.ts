@@ -2,7 +2,7 @@ import { language } from "src/lang"
 import { alertClear, alertConfirm, alertError, alertModuleSelect, alertNormal, alertStore, alertWait, notifySuccess } from "../alert"
 import { getCurrentCharacter, getCurrentChat, getDatabase, setCurrentCharacter, setDatabase, type customscript, type loreBook, type triggerscript } from "../storage/database.svelte"
 import { AppendableBuffer, downloadFile, forageStorage, LocalWriter, readImage, saveAsset, VirtualWriter } from "../globalApi.svelte"
-import { checkPersonaBinded, selectSingleFile, sleep } from "../util"
+import { checkPersonaBinded, selectSingleNativeFile, sleep } from "../util"
 import { v4 } from "uuid"
 import { convertExternalLorebook } from "./lorebook.svelte"
 import { compressImage } from '../media'
@@ -12,6 +12,10 @@ import {get} from "svelte/store"
 import { convertCharacterToModule, convertModuleToCharacter } from "../interchangeability"
 import { exportCharacterCard, importCharacterProcess } from "../characterCards"
 import { hasher } from "../parser/parser.svelte"
+import { withSaverScope } from '../performance/saverMode'
+import { isNodeServer } from '../platform'
+
+const MAX_BROWSER_RISUM_BYTES = 128 * 1024 * 1024
 
 export interface MCPModule{
     url: string
@@ -45,7 +49,7 @@ export interface ModuleFolder {
     color: string
 }
 
-export async function exportModule(module:RisuModule, arg:{
+async function exportModuleInner(module:RisuModule, arg:{
     alertEnd?:boolean
 } = {}){
     const alertEnd = arg.alertEnd ?? true
@@ -69,7 +73,11 @@ export async function exportModule(module:RisuModule, arg:{
     }
 }
 
-export async function exportModuleLegacy(module:RisuModule, arg:{
+export async function exportModule(module: RisuModule, arg: { alertEnd?: boolean } = {}): Promise<void> {
+    return withSaverScope('export', () => exportModuleInner(module, arg))
+}
+
+async function exportModuleLegacyInner(module:RisuModule, arg:{
     alertEnd?:boolean
     saveData?:boolean
 } = {}){
@@ -133,7 +141,7 @@ export async function exportModuleLegacy(module:RisuModule, arg:{
     return apb.buffer
 }
 
-export async function readModule(buf:Buffer):Promise<RisuModule> {
+async function readModuleScoped(buf:Buffer):Promise<RisuModule> {
     let pos = 0
 
     const readLength = () => {
@@ -323,14 +331,59 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
     return module
 }
 
+export async function exportModuleLegacy(module: RisuModule, arg: { alertEnd?: boolean; saveData?: boolean } = {}): Promise<Uint8Array> {
+    return withSaverScope('export', () => exportModuleLegacyInner(module, arg))
+}
+
+/** Module archives can transiently hold decoded assets; release caches around the full read. */
+export async function readModule(buf: Buffer): Promise<RisuModule> {
+    return withSaverScope('import', () => readModuleScoped(buf))
+}
+
 export async function importModule(){
-    const f = await selectSingleFile(['json', 'lorebook', 'risum', 'charx'])
+    const f = await selectSingleNativeFile(['json', 'lorebook', 'risum', 'charx'])
     if(!f){
         return
     }
-    let fileData = f.data
+    const extension = f.name.split('.').pop()?.toLowerCase() ?? ''
     const db = getDatabase()
-    if(f.name.endsWith('.charx')){
+    if(extension === 'risum'){
+        if(isNodeServer){
+            let failed = false
+            try {
+                await withSaverScope('import', async () => {
+                    alertWait('Loading... (Uploading Module…)')
+                    const result = await forageStorage.importRisum(f, progress => {
+                        if(progress.phase === 'uploading'){
+                            alertWait(`Loading... (Uploading Module ${progress.loaded} / ${progress.total})`)
+                        }
+                        else {
+                            alertWait(`Loading... (${progress.phase} ${progress.completed} / ${progress.total})`)
+                        }
+                    })
+                    const module = result?.module
+                    if(!module || typeof module !== 'object') throw new Error('Invalid risum module')
+                    module.id = v4()
+                    db.modules.push(module)
+                    notifySuccess(language.successImport)
+                })
+            } catch (error) {
+                failed = true
+                alertClear()
+                console.error(error)
+                alertError(language.errors.noData)
+            } finally {
+                if(!failed) alertClear()
+            }
+            return
+        }
+        if(f.size > MAX_BROWSER_RISUM_BYTES){
+            alertError('Large .risum imports require a Node server connection.')
+            return
+        }
+    }
+    const fileData = new Uint8Array(await f.arrayBuffer())
+    if(extension === 'charx'){
         try {
             const buf = Buffer.from(fileData)
             const char = await importCharacterProcess({
@@ -351,7 +404,7 @@ export async function importModule(){
         notifySuccess(language.successImport)
         return
     }
-    if(f.name.endsWith('.risum')){
+    if(extension === 'risum'){
         try {
             const buf = Buffer.from(fileData)
             const module = await readModule(buf)

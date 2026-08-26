@@ -25,6 +25,7 @@ vi.mock('src/ts/storage/database.svelte', () => ({
 vi.mock('src/ts/storage/chatStorage', () => ({
     ensureChatHydrated: mocks.ensureChatHydrated,
     saveChatToServer: mocks.saveChatToServer,
+    isChatHistoryIncomplete: (chat: any) => !chat || chat._placeholder === true || chat.messagesLoaded === false || chat.messagesFullyLoaded === false || chat._sqlWindow?.hasOlder === true,
 }))
 vi.mock('src/ts/alert', () => ({
     notifyError: mocks.notifyError,

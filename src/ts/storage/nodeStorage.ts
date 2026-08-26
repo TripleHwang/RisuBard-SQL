@@ -7,6 +7,7 @@
 // /api/login, /api/token/refresh)
 import { language } from "src/lang"
 import type { CharacterCardV3 } from '@risuai/ccardlib'
+import type { RisuModule } from '../process/modules'
 import { alertInput, waitAlert, notifyError } from "../alert"
 import { decodeRisuSave, encodeRisuSaveLegacy } from "./risuSave"
 import { normalizeChat, type Chat, type Message } from "./database.svelte"
@@ -14,6 +15,7 @@ import {
     assembleChatContentPages,
     type ChatContentPageEnvelope,
 } from './chatContentPage'
+import { createIncrementalNdjsonParser } from './ndjsonStream'
 
 const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 200
 
@@ -93,8 +95,21 @@ export type ServerCharXImportProgress =
     | { phase: 'uploading', loaded: number, total: number }
     | { phase: 'processing', completed: number, total: number }
 
+export interface ServerRisumImportResult {
+    module: RisuModule
+    assets: number
+    decodedBytes?: number
+}
+
+export type ServerRisumImportProgress =
+    | { phase: 'uploading', loaded: number, total: number }
+    | { phase: 'spooling' | 'validate' | 'assets' | 'publish', completed: number, total: number }
+
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 50
+    private static readonly BULK_WRITE_CLIENT_BYTES = 32 * 1024 * 1024
+    /** JSON/base64 is retained for small compatibility writes only. */
+    private static readonly RAW_ASSET_UPLOAD_THRESHOLD = 8 * 1024 * 1024
 
     // Cross-device single-writer lock identity. Persisted in sessionStorage so
     // a reload or an OS tab restore of the SAME tab keeps the same identity —
@@ -261,6 +276,11 @@ export class NodeStorage{
     }
 
     async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
+        if (key.startsWith('assets/') && value.byteLength > NodeStorage.RAW_ASSET_UPLOAD_THRESHOLD) {
+            if (etag) throw new Error('Conditional large asset writes are not supported')
+            await this.setItemStreamed(key, value)
+            return null
+        }
         const headers: Record<string, string> = {
             'content-type': 'application/octet-stream',
             'file-path': Buffer.from(key, 'utf-8').toString('hex')
@@ -292,6 +312,37 @@ export class NodeStorage{
     }
     async setItemConditional(key: string, value: Uint8Array, etag: string): Promise<string | null> {
         return await this.setItem(key, value, etag)
+    }
+
+    /**
+     * Upload a binary asset without base64 expansion or a browser-sized JSON
+     * string. The supplied Blob/Uint8Array is handed to XHR unchanged.
+     */
+    async setItemStreamed(key: string, value: Blob | Uint8Array): Promise<void> {
+        if (!key.startsWith('assets/')) throw new Error('Streamed uploads are limited to asset keys')
+        const authHeader = await this.createAuth()
+        await new Promise<void>((resolve, reject) => {
+            const xhr = new XMLHttpRequest()
+            xhr.open('POST', '/api/assets/upload')
+            xhr.setRequestHeader('content-type', 'application/octet-stream')
+            xhr.setRequestHeader('x-risu-asset-key', key)
+            xhr.setRequestHeader('risu-auth', authHeader)
+            xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
+            if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
+
+            xhr.onerror = () => reject(new Error('Asset upload request failed'))
+            xhr.onabort = () => reject(new Error('Asset upload request aborted'))
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) { resolve(); return }
+                let message = `Asset upload error: ${xhr.status}`
+                try {
+                    const body = JSON.parse(xhr.responseText)
+                    if (typeof body?.error === 'string') message = body.error
+                } catch { /* non-JSON error */ }
+                reject(new Error(message))
+            }
+            xhr.send(value as any)
+        })
     }
     async getItemWithEtag(key:string):Promise<{ value: Buffer | null, etag: string | null }> {
         const headers: Record<string, string> = {
@@ -503,8 +554,15 @@ export class NodeStorage{
     }
 
     async setItems(entries: {key: string, value: Uint8Array}[]) {
-        for (let i = 0; i < entries.length; i += NodeStorage.BULK_WRITE_CLIENT_BATCH) {
-            const batch = entries.slice(i, i + NodeStorage.BULK_WRITE_CLIENT_BATCH)
+        // Preserve input order, including duplicate keys. In particular, a
+        // large raw write must not leapfrog an earlier/later JSON fallback.
+        let smallBatch: {key: string, value: Uint8Array}[] = []
+        let smallBytes = 0
+        const flushSmall = async () => {
+            if (smallBatch.length === 0) return
+            const batch = smallBatch
+            smallBatch = []
+            smallBytes = 0
             const body = batch.map(e => ({
                 key: e.key,
                 value: Buffer.from(e.value).toString('base64')
@@ -518,6 +576,18 @@ export class NodeStorage{
             })
             if (da.status < 200 || da.status >= 300) throw 'setItems Error'
         }
+        for (const entry of entries) {
+            if (entry.key.startsWith('assets/') && entry.value.byteLength > NodeStorage.RAW_ASSET_UPLOAD_THRESHOLD) {
+                await flushSmall()
+                await this.setItemStreamed(entry.key, entry.value)
+                continue
+            }
+            if (smallBatch.length > 0 && smallBytes + entry.value.byteLength > NodeStorage.BULK_WRITE_CLIENT_BYTES) await flushSmall()
+            smallBatch.push(entry)
+            smallBytes += entry.value.byteLength
+            if (smallBatch.length >= NodeStorage.BULK_WRITE_CLIENT_BATCH || smallBytes >= NodeStorage.BULK_WRITE_CLIENT_BYTES) await flushSmall()
+        }
+        await flushSmall()
     }
 
     async exportBackup(opts?: ExportBackupOptions): Promise<Response> {
@@ -711,6 +781,78 @@ export class NodeStorage{
                 else reject(new Error('CharX import: no result received'))
             }
 
+            xhr.send(file)
+        })
+    }
+
+    /** Upload a .risum File as-is so Node can parse it on disk without a browser-sized ArrayBuffer. */
+    async importRisum(
+        file: File,
+        onProgress?: (progress: ServerRisumImportProgress) => void,
+    ): Promise<ServerRisumImportResult> {
+        const authHeader = await this.createAuth()
+
+        return await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest()
+            xhr.open('POST', '/api/risum/import')
+            xhr.setRequestHeader('content-type', 'application/x-risu-module')
+            xhr.setRequestHeader('accept', 'application/x-ndjson')
+            xhr.setRequestHeader('risu-auth', authHeader)
+            xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
+            if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
+
+            let parsedIndex = 0
+            let leftover = ''
+            let result: ServerRisumImportResult | null = null
+            let serverError: string | null = null
+            const handleMessage = (msg: any) => {
+                if (msg?.type === 'progress' &&
+                    (msg.phase === 'spooling' || msg.phase === 'validate' || msg.phase === 'assets' || msg.phase === 'publish') &&
+                    typeof msg.completed === 'number' && typeof msg.total === 'number') {
+                    onProgress?.({ phase: msg.phase, completed: msg.completed, total: msg.total })
+                } else if (msg?.type === 'done' && msg.result?.module) {
+                    result = msg.result as ServerRisumImportResult
+                } else if (msg?.type === 'error') {
+                    serverError = typeof msg.message === 'string' ? msg.message : 'Risum import failed'
+                }
+            }
+            const drainNdjson = (final = false) => {
+                const text = xhr.responseText
+                if (text.length > parsedIndex) { leftover += text.slice(parsedIndex); parsedIndex = text.length }
+                const lines = leftover.split('\n')
+                leftover = lines.pop() ?? ''
+                for (const line of lines) {
+                    if (!line) continue
+                    try { handleMessage(JSON.parse(line)) } catch { /* malformed event */ }
+                }
+                if (final && leftover.trim()) {
+                    try { handleMessage(JSON.parse(leftover)) } catch { /* malformed final event */ }
+                    leftover = ''
+                }
+            }
+
+            xhr.upload.onprogress = event => {
+                if (event.lengthComputable) onProgress?.({ phase: 'uploading', loaded: event.loaded, total: event.total })
+            }
+            xhr.onprogress = () => drainNdjson()
+            xhr.onerror = () => reject(new Error('Risum import request failed'))
+            xhr.onabort = () => reject(new Error('Risum import request aborted'))
+            xhr.onload = () => {
+                if (xhr.status < 200 || xhr.status >= 300) {
+                    let message = `Risum import error: ${xhr.status}`
+                    try {
+                        const body = JSON.parse(xhr.responseText)
+                        if (typeof body?.error === 'string') message = body.error
+                        else if (typeof body?.message === 'string') message = body.message
+                    } catch { /* non-JSON error body */ }
+                    reject(new Error(message))
+                    return
+                }
+                drainNdjson(true)
+                if (serverError) reject(new Error(serverError))
+                else if (result) resolve(result)
+                else reject(new Error('Risum import: no result received'))
+            }
             xhr.send(file)
         })
     }
@@ -921,6 +1063,20 @@ export class NodeStorage{
             xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
             if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
 
+            let result: { imported: number } | null = null
+            let serverError: string | null = null
+            const parser = createIncrementalNdjsonParser((value) => {
+                const event = value as any
+                if (event?.type === 'progress' && event.phase === 'extracting' &&
+                    typeof event.completed === 'number' && typeof event.total === 'number') {
+                    onProgress?.(event.completed, event.total)
+                } else if (event?.type === 'done' && typeof event.result?.imported === 'number') {
+                    result = event.result
+                } else if (event?.type === 'error') {
+                    serverError = typeof event.message === 'string' ? event.message : 'zip import failed'
+                }
+            })
+
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
                     onProgress?.(event.loaded, event.total)
@@ -928,6 +1084,7 @@ export class NodeStorage{
             }
 
             xhr.onerror = () => reject(new Error('zip upload failed'))
+            xhr.onprogress = () => parser.drain(xhr.responseText)
             xhr.onload = () => {
                 if (xhr.status < 200 || xhr.status >= 300) {
                     let msg = `zip import error: ${xhr.status}`
@@ -935,11 +1092,10 @@ export class NodeStorage{
                     reject(new Error(msg))
                     return
                 }
-                try {
-                    resolve(JSON.parse(xhr.responseText))
-                } catch (error) {
-                    reject(error)
-                }
+                parser.drain(xhr.responseText, true)
+                if (serverError) reject(new Error(serverError))
+                else if (result) resolve({ ok: true, imported: result.imported })
+                else reject(new Error('zip import did not complete'))
             }
 
             xhr.send(file)

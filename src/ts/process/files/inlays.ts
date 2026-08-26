@@ -162,6 +162,18 @@ export function __resetInlayStorageForTest(): void {
     _nodeInlayInfoStorage = null
 }
 
+/** Drops only derived in-memory inlay values; persisted inlays and consumer URLs remain valid. */
+export function clearInlayRuntimeCache(): void {
+    inlayLRUCache.clear()
+    totalLRUSize = 0
+    _explorerItemsCache = null
+    _explorerItemsCacheTime = 0
+}
+
+export function getInlayRuntimeCacheStats(): { entries: number; bytes: number; galleryItems: number } {
+    return { entries: inlayLRUCache.size, bytes: totalLRUSize, galleryItems: _explorerItemsCache?.length ?? 0 }
+}
+
 // ── NodeInlayStorage ──
 
 class NodeInlayStorage {

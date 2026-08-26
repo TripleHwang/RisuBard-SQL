@@ -1,7 +1,7 @@
 import { get } from 'svelte/store'
 import { v4 as uuidv4 } from 'uuid'
 import { getDatabase, type Chat, type Database, type Message } from 'src/ts/storage/database.svelte'
-import { ensureChatHydrated, saveChatToServer } from 'src/ts/storage/chatStorage'
+import { ensureChatHydrated, isChatHistoryIncomplete, saveChatToServer } from 'src/ts/storage/chatStorage'
 import { notifyError, notifyInfo } from 'src/ts/alert'
 import { addLog } from 'src/ts/log'
 import { recordRequestLog } from 'src/ts/requestLog'
@@ -197,7 +197,7 @@ async function locateChat(chatId: string): Promise<LocatedChat | null> {
         const idx = char?.chats?.findIndex((c) => c?.id === chatId) ?? -1
         if (idx === -1) continue
         let chat = char.chats[idx]
-        if (chat._placeholder) {
+        if (isChatHistoryIncomplete(chat)) {
             const hydrated = await ensureChatHydrated(char.chats, idx, char.chaId)
             if (!hydrated) throw new Error(`chat ${chatId} could not be hydrated`)
             // Re-read through the $state proxy, do NOT use the returned object:
@@ -209,6 +209,10 @@ async function locateChat(chatId: string): Promise<LocatedChat | null> {
             const reIdx = char.chats.findIndex((c) => c?.id === chatId)
             if (reIdx === -1) throw new Error(`chat ${chatId} vanished during hydration`)
             chat = char.chats[reIdx]
+        }
+        if (isChatHistoryIncomplete(chat)) {
+            diag(`recover ${chatId.slice(0, 8)}: deferred; earlier messages are not loaded`)
+            return null
         }
         if (!Array.isArray(chat.message)) chat.message = []
         return { char, chat }

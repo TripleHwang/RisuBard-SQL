@@ -1,8 +1,8 @@
 import { safeStructuredClone } from "../../polyfill";
 import { isNodeServer } from "../../platform";
 import type { Database } from "../database.svelte";
-import type { ISqlStorage } from "./ISqlStorage";
-import { buildSqlDeltaCommit } from "./sqlDelta";
+import type { ISqlStorage, SqlBootstrapStorage } from "./ISqlStorage";
+import { activateSqlPersistenceRuntime, deactivateSqlPersistenceRuntime, flushSqlDirtyChanges } from "./sqlPersistenceRuntime";
 import { WebSqliteStorage } from "./webSqliteStorage";
 
 export interface SqlBootstrapResult {
@@ -12,6 +12,11 @@ export interface SqlBootstrapResult {
   migrated: boolean;
   error?: unknown;
 }
+
+export type ExistingSqlOpenResult = SqlBootstrapResult & {
+  mode: "metadata-first" | "degraded" | "unsupported";
+  recoveryStorage?: SqlBootstrapStorage;
+};
 
 export interface SqlBootstrapOptions {
   beforeMigrate?: () => void | Promise<void>;
@@ -49,7 +54,9 @@ export async function selectCanonicalDatabase(
     );
     if (!imported) throw new Error("SQL storage rejected the legacy database");
 
-    const verified = await storage.loadDatabase({ shallow: false });
+    const verified = storage.backendKind === "server-sql" && "loadRecoverySnapshot" in storage
+      ? await (storage as SqlBootstrapStorage).loadRecoverySnapshot()
+      : await storage.loadDatabase({ shallow: false });
     if (verified?.status !== "ready" || !verified.database) {
       throw new Error("SQL migration could not be verified by reloading it");
     }
@@ -72,8 +79,6 @@ export async function selectCanonicalDatabase(
 }
 
 let activeSqlStorage: ISqlStorage | null = null;
-let activeSqlBaseline: Database | null = null;
-let sqlCommitChain: Promise<void> = Promise.resolve();
 let pendingSqlStorage: ISqlStorage | null = null;
 
 async function createDefaultSqlStorage(): Promise<ISqlStorage> {
@@ -93,18 +98,17 @@ async function createDefaultSqlStorage(): Promise<ISqlStorage> {
 
 function activateSqlStorage(storage: ISqlStorage, database: Database): void {
   activeSqlStorage = storage;
-  activeSqlBaseline = safeStructuredClone(database);
-  sqlCommitChain = Promise.resolve();
+  activateSqlPersistenceRuntime(storage, database);
 }
 
 /** Open an already-migrated SQL graph before touching its legacy projection. */
 export async function openExistingStandaloneSql(
   storage?: ISqlStorage,
-): Promise<SqlBootstrapResult | null> {
+): Promise<ExistingSqlOpenResult | null> {
   try {
     storage ??= await createDefaultSqlStorage();
     if (!(await storage.init())) return null;
-    const loaded = await storage.loadDatabase({ shallow: false });
+    const loaded = await storage.loadDatabase({ shallow: true });
     if (loaded?.status === "ready" && loaded.database) {
       pendingSqlStorage = null;
       activateSqlStorage(storage, loaded.database);
@@ -113,6 +117,7 @@ export async function openExistingStandaloneSql(
         storage,
         usingSql: true,
         migrated: false,
+        mode: "metadata-first",
       };
     }
     pendingSqlStorage = storage;
@@ -120,8 +125,50 @@ export async function openExistingStandaloneSql(
   } catch (error) {
     console.error("Could not open existing standalone SQL database", error);
     pendingSqlStorage = null;
+    if (storage?.backendKind === "server-sql" && "loadRecoverySnapshot" in storage) {
+      const status = httpStatus(error);
+      if (status === 404) {
+        return {
+          database: {} as Database,
+          storage: null,
+          usingSql: false,
+          migrated: false,
+          mode: "unsupported",
+          error,
+        };
+      }
+      if (status !== undefined && (status < 500 || status > 599)) {
+        return {
+          database: {} as Database,
+          storage: null,
+          usingSql: false,
+          migrated: false,
+          mode: "unsupported",
+          error,
+        };
+      }
+      return {
+        database: {} as Database,
+        storage: null,
+        usingSql: false,
+        migrated: false,
+        mode: "degraded",
+        recoveryStorage: storage as SqlBootstrapStorage,
+        error,
+      };
+    }
     return null;
   }
+}
+
+export function activateRecoveredSqlStorage(storage: ISqlStorage, database: Database): void {
+  activateSqlStorage(storage, database);
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("status" in error)) return undefined;
+  const status = Number(error.status);
+  return Number.isInteger(status) ? status : undefined;
 }
 
 export async function openStandaloneSql(
@@ -138,7 +185,7 @@ export async function openStandaloneSql(
     activateSqlStorage(result.storage, result.database);
   } else {
     activeSqlStorage = null;
-    activeSqlBaseline = null;
+    deactivateSqlPersistenceRuntime();
   }
   return result;
 }
@@ -149,24 +196,14 @@ export function getActiveSqlStorage(): ISqlStorage | null {
 
 /** Serialize row-level commits so all writers share one monotonic revision. */
 export function syncActiveSqlDatabase(database: Database): Promise<void> {
-  const snapshot = safeStructuredClone(database);
-  const run = async () => {
-    if (!activeSqlStorage || !activeSqlBaseline) return;
-    const commit = buildSqlDeltaCommit(
-      activeSqlBaseline,
-      snapshot,
-      activeSqlStorage.getRevision(),
-    );
-    if (commit) await activeSqlStorage.commit(commit);
-    activeSqlBaseline = snapshot;
-  };
-  sqlCommitChain = sqlCommitChain.then(run, run);
-  return sqlCommitChain;
+  // Kept as a compatibility facade for callers outside the normal mutation
+  // path. Normal persistence is registry-driven and holds the live reference.
+  if (activeSqlStorage) activateSqlPersistenceRuntime(activeSqlStorage, database);
+  return flushSqlDirtyChanges();
 }
 
 export function setActiveSqlStorageForTesting(storage: ISqlStorage | null): void {
   activeSqlStorage = storage;
-  activeSqlBaseline = null;
-  sqlCommitChain = Promise.resolve();
+  if (!storage) deactivateSqlPersistenceRuntime();
   pendingSqlStorage = null;
 }

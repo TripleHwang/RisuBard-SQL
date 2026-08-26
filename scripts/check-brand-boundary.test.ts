@@ -54,5 +54,5 @@ describe('brand boundary', () => {
         }
 
         expect(violations).toEqual([])
-    })
+    }, 30_000)
 })

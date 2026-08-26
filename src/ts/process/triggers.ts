@@ -4,7 +4,7 @@ import { getCurrentCharacter, getCurrentChat, getDatabase, setCurrentCharacter, 
 import { tokenize } from "../tokenizer";
 import { getModuleTriggers } from "./modules";
 import { get } from "svelte/store";
-import { ReloadChatPointer, ReloadGUIPointer, selectedCharID, CurrentTriggerIdStore } from "../stores.svelte";
+import { bumpActiveChatReloadAt, ReloadGUIPointer, selectedCharID, CurrentTriggerIdStore } from "../stores.svelte";
 import { processMultiCommand } from "./command";
 import { parseKeyValue, sleep } from "../util";
 import { alertError, alertInput, alertNormal, alertSelect } from "../alert";
@@ -16,6 +16,8 @@ import { generateAIImage } from "./stableDiff";
 import { writeInlayImage } from "./files/inlays";
 import { runScripted } from "./scriptings";
 import { calcString } from "./infunctions";
+import { markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from '../storage/sql/sqlPersistenceRuntime';
+import { v4 } from 'uuid';
 
 
 export interface triggerscript{
@@ -1360,10 +1362,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'impersonate':{
                     const effectValue = risuChatParser(effect.value,{chara:char})
                     if(effect.role === 'user'){
-                        chat.message.push({role: 'user', data: effectValue})
+                        chat.message.push({role: 'user', data: effectValue, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     else if(effect.role === 'char'){
-                        chat.message.push({role: 'char', data: effectValue})
+                        chat.message.push({role: 'char', data: effectValue, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     break
                 }
@@ -1398,7 +1402,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'cutchat':{
                     const start = Number(risuChatParser(effect.start,{chara:char}))
                     const end = Number(risuChatParser(effect.end,{chara:char}))
-                    chat.message = chat.message.slice(start,end)
+                    const before = chat.message
+                    const kept = before.slice(start,end)
+                    const keptIds = new Set(kept.map(message => message.chatId).filter(Boolean))
+                    for (const message of before) if (message.chatId && !keptIds.has(message.chatId)) markSqlMessageDeleted(chat.id!, message.chatId)
+                    chat.message = kept
+                    if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id!)
                     break
                 }
                 case 'modifychat':{
@@ -1406,6 +1415,8 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     const value = risuChatParser(effect.value,{chara:char})
                     if(chat.message[index]){
                         chat.message[index].data = value
+                        chat.message[index].chatId ||= v4()
+                        markSqlMessageDirty(chat.id!, chat.message[index].chatId!)
                     }
                     break
                 }
@@ -1814,7 +1825,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                         end = chat.message.length
                     }
                     
-                    chat.message = chat.message.slice(start,end)
+                    const before = chat.message
+                    const kept = before.slice(start,end)
+                    const keptIds = new Set(kept.map(message => message.chatId).filter(Boolean))
+                    for (const message of before) if (message.chatId && !keptIds.has(message.chatId)) markSqlMessageDeleted(chat.id!, message.chatId)
+                    chat.message = kept
+                    if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id!)
                     break
                 }
                 case 'v2ModifyChat':{
@@ -1822,6 +1838,8 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     let value = effect.valueType === 'value' ? risuChatParser(effect.value,{chara:char}) : getVar(risuChatParser(effect.value,{chara:char}))
                     if(chat.message[index]){
                         chat.message[index].data = value
+                        chat.message[index].chatId ||= v4()
+                        markSqlMessageDirty(chat.id!, chat.message[index].chatId!)
                     }
                     break
                 }
@@ -1833,10 +1851,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'v2Impersonate':{
                     let value = effect.valueType === 'value' ? risuChatParser(effect.value,{chara:char}) : getVar(risuChatParser(effect.value,{chara:char}))
                     if(effect.role === 'user'){
-                        chat.message.push({role: 'user', data: value})
+                        chat.message.push({role: 'user', data: value, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     else if(effect.role === 'char'){
-                        chat.message.push({role: 'char', data: value})
+                        chat.message.push({role: 'char', data: value, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     break
                 }
@@ -2357,10 +2377,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     break
                 }
                 case 'v2UpdateChatAt':{
-                    ReloadChatPointer.update((v) => {
-                        v[effect.index] = (v[effect.index] ?? 0) + 1
-                        return v
-                    })
+                    bumpActiveChatReloadAt(Number(effect.index))
                     break
                 }
                 case 'v2Wait':{

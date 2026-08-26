@@ -21,6 +21,7 @@ import { exportModuleLegacy, readModule, type RisuModule } from "./process/modul
 import { pinCharacterVaultQuickAccess } from './characterVault'
 import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } from './firstMessageStudio'
 import { isNodeServer } from './platform'
+import { withSaverScope } from './performance/saverMode'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -62,7 +63,7 @@ export async function importCharacter() {
     }
 }
 
-export async function importCharacterProcess<T extends boolean = false>(f:{
+async function importCharacterProcessInner<T extends boolean = false>(f:{
     name: string;
     data: Uint8Array|File|ReadableStream<Uint8Array>
     lightningRealmImport?:boolean
@@ -395,6 +396,18 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
     db = getDatabase()
     return db.characters.length - 1
     
+}
+
+/** The outer CharX scope covers both local archive decoding and server upload exactly once. */
+export async function importCharacterProcess<T extends boolean = false>(f: {
+    name: string
+    data: Uint8Array | File | ReadableStream<Uint8Array>
+    lightningRealmImport?: boolean
+    returnCharacter?: T
+}): Promise<T extends true ? character | number | null : number | null> {
+    return f.name.toLowerCase().endsWith('.charx')
+        ? withSaverScope('import', () => importCharacterProcessInner(f))
+        : importCharacterProcessInner(f)
 }
 
 export const getRealmInfo = async (realmPath:string) => {
@@ -1250,7 +1263,7 @@ export function createBaseV2(char:character) {
 }
 
 
-export async function exportCharacterCard(char:character, type:'png'|'json'|'charx'|'charxJpeg' = 'png', arg:{
+async function exportCharacterCardInner(char:character, type:'png'|'json'|'charx'|'charxJpeg' = 'png', arg:{
     password?:string
     writer?:LocalWriter|VirtualWriter,
     spec?:'v2'|'v3'
@@ -1515,6 +1528,15 @@ export async function exportCharacterCard(char:character, type:'png'|'json'|'cha
     catch(e){
         alertError(e)
     }
+}
+
+export async function exportCharacterCard(char: character, type: 'png' | 'json' | 'charx' | 'charxJpeg' = 'png', arg: {
+    password?: string
+    writer?: LocalWriter | VirtualWriter
+    spec?: 'v2' | 'v3'
+    onProgress?: (msg: string, pct: number) => void
+} = {}): Promise<void> {
+    return withSaverScope('export', () => exportCharacterCardInner(char, type, arg))
 }
 
 // Extended LorebookEntry with Risuai specific fields

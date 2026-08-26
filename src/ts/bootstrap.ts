@@ -21,7 +21,7 @@ import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
     forageStorage,
-    saveDb,
+    saveDb, startMetadataPersistence,
     setPatchSyncBaseline,
     getDbBackups,
     getUncleanables,
@@ -31,11 +31,56 @@ import {
 import { registerModelDynamic } from "./model/modellist";
 import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
-import { isChatStub, purgeUnsupportedGroupChats } from "./storage/database.svelte";
+import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
-import { openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
+import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
+import { markPerformance } from './performance/startupMetrics'
+import { runtimeMetrics } from './performance/runtimeMetrics'
+import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
+import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
+import { evictHydratedChats } from './storage/chatStorage'
+import { clearParserRuntimeCaches } from './parser/parser.svelte'
+import { clearInlayRuntimeCache } from './process/files/inlays'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
+let dataLoading = false
+
+type IdleCallbackWindow = typeof globalThis & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => unknown;
+}
+
+/**
+ * Run nonessential startup work only after the browser has had two chances to
+ * paint the initial UI. Each platform capability is optional so this remains
+ * safe in older WebKit and test environments.
+ */
+export function scheduleAfterFirstPaint(task: () => void | Promise<void>, timeoutMs = 2_000): void {
+    const run = () => {
+        void Promise.resolve().then(task).catch(console.error)
+    }
+    const requestFrame = typeof globalThis.requestAnimationFrame === 'function'
+        ? globalThis.requestAnimationFrame.bind(globalThis)
+        : (callback: FrameRequestCallback) => globalThis.setTimeout(callback, 0) as unknown as number
+
+    requestFrame(() => requestFrame(() => {
+        const idle = (globalThis as IdleCallbackWindow).requestIdleCallback
+        if (typeof idle === 'function') {
+            idle(run, { timeout: timeoutMs })
+        } else {
+            globalThis.setTimeout(run, 0)
+        }
+    }))
+}
+
+async function loadDeferredModules(): Promise<void> {
+    try {
+        await loadPlugins()
+    } catch (error) {
+        console.error(error)
+    }
+    registerModelDynamic()
+    moduleUpdate()
+}
 
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
     LoadingStatusState.text = "Opening SQL Database..."
@@ -55,19 +100,34 @@ async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) 
  * Loads the application data.
  */
 export async function loadData() {
-    const loaded = get(loadedStore)
-    if (!loaded) {
-        try {
+    if (get(loadedStore) || dataLoading) return
+    dataLoading = true
+    const bootstrapMetric = runtimeMetrics.start('bootstrap')
+    try {
             applyEarlyLanguage()
             let createdFreshDatabase = false
+            let startupMode: 'metadata-first' | 'degraded' | 'unsupported' | undefined
             {
                 await forageStorage.Init()
 
                 LoadingStatusState.text = "Opening SQL Database..."
                 const existingSql = await openExistingStandaloneSql()
-                if (existingSql) {
+                startupMode = existingSql?.mode
+                if (existingSql?.usingSql) {
                     setPatchSyncBaseline(safeStructuredClone(existingSql.database))
                     setDatabase(existingSql.database)
+                } else if (startupMode === 'degraded') {
+                    LoadingStatusState.text = 'Server metadata load failed. Recovering in degraded mode...'
+                    const recovery = await existingSql?.recoveryStorage?.loadRecoverySnapshot()
+                    if (recovery?.status !== 'ready' || !recovery.database) {
+                        throw existingSql?.error ?? new Error('SQL recovery snapshot unavailable')
+                    }
+                    setPatchSyncBaseline(safeStructuredClone(recovery.database))
+                    setDatabase(recovery.database)
+                    activateRecoveredSqlStorage(existingSql.recoveryStorage!, recovery.database)
+                    alertError('Started in degraded compatibility mode. Update the server to restore fast startup.')
+                } else if (startupMode === 'unsupported') {
+                    throw new Error('This server does not support fast startup. Update the server to use this version.')
                 } else {
                     LoadingStatusState.text = "Loading Local Save File..."
                     let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
@@ -101,9 +161,6 @@ export async function loadData() {
                     }
                 }
 
-                if (getDatabase().didFirstSetup) {
-                    characterURLImport()
-                }
             }
             if (createdFreshDatabase) {
                 // Brand-new instance (no save file existed): apply the default
@@ -132,10 +189,6 @@ export async function loadData() {
                     changeLanguage(mappedLanguage)
                 }
             }
-            LoadingStatusState.text = "Loading Plugins..."
-            try {
-                await loadPlugins()
-            } catch (error) { }
             try {
                 //@ts-expect-error navigator.standalone is iOS Safari non-standard property, not in Navigator interface
                 const isInStandaloneMode = (window.matchMedia('(display-mode: standalone)').matches) || (window.navigator.standalone) || document.referrer.includes('android-app://');
@@ -145,15 +198,17 @@ export async function loadData() {
             } catch (error) {
 
             }
-            LoadingStatusState.text = "Checking For Format Update..."
-            await checkNewFormat()
+            if (startupMode !== 'metadata-first') {
+                LoadingStatusState.text = "Checking For Format Update..."
+                await checkNewFormat()
 
-            // Convert any ChatStubs (from server-stripped database.bin) to placeholder Chats
-            // so runtime code only sees Chat objects
-            {
-                const dbForConvert = getDatabase()
-                for (const char of dbForConvert.characters) {
-                    char.chats = convertStubsToPlaceholders(char.chats)
+                // Convert any ChatStubs (from server-stripped database.bin) to placeholder Chats
+                // so runtime code only sees Chat objects
+                {
+                    const dbForConvert = getDatabase()
+                    for (const char of dbForConvert.characters) {
+                        char.chats = convertStubsToPlaceholders(char.chats)
+                    }
                 }
             }
 
@@ -183,22 +238,22 @@ export async function loadData() {
                 MobileGUI.set(true)
             }
             loadedStore.set(true)
+            configureSaverModeActions({ flush: flushSqlDirtyChanges, evictChats: evictHydratedChats })
+            registerRuntimeCacheOwners(clearParserRuntimeCaches, clearInlayRuntimeCache)
+            installSaverModeLifecycle()
+            markPerformance('first-interactive')
             selectedCharID.set(-1)
             startObserveDom()
-            assignIds()
-            registerModelDynamic()
-            saveDb()
-            moduleUpdate()
-            // cleanChunks는 화면 진입 후 유휴 시간에 실행 (부트 블로킹 제거)
-            setTimeout(() => {
-                cleanChunks().catch(console.error)
-            }, 5_000)
-            checkRisuUpdate()
-            // Server-side model-job recovery (jobRecovery.ts): slot journaled
-            // responses from disconnected generations back into their chats.
-            // Installs the return triggers (visibility / online) and runs the
-            // first pass. Fire-and-forget — never throws, no-op without jobs.
-            initModelJobRecovery()
+            if (startupMode !== 'metadata-first') assignIds()
+            if (startupMode === 'metadata-first') startMetadataPersistence()
+            else saveDb()
+            scheduleAfterFirstPaint(() => loadDeferredModules())
+            scheduleAfterFirstPaint(() => cleanChunks(), 5_000)
+            scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))
+            scheduleAfterFirstPaint(() => initModelJobRecovery())
+            scheduleAfterFirstPaint(() => {
+                if (getDatabase().didFirstSetup) characterURLImport()
+            })
             if (import.meta.env.VITE_RISU_TOS === 'TRUE') {
                 alertTOS().then((a) => {
                     if (a === false) {
@@ -206,9 +261,11 @@ export async function loadData() {
                     }
                 })
             }
-        } catch (error) {
-            alertError(error)
-        }
+    } catch (error) {
+        alertError(error)
+    } finally {
+        dataLoading = false
+        runtimeMetrics.end(bootstrapMetric)
     }
 }
 
@@ -221,6 +278,7 @@ const ignorableBrowserErrors = new Set([
     'ResizeObserver loop completed with undelivered notifications.',
     'ResizeObserver loop limit exceeded',
 ])
+let errorHandlingStarted = false
 
 function isIgnorableBrowserError(error: unknown): boolean {
     const message = typeof error === 'string'
@@ -232,6 +290,8 @@ function isIgnorableBrowserError(error: unknown): boolean {
 }
 
 function updateErrorHandling() {
+    if (errorHandlingStarted) return
+    errorHandlingStarted = true
     const errorHandler = (event: ErrorEvent) => {
         const error = event.error ?? event.message
         if (!error) return

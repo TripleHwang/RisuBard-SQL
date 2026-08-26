@@ -3,7 +3,7 @@ import { v4 as uuidv4, v4 } from 'uuid';
 import { tick } from "svelte";
 import { get } from "svelte/store";
 import streamSaver from 'streamsaver';
-import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
+import { setDatabase, type Chat, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
@@ -12,7 +12,8 @@ import { hasher } from "./parser/parser.svelte";
 import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
-import { isHydrating, saveChatToServer, ensureChatHydrated, chatToStub, classifyChat } from "./storage/chatStorage";
+import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, touchHydratedChat, chatToStub, classifyChat } from "./storage/chatStorage";
+import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
 import { supportsPatchSync } from "./platform";
@@ -32,7 +33,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { syncActiveSqlDatabase } from './storage/sql/sqlBootstrap'
+import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 
 export const forageStorage = new AutoStorage()
 
@@ -358,7 +359,8 @@ export function setPatchSyncBaseline(data: Database | null) {
     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
 }
 
-export async function saveDb() {
+export async function saveDb(options: { metadataOnly?: boolean } = {}) {
+    const metadataOnly = options.metadataOnly === true
     let changed = false
     let gotChannel = false
     const sessionID = v4()
@@ -451,12 +453,14 @@ export async function saveDb() {
     }
 
     let encoder = new RisuSaveEncoder()
-    await encoder.init(getDatabase(), {
-        compression: false
-    })
+    if (!metadataOnly) {
+        await encoder.init(getDatabase(), {
+            compression: false
+        })
+    }
 
     let patcher = new RisuSavePatcher()
-    if (supportsPatchSync) {
+    if (supportsPatchSync && !metadataOnly) {
         await patcher.init(patchSyncBaseline ?? getDatabase())
         patchSyncBaseline = null
     }
@@ -833,6 +837,15 @@ export async function saveDb() {
             return 'noop'
         }
 
+        // Metadata-first startup installs the normal reactive save hooks, but
+        // must not encode the partial character summaries into database.bin.
+        // Its active SQL baseline is already canonical, so row-level commits
+        // safely preserve root edits until the full runtime persistence work.
+        if (metadataOnly) {
+            await flushSqlDirtyChanges()
+            return 'saved'
+        }
+
         // ── Save changed chat content to server ─────────────────────────
         const failedChats: [string, string][] = []
         for (const [chaId, chatId] of collectChatsToPersist(db, toSave)) {
@@ -843,6 +856,11 @@ export async function saveDb() {
             const chat = char.chats[chatIndex]
             // Skip placeholders — they have no real data to save
             if (!chat || chat._placeholder) continue
+            const partialSqlWindow = getActiveSqlStorage()?.backendKind === 'server-sql' &&
+                ((chat as Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }).messagesLoaded === false ||
+                (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false ||
+                (chat as Chat & { _sqlWindow?: { hasOlder?: boolean } })._sqlWindow?.hasOlder === true)
+            if (partialSqlWindow) continue
             try {
                 await saveChatToServer(chaId, chatIndex, chatId, chat)
             } catch (e) {
@@ -1072,7 +1090,7 @@ export async function saveDb() {
         }
 
         updateKnownChatsAfterSuccessfulSave(db, toSave)
-        await syncActiveSqlDatabase(db)
+        await flushSqlDirtyChanges()
 
         if (newEtag) {
             forageStorage.setDbEtag(newEtag)
@@ -1155,7 +1173,7 @@ export async function saveDb() {
             continue
         }
         changed = false
-        if (requiresFullEncoderReload.state) {
+        if (!metadataOnly && requiresFullEncoderReload.state) {
             encoder = new RisuSaveEncoder()
             await encoder.init(getDatabase(), {
                 compression: false,
@@ -1166,6 +1184,22 @@ export async function saveDb() {
         await triggerSave()
         await sleep(100)
     }
+}
+
+/** Installs reactive persistence without encoding metadata-only SQL summaries. */
+export async function startMetadataPersistence() {
+    startSqlMetadataPersistence(window, () => {
+        try { void fetch('/api/db/flush', { method: 'POST', keepalive: true, credentials: 'same-origin' }) } catch { /* best effort */ }
+    })
+
+    initializeSqlCompatibilityBaseline(getDatabase())
+    // Plugin code can mutate the legacy object graph directly. This scan is
+    // explicitly idle/coalesced: it is never a reactive typing/streaming path.
+    const audit = () => {
+        const db = getDatabase()
+        auditSqlCompatibilityDatabase(db)
+    }
+    startSqlCompatibilityAuditLoop(audit)
 }
 
 /**
@@ -2768,7 +2802,7 @@ export function changeChatTo(IdOrIndex: string | number) {
     char.chatPage = index
     const newChat = char.chats[index]
     if(newChat){
-        if(newChat._placeholder){
+        if(isChatHistoryIncomplete(newChat)){
             const capturedIndex = index
             let cancelled = false
             loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: () => {
@@ -2785,6 +2819,7 @@ export function changeChatTo(IdOrIndex: string | number) {
                 if(!cancelled) loadingOverlayStore.set({ active: false, text: '', onCancel: null })
             })
         } else {
+            void touchHydratedChat(char.chaId, char.chats, index)
             loadTogglesFromChat(newChat)
         }
     }

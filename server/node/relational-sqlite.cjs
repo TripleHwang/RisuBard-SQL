@@ -26,6 +26,15 @@ const TABLES = Object.freeze([
 const WRITABLE_TABLES = new Set(TABLES.filter((table) => (
     table !== 'system_storage_meta' && table !== 'system_revisions'
 )));
+const DEFAULT_MESSAGE_PAGE_LIMIT = 40;
+const MAX_MESSAGE_PAGE_LIMIT = 100;
+const MAX_RELATIONAL_NODE_DEPTH = 128;
+const MAX_SQL_READ_KEY_LENGTH = 256;
+const MAX_SQL_READ_LIMIT = 100;
+// `messages` has no timestamp index in schema v3. rowid DESC is an implicit
+// SQLite primary-key traversal, so this candidate cap cannot trigger a full
+// table sort before the limit; final relevance ordering happens afterward.
+const MAX_MESSAGE_SEARCH_SCAN_ROWS = 50_000;
 
 function statementTable(sql) {
     const normalized = String(sql || '').trim();
@@ -83,6 +92,371 @@ function createRelationalSqlite(options) {
             revision: Number(meta.revision) || 0,
             tables,
         };
+    }
+
+    function decodeUtf16(value) {
+        const bytes = Buffer.from(String(value), 'base64');
+        if (bytes.length % 2 !== 0) throw new Error('Invalid UTF-16 relational node value');
+        let result = '';
+        for (let index = 0; index < bytes.length; index += 2) {
+            result += String.fromCharCode(bytes[index] | (bytes[index + 1] << 8));
+        }
+        return result;
+    }
+
+    function decodedText(text, encoded) {
+        return encoded !== null && encoded !== undefined
+            ? decodeUtf16(encoded)
+            : String(text ?? '');
+    }
+
+    function rebuildRelationalValue(input) {
+        if (!input.length) throw new Error('Relational value has no root node');
+        const rows = [...input].sort((left, right) => Number(left.node_id) - Number(right.node_id));
+        if (Number(rows[0].node_id) !== 0 || rows[0].parent_node_id !== null) {
+            throw new Error('Relational value has an invalid root node');
+        }
+        const children = new Map();
+        for (const row of rows.slice(1)) {
+            const parent = Number(row.parent_node_id);
+            if (!Number.isSafeInteger(parent)) throw new Error('Relational node has no parent');
+            const list = children.get(parent) || [];
+            list.push(row);
+            children.set(parent, list);
+        }
+        for (const list of children.values()) {
+            list.sort((left, right) => Number(left.node_order) - Number(right.node_order));
+        }
+        const build = (row, depth) => {
+            if (depth > MAX_RELATIONAL_NODE_DEPTH) throw new Error('Relational value exceeds maximum depth');
+            switch (row.value_type) {
+                case 'null': return null;
+                case 'undefined': return undefined;
+                case 'boolean': return Boolean(row.boolean_value);
+                case 'number':
+                    if (row.text_value === 'NaN') return Number.NaN;
+                    if (row.text_value === 'Infinity') return Number.POSITIVE_INFINITY;
+                    if (row.text_value === '-Infinity') return Number.NEGATIVE_INFINITY;
+                    return Number(row.number_value);
+                case 'string': return decodedText(row.text_value, row.encoded_text_value);
+                case 'array': return (children.get(Number(row.node_id)) || []).map((child) => build(child, depth + 1));
+                case 'object': {
+                    const result = {};
+                    for (const child of children.get(Number(row.node_id)) || []) {
+                        Object.defineProperty(result, decodedText(child.object_key, child.object_key_encoded), {
+                            value: build(child, depth + 1), enumerable: true, configurable: true, writable: true,
+                        });
+                    }
+                    return result;
+                }
+                default: throw new Error(`Unknown relational node type: ${String(row.value_type)}`);
+            }
+        };
+        return build(rows[0], 0);
+    }
+
+    function inReadTransaction(read) {
+        database.exec('BEGIN DEFERRED');
+        try {
+            const value = read();
+            database.exec('COMMIT');
+            return value;
+        } catch (error) {
+            try { database.exec('ROLLBACK'); } catch {}
+            throw error;
+        }
+    }
+
+    function readNodeValue(table, whereSql, bind) {
+        const rows = database.prepare(`SELECT * FROM ${table} WHERE ${whereSql} ORDER BY node_id`).all(...bind);
+        return rows.length ? rebuildRelationalValue(rows) : undefined;
+    }
+
+    function requireBoundedReadKey(value, description) {
+        if (typeof value !== 'string' || value.trim().length === 0 || value.length > MAX_SQL_READ_KEY_LENGTH) {
+            throw new Error(`Invalid ${description}`);
+        }
+        return value;
+    }
+
+    function boundedReadLimit(value, fallback) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return fallback;
+        return Math.min(MAX_SQL_READ_LIMIT, Math.max(1, Math.floor(numeric)));
+    }
+
+    function escapeSqlLike(value) {
+        return String(value).replace(/[\\%_]/g, '\\$&');
+    }
+
+    function parseCanonicalJson(value, description) {
+        try {
+            return JSON.parse(String(value));
+        } catch (error) {
+            throw new Error(`Invalid canonical JSON in ${description}`, { cause: error });
+        }
+    }
+
+    function loadChatSummaryRows(characterId) {
+        const where = characterId === undefined ? '' : 'WHERE c.character_id = ?';
+        const rows = database.prepare(
+            `SELECT c.id, c.character_id, c.position, c.name, c.note, c.folder_id, c.last_message_time,
+                    COUNT(m.id) AS message_total
+             FROM chats c LEFT JOIN messages m ON m.chat_id = c.id ${where}
+             GROUP BY c.id ORDER BY c.character_id, c.position`,
+        ).all(...(characterId === undefined ? [] : [characterId]));
+        return rows;
+    }
+
+    function loadChatSummaryRow(chatId) {
+        return database.prepare(
+            `SELECT c.id, c.character_id, c.position, c.name, c.note, c.folder_id, c.last_message_time,
+                    COUNT(m.id) AS message_total
+             FROM chats c LEFT JOIN messages m ON m.chat_id = c.id
+             WHERE c.id = ? GROUP BY c.id`,
+        ).get(chatId);
+    }
+
+    function summaryChat(row, detailsLoaded) {
+        return {
+            id: row.id,
+            name: row.name,
+            note: row.note,
+            folderId: row.folder_id ?? undefined,
+            lastDate: row.last_message_time ?? undefined,
+            message: [],
+            messageTotal: Number(row.message_total),
+            messagesLoaded: false,
+            messagesFullyLoaded: false,
+            detailsLoaded,
+        };
+    }
+
+    function bootstrap() {
+        return inReadTransaction(() => {
+            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
+            const settings = Object.fromEntries(settingRows.map((row) => [
+                row.key, readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]),
+            ]));
+            const botPresets = database.prepare(
+                'SELECT preset_id, data FROM bot_presets ORDER BY position',
+            ).all().map((row) => {
+                const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
+                if (!preset || typeof preset !== 'object' || Array.isArray(preset)) {
+                    throw new Error(`Invalid canonical bot preset data for ${row.preset_id}`);
+                }
+                return { ...preset, id: row.preset_id };
+            });
+            const pluginCustomStorage = Object.create(null);
+            for (const row of database.prepare(
+                'SELECT key, value FROM plugin_custom_storage ORDER BY key',
+            ).all()) {
+                Object.defineProperty(pluginCustomStorage, row.key, {
+                    value: parseCanonicalJson(row.value, `plugin custom storage ${row.key}`),
+                    enumerable: true,
+                    configurable: true,
+                    writable: true,
+                });
+            }
+            const chatsByCharacter = new Map();
+            for (const row of loadChatSummaryRows()) {
+                const chats = chatsByCharacter.get(row.character_id) || [];
+                chats.push(summaryChat(row, false));
+                chatsByCharacter.set(row.character_id, chats);
+            }
+            const characters = database.prepare('SELECT * FROM characters ORDER BY position').all().map((row) => ({
+                chaId: row.id,
+                type: row.kind,
+                name: row.name,
+                image: row.image ?? '',
+                trashTime: row.trash_time ?? undefined,
+                creationDate: row.creation_time ?? undefined,
+                modificationDate: row.modification_time ?? undefined,
+                lastInteraction: row.last_interaction_time ?? undefined,
+                detailsLoaded: false,
+                chats: chatsByCharacter.get(row.id) || [],
+                chatPage: 0,
+            }));
+            const initialized = database.prepare('SELECT initialized FROM system_storage_meta WHERE singleton = 1').get();
+            return {
+                status: Number(initialized?.initialized) === 1 ? 'ready' : 'empty',
+                revision: revision(), settings, pluginCustomStorage, botPresets, characters,
+                selectedCharacterId: null, selectedChatId: null,
+            };
+        });
+    }
+
+    function loadCharacter(characterId) {
+        return inReadTransaction(() => {
+            if (!database.prepare('SELECT 1 FROM characters WHERE id = ?').get(characterId)) return null;
+            const character = readNodeValue('character_extension_nodes', 'character_id = ?', [characterId]) || {};
+            character.chaId = characterId;
+            character.detailsLoaded = true;
+            character.chats = loadChatSummaryRows(characterId).map((row) => summaryChat(row, true));
+            return { revision: revision(), character };
+        });
+    }
+
+    function loadChat(chatId) {
+        return inReadTransaction(() => {
+            const row = loadChatSummaryRow(chatId);
+            if (!row) return null;
+            const chat = readNodeValue('chat_extension_nodes', 'chat_id = ?', [chatId]) || {};
+            Object.assign(chat, summaryChat(row, true));
+            return { revision: revision(), chat };
+        });
+    }
+
+    function loadChatMessages(chatId, before, requestedLimit) {
+        return inReadTransaction(() => {
+            if (!database.prepare('SELECT 1 FROM chats WHERE id = ?').get(chatId)) return null;
+            if (before !== undefined && (!Number.isSafeInteger(before) || before < 0)) {
+                throw new Error('Invalid before cursor');
+            }
+            const limit = Math.min(MAX_MESSAGE_PAGE_LIMIT, Math.max(1,
+                Number.isFinite(requestedLimit) ? Math.floor(requestedLimit) : DEFAULT_MESSAGE_PAGE_LIMIT));
+            const total = Number(database.prepare('SELECT COUNT(*) AS total FROM messages WHERE chat_id = ?').get(chatId).total);
+            const nextPosition = Number(database.prepare(
+                'SELECT COALESCE(MAX(position) + 1, 0) AS cursor FROM messages WHERE chat_id = ?',
+            ).get(chatId).cursor);
+            const normalizedBefore = before ?? Number(database.prepare(
+                'SELECT COALESCE(MAX(position) + 1, 0) AS cursor FROM messages WHERE chat_id = ?',
+            ).get(chatId).cursor);
+            const descendingRows = database.prepare(
+                'SELECT id, position FROM messages WHERE chat_id = ? AND position < ? ORDER BY position DESC, id DESC LIMIT ?',
+            ).all(chatId, normalizedBefore, limit + 1);
+            const extraRow = descendingRows[limit];
+            const boundaryRow = descendingRows[limit - 1];
+            if (extraRow && boundaryRow && Number(extraRow.position) === Number(boundaryRow.position)) {
+                throw new Error('Reverse message page would split tied SQL positions');
+            }
+            const rows = descendingRows.slice(0, limit).reverse();
+            const ids = rows.map((row) => row.id);
+            const nodeRows = ids.length
+                ? database.prepare(`SELECT * FROM message_extension_nodes WHERE chat_id = ? AND message_id IN (${ids.map(() => '?').join(',')}) ORDER BY message_id, node_id`).all(chatId, ...ids)
+                : [];
+            const byId = new Map();
+            for (const row of nodeRows) {
+                const group = byId.get(row.message_id) || [];
+                group.push(row);
+                byId.set(row.message_id, group);
+            }
+            const messages = rows.map((row) => ({
+                ...(rebuildRelationalValue(byId.get(row.id) || []) || {}), chatId: row.id,
+            }));
+            const positions = rows.map((row) => Number(row.position));
+            const nextBefore = rows.length ? Math.min(...rows.map((row) => Number(row.position))) : null;
+            return {
+                revision: revision(), chatId, messages, positions, nextPosition, before: normalizedBefore, nextBefore, total,
+                hasMore: Boolean(extraRow),
+            };
+        });
+    }
+
+    function getChatDraft(key) {
+        return inReadTransaction(() => {
+            const draftKey = requireBoundedReadKey(key, 'draft key');
+            const row = database.prepare(
+                'SELECT message_text, translate_text FROM chat_drafts WHERE draft_key = ?',
+            ).get(draftKey);
+            return row ? { m: row.message_text, t: row.translate_text } : null;
+        });
+    }
+
+    function listChatDraftKeys(after, requestedLimit) {
+        return inReadTransaction(() => {
+            const afterKey = after === undefined ? undefined : requireBoundedReadKey(after, 'draft cursor');
+            const limit = boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT);
+            const rows = database.prepare(
+                `SELECT draft_key FROM chat_drafts ${afterKey === undefined ? '' : 'WHERE draft_key > ?'}
+                 ORDER BY draft_key ASC LIMIT ?`,
+            ).all(...(afterKey === undefined ? [limit + 1] : [afterKey, limit + 1]));
+            const keys = rows.slice(0, limit).map((row) => row.draft_key);
+            const hasMore = rows.length > limit;
+            return { keys, nextAfter: hasMore ? keys.at(-1) : null, hasMore };
+        });
+    }
+
+    function getColdStorageItem(key) {
+        return inReadTransaction(() => {
+            const archiveId = requireBoundedReadKey(key, 'cold storage key');
+            if (!database.prepare('SELECT 1 FROM cold_archives WHERE archive_id = ?').get(archiveId)) return null;
+            return readNodeValue('cold_extension_nodes', 'archive_id = ?', [archiveId]) ?? null;
+        });
+    }
+
+    function listColdStorageItems(after, requestedLimit) {
+        return inReadTransaction(() => {
+            const afterKey = after === undefined ? undefined : requireBoundedReadKey(after, 'cold storage cursor');
+            const limit = boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT);
+            const rows = database.prepare(
+                `SELECT archive_id FROM cold_archives ${afterKey === undefined ? '' : 'WHERE archive_id > ?'}
+                 ORDER BY archive_id ASC LIMIT ?`,
+            ).all(...(afterKey === undefined ? [limit + 1] : [afterKey, limit + 1]));
+            const items = rows.slice(0, limit).map((row) => row.archive_id);
+            const hasMore = rows.length > limit;
+            return { items, nextAfter: hasMore ? items.at(-1) : null, hasMore };
+        });
+    }
+
+    function listRevisions(requestedLimit) {
+        return inReadTransaction(() => database.prepare(
+            `SELECT id, storage_revision, database_initialized, scope, action, restored_from_revision, created_at
+             FROM system_revisions ORDER BY created_at DESC, id DESC LIMIT ?`,
+        ).all(boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT)).map((row) => ({
+            id: Number(row.id),
+            storage_revision: row.storage_revision == null ? null : Number(row.storage_revision),
+            database_initialized: row.database_initialized == null ? null : Boolean(row.database_initialized),
+            scope: row.scope,
+            action: row.action,
+            restored_from_revision: row.restored_from_revision == null ? null : Number(row.restored_from_revision),
+            created_at: row.created_at,
+            change_count: 0,
+        })));
+    }
+
+    function searchMessages(query, requestedLimit) {
+        return inReadTransaction(() => {
+            const phrase = requireBoundedReadKey(query, 'message search query');
+            const rows = database.prepare(
+                `SELECT m.chat_id, m.id, m.position, m.role, m.sent_time, m.sender_name, m.content_text,
+                        c.character_id, c.name AS chat_name, ch.name AS character_name
+                 FROM (SELECT chat_id, id, position, role, sent_time, sender_name, content_text
+                       FROM messages ORDER BY rowid DESC LIMIT ?) m
+                 JOIN chats c ON c.id = m.chat_id
+                 JOIN characters ch ON ch.id = c.character_id
+                 WHERE m.content_text LIKE ? ESCAPE '\\' ORDER BY m.sent_time DESC, m.position DESC LIMIT ?`,
+            ).all(MAX_MESSAGE_SEARCH_SCAN_ROWS, `%${escapeSqlLike(phrase)}%`, boundedReadLimit(requestedLimit, 50));
+            return rows.map((row) => ({
+                storageState: 'active', archiveId: null,
+                characterId: row.character_id, characterName: row.character_name,
+                chatId: row.chat_id, chatName: row.chat_name,
+                messageId: row.id, position: Number(row.position), role: row.role,
+                sentTime: row.sent_time == null ? null : Number(row.sent_time),
+                senderName: row.sender_name ?? null,
+                snippet: String(row.content_text ?? '').slice(0, 200),
+            }));
+        });
+    }
+
+    function characterSearchRows(whereSql, query, requestedLimit) {
+        const phrase = requireBoundedReadKey(query, 'character search query');
+        return database.prepare(
+            `SELECT DISTINCT c.id, c.name, c.image, c.kind FROM characters c ${whereSql}
+             ORDER BY c.position ASC LIMIT ?`,
+        ).all(`%${escapeSqlLike(phrase)}%`, boundedReadLimit(requestedLimit, MAX_SQL_READ_LIMIT)).map((row) => ({
+            id: row.id, name: row.name, image: row.image ?? null, kind: row.kind,
+        }));
+    }
+
+    function searchCharactersByName(name, requestedLimit) {
+        return inReadTransaction(() => characterSearchRows("WHERE c.name LIKE ? ESCAPE '\\'", name, requestedLimit));
+    }
+
+    function searchCharactersByTag(tag, requestedLimit) {
+        return inReadTransaction(() => characterSearchRows(
+            "JOIN character_tags t ON t.character_id = c.id WHERE t.tag LIKE ? ESCAPE '\\'", tag, requestedLimit,
+        ));
     }
 
     function commit(payload) {
@@ -159,7 +533,12 @@ function createRelationalSqlite(options) {
         return { archivedPath, previousRevision };
     }
 
-    return { databasePath, revision, dump, commit, checkpoint, reset, close };
+    return {
+        databasePath, revision, dump, bootstrap, loadCharacter, loadChat, loadChatMessages,
+        getChatDraft, listChatDraftKeys, getColdStorageItem, listColdStorageItems, listRevisions,
+        searchMessages, searchCharactersByName, searchCharactersByTag,
+        commit, checkpoint, reset, close,
+    };
 }
 
 module.exports = {

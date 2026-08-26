@@ -26,6 +26,7 @@
     import { language } from "src/lang";
     import { alertStore } from "src/ts/stores.svelte";
     import { sleep } from "src/ts/util";
+    import { runtimePerformanceReport } from "src/ts/performance/performanceReport";
     import { resetAllPluginPermissions } from "src/ts/plugins/apiV3/v3.svelte";
     import {
         updatePopupStore,
@@ -48,6 +49,26 @@
     import TextInput from "src/lib/UI/GUI/TextInput.svelte";
 
     let lastResult = $state('');
+    const performanceReport = runtimePerformanceReport;
+
+    function downloadPerformanceReport() {
+        // This export intentionally contains only bounded timing/resource counters.
+        const report = performanceReport.export();
+        if (Object.keys(report.durations).length === 0 && report.resources.length === 0) {
+            setResult('No performance samples have been collected; report export was skipped.');
+            return;
+        }
+        const blob = new Blob([JSON.stringify(report, null, 2)], {
+            type: 'application/json',
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'risuvault-performance-report.json';
+        link.click();
+        URL.revokeObjectURL(url);
+        setResult('content-free performance report downloaded');
+    }
 
     function disablePanel() {
         localStorage.removeItem('risu-dev-panel');
@@ -431,6 +452,9 @@ function hello(): string {
         <h2 class="text-lg font-semibold text-textcolor">Dev Panel</h2>
         <ShButton variant="ghost" size="sm" onclick={disablePanel}>
             Disable panel
+        </ShButton>
+        <ShButton variant="outline" size="sm" onclick={downloadPerformanceReport}>
+            Download performance report
         </ShButton>
     </div>
     <p class="text-xs text-textcolor2">

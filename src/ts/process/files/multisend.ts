@@ -7,6 +7,8 @@ import { downloadFile } from 'src/ts/globalApi.svelte';
 import { HypaProcesser } from '../memory/hypamemory';
 import { BufferToText as BufferToText, selectMultipleFile } from 'src/ts/util';
 import { postInlayAsset } from './inlays';
+import { v4 as uuidv4 } from 'uuid';
+import { markSqlMessageDirty } from '../../storage/sql/sqlPersistenceRuntime';
 
 type sendFileArg = {
     file:string
@@ -41,8 +43,10 @@ async function sendPofile(arg:sendFileArg){
             }
             currentChat.message.push({
                 role: 'user',
-                data: text
+                data: text,
+                chatId: uuidv4(),
             })
+            markSqlMessageDirty(currentChat.id!, currentChat.message.at(-1)!.chatId!, true)
             currentChar.chats[currentChar.chatPage] = currentChat
             db.characters[get(selectedCharID)] = currentChar
             endAllGenerations()

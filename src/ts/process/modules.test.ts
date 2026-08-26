@@ -7,6 +7,11 @@ const mocks = vi.hoisted(() => ({
     hasher: vi.fn(async (data: Uint8Array) => `hash-${data[0]}`),
     saveAsset: vi.fn<(data: Uint8Array) => Promise<string>>(async () => 'single-write'),
     setItems: vi.fn<(entries: Array<{ key: string; value: Uint8Array }>) => Promise<void>>(async () => undefined),
+    importRisum: vi.fn(),
+    alertClear: vi.fn(),
+    alertError: vi.fn(),
+    selectedNativeFile: null as File | null,
+    isNodeServer: false,
     database: {
         current: {
             modules: [] as Array<{ id: string, name: string, description: string }>,
@@ -22,9 +27,9 @@ vi.mock('src/lang', () => ({
     language: { errors: { noData: 'no data' } },
 }))
 vi.mock('../alert', () => ({
-    alertClear: vi.fn(),
+    alertClear: mocks.alertClear,
     alertConfirm: vi.fn(),
-    alertError: vi.fn(),
+    alertError: mocks.alertError,
     alertModuleSelect: vi.fn(),
     alertNormal: vi.fn(),
     alertStore: { set: vi.fn() },
@@ -41,7 +46,7 @@ vi.mock('../storage/database.svelte', () => ({
 vi.mock('../globalApi.svelte', () => ({
     AppendableBuffer: class {},
     downloadFile: vi.fn(),
-    forageStorage: { setItems: mocks.setItems },
+    forageStorage: { setItems: mocks.setItems, importRisum: mocks.importRisum },
     LocalWriter: class {},
     readImage: vi.fn(),
     saveAsset: mocks.saveAsset,
@@ -50,6 +55,7 @@ vi.mock('../globalApi.svelte', () => ({
 vi.mock('../util', () => ({
     checkPersonaBinded: vi.fn(),
     selectSingleFile: vi.fn(),
+    selectSingleNativeFile: vi.fn(() => mocks.selectedNativeFile),
     sleep: vi.fn(async () => undefined),
 }))
 vi.mock('uuid', () => ({ v4: vi.fn(() => 'new-module-id') }))
@@ -65,7 +71,10 @@ vi.mock('../stores.svelte', () => ({
     moduleBackgroundEmbedding: { set: vi.fn() },
     ReloadGUIPointer: { set: vi.fn() },
 }))
-vi.mock('svelte/store', () => ({ get: vi.fn(() => 0) }))
+vi.mock('svelte/store', () => ({
+    get: vi.fn(() => 0),
+    writable: vi.fn((value: unknown) => ({ set: vi.fn(), subscribe: vi.fn(() => () => undefined), update: vi.fn(), value })),
+}))
 vi.mock('../interchangeability', () => ({
     convertCharacterToModule: vi.fn(),
     convertModuleToCharacter: vi.fn(),
@@ -75,8 +84,9 @@ vi.mock('../characterCards', () => ({
     importCharacterProcess: vi.fn(),
 }))
 vi.mock('../parser/parser.svelte', () => ({ hasher: mocks.hasher }))
+vi.mock('../platform', () => ({ get isNodeServer() { return mocks.isNodeServer } }))
 
-import { getModules, readModule, refreshModules, resolveModuleIds } from './modules'
+import { getModules, importModule, readModule, refreshModules, resolveModuleIds } from './modules'
 
 function uint32le(value: number) {
     const bytes = Buffer.alloc(4)
@@ -146,6 +156,57 @@ describe('readModule asset persistence', () => {
 
         expect(mocks.setItems).not.toHaveBeenCalled()
         expect(mocks.saveAsset).not.toHaveBeenCalled()
+    })
+})
+
+describe('importModule risum file routing', () => {
+    beforeEach(() => {
+        vi.clearAllMocks()
+        mocks.database.current.modules = []
+        mocks.selectedNativeFile = null
+        mocks.isNodeServer = false
+    })
+
+    it('sends the original mixed-case .risum File to Node exactly once without reading it locally', async () => {
+        mocks.isNodeServer = true
+        const file = new File(['large archive'], 'Huge.RISUM')
+        const read = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('must not read file'))
+        mocks.selectedNativeFile = file
+        mocks.importRisum.mockResolvedValue({ module: { type: 'risuModule', id: 'old', name: 'Pack', description: '', assets: [['a', 'assets/hash.png', 'png']] }, assets: 1 })
+
+        await importModule()
+
+        expect(mocks.importRisum).toHaveBeenCalledTimes(1)
+        expect(mocks.importRisum.mock.calls[0][0]).toBe(file)
+        expect(read).not.toHaveBeenCalled()
+        expect(mocks.setItems).not.toHaveBeenCalled()
+        expect(mocks.database.current.modules).toHaveLength(1)
+        expect(mocks.database.current.modules[0].id).toBe('new-module-id')
+    })
+
+    it('rejects an oversized browser .risum before reading it', async () => {
+        const file = new File(['x'], 'Huge.RISUM')
+        Object.defineProperty(file, 'size', { value: 128 * 1024 * 1024 + 1 })
+        const read = vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('must not read file'))
+        mocks.selectedNativeFile = file
+
+        await importModule()
+
+        expect(read).not.toHaveBeenCalled()
+        expect(mocks.importRisum).not.toHaveBeenCalled()
+        expect(mocks.database.current.modules).toHaveLength(0)
+    })
+
+    it('clears Node upload loading state before showing an import failure', async () => {
+        mocks.isNodeServer = true
+        mocks.selectedNativeFile = new File(['archive'], 'broken.risum')
+        mocks.importRisum.mockRejectedValue(new Error('server failed'))
+
+        await importModule()
+
+        expect(mocks.alertError).toHaveBeenCalledTimes(1)
+        expect(mocks.alertClear).toHaveBeenCalledTimes(1)
+        expect(mocks.alertClear.mock.invocationCallOrder[0]).toBeLessThan(mocks.alertError.mock.invocationCallOrder[0])
     })
 })
 

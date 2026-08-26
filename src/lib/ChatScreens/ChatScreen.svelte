@@ -13,10 +13,11 @@
     import SideBarArrow from "../UI/GUI/SideBarArrow.svelte";
     import ModuleChatMenu from "../Setting/Pages/Module/ModuleChatMenu.svelte";
     import RisuBardSaveSlotsDialog from '../SideBars/RisuBardSaveSlotsDialog.svelte';
-    import { ensureChatHydrated } from 'src/ts/storage/chatStorage';
+    import { ensureChatHydrated, isChatHistoryIncomplete } from 'src/ts/storage/chatStorage';
     import { notifyError, notifySuccess } from 'src/ts/alert';
     import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
+    import { pluginStateStore } from 'src/ts/plugins/plugins.svelte';
     import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
     let openChatList = $state(false)
     let openModuleList = $state(false)
@@ -30,7 +31,7 @@
         const character = currentCharacter
         if(savingSlot || !character) return
         const chatIdx = character.chatPage
-        if(character.chats[chatIdx]?._placeholder){
+        if(isChatHistoryIncomplete(character.chats[chatIdx])){
             await ensureChatHydrated(
                 character.chats,
                 chatIdx,
@@ -38,8 +39,8 @@
             )
         }
         const chat = character.chats[chatIdx]
-        if(!chat || chat._placeholder){
-            notifyError('채팅 전체 내용을 불러오지 못했습니다.')
+        if(isChatHistoryIncomplete(chat)){
+            notifyError('Load earlier messages before saving this chat.')
             return
         }
         if(chat.isStreaming){
@@ -77,12 +78,12 @@
         const character = currentCharacter
         if(!character?.chaId) return
         const chatIdx = character.chatPage
-        if(character.chats[chatIdx]?._placeholder){
+        if(isChatHistoryIncomplete(character.chats[chatIdx])){
             await ensureChatHydrated(character.chats, chatIdx, character.chaId)
         }
         const currentChat = character.chats[chatIdx]
-        if(!currentChat?.id || currentChat._placeholder){
-            throw new Error('현재 채팅 전체 내용을 불러오지 못했습니다.')
+        if(!currentChat?.id || isChatHistoryIncomplete(currentChat)){
+            throw new Error('Load earlier messages before loading into this chat.')
         }
         if(currentChat.isStreaming){
             throw new Error('응답 생성이 끝난 뒤 저장 파일을 불러와 주세요.')
@@ -221,7 +222,16 @@
 {#if openChatList}
     <ChatList close={() => {openChatList = false}}/>
 {:else if openModuleList}
-    <ModuleChatMenu close={() => {openModuleList = false}}/>
+    {#if $pluginStateStore === 'idle' || $pluginStateStore === 'loading'}
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 text-textcolor">Loading plugins…</div>
+    {:else if $pluginStateStore === 'failed'}
+        <div class="fixed inset-0 z-50 flex flex-col gap-3 items-center justify-center bg-black/40 text-textcolor">
+            <span>Plugin initialization failed. Module tools are unavailable.</span>
+            <button class="rounded bg-darkbutton px-3 py-2" onclick={() => { openModuleList = false }}>Close</button>
+        </div>
+    {:else}
+        <ModuleChatMenu close={() => {openModuleList = false}}/>
+    {/if}
 {/if}
 
 {#if currentCharacter?.chaId}

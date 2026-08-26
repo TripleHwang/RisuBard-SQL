@@ -1,16 +1,20 @@
 import type {
   BotPresetSummary,
-  ISqlStorage,
   SqlBotChatStats,
+  SqlBootstrapPayload,
+  SqlBootstrapStorage,
   SqlCharacterSearchResult,
   SqlLoadDatabaseOptions,
   SqlLoadDatabaseResult,
   SqlMessagePage,
   SqlMessageSearchResult,
   SqlRevision,
+  SqlReverseMessagePage,
   SqlTokenUsage,
   StoredBotPreset,
 } from "./ISqlStorage";
+import { markPerformance, measurePerformance } from "../../performance/startupMetrics";
+import { runtimeMetrics } from "../../performance/runtimeMetrics";
 import type {
   character,
   Chat,
@@ -46,16 +50,28 @@ interface ServerDump {
 
 type Statement = { sql: string; bind: unknown[] };
 
+export class SqlHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "SqlHttpError";
+  }
+}
+
+function boundedLimit(value: number | undefined, fallback: number, maximum: number): number {
+  const normalized = Number.isFinite(value) ? Math.floor(value!) : fallback;
+  return Math.min(maximum, Math.max(1, normalized));
+}
+
 function sorted(rows: Record<string, unknown>[], key = "position") {
   return [...rows].sort((left, right) => Number(left[key]) - Number(right[key]));
 }
 
 /** Browser client for the standalone Node server's native SQLite database. */
-export class NodeSqliteStorage implements ISqlStorage {
+export class NodeSqliteStorage implements SqlBootstrapStorage {
   readonly backendKind = "server-sql" as const;
   private enabled = false;
   private revision = 0;
-  private initialDump: ServerDump | null = null;
+  private bootstrapPayload: SqlBootstrapPayload | null = null;
 
   constructor(private readonly request: AuthenticatedRequest) {}
 
@@ -75,21 +91,85 @@ export class NodeSqliteStorage implements ISqlStorage {
     return dump;
   }
 
+  private validateBootstrap(payload: unknown): SqlBootstrapPayload {
+    if (!payload || typeof payload !== "object") throw new Error("Invalid SQL bootstrap payload");
+    const value = payload as Partial<SqlBootstrapPayload>;
+    if ((value.status !== "ready" && value.status !== "empty") ||
+      !Number.isSafeInteger(value.revision) || value.revision < 0 ||
+      !value.settings || typeof value.settings !== "object" || Array.isArray(value.settings) ||
+      !value.pluginCustomStorage || typeof value.pluginCustomStorage !== "object" || Array.isArray(value.pluginCustomStorage) ||
+      !Array.isArray(value.botPresets) || !Array.isArray(value.characters) ||
+      (value.selectedCharacterId !== null && typeof value.selectedCharacterId !== "string") ||
+      (value.selectedChatId !== null && typeof value.selectedChatId !== "string")) {
+      throw new Error("Invalid SQL bootstrap payload");
+    }
+    return value as SqlBootstrapPayload;
+  }
+
+  private acceptReadRevision(revision: number): void {
+    if (this.bootstrapPayload && this.bootstrapPayload.revision !== revision) {
+      this.bootstrapPayload = null;
+    }
+    this.revision = revision;
+  }
+
+  async loadBootstrap(): Promise<SqlBootstrapPayload> {
+    markPerformance("bootstrap-fetch:start");
+    let response: Response;
+    try {
+      response = await this.request("/api/sql/bootstrap");
+    } finally {
+      markPerformance("bootstrap-fetch:end");
+      measurePerformance("bootstrap-fetch", "bootstrap-fetch:start", "bootstrap-fetch:end");
+    }
+    if (!response.ok) throw new SqlHttpError(`SQL bootstrap failed (${response.status})`, response.status);
+    const payload = this.validateBootstrap(await response.json());
+    markPerformance("bootstrap-json:end");
+    measurePerformance("bootstrap-json", "bootstrap-fetch:end", "bootstrap-json:end");
+    this.revision = payload.revision;
+    this.bootstrapPayload = payload;
+    this.enabled = true;
+    return payload;
+  }
+
   async init(): Promise<boolean> {
     if (this.enabled) return true;
-    this.initialDump = await this.fetchDump();
+    await this.loadBootstrap();
     this.enabled = true;
     return true;
   }
 
-  private async dump(): Promise<ServerDump> {
-    if (!this.enabled) await this.init();
-    if (this.initialDump) {
-      const value = this.initialDump;
-      this.initialDump = null;
-      return value;
-    }
-    return await this.fetchDump();
+  private rebuildBootstrap(payload: SqlBootstrapPayload): Database | null {
+    if (payload.status !== "ready") return null;
+    const database = {
+      ...payload.settings,
+      pluginCustomStorage: payload.pluginCustomStorage,
+      botPresets: payload.botPresets,
+      characters: payload.characters.map((character) => ({
+        ...character,
+        detailsLoaded: false,
+        chats: (character.chats ?? []).map((chat) => ({
+          ...chat,
+          message: [],
+          messagesLoaded: false,
+          messagesFullyLoaded: false,
+        })),
+      })),
+    } as unknown as Database;
+    database.botPresetsId = Math.max(0, database.botPresets.findIndex(
+      (preset) => preset.id === (payload.settings as { activeBotPresetId?: unknown }).activeBotPresetId,
+    ));
+    delete (database as unknown as Record<string, unknown>).activeBotPresetId;
+    (database as Database & { selectedCharacterId?: string | null }).selectedCharacterId = payload.selectedCharacterId;
+    (database as Database & { selectedChatId?: string | null }).selectedChatId = payload.selectedChatId;
+    return database;
+  }
+
+  async loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null> {
+    const dump = await this.fetchDump();
+    this.bootstrapPayload = null;
+    const database = this.rebuild(dump);
+    return { status: database ? "ready" : "empty", revision: dump.revision, database };
   }
 
   private nodes(
@@ -186,16 +266,92 @@ export class NodeSqliteStorage implements ISqlStorage {
     return database;
   }
 
-  async loadDatabase(
-    _options?: SqlLoadDatabaseOptions,
-  ): Promise<SqlLoadDatabaseResult | null> {
-    const dump = await this.dump();
-    const database = this.rebuild(dump);
-    return {
-      status: database ? "ready" : "empty",
-      revision: dump.revision,
-      database,
-    };
+  async loadDatabase(_options?: SqlLoadDatabaseOptions): Promise<SqlLoadDatabaseResult | null> {
+    if (!this.enabled) await this.init();
+    const payload = this.bootstrapPayload ?? await this.loadBootstrap();
+    const database = this.rebuildBootstrap(payload);
+    return { status: payload.status, revision: payload.revision, database };
+  }
+
+  async loadCharacterHydration(characterId: string): Promise<character | null> {
+    const metric = runtimeMetrics.start("character-hydration");
+    try {
+    const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`SQL character load failed (${response.status})`);
+    const payload = await response.json() as { revision: number; character: character };
+    if (!Number.isSafeInteger(payload.revision) || payload.revision < 0 ||
+      !payload.character || typeof payload.character !== "object") {
+      throw new Error("Invalid SQL character payload");
+    }
+    this.acceptReadRevision(payload.revision);
+    return payload.character;
+    } finally {
+      runtimeMetrics.end(metric);
+    }
+  }
+
+  async loadChatMessageReversePage(
+    chatId: string,
+    before: number | undefined,
+    limit: number,
+  ): Promise<SqlReverseMessagePage> {
+    const metric = runtimeMetrics.start("message-page");
+    try {
+    const params = new URLSearchParams({ limit: String(Math.min(100, Math.max(1, Math.floor(limit)))) });
+    if (before !== undefined) params.set("before", String(before));
+    const response = await this.request(`/api/sql/chats/${encodeURIComponent(chatId)}/messages?${params}`);
+    if (!response.ok) throw new Error(`SQL message page failed (${response.status})`);
+    const page = await response.json() as SqlReverseMessagePage;
+    if (!Number.isSafeInteger(page.revision) || page.revision < 0 ||
+      page.chatId !== chatId || !Array.isArray(page.messages) ||
+      !Array.isArray(page.positions) || page.positions.length !== page.messages.length ||
+      !page.positions.every((position) => Number.isSafeInteger(position) && position >= 0) ||
+      !Number.isSafeInteger(page.nextPosition) || page.nextPosition < 0 ||
+      !Number.isSafeInteger(page.total) || page.total < 0 ||
+      typeof page.hasMore !== "boolean") {
+      throw new Error("Invalid SQL message page payload");
+    }
+    this.acceptReadRevision(page.revision);
+    return page;
+    } finally {
+      runtimeMetrics.end(metric);
+    }
+  }
+
+  private async listAncillaryKeys(
+    path: "/api/sql/chat-drafts" | "/api/sql/cold-storage",
+    property: "keys" | "items",
+  ): Promise<string[]> {
+    const values: string[] = [];
+    const seenCursors = new Set<string>();
+    let after: string | undefined;
+    while (true) {
+      const params = new URLSearchParams({ limit: "100" });
+      if (after !== undefined) params.set("after", after);
+      const response = await this.request(`${path}?${params}`);
+      if (!response.ok) throw new Error(`SQL ancillary list failed (${response.status})`);
+      const payload = await response.json() as Record<string, unknown>;
+      const page = payload?.[property];
+      const hasMore = payload?.hasMore;
+      const nextAfter = payload?.nextAfter;
+      if (!Array.isArray(page) || page.length > 100 || page.some((item) => typeof item !== "string") ||
+        typeof hasMore !== "boolean" ||
+        (nextAfter !== null && typeof nextAfter !== "string")) {
+        throw new Error("Invalid SQL ancillary page");
+      }
+      values.push(...page as string[]);
+      if (!hasMore) {
+        if (nextAfter !== null) throw new Error("Invalid SQL ancillary cursor");
+        return values;
+      }
+      if (typeof nextAfter !== "string" || !nextAfter || nextAfter === after ||
+        seenCursors.has(nextAfter) || page.length === 0 || page.at(-1) !== nextAfter) {
+        throw new Error("SQL ancillary cursor did not progress");
+      }
+      seenCursors.add(nextAfter);
+      after = nextAfter;
+    }
   }
 
   private async sendStatements(
@@ -211,12 +367,13 @@ export class NodeSqliteStorage implements ISqlStorage {
     if (response.status === 409) {
       const body = await response.json();
       this.revision = Number(body.currentRevision) || 0;
+      this.bootstrapPayload = null;
       throw new SqlRevisionConflictError(this.revision);
     }
     if (!response.ok) throw new Error(`SQL commit failed (${response.status})`);
     const result = (await response.json()) as SqlCommitResult;
     this.revision = result.revision;
-    this.initialDump = null;
+    this.bootstrapPayload = null;
     return result;
   }
 
@@ -246,19 +403,20 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   private async current(): Promise<Database> {
-    return (await this.loadDatabase({ shallow: false }))?.database ?? ({} as Database);
+    return (await this.loadDatabase({ shallow: true }))?.database ?? ({} as Database);
   }
 
   async loadCharacter(characterId: string): Promise<character | null> {
-    return (await this.current()).characters?.find((item) => item.chaId === characterId) ?? null;
+    return await this.loadCharacterHydration(characterId);
   }
 
   async loadChat(chatId: string, options?: { messageLimit?: number }): Promise<Chat | null> {
     for (const character of (await this.current()).characters ?? []) {
       const chat = character.chats?.find((item) => item.id === chatId);
       if (chat) {
-        if (options?.messageLimit && chat.message.length > options.messageLimit) {
-          return { ...chat, message: chat.message.slice(-options.messageLimit) };
+        if (options?.messageLimit) {
+          const page = await this.loadChatMessageReversePage(chatId, undefined, options.messageLimit);
+          return { ...chat, message: page.messages };
         }
         return chat;
       }
@@ -267,7 +425,7 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   async loadChatMessages(chatId: string): Promise<Message[]> {
-    return (await this.loadChat(chatId))?.message ?? [];
+    return (await this.loadChatMessageReversePage(chatId, undefined, 100)).messages;
   }
 
   async loadChatMessagePage(
@@ -275,14 +433,12 @@ export class NodeSqliteStorage implements ISqlStorage {
     before: number | undefined,
     limit: number,
   ): Promise<SqlMessagePage> {
-    const messages = await this.loadChatMessages(chatId);
-    const end = Math.min(messages.length, before ?? messages.length);
-    const offset = Math.max(0, end - Math.max(1, limit));
+    const page = await this.loadChatMessageReversePage(chatId, before, limit);
     return {
-      messages: messages.slice(offset, end),
-      offset,
-      total: messages.length,
-      hasMore: offset > 0,
+      messages: page.messages,
+      offset: page.nextBefore ?? 0,
+      total: page.total,
+      hasMore: page.hasMore,
     };
   }
 
@@ -346,13 +502,18 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   async getChatDraft(key: string): Promise<{ m: string; t: string } | null> {
-    const dump = await this.dump();
-    const row = (dump.tables.chat_drafts ?? []).find((item) => item.draft_key === key);
-    return row ? { m: String(row.message_text ?? ""), t: String(row.translate_text ?? "") } : null;
+    const response = await this.request(`/api/sql/chat-drafts/${encodeURIComponent(key)}`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`SQL chat draft load failed (${response.status})`);
+    const payload = await response.json() as { draft?: { m?: unknown; t?: unknown } };
+    if (!payload.draft || typeof payload.draft.m !== "string" || typeof payload.draft.t !== "string") {
+      throw new Error("Invalid SQL chat draft payload");
+    }
+    return { m: payload.draft.m, t: payload.draft.t };
   }
 
   async listChatDraftKeys(): Promise<string[]> {
-    return (await this.dump()).tables.chat_drafts?.map((row) => row.draft_key as string) ?? [];
+    return await this.listAncillaryKeys("/api/sql/chat-drafts", "keys");
   }
 
   async setChatDraft(key: string, draft: { m: string; t: string }): Promise<void> {
@@ -375,18 +536,18 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   async getColdStorageItem(key: string): Promise<unknown | null> {
-    const dump = await this.dump();
-    return this.nodes(
-      dump,
-      "cold_extension_nodes",
-      (row) => row.archive_id === key,
-    ) ?? null;
+    const response = await this.request(`/api/sql/cold-storage/${encodeURIComponent(key)}`);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`SQL cold storage load failed (${response.status})`);
+    const payload = await response.json() as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(payload, "item")) {
+      throw new Error("Invalid SQL cold storage payload");
+    }
+    return payload.item;
   }
 
   async listColdStorageItems(): Promise<{ items: string[] }> {
-    return {
-      items: (await this.dump()).tables.cold_archives?.map((row) => row.archive_id as string) ?? [],
-    };
+    return { items: await this.listAncillaryKeys("/api/sql/cold-storage", "items") };
   }
 
   async setColdStorageItem(key: string, value: unknown): Promise<boolean> {
@@ -413,12 +574,17 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   async listRevisions(limit = 100): Promise<SqlRevision[]> {
-    const rows = sorted((await this.dump()).tables.system_revisions ?? [], "id").reverse();
-    return rows.slice(0, limit).map((row) => ({
-      ...row,
-      id: Number(row.id),
-      action: String(row.action ?? "sync"),
-    }));
+    const params = new URLSearchParams({ limit: String(boundedLimit(limit, 100, 100)) });
+    const response = await this.request(`/api/sql/revisions?${params}`);
+    if (!response.ok) throw new Error(`SQL revision list failed (${response.status})`);
+    const payload = await response.json() as { revisions?: unknown };
+    if (!Array.isArray(payload.revisions) || payload.revisions.some((revision) =>
+      !revision || typeof revision !== "object" ||
+      !Number.isSafeInteger((revision as { id?: unknown }).id) ||
+      typeof (revision as { action?: unknown }).action !== "string")) {
+      throw new Error("Invalid SQL revision payload");
+    }
+    return payload.revisions as SqlRevision[];
   }
 
   async restoreRevision(revisionId: number) {
@@ -426,19 +592,15 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   async searchMessages(query: string, _scope = "all", limit = 50): Promise<SqlMessageSearchResult[]> {
-    const dump = await this.dump();
-    const needle = query.toLocaleLowerCase();
-    return (dump.tables.messages ?? [])
-      .filter((row) => String(row.content_text ?? "").toLocaleLowerCase().includes(needle))
-      .slice(0, limit)
-      .map((row) => ({
-        storageState: "active",
-        chatId: row.chat_id,
-        messageId: row.id,
-        position: row.position,
-        role: row.role,
-        snippet: String(row.content_text ?? "").slice(0, 200),
-      }));
+    const params = new URLSearchParams({
+      query,
+      limit: String(boundedLimit(limit, 50, 50)),
+    });
+    const response = await this.request(`/api/sql/search/messages?${params}`);
+    if (!response.ok) throw new Error(`SQL message search failed (${response.status})`);
+    const payload = await response.json() as { results?: unknown };
+    if (!Array.isArray(payload.results)) throw new Error("Invalid SQL message search payload");
+    return payload.results as SqlMessageSearchResult[];
   }
 
   async getTokenUsage(): Promise<SqlTokenUsage[]> {
@@ -450,18 +612,27 @@ export class NodeSqliteStorage implements ISqlStorage {
   }
 
   async searchCharactersByTag(tag: string, limit = 100): Promise<SqlCharacterSearchResult[]> {
-    const database = await this.current();
-    return (database.characters ?? [])
-      .filter((item) => item.tags?.some((value) => value.includes(tag)))
-      .slice(0, limit)
-      .map((item) => ({ id: item.chaId, name: item.name, image: item.image ?? null }));
+    return await this.searchCharacters("tag", tag, limit);
   }
 
   async searchCharactersByName(name: string, limit = 100): Promise<SqlCharacterSearchResult[]> {
-    const needle = name.toLocaleLowerCase();
-    return ((await this.current()).characters ?? [])
-      .filter((item) => item.name.toLocaleLowerCase().includes(needle))
-      .slice(0, limit)
-      .map((item) => ({ id: item.chaId, name: item.name, image: item.image ?? null }));
+    return await this.searchCharacters("name", name, limit);
+  }
+
+  private async searchCharacters(
+    mode: "name" | "tag",
+    query: string,
+    limit: number,
+  ): Promise<SqlCharacterSearchResult[]> {
+    const params = new URLSearchParams({
+      mode,
+      query,
+      limit: String(boundedLimit(limit, 100, 100)),
+    });
+    const response = await this.request(`/api/sql/search/characters?${params}`);
+    if (!response.ok) throw new Error(`SQL character search failed (${response.status})`);
+    const payload = await response.json() as { results?: unknown };
+    if (!Array.isArray(payload.results)) throw new Error("Invalid SQL character search payload");
+    return payload.results as SqlCharacterSearchResult[];
   }
 }

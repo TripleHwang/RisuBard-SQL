@@ -45,6 +45,12 @@ export async function selectSingleFile(ext:string[]){
     return {name: file.name,data:await readFileAsUint8Array(file)}
 }
 
+/** Select one file without eagerly reading it. Large Node imports must retain this File for XHR streaming. */
+export async function selectSingleNativeFile(ext: string[]): Promise<File | null> {
+    const files = await selectFileByDom(ext, 'single')
+    return files?.[0] ?? null
+}
+
 export async function selectMultipleFile(ext:string[]){
     const v = await selectFileByDom(ext, 'multiple')
     let arr:{name:string, data:Uint8Array}[] = []

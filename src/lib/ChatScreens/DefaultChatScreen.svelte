@@ -17,6 +17,7 @@
         getLatestChatPage,
         normalizeChatPageSize,
     } from 'src/ts/chatPagination';
+    import { isCurrentChatWindowRequest } from 'src/ts/chatWindow';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -36,6 +37,7 @@
     import { abortGeneration, chatGenKey, endGeneration, generationStates, registerAbort } from "../../ts/process/generationState";
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
+    import { loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
     import { sleep } from "../../ts/util";
     import { language } from "../../lang";
     import { isExpTranslator, translate } from "../../ts/translator/translator";
@@ -51,6 +53,7 @@ import { isMobile } from 'src/ts/platform'
     import { aiLawApplies, chatFoldedState, chatFoldedStateMessageIndex, downloadFile } from 'src/ts/globalApi.svelte';
     import { runTrigger } from 'src/ts/process/triggers';
     import { v4 } from 'uuid';
+    import { markSqlMessageDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime';
     import { processMultiCommand } from 'src/ts/process/command';
     import { postChatFile } from 'src/ts/process/files/multisend';
     import { getInlayAsset } from 'src/ts/process/files/inlays';
@@ -58,6 +61,7 @@ import { isMobile } from 'src/ts/platform'
     import { loadChatDraft, scheduleSaveChatDraft, flushChatDraft, removeChatDraft } from 'src/ts/storage/chatDraft';
     import { blocksChatGeneration } from 'src/ts/risubard/wikiReboot';
     import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
+    import { saverModeStore } from 'src/ts/performance/saverMode';
 
     import Chats from './Chats.svelte';
     import Button from '../UI/GUI/Button.svelte';
@@ -113,6 +117,8 @@ import { isMobile } from 'src/ts/platform'
     let memoryWikiOpen = $state(false)
     let chatPage = $state(0)
     let paginationKey = $state('')
+    // Cancels DOM restoration when a different chat becomes active mid-fetch.
+    let chatWindowVersion = $state(0)
     let paginationMessageCount = $state(0)
     let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
     let doingChatInputTranslate = false
@@ -136,7 +142,7 @@ import { isMobile } from 'src/ts/platform'
     let wikiRebootBlocksGeneration = $derived(
         blocksChatGeneration(currentChatSlot?.risuBardWikiReboot)
     )
-    let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
+    let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
     let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
@@ -150,6 +156,7 @@ import { isMobile } from 'src/ts/platform'
 
         if (nextKey !== paginationKey) {
             paginationKey = nextKey
+            chatWindowVersion += 1
             chatPage = latestPage
         } else if (chatPageSize !== paginationPageSize) {
             const anchorIndex = chatPage * paginationPageSize
@@ -249,7 +256,7 @@ import { isMobile } from 'src/ts/platform'
         if (!char) return null
         const chat = char.chats[char.chatPage]
         if (!chat) return null
-        if (!chat._placeholder) return chat
+        if (!chat._placeholder && (chat as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false) return chat
         return await ensureCurrentChatReady(char.chats, char.chatPage, char.chaId)
     }
 
@@ -290,11 +297,48 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function selectChatPage(page: number, scrollToLatest = false) {
+        // A manual page move wins over any in-flight reverse-page anchor.
+        chatWindowVersion += 1
         chatPage = getChatPageBounds(currentChat.length, chatPageSize, page).page
         chatFoldedState.data = null
         await tick()
         if (scrollToLatest) chatsInstance?.scrollToLatestMessage()
         else scrollToLoadedTop()
+    }
+
+    async function selectPreviousChatPage() {
+        if (chatPage > 0) return selectChatPage(chatPage - 1)
+        const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
+        if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return
+        const container = document.querySelector('.default-chat-screen') as HTMLElement | null
+        const firstVisible = container
+            ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-id]'))
+                .map((element) => ({ element, top: element.getBoundingClientRect().top }))
+                .filter(({ element }) => element.getBoundingClientRect().bottom >= container.getBoundingClientRect().top)
+                .sort((left, right) => left.top - right.top)[0]
+            : undefined
+        const anchor = firstVisible?.element.dataset.chatId
+            ? { id: firstVisible.element.dataset.chatId, top: firstVisible.top }
+            : null
+        const requestKey = paginationKey
+        const requestVersion = chatWindowVersion
+        const formerFirstId = currentChat[0]?.chatId
+        await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+        // The fetch may finish after selection changed. It may update its old
+        // object, but must never mutate this screen's scroll position.
+        if (!isCurrentChatWindowRequest(
+            { key: requestKey, version: requestVersion },
+            { key: paginationKey, version: chatWindowVersion },
+        )) return
+        const anchorIndex = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
+        chatPage = getChatPageForMessage(Math.max(0, anchorIndex), currentChat.length, chatPageSize)
+        await tick()
+        if (container && anchor) {
+            const restored = container.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(anchor.id)}"]`)
+            if (restored) container.scrollTop += restored.getBoundingClientRect().top - anchor.top
+        } else {
+            scrollToLoadedTop()
+        }
     }
 
     // Literal bottom of the scroll (end of the latest message).
@@ -1183,8 +1227,11 @@ import { isMobile } from 'src/ts/platform'
                     <button type="button" aria-label={language.add} onclick={() => {
                         DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.push({
                             role: 'char',
-                            data: ''
+                            data: '',
+                            chatId: v4(),
                         })
+                        const currentChat = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
+                        markSqlMessageDirty(currentChat.id!, currentChat.message.at(-1)!.chatId!, true)
                         DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
                     }}
                          class="shrink-0 flex justify-center items-center w-9 h-9 rounded-full text-textcolor hover:bg-primary/20 transition-colors cursor-pointer"
@@ -1461,8 +1508,8 @@ import { isMobile } from 'src/ts/platform'
                     <button
                         data-chat-page-previous
                         class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page === 0}
-                        onclick={() => void selectChatPage(chatBounds.page - 1)}
+                        disabled={chatBounds.page === 0 && !(currentChatSlot as any)?._sqlWindow?.hasOlder}
+                        onclick={() => void selectPreviousChatPage()}
                     >{language.chatPagePrevious}</button>
                     <span class="min-w-20 text-center tabular-nums">
                         {chatBounds.page + 1} / {chatBounds.pageCount}
@@ -1487,6 +1534,7 @@ import { isMobile } from 'src/ts/platform'
                 messages={currentChat}
                 pageStart={chatBounds.start}
                 pageEnd={chatBounds.end}
+                saverMode={$saverModeStore}
                 onReroll={reroll}
                 onNextSwipe={nextSwipe}
                 onDeleteSwipe={deleteSwipe}

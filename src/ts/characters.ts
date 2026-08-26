@@ -1,6 +1,7 @@
 import { get, writable } from "svelte/store";
 import { saveImage, setDatabase, type character, type Chat, defaultSdDataFunc, type loreBook, getDatabase, getCharacterByIndex, setCharacterByIndex, getCurrentChat, loadTogglesFromChat, normalizeChat, newChatModelDefaults } from "./storage/database.svelte";
-import { ensureChatHydrated } from "./storage/chatStorage";
+import { ensureChatHydrated, touchHydratedChat } from "./storage/chatStorage";
+import { ensureCharacterHydrated } from "./storage/sql/sqlRuntimeHydration";
 import { alertAddCharacter, alertConfirm, alertError, alertSelect, alertStore, alertWait, notifySuccess, notifyInfo } from "./alert";
 import { loadingOverlayStore, chatDeselected } from "./stores.svelte";
 import { language } from "../lang";
@@ -17,11 +18,32 @@ import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
 import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
+import { withSaverScope } from './performance/saverMode'
+import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
+import { runtimeMetrics } from './performance/runtimeMetrics'
+
+/** Assign identities before a chat becomes visible, then mark its parent before rows. */
+function markImportedChat(characterId: string, chat: Chat): void {
+    chat.id ||= uuidv4()
+    for (const message of chat.message ?? []) message.chatId ||= uuidv4()
+    markSqlChatDirty(characterId, chat.id, true)
+    for (const message of chat.message ?? []) markSqlMessageDirty(chat.id, message.chatId!, true)
+    if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id)
+}
+
+/** An unshift changes every sibling's SQL position, not only the imported rows. */
+function markChatOrder(characterId: string, chats: Chat[]): void {
+    for (const chat of chats) {
+        chat.id ||= uuidv4()
+        markSqlChatDirty(characterId, chat.id)
+    }
+}
 
 export function createNewCharacter() {
     let db = getDatabase()
     const character = createBlankChar()
     db.characters.push(character)
+    markSqlCharacterDirty(character.chaId)
     pinCharacterVaultQuickAccess(db, character.chaId)
     checkCharOrder()
     return db.characters.length - 1
@@ -170,15 +192,17 @@ export async function exportChat(page:number){
         const mode = await alertSelect(['Export as JSON', "Export as TXT", "Export as HTML File", "Export as HTML Embed"])
         const doTranslate = (mode === '2' || mode === '3') ? (await alertSelect([language.translateContent, language.doNotTranslate])) === '0' : false
         const anonymous = (mode === '2' || mode === '3') ? ((await alertSelect([language.includePersonaName, language.hidePersonaName])) === '1') : false
+        await withSaverScope('export', async () => {
         const selectedID = get(selectedCharID)
         const db = getDatabase()
         const char = db.characters[selectedID]
         // Ensure chat is hydrated before export
-        if(char.chats[page]?._placeholder){
+        if(char.chats[page]?._placeholder || (char.chats[page] as Chat & { messagesLoaded?: boolean }).messagesLoaded === false){
             await ensureChatHydrated(char.chats, page, char.chaId)
         }
-        if(char.chats[page]?._placeholder){
-            alertError('Failed to load chat data. Export aborted.')
+        const hydratedChat = char.chats[page] as Chat & { _sqlWindow?: { hasOlder?: boolean }; messagesFullyLoaded?: boolean }
+        if(hydratedChat?._placeholder || hydratedChat?.messagesFullyLoaded === false || hydratedChat?._sqlWindow?.hasOlder){
+            alertError('Load earlier messages before exporting this chat.')
             return
         }
         const chat = char.chats[page]
@@ -344,12 +368,13 @@ export async function exportChat(page:number){
 
         }
         notifySuccess(language.successExport)
+        })
     } catch (error) {
         alertError(error)
     }
 }
 
-export async function importChat(){
+async function importChatInner(){
     const dat =await selectSingleFile(['json','jsonl','txt','html'])
     if(!dat){
         return
@@ -378,7 +403,8 @@ export async function importChat(){
                     if(!isFirst){
                         newChat.message.push({
                             role: presedLine.is_user ? "user" : 'char',
-                            data: formatTavernChat(presedLine.mes, db.characters[selectedID].name)
+                            data: formatTavernChat(presedLine.mes, db.characters[selectedID].name),
+                            chatId: v4(),
                         })
                     }
                 }
@@ -397,6 +423,8 @@ export async function importChat(){
             }
 
             db.characters[selectedID].chats.unshift(newChat)
+            markImportedChat(db.characters[selectedID].chaId, newChat)
+            markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
             changeChatTo(0)
             notifySuccess(language.successImport)
         }
@@ -427,14 +455,17 @@ export async function importChat(){
                     }
                     chat.id = v4()
                 })
-                db.characters[selectedID].chats.unshift(...chats.map(c => normalizeChat(c)))
+                const imported = chats.map(c => normalizeChat(c))
+                db.characters[selectedID].chats.unshift(...imported)
+                imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
+                markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                 notifySuccess(language.successImport)
                 return
             }
             if(json.type === 'risuAllChats' && json.ver === 1){
                 const chats = json.data
                 if(Array.isArray(chats) && chats.length > 0){
-                    db.characters[selectedID].chats.unshift(...(chats.map((v) => {
+                    const imported = chats.map((v) => {
                         if(!v.id){
                             v.id = uuidv4()
                         }
@@ -443,7 +474,10 @@ export async function importChat(){
                         }
                         v.fmIndex ??= -1
                         return normalizeChat(v)
-                    })))
+                    })
+                    db.characters[selectedID].chats.unshift(...imported)
+                    imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
+                    markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                     notifySuccess(language.successImport)
                     return
                 } else {
@@ -456,7 +490,10 @@ export async function importChat(){
                 if(!(checkNullish(das.message) || checkNullish(das.note) || checkNullish(das.name) || checkNullish(das.localLore))){
                     das.fmIndex ??= -1
                     das.id = v4()
-                    db.characters[selectedID].chats.unshift(normalizeChat(das))
+                    const imported = normalizeChat(das)
+                    db.characters[selectedID].chats.unshift(imported)
+                    markImportedChat(db.characters[selectedID].chaId, imported)
+                    markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                     notifySuccess(language.successImport)
                     return
                 }
@@ -475,7 +512,10 @@ export async function importChat(){
             const chat = doc.querySelector('.idat').textContent
             const json = JSON.parse(chat)
             if(json.message && json.note && json.name && json.localLore){
-                db.characters[selectedID].chats.unshift(normalizeChat(json))
+                const imported = normalizeChat(json)
+                db.characters[selectedID].chats.unshift(imported)
+                markImportedChat(db.characters[selectedID].chaId, imported)
+                markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
                 notifySuccess(language.successImport)
             }
             else{
@@ -487,20 +527,26 @@ export async function importChat(){
     }
 }
 
+export async function importChat(): Promise<void> {
+    return withSaverScope('import', async () => importChatInner())
+}
+
 export async function exportAllChats() {
     try {
+        await withSaverScope('export', async () => {
         const selectedID = get(selectedCharID)
         const db = getDatabase()
         const char = db.characters[selectedID]
         const date = new Date().toISOString().replace(/[:.]/g, "-")
 
         for (let i = 0; i < char.chats.length; i++) {
-            if (char.chats[i]?._placeholder) {
+            if (char.chats[i]?._placeholder || (char.chats[i] as Chat & { messagesLoaded?: boolean }).messagesLoaded === false) {
                 alertWait(`Loading chat data... (${i + 1}/${char.chats.length})`)
                 await ensureChatHydrated(char.chats, i, char.chaId)
             }
-            if (char.chats[i]?._placeholder) {
-                alertError(`Failed to load chat data for "${char.chats[i].name}". Export aborted to prevent data loss.`)
+            const chat = char.chats[i] as Chat & { _sqlWindow?: { hasOlder?: boolean }; messagesFullyLoaded?: boolean }
+            if (chat?._placeholder || chat?.messagesFullyLoaded === false || chat?._sqlWindow?.hasOlder) {
+                alertError(`Load earlier messages before exporting "${chat.name}". Export aborted to prevent data loss.`)
                 return
             }
         }
@@ -515,6 +561,7 @@ export async function exportAllChats() {
         }), 'utf-8')
         await downloadFile(`${char.name}_all_chats_${date}`.replace(/[<>:"/\\|?*.,]/g, "") + '.json', stringl)
         notifySuccess(language.successExport)
+        })
     } catch (error) {
         alertError(error)
     }
@@ -544,6 +591,8 @@ export function characterFormatUpdate(indexOrCharacter:number|character, arg:{
     if(!cha.chats[cha.chatPage].message){
         cha.chats[cha.chatPage].message = []
     }
+    cha.chats[cha.chatPage].id ||= uuidv4()
+    markSqlChatDirty(cha.chaId!, cha.chats[cha.chatPage].id!, true)
     if(!cha.type){
         cha.type = 'character'
     }
@@ -724,9 +773,14 @@ export async function removeChar(identifier:string|number,name:string, type:'nor
     }
     if(type === 'normal'){
         chars[index].trashTime = Date.now()
+        markSqlCharacterDirty(chars[index].chaId)
     }
     else{
+        // Mark before removal: the dirty builder emits an explicit row delete.
+        markSqlCharacterDirty(chars[index].chaId)
         chars.splice(index, 1)
+        // Every trailing character receives a new SQL position after removal.
+        for (const character of chars.slice(index)) markSqlCharacterDirty(character.chaId)
     }
     checkCharOrder()
     db.characters = chars
@@ -763,23 +817,52 @@ export async function addCharacter(arg:{
     }
     let db = getDatabase()
     if(db.characters[db.characters.length-1]){
-        changeChar(db.characters.length-1, { clearNewBadge: false })
+        void changeChar(db.characters.length-1, { clearNewBadge: false })
     }
     MobileGUIStack.set(1)
 }
 
-export function changeChar(index: number, arg:{
+let characterSelectionIntent = 0
+
+export async function changeChar(index: number, arg:{
     reseter?:()=>any,
     clearNewBadge?:boolean,
 } = {}) {
+    const metric = runtimeMetrics.start('chat-selection')
+    try {
     const reseter = arg.reseter ?? (() => {})
     if(get(doingChat)){
       return
     }
     const db = getDatabase()
     const char = db.characters[index]
+    if (!char) return
+    const intent = ++characterSelectionIntent
+    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+    if ((char as character & { detailsLoaded?: boolean }).detailsLoaded === false) {
+        loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
+        try {
+            let hydrated: character | null
+            try {
+                hydrated = await ensureCharacterHydrated(db, index)
+            } catch (error) {
+                if (intent === characterSelectionIntent) alertError(error)
+                return
+            }
+            if (!hydrated || intent !== characterSelectionIntent) return
+        } finally {
+            if (intent === characterSelectionIntent) {
+                loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+            }
+        }
+    }
+    if (intent !== characterSelectionIntent) return
+    const currentIndex = db.characters.findIndex((value) => value?.chaId === char.chaId)
+    if (currentIndex === -1) return
+    index = currentIndex
+    const selectedCharacter = db.characters[index]
     if(arg.clearNewBadge !== false){
-      clearCharacterVaultNew(db, char.chaId)
+      clearCharacterVaultNew(db, selectedCharacter.chaId)
     }
     reseter();
     chatDeselected.set(false)
@@ -789,7 +872,7 @@ export function changeChar(index: number, arg:{
     selectedCharID.set(index);
     const chat = getCurrentChat()
     if(chat){
-        if(chat._placeholder){
+        if(chat._placeholder || (chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false){
             const db = getDatabase()
             const char = db.characters[index]
             const capturedIndex = index
@@ -815,7 +898,11 @@ export function changeChar(index: number, arg:{
                 })
             }
         } else {
+            void touchHydratedChat(selectedCharacter.chaId, selectedCharacter.chats, selectedCharacter.chatPage)
             loadTogglesFromChat(chat)
         }
+    }
+    } finally {
+        runtimeMetrics.end(metric)
     }
 }

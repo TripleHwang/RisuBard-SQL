@@ -962,6 +962,17 @@ export async function ParseMarkdown(
 const trimCache = new Map<string, string>()
 const TRIM_CACHE_MAX = 200
 
+/** Drops only parser-owned lookup/render caches; inlay URLs are direct server URLs, not owned blobs. */
+export function clearParserRuntimeCaches(): void {
+    fileSrcCache.clear()
+    blobUrlCache.clear()
+    trimCache.clear()
+    encodedMetadataCache.clear()
+    assetsCache = null
+    emoAssetsCache = null
+    assetsCacheCharacterId = ''
+}
+
 export function trimMarkdown(data:string){
     // Include hideAllImages in cache key — DOMPurify hook rewrites <img> based on this flag
     const cacheKey = (DBState.db?.hideAllImages ? '1|' : '0|') + data

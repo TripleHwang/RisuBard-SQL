@@ -15,6 +15,7 @@ import { getInlayAsset, setInlayAsset, getInlayInfosBatch, type InlayAsset } fro
 import { getInlayMeta, setInlayMeta, type InlayAssetMeta } from './process/files/inlayMeta'
 import { PngChunk } from './pngChunk'
 import { reencodeImage } from './process/files/inlays'
+import { withSaverScope } from './performance/saverMode'
 import { resolvePersonaById } from './personaScopes'
 
 // ── Types ──
@@ -390,7 +391,7 @@ async function importInlays(
 
 // ── Export ──
 
-export async function exportCharacterPackage(
+async function exportCharacterPackageInner(
     charIndex: number,
     options: {
         includeCharacter: boolean
@@ -412,7 +413,7 @@ export async function exportCharacterPackage(
         // Hydrate placeholder chats from server before any scan/export
         for (let i = 0; i < char.chats.length; i++) {
             const chat = char.chats[i]
-            if (chat._placeholder && chat.id) {
+            if ((chat._placeholder || (chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false) && chat.id) {
                 const full = await fetchChatFromServer(char.chaId, i, chat.id)
                 if (full) {
                     char.chats[i] = full as Chat
@@ -420,6 +421,11 @@ export async function exportCharacterPackage(
                     alertError(`Chat data missing for "${char.name}" / "${chat.name}". Export aborted to prevent data loss.`)
                     return
                 }
+            }
+            const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }
+            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || hydrated._sqlWindow?.hasOlder) {
+                alertError(`Load earlier messages before package export: "${hydrated.name}".`)
+                return
             }
         }
 
@@ -612,9 +618,16 @@ export async function exportCharacterPackage(
     }
 }
 
+export async function exportCharacterPackage(
+    charIndex: number,
+    options: { includeCharacter: boolean; includeChats: boolean; includePersona: boolean; includeInlays: boolean },
+): Promise<void> {
+    return withSaverScope('export', () => exportCharacterPackageInner(charIndex, options))
+}
+
 // ── Import (new character) ──
 
-export async function importCharacterPackage(): Promise<void> {
+async function importCharacterPackageInner(): Promise<void> {
     try {
         const file = await selectSingleFile(['zip'])
         if (!file) return
@@ -698,9 +711,13 @@ export async function importCharacterPackage(): Promise<void> {
     }
 }
 
+export async function importCharacterPackage(): Promise<void> {
+    return withSaverScope('import', () => importCharacterPackageInner())
+}
+
 // ── Import to existing character ──
 
-export async function importPackageToCharacter(charIndex: number): Promise<void> {
+async function importPackageToCharacterInner(charIndex: number): Promise<void> {
     try {
         const file = await selectSingleFile(['zip'])
         if (!file) return
@@ -755,4 +772,8 @@ export async function importPackageToCharacter(charIndex: number): Promise<void>
     } catch (error) {
         alertError(error)
     }
+}
+
+export async function importPackageToCharacter(charIndex: number): Promise<void> {
+    return withSaverScope('import', () => importPackageToCharacterInner(charIndex))
 }

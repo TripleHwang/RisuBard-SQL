@@ -27,15 +27,38 @@ async function digestFileAsync(filePath) {
 
 async function mapWithConcurrency(items, concurrency, mapper) {
     const results = new Array(items.length);
+    const failures = new Array(items.length);
     let nextIndex = 0;
     const workers = Array.from({ length: Math.min(items.length, Math.max(1, concurrency)) }, async () => {
         while (nextIndex < items.length) {
             const index = nextIndex++;
-            results[index] = await mapper(items[index], index);
+            try {
+                results[index] = await mapper(items[index], index);
+            } catch (error) {
+                // Do not leave concurrent file preparations writing after the caller
+                // has observed a failure.  Settle every scheduled input first.
+                failures[index] = error;
+            }
         }
     });
     await Promise.all(workers);
+    const failure = failures.find(Boolean);
+    if (failure) throw failure;
     return results;
+}
+
+async function syncDirectoryAsync(directory) {
+    let handle;
+    try {
+        handle = await fsp.open(directory, 'r');
+        await handle.sync();
+    } catch (error) {
+        // Windows does not permit opening a directory as a normal file.  On
+        // platforms that support it, this is the durability barrier after rename.
+        if (!['EINVAL', 'EPERM', 'EISDIR', 'ENOTSUP'].includes(error?.code)) throw error;
+    } finally {
+        await handle?.close().catch(() => {});
+    }
 }
 
 function writeObject(dataRoot, hash, data) {
@@ -95,7 +118,7 @@ async function writeObjectAsync(dataRoot, hash, data) {
     }
 }
 
-async function writeObjectFromFileAsync(dataRoot, sourcePath) {
+async function writeObjectFromFileAsync(dataRoot, sourcePath, onObjectReady = () => {}) {
     const directory = path.join(dataRoot, 'kv', 'objects');
     await fsp.mkdir(directory, { recursive: true });
     const temp = path.join(directory, `.${crypto.randomUUID()}.import`);
@@ -115,8 +138,11 @@ async function writeObjectFromFileAsync(dataRoot, sourcePath) {
             throw new Error(`Content object checksum verification failed: ${digestValue}`);
         }
         const target = path.join(directory, digestValue);
+        let renamed = false;
         try {
             await fsp.rename(temp, target);
+            renamed = true;
+            await syncDirectoryAsync(directory);
         } catch (error) {
             try {
                 await fsp.access(target);
@@ -125,6 +151,7 @@ async function writeObjectFromFileAsync(dataRoot, sourcePath) {
                 throw error;
             }
         }
+        onObjectReady(digestValue, renamed);
         await fsp.unlink(sourcePath).catch(() => {});
         return { hash: digestValue, size };
     } catch (error) {
@@ -151,6 +178,20 @@ function createFileKv(options = {}) {
     }));
     let manifestCommitTail = Promise.resolve();
     const inFlightManifests = new Set();
+    const pendingReplacementMutationJournals = new Set();
+    const preparedObjectReferences = new Map();
+
+    function retainPreparedObject(hash) {
+        preparedObjectReferences.set(hash, (preparedObjectReferences.get(hash) ?? 0) + 1);
+    }
+
+    function releasePreparedObjects(hashes) {
+        for (const hash of hashes) {
+            const remaining = (preparedObjectReferences.get(hash) ?? 1) - 1;
+            if (remaining > 0) preparedObjectReferences.set(hash, remaining);
+            else preparedObjectReferences.delete(hash);
+        }
+    }
 
     async function commitManifest(next) {
         inFlightManifests.add(next);
@@ -178,6 +219,7 @@ function createFileKv(options = {}) {
     // Apply it to both the live manifest and every in-flight staged snapshot so a
     // later staged publish cannot overwrite the synchronous write with stale data.
     function mutateManifest(mutate) {
+        for (const journal of pendingReplacementMutationJournals) journal.push(mutate);
         const targets = new Set([manifest, ...inFlightManifests]);
         for (const target of targets) {
             mutate(target);
@@ -222,9 +264,58 @@ function createFileKv(options = {}) {
         });
     }
 
-    async function prepareFileEntriesAsync(entries) {
+    function validateFileEntries(entries) {
+        if (!Array.isArray(entries)) throw new TypeError('File KV entries must be an array');
+        const keys = new Set();
+        const sourcePaths = new Set();
+        const sourceInodes = new Set();
+        const objectsDirectory = path.resolve(dataRoot, 'kv', 'objects');
+        const realObjectsDirectory = fs.existsSync(objectsDirectory)
+            ? fs.realpathSync.native(objectsDirectory)
+            : objectsDirectory;
+        return entries.map((entry, index) => {
+            if (!entry || typeof entry.key !== 'string' || !entry.key || entry.key.includes('\0')) {
+                throw new TypeError(`Invalid file KV key at entry ${index}`);
+            }
+            if (typeof entry.sourcePath !== 'string' || !entry.sourcePath) {
+                throw new TypeError(`Invalid file KV source path at entry ${index}`);
+            }
+            if (keys.has(entry.key)) throw new Error(`Duplicate file KV key: ${entry.key}`);
+            keys.add(entry.key);
+            const sourcePath = path.resolve(entry.sourcePath);
+            let canonicalSourcePath = sourcePath;
+            try {
+                const sourceLstat = fs.lstatSync(sourcePath);
+                if (sourceLstat.isSymbolicLink()) {
+                    throw new Error(`Unsafe symbolic-link file KV source path: ${entry.sourcePath}`);
+                }
+                canonicalSourcePath = fs.realpathSync.native(sourcePath);
+                const sourceStat = fs.statSync(sourcePath);
+                const inodeIdentity = `${sourceStat.dev}:${sourceStat.ino}`;
+                if (sourceInodes.has(inodeIdentity)) {
+                    throw new Error(`Ambiguous hard-link file KV source path: ${entry.sourcePath}`);
+                }
+                sourceInodes.add(inodeIdentity);
+            } catch (error) {
+                if (error?.code !== 'ENOENT') throw error;
+            }
+            const relativeToObjects = path.relative(realObjectsDirectory, canonicalSourcePath);
+            if (relativeToObjects === '' || (!relativeToObjects.startsWith(`..${path.sep}`) && relativeToObjects !== '..' && !path.isAbsolute(relativeToObjects))) {
+                throw new Error(`Unsafe file KV source path inside object store: ${entry.sourcePath}`);
+            }
+            if (sourcePaths.has(canonicalSourcePath)) throw new Error(`Ambiguous file KV source path: ${entry.sourcePath}`);
+            sourcePaths.add(canonicalSourcePath);
+            return { key: entry.key, sourcePath };
+        });
+    }
+
+    async function prepareFileEntriesAsync(entries, retainedHashes) {
         return mapWithConcurrency(entries, objectWriteConcurrency, async ({ key, sourcePath }) => {
-            const prepared = await writeObjectFromFileAsync(dataRoot, sourcePath);
+            const prepared = await writeObjectFromFileAsync(dataRoot, sourcePath, hash => {
+                if (!retainedHashes) return;
+                retainPreparedObject(hash);
+                retainedHashes.push(hash);
+            });
             return [key, { object: prepared.hash, size: prepared.size, updatedAt: Date.now() }];
         });
     }
@@ -292,8 +383,36 @@ function createFileKv(options = {}) {
         mutateManifest(target => { target.entries = Object.fromEntries(prepared); });
     }
 
+    async function kvReplaceAllFromFilesAsync(entries) {
+        const validEntries = validateFileEntries(entries);
+        const deferredMutations = [];
+        const retainedHashes = [];
+        pendingReplacementMutationJournals.add(deferredMutations);
+        return queueManifestCommit(async () => {
+            try {
+                const prepared = await prepareFileEntriesAsync(validEntries, retainedHashes);
+                const next = {
+                    schemaVersion: 1,
+                    updatedAt: Date.now(),
+                    entries: Object.fromEntries(prepared),
+                };
+                for (const mutate of deferredMutations) {
+                    mutate(next);
+                    next.updatedAt = Date.now();
+                }
+                pendingReplacementMutationJournals.delete(deferredMutations);
+                await commitManifest(next);
+            } finally {
+                pendingReplacementMutationJournals.delete(deferredMutations);
+                releasePreparedObjects(retainedHashes);
+            }
+        });
+    }
+
     function kvDel(key) {
-        if (!(key in manifest.entries) && ![...inFlightManifests].some(target => key in target.entries)) return;
+        if (!(key in manifest.entries)
+            && ![...inFlightManifests].some(target => key in target.entries)
+            && pendingReplacementMutationJournals.size === 0) return;
         mutateManifest(target => { delete target.entries[key]; });
     }
 
@@ -305,6 +424,13 @@ function createFileKv(options = {}) {
         return manifest.entries[key]?.updatedAt ?? null;
     }
 
+    // Read-only manifest metadata: callers can validate object identity without
+    // opening the content-addressed object file.
+    function kvGetMetadata(key) {
+        const entry = manifest.entries[key];
+        return entry ? { object: entry.object, size: entry.size, updatedAt: entry.updatedAt } : null;
+    }
+
     function kvCopyValue(source, destination) {
         const entry = manifest.entries[source];
         if (!entry) return;
@@ -314,7 +440,8 @@ function createFileKv(options = {}) {
 
     function kvDelPrefix(prefix) {
         const changed = [manifest, ...inFlightManifests]
-            .some(target => Object.keys(target.entries).some(key => key.startsWith(prefix)));
+            .some(target => Object.keys(target.entries).some(key => key.startsWith(prefix)))
+            || pendingReplacementMutationJournals.size > 0;
         if (changed) mutateManifest(target => {
             for (const key of Object.keys(target.entries)) {
                 if (key.startsWith(prefix)) delete target.entries[key];
@@ -339,7 +466,7 @@ function createFileKv(options = {}) {
         if (!fs.existsSync(directory)) return [];
         const referenced = referencedObjects();
         return fs.readdirSync(directory)
-            .filter(name => /^[a-f0-9]{64}$/.test(name) && !referenced.has(name));
+            .filter(name => /^[a-f0-9]{64}$/.test(name) && !referenced.has(name) && !preparedObjectReferences.has(name));
     }
 
     function reclaimableChunkBytes() {
@@ -422,9 +549,11 @@ function createFileKv(options = {}) {
         kvReplacePrefixesFromFilesAsync,
         kvReplaceAll,
         kvReplaceAllAsync,
+        kvReplaceAllFromFilesAsync,
         kvDel,
         kvSize,
         kvGetUpdatedAt,
+        kvGetMetadata,
         kvCopyValue,
         kvDelPrefix,
         kvList,

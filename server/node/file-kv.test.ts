@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 
 const { createFileKv } = require('./file-kv.cjs')
 const { atomicWriteJson } = require('./file-store.cjs')
@@ -247,6 +248,214 @@ describe('file-native KV compatibility projection', () => {
         const reopened = createFileKv({ dataRoot })
         expect(reopened.kvList()).toEqual(['assets/a', 'database/database.bin'])
         expect(reopened.kvGet('assets/a')?.toString()).toBe('asset-a')
+    })
+
+    it('replaces the complete manifest from staged files only after every source prepares', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const databasePath = path.join(stagingRoot, 'database.bin')
+        const assetPath = path.join(stagingRoot, 'asset.bin')
+        fs.writeFileSync(databasePath, Buffer.from('new-database'))
+        fs.writeFileSync(assetPath, Buffer.from('new-asset'))
+        const store = createFileKv({ dataRoot })
+        store.kvSet('database/database.bin', Buffer.from('old-database'))
+        store.kvSet('assets/old.png', Buffer.from('old-asset'))
+
+        await store.kvReplaceAllFromFilesAsync([
+            { key: 'database/database.bin', sourcePath: databasePath },
+            { key: 'assets/new.png', sourcePath: assetPath },
+        ])
+
+        expect(store.kvList()).toEqual(['assets/new.png', 'database/database.bin'])
+        expect(store.kvGet('database/database.bin')?.toString()).toBe('new-database')
+        expect(store.kvGet('assets/new.png')?.toString()).toBe('new-asset')
+        expect(fs.existsSync(databasePath)).toBe(false)
+        expect(fs.existsSync(assetPath)).toBe(false)
+    })
+
+    it('preserves the old manifest when a full staged replacement cannot prepare every source', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const validPath = path.join(stagingRoot, 'valid.bin')
+        fs.writeFileSync(validPath, Buffer.from('replacement'))
+        const store = createFileKv({ dataRoot, objectWriteConcurrency: 1 })
+        store.kvSet('database/database.bin', Buffer.from('old-database'))
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/missing.png', sourcePath: path.join(stagingRoot, 'missing.bin') },
+            { key: 'assets/valid.png', sourcePath: validPath },
+        ])).rejects.toThrow()
+
+        expect(store.kvList()).toEqual(['database/database.bin'])
+        expect(store.kvGet('database/database.bin')?.toString()).toBe('old-database')
+        // Staged paths are transferred to the importer as each independent prepare succeeds,
+        // even if a later complete-manifest publish is rejected.
+        expect(fs.existsSync(validPath)).toBe(false)
+    })
+
+    it('rejects duplicate replacement keys and ambiguous reused source paths before consuming them', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'input.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('input'))
+        const store = createFileKv({ dataRoot })
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/a.png', sourcePath },
+            { key: 'assets/a.png', sourcePath: path.join(stagingRoot, 'other.bin') },
+        ])).rejects.toThrow(/duplicate.*key/i)
+        expect(fs.existsSync(sourcePath)).toBe(true)
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/a.png', sourcePath },
+            { key: 'assets/b.png', sourcePath },
+        ])).rejects.toThrow(/source path/i)
+        expect(fs.existsSync(sourcePath)).toBe(true)
+    })
+
+    it('replaces the complete manifest with an empty staged set', async () => {
+        const dataRoot = root()
+        const store = createFileKv({ dataRoot })
+        store.kvSet('database/database.bin', Buffer.from('old-database'))
+
+        await store.kvReplaceAllFromFilesAsync([])
+
+        expect(store.kvList()).toEqual([])
+        expect(createFileKv({ dataRoot }).kvList()).toEqual([])
+    })
+
+    it('preserves the complete old manifest if its replacement write fails', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'replacement.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('replacement'))
+        createFileKv({ dataRoot }).kvSet('database/database.bin', Buffer.from('old-database'))
+        const store = createFileKv({
+            dataRoot,
+            manifestWriter: async () => { throw new Error('manifest write failed') },
+        })
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'database/database.bin', sourcePath },
+        ])).rejects.toThrow('manifest write failed')
+
+        expect(store.kvList()).toEqual(['database/database.bin'])
+        expect(store.kvGet('database/database.bin')?.toString()).toBe('old-database')
+        expect(createFileKv({ dataRoot }).kvGet('database/database.bin')?.toString()).toBe('old-database')
+    })
+
+    it('keeps prepared replacement objects out of GC until their queued manifest commits', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'replacement.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('replacement'))
+        let store: ReturnType<typeof createFileKv>
+        store = createFileKv({
+            dataRoot,
+            manifestWriter: async next => {
+                expect(store.gcChunks()).toEqual({ count: 0, bytes: 0 })
+                atomicWriteJson(dataRoot, 'kv/manifest.json', next)
+            },
+        })
+
+        await store.kvReplaceAllFromFilesAsync([
+            { key: 'database/database.bin', sourcePath },
+        ])
+
+        expect(store.kvGet('database/database.bin')?.toString()).toBe('replacement')
+    })
+
+    it('reserves replacement order before preparation so later sync and queued writes survive', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const replacementPath = path.join(stagingRoot, 'replacement.bin')
+        const removedPath = path.join(stagingRoot, 'removed.bin')
+        const laterPath = path.join(stagingRoot, 'later.bin')
+        fs.writeFileSync(replacementPath, Buffer.from('replacement'))
+        fs.writeFileSync(removedPath, Buffer.from('remove-me'))
+        fs.writeFileSync(laterPath, Buffer.from('later'))
+        const store = createFileKv({ dataRoot, objectWriteConcurrency: 1 })
+        store.kvSet('assets/old', Buffer.from('old'))
+
+        const createReadStream = fs.createReadStream.bind(fs)
+        let releasePreparation!: () => void
+        let preparationStarted!: () => void
+        const preparationGate = new Promise<void>(resolve => { releasePreparation = resolve })
+        const preparationStartedPromise = new Promise<void>(resolve => { preparationStarted = resolve })
+        const streamSpy = vi.spyOn(fs, 'createReadStream').mockImplementation(((filePath: fs.PathLike, options?: unknown) => {
+            if (path.resolve(String(filePath)) !== path.resolve(replacementPath)) {
+                return createReadStream(filePath, options as never)
+            }
+            return Readable.from((async function* () {
+                preparationStarted()
+                await preparationGate
+                yield fs.readFileSync(replacementPath)
+            })()) as fs.ReadStream
+        }) as typeof fs.createReadStream)
+
+        try {
+            const replacement = store.kvReplaceAllFromFilesAsync([
+                { key: 'database/database.bin', sourcePath: replacementPath },
+                { key: 'assets/remove-after-replacement', sourcePath: removedPath },
+            ])
+            await preparationStartedPromise
+            store.kvSet('settings/after-replacement', Buffer.from('sync'))
+            store.kvDel('assets/remove-after-replacement')
+            const queued = store.kvSetManyFromFilesAsync([
+                { key: 'assets/after-replacement', sourcePath: laterPath },
+            ])
+            await waitForStagedSourceConsumption(laterPath)
+            releasePreparation()
+            await Promise.all([replacement, queued])
+        } finally {
+            releasePreparation()
+            streamSpy.mockRestore()
+        }
+
+        expect(store.kvList()).toEqual([
+            'assets/after-replacement',
+            'database/database.bin',
+            'settings/after-replacement',
+        ])
+        expect(store.kvGet('settings/after-replacement')?.toString()).toBe('sync')
+        expect(store.kvGet('assets/after-replacement')?.toString()).toBe('later')
+    })
+
+    it('rejects hard-link source aliases before consuming either staged path', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'source.bin')
+        const aliasPath = path.join(stagingRoot, 'alias.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('shared'))
+        fs.linkSync(sourcePath, aliasPath)
+        const store = createFileKv({ dataRoot })
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/source', sourcePath },
+            { key: 'assets/alias', sourcePath: aliasPath },
+        ])).rejects.toThrow(/alias|hard.?link|source path/i)
+
+        expect(fs.existsSync(sourcePath)).toBe(true)
+        expect(fs.existsSync(aliasPath)).toBe(true)
+        expect(store.kvList()).toEqual([])
+    })
+
+    it('rejects an object-store source reached through a directory alias', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const store = createFileKv({ dataRoot })
+        store.kvSet('assets/existing', Buffer.from('existing'))
+        const objectsDirectory = path.join(dataRoot, 'kv', 'objects')
+        const objectName = fs.readdirSync(objectsDirectory)[0]
+        const aliasedDirectory = path.join(stagingRoot, 'objects-alias')
+        fs.symlinkSync(objectsDirectory, aliasedDirectory, 'junction')
+
+        await expect(store.kvReplaceAllFromFilesAsync([
+            { key: 'assets/reused', sourcePath: path.join(aliasedDirectory, objectName) },
+        ])).rejects.toThrow(/unsafe.*object store/i)
+
+        expect(store.kvGet('assets/existing')?.toString()).toBe('existing')
+        expect(fs.existsSync(path.join(objectsDirectory, objectName))).toBe(true)
     })
 
     it('round-trips binary values and persists only a small manifest plus content objects', () => {

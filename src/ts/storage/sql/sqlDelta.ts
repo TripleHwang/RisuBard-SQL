@@ -167,6 +167,16 @@ export function buildSqlDeltaCommit(
         });
       }
 
+      const runtimeChat = chat as typeof chat & {
+        messagesLoaded?: boolean;
+        messagesFullyLoaded?: boolean;
+        _sqlWindow?: { hasOlder?: boolean };
+      };
+      const incompleteWindow = runtimeChat.messagesLoaded === false ||
+        runtimeChat.messagesFullyLoaded === false ||
+        runtimeChat._sqlWindow?.hasOlder === true;
+      if (incompleteWindow) return;
+
       const oldMessages = oldChat?.message ?? [];
       const currentMessages = chat.message ?? [];
       const oldMessageIds = oldMessages.map(ensureMessageId);

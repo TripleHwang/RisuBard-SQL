@@ -13,6 +13,7 @@ const zlib = require('zlib')
 const rateLimit = require('express-rate-limit')
 const { WebSocketServer } = require('ws')
 const Vips = require('wasm-vips')
+const { createAssetThumbnailService, decodeCanonicalHexKey } = require('./asset-thumbnail.cjs')
 let _vipsPromise = null
 const getVips = () => {
     if (!_vipsPromise) {
@@ -23,8 +24,8 @@ const getVips = () => {
     }
     return _vipsPromise
 }
-const { kvGet, kvSet, kvSetMany, kvSetManyFromFilesAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
+const { kvGet, kvSet, kvSetMany, kvSetManyFromFilesAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvReplaceAllFromFilesAsync, kvDel, kvList,
+        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvGetMetadata, kvCopyValue,
         gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
@@ -39,9 +40,23 @@ const { releaseToUpdateInfo } = require('./release-update.cjs');
 const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest } = require('./update-manifest.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
+const {
+    normalizeSqlMessagePageQuery,
+    normalizeSqlAncillaryLimitQuery,
+    normalizeSqlSearchQuery,
+    normalizeSqlCharacterSearchQuery,
+    normalizeSqlReadKey,
+    normalizeSqlAncillaryPageQuery,
+} = require('./sql-read-route-params.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
 const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
 const { createCharXImportHandler } = require('./charx-import-route.cjs');
+const { importRisumFile, DEFAULT_RISUM_LIMITS } = require('./risum-import.cjs');
+const { createRisumImportHandler } = require('./risum-import-route.cjs');
+const { spoolSourceToOwnedFile } = require('./import-stream.cjs');
+const { createAssetUploadHandler } = require('./asset-upload-route.cjs');
+const { importSaveFolderZip, DEFAULT_SAVE_FOLDER_ZIP_LIMITS } = require('./save-folder-zip-import.cjs');
+const { createNdjsonResponseWriter } = require('./ndjson-response-writer.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -783,10 +798,21 @@ app.use(
     '/api/risubard/memory',
     createRisuBardMemoryJsonParser(express)
 );
+// This legacy endpoint accepts large chat writes. Install its limiter before
+// any body parser so rejected requests are not parsed into memory first.
+const chatContentWriteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 1200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many chat content save requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+app.use('/api/chat-content', chatContentWriteLimiter);
 app.use(express.json({ limit: '100mb' }));
 app.use((req, res, next) => {
     // Streaming imports must bypass express.raw(), which would buffer their full bodies.
-    if (req.path === '/api/backup/import' || req.path === '/api/charx/import') return next();
+    if (req.path === '/api/backup/import' || req.path === '/api/charx/import' || req.path === '/api/risum/import' || req.path === '/api/migrate/save-folder/upload' || req.path === '/api/assets/upload') return next();
     return express.raw({ type: 'application/octet-stream', limit: '2gb' })(req, res, next);
 });
 app.use(express.text({ limit: '100mb' }));
@@ -1575,6 +1601,51 @@ const charxImportLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many CharX import requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Risum imports share the import lock but still need an admission limit before
+// a client can repeatedly open large streamed request bodies.
+const risumImportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many Risum import requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Asset transfers are normally sequential during import/export workflows. Keep
+// a generous burst for those workflows while bounding repeated raw uploads.
+const assetUploadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 1200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many asset upload requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Backup and save-folder imports share one destructive import slot. These are
+// attached directly to their raw-body POST handlers before stream consumption.
+const legacySaveImportLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many legacy save import requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Bounded SQL hydration reads are frequent during normal navigation, but a
+// route-scoped cap prevents an authenticated client from repeatedly forcing
+// SQLite scans without throttling unrelated storage traffic.
+const sqlReadLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 2000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many SQL read requests. Please wait and try again later.' },
     validate: { xForwardedForHeader: false }
 });
 
@@ -3193,6 +3264,48 @@ async function generateThumbnail(buffer) {
     }
 }
 
+async function inspectThumbnailSource(buffer) {
+    const vips = await getVips()
+    const image = vips.Image.newFromBuffer(buffer)
+    try {
+        return { width: image.width, height: image.height }
+    } finally {
+        image.delete()
+    }
+}
+
+// Derived image data is deliberately process-local and bounded: it must never
+// become unbounded user KV data or get included in backups.
+const assetThumbnailService = createAssetThumbnailService({
+    getMetadata: kvGetMetadata,
+    get: kvGet,
+    inspect: inspectThumbnailSource,
+    transform: generateThumbnail,
+    transformVersion: 'webp-v1',
+    maxSide: THUMB_MAX_SIDE,
+    quality: THUMB_QUALITY,
+    maxEntries: 128,
+    maxBytes: 32 * 1024 * 1024,
+    maxSourceBytes: 32 * 1024 * 1024,
+    maxPixels: 40_000_000,
+})
+
+app.get('/api/asset/:hexKey/thumb', sessionAuthMiddleware, async (req, res) => {
+    try {
+        const key = decodeCanonicalHexKey(req.params.hexKey)
+        const result = await assetThumbnailService.get(key, req.headers['if-none-match'])
+        // URL is stable, so force ETag revalidation before reuse after overwrites.
+        res.set({ 'Cache-Control': 'public, max-age=0, must-revalidate', 'ETag': result.etag })
+        if (result.status === 304) return res.status(304).end()
+        return res.type('image/webp').send(result.image)
+    } catch (error) {
+        const status = error?.status
+        if (status) return res.status(status).set('Cache-Control', 'no-store').end()
+        logger.warn('[Asset thumbnail] Failed to create thumbnail:', error)
+        return res.status(422).set('Cache-Control', 'no-store').end()
+    }
+})
+
 app.get('/api/asset/:hexKey', sessionAuthMiddleware, async (req, res) => {
     try {
         const key = Buffer.from(req.params.hexKey, 'hex').toString('utf-8')
@@ -3606,6 +3719,133 @@ registerRisuBardMemoryRoutes(app, {
 // Relational SQL is the canonical structured-data store for the standalone
 // Node build. Assets remain content-addressed files; the browser sends only
 // bounded, pre-validated DML generated by the shared SQL commit layer.
+app.get('/api/sql/bootstrap', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        res.set('Cache-Control', 'no-store').json(relationalSql.bootstrap());
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/characters/:characterId', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const id = String(req.params.characterId || '');
+    if (!id || id.length > 256) {
+        return res.status(400).json({ error: 'Invalid character id' });
+    }
+    try {
+        const result = relationalSql.loadCharacter(id);
+        if (!result) return res.status(404).json({ error: 'Character not found' });
+        res.set('Cache-Control', 'no-store').json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/chats/:chatId/messages', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const id = String(req.params.chatId || '');
+    if (!id || id.length > 256) {
+        return res.status(400).json({ error: 'Invalid chat id' });
+    }
+    const pageQuery = normalizeSqlMessagePageQuery(req.query);
+    if (pageQuery.error) return res.status(400).json({ error: pageQuery.error });
+    try {
+        const result = relationalSql.loadChatMessages(id, pageQuery.before, pageQuery.limit);
+        if (!result) return res.status(404).json({ error: 'Chat not found' });
+        res.set('Cache-Control', 'no-store').json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Ancillary reads intentionally stay bounded. They replace normal-mode
+// snapshot fallbacks for drafts, cold archives, history and search UI.
+app.get('/api/sql/chat-drafts', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlAncillaryPageQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        res.set('Cache-Control', 'no-store').json(relationalSql.listChatDraftKeys(parsed.after, parsed.limit));
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/chat-drafts/:draftKey', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlReadKey(req.params.draftKey);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        const draft = relationalSql.getChatDraft(parsed.key);
+        if (!draft) return res.status(404).json({ error: 'Chat draft not found' });
+        res.set('Cache-Control', 'no-store').json({ key: parsed.key, draft });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/cold-storage', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlAncillaryPageQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        res.set('Cache-Control', 'no-store').json(relationalSql.listColdStorageItems(parsed.after, parsed.limit));
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/cold-storage/:archiveId', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlReadKey(req.params.archiveId);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        const item = relationalSql.getColdStorageItem(parsed.key);
+        if (item === null) return res.status(404).json({ error: 'Cold storage item not found' });
+        res.set('Cache-Control', 'no-store').json({ id: parsed.key, item });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/revisions', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlAncillaryLimitQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        res.set('Cache-Control', 'no-store').json({ revisions: relationalSql.listRevisions(parsed.limit) });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/search/messages', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlSearchQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        res.set('Cache-Control', 'no-store').json({ results: relationalSql.searchMessages(parsed.query, parsed.limit) });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/sql/search/characters', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const parsed = normalizeSqlCharacterSearchQuery(req.query);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    try {
+        const results = parsed.mode === 'tag'
+            ? relationalSql.searchCharactersByTag(parsed.query, parsed.limit)
+            : relationalSql.searchCharactersByName(parsed.query, parsed.limit);
+        res.set('Cache-Control', 'no-store').json({ results });
+    } catch (error) {
+        next(error);
+    }
+});
+
 app.get('/api/sql/snapshot', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     try {
@@ -3954,6 +4194,17 @@ app.post('/api/patch', async (req, res, next) => {
 
 // ─── Bulk asset endpoints (3-2-B) ─────────────────────────────────────────────
 const BULK_BATCH = 50;
+
+app.post('/api/assets/upload', assetUploadLimiter, createAssetUploadHandler({
+    checkAuth,
+    checkActiveSession,
+    kvSetManyFromFilesAsync,
+    stagingRoot: path.join(savePath, 'asset-uploads'),
+    getAvailableBytes: () => {
+        const stats = require('fs').statfsSync(savePath);
+        return Number(stats.bavail) * Number(stats.bsize);
+    },
+}));
 
 app.post('/api/assets/bulk-read', async (req, res, next) => {
     if(!await checkAuth(req, res)){ return; }
@@ -4317,6 +4568,26 @@ app.post('/api/charx/import', charxImportLimiter, createCharXImportHandler({
     logger,
 }));
 
+app.post('/api/risum/import', risumImportLimiter, createRisumImportHandler({
+    checkAuth,
+    checkActiveSession,
+    beginImport: () => {
+        if (importInProgress) return false;
+        importInProgress = true;
+        return true;
+    },
+    endImport: () => { importInProgress = false; },
+    importRisumFile,
+    publishAssets: entries => kvSetManyFromFilesAsync(entries),
+    stagingRoot: path.join(savePath, 'risum-imports'),
+    getAvailableBytes: () => {
+        const stats = require('fs').statfsSync(savePath);
+        return stats.bsize * stats.bavail;
+    },
+    limits: DEFAULT_RISUM_LIMITS,
+    logger,
+}));
+
 // Pre-flight check: auth + size + disk space before client starts uploading
 app.post('/api/backup/import/prepare', async (req, res, next) => {
     if (!await checkAuth(req, res)) { return; }
@@ -4351,7 +4622,7 @@ app.post('/api/backup/import/prepare', async (req, res, next) => {
     }
 });
 
-app.post('/api/backup/import', async (req, res, next) => {
+app.post('/api/backup/import', legacySaveImportLimiter, async (req, res, next) => {
     if(!await checkAuth(req, res)){ return; }
     if (!checkActiveSession(req, res)) return;
 
@@ -5061,14 +5332,22 @@ function scanHexFilesInDir(dirPath) {
     return { hexFiles, count: hexFiles.length, totalSize, hasDatabase };
 }
 
-async function replaceWithLegacySaveEntries(entries) {
+async function applyLegacySaveReplacement(apply, imported) {
     await flushPendingDb();
     maybeCollectUnreferencedObjects();
     invalidateDbCache();
-    await kvReplaceAllAsync(entries);
+    await apply();
     relationalSql.reset();
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
-    return { imported: entries.length };
+    return { imported };
+}
+
+async function replaceWithLegacySaveEntries(entries) {
+    return applyLegacySaveReplacement(async () => await kvReplaceAllAsync(entries), entries.length);
+}
+
+async function replaceWithLegacySaveFileEntries(entries) {
+    return applyLegacySaveReplacement(async () => await kvReplaceAllFromFilesAsync(entries), entries.length);
 }
 
 async function importHexFilesFromDir(dirPath) {
@@ -5153,7 +5432,7 @@ app.post('/api/migrate/save-folder/execute', async (req, res, next) => {
     }
 });
 
-app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
+app.post('/api/migrate/save-folder/upload', legacySaveImportLimiter, async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
     if (importInProgress) {
@@ -5167,54 +5446,47 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
     const prevRequestTimeout = req.socket.server?.requestTimeout;
     if (req.socket.server) req.socket.server.requestTimeout = 0;
 
+    const controller = new AbortController();
+    let staged;
+    const ndjson = createNdjsonResponseWriter(res, { throttleMs: 250, signal: controller.signal });
+    // IncomingMessage emits close after a normal fully-read request too; only
+    // treat it as cancellation while the request was actually interrupted.
+    const onRequestClose = () => { if (req.aborted || !req.complete) controller.abort(); };
+    const onResponseClose = () => { if (!res.writableEnded) controller.abort(); };
+    let heartbeat;
     try {
-        const chunks = [];
-        let totalSize = 0;
-        for await (const chunk of req) {
-            totalSize += chunk.length;
-            if (BACKUP_IMPORT_MAX_BYTES > 0 && totalSize > BACKUP_IMPORT_MAX_BYTES) {
-                res.status(413).json({ error: 'Zip file exceeds max allowed size' });
-                return;
-            }
-            chunks.push(chunk);
+        const contentLength = Number(req.headers['content-length']);
+        if (Number.isFinite(contentLength) && contentLength > DEFAULT_SAVE_FOLDER_ZIP_LIMITS.compressedBytes) {
+            return res.status(413).json({ error: 'Zip file exceeds max allowed size', code: 'SAVE_FOLDER_ZIP_LIMIT_EXCEEDED' });
         }
-        const zipBuffer = Buffer.concat(chunks);
-
-        const fflate = require('fflate');
-        let unzipped;
-        try {
-            unzipped = await new Promise((resolve, reject) => {
-                fflate.unzip(new Uint8Array(zipBuffer), (error, data) => {
-                    if (error) reject(error);
-                    else resolve(data);
-                });
-            });
-        } catch {
-            res.status(400).json({ error: 'Invalid or corrupted zip file' });
-            return;
-        }
-
-        const entries = [];
-        for (const [entryPath, data] of Object.entries(unzipped)) {
-            if (data.length === 0) continue;
-            const basename = path.basename(entryPath);
-            if (!hexRegex.test(basename)) continue;
-            try {
-                const key = Buffer.from(basename, 'hex').toString('utf-8');
-                entries.push({ key, value: Buffer.from(data) });
-            } catch { /* invalid hex filename */ }
-        }
-
-        if (entries.length === 0) {
-            res.status(400).json({ error: 'No compatible hex files found in zip' });
-            return;
-        }
-
-        const result = await importHexEntries(entries);
-        res.json({ ok: true, imported: result.imported });
+        req.once('aborted', () => controller.abort()); req.once('close', onRequestClose); res.once('close', onResponseClose);
+        res.status(200).set({ 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' }); res.flushHeaders();
+        heartbeat = setInterval(() => ndjson.heartbeat(), 5000);
+        let received = 0;
+        const source = (async function* () { for await (const chunk of req) { received += chunk.length; ndjson.progress({ type: 'progress', phase: 'spooling', completed: received, total: Number.isFinite(contentLength) ? contentLength : received }); yield chunk; } })();
+        staged = await spoolSourceToOwnedFile(source, { stagingRoot: path.join(savePath, 'save-folder-imports'), prefix: 'upload-', filename: 'archive.zip', maxBytes: DEFAULT_SAVE_FOLDER_ZIP_LIMITS.compressedBytes, diskHeadroomBytes: DEFAULT_SAVE_FOLDER_ZIP_LIMITS.diskHeadroomBytes, signal: controller.signal,
+            getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); } });
+        const result = await importSaveFolderZip({ archivePath: staged.filePath, stagingRoot: path.join(savePath, 'save-folder-imports'), signal: controller.signal,
+            getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); },
+            replaceAllFromFiles: replaceWithLegacySaveFileEntries,
+            onProgress: progress => ndjson.progress({ type: 'progress', ...progress }), });
+        await ndjson.final({ type: 'done', result });
+        // A client can issue its next import as soon as it has read the final
+        // NDJSON event. Release before ending that response; otherwise the
+        // finally block runs one event-loop turn too late and returns a 409.
+        importInProgress = false;
+        res.end();
     } catch (error) {
-        res.status(400).json({ error: error.message || 'Import failed' });
+        const status = Number.isInteger(error?.status) ? error.status : 400;
+        const event = { type: 'error', code: error?.code || 'SAVE_FOLDER_IMPORT_FAILED', status, message: error?.message || 'Import failed' };
+        if (res.headersSent) {
+            try { await ndjson.final(event); } catch {}
+            importInProgress = false;
+            if (!res.writableEnded) res.end();
+        } else res.status(status).json({ error: event.message, code: event.code });
     } finally {
+        if (heartbeat) clearInterval(heartbeat); ndjson.close(); req.removeListener('close', onRequestClose); res.removeListener('close', onResponseClose);
+        if (staged?.ownedDir) await fs.rm(staged.ownedDir, { recursive: true, force: true }).catch(() => {});
         importInProgress = false;
         if (req.socket.server && prevRequestTimeout !== undefined) {
             req.socket.server.requestTimeout = prevRequestTimeout;

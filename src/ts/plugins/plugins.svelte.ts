@@ -15,6 +15,21 @@ import { runPluginUpdate } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 
 export const customProviderStore = writable([] as string[])
+export const pluginLoadingStore = writable(false)
+export const pluginReadyStore = writable(false)
+export const pluginStateStore = writable<'idle' | 'loading' | 'ready' | 'failed'>('idle')
+
+export function hasMetadataOnlyCharacters(db: { characters?: any[] }): boolean {
+    return (db.characters ?? []).some((character) => character?.detailsLoaded === false)
+}
+
+export function isPluginChatComplete(chat: any): boolean {
+    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
+}
+
+export function isPluginCharacterComplete(character: any): boolean {
+    return !!character && character.detailsLoaded !== false && Array.isArray(character.chats) && character.chats.every(isPluginChatComplete)
+}
 
 interface ProviderPlugin {
     name: string
@@ -453,6 +468,10 @@ export async function importPlugin(code:string|null = null, argu:{
 let pluginTranslator = false
 
 export async function loadPlugins() {
+    pluginLoadingStore.set(true)
+    pluginReadyStore.set(false)
+    pluginStateStore.set('loading')
+    try {
     console.log('Loading plugins...')
     let db = getDatabase()
 
@@ -478,6 +497,14 @@ export async function loadPlugins() {
 
     await loadV2Plugin(pluginV2)
     await loadV3Plugins(pluginV3)
+    pluginReadyStore.set(true)
+    pluginStateStore.set('ready')
+    } catch (error) {
+        pluginStateStore.set('failed')
+        throw error
+    } finally {
+        pluginLoadingStore.set(false)
+    }
 }
 
 export type PluginV2ProviderArgument = {
@@ -564,11 +591,15 @@ export const getV2PluginAPIs = () => {
             }
         },
         getChar: () => {
-            return getCurrentCharacter({ snapshot: true })
+            const character = getCurrentCharacter({ snapshot: true }) as any
+            return isPluginCharacterComplete(character) ? character : null
         },
         setChar: (char: any) => {
             const db = getDatabase()
             const charid = get(selectedCharID)
+            if (!isPluginCharacterComplete(db.characters[charid])) {
+                throw new Error('Character details are still loading')
+            }
             db.characters[charid] = char
             setDatabaseLite(db)
         },
@@ -716,6 +747,7 @@ export const getV2PluginAPIs = () => {
             }
             return new Proxy(db, {
                 get(target, prop) {
+                    if (prop === 'characters' && hasMetadataOnlyCharacters(target)) return undefined
                     if (typeof prop === 'string' && allowedDbKeys.includes(prop)) {
                         return (target as any)[prop];
                     }
@@ -726,6 +758,7 @@ export const getV2PluginAPIs = () => {
                     return undefined;
                 },
                 set(target, prop, value) {
+                    if (prop === 'characters' && hasMetadataOnlyCharacters(target)) throw new Error('Character details are still loading')
                     if (typeof prop === 'string' && allowedDbKeys.includes(prop)) {
                         (target as any)[prop] = value;
                         return true;
@@ -738,7 +771,7 @@ export const getV2PluginAPIs = () => {
                     }
                 },
                 ownKeys(target) {
-                    const keys = Reflect.ownKeys(target).filter(key => typeof key === 'string' && allowedDbKeys.includes(key));
+                    const keys = Reflect.ownKeys(target).filter(key => typeof key === 'string' && allowedDbKeys.includes(key) && !(key === 'characters' && hasMetadataOnlyCharacters(target)));
                     if(target.pluginCustomStorage){
                         keys.push(...Object.keys(target.pluginCustomStorage));
                     }
@@ -792,6 +825,7 @@ export const getV2PluginAPIs = () => {
         },
         setDatabaseLite: (newDb: any) => {
             const db = getDatabase();
+            if ('characters' in newDb && hasMetadataOnlyCharacters(db)) throw new Error('Character details are still loading')
             db.pluginCustomStorage ??= {}
             for (const key of Object.keys(newDb)) {
                 if (allowedDbKeys.includes(key)) {
@@ -805,6 +839,7 @@ export const getV2PluginAPIs = () => {
         },
         setDatabase: async (newDb: any) => {
             const db = getDatabase();
+            if ('characters' in newDb && hasMetadataOnlyCharacters(db)) throw new Error('Character details are still loading')
             db.pluginCustomStorage ??= {}
             for (const key of Object.keys(newDb)) {
                 if (key === 'plugins') {

@@ -15,13 +15,14 @@ describe('data import parallelism connections', () => {
         expect(server).not.toContain('stagedKvEntries.push({ key: storageKey, value: Buffer.from(storageValue) })')
     })
 
-    it('decompresses uploaded save-folder ZIPs through the worker-thread fflate API', () => {
+    it('spools uploaded save-folder ZIPs and delegates bounded extraction', () => {
         const route = server.slice(
             server.indexOf("app.post('/api/migrate/save-folder/upload'"),
             server.indexOf("app.post('/api/migrate/save-folder/cleanup/scan'"),
         )
-        expect(route).toContain('fflate.unzip(')
-        expect(route).not.toContain('unzipSync')
+        expect(route).toContain('spoolSourceToOwnedFile')
+        expect(route).toContain('importSaveFolderZip')
+        expect(route).not.toMatch(/Buffer\.concat\(chunks\)|fflate\.unzip\(/)
     })
 
     it('keeps the CharX stream out of raw-body buffering and wires file-backed publication', () => {
@@ -30,5 +31,13 @@ describe('data import parallelism connections', () => {
         expect(server).toContain('kvSetManyFromFilesAsync')
         const route = server.slice(server.indexOf("app.post('/api/charx/import'"), server.indexOf('// ── Server-side backup endpoints'))
         expect(route).not.toMatch(/charx[\s\S]{0,1500}Buffer\.concat\(chunks\)/i)
+    })
+
+    it('keeps the risum stream out of raw-body buffering and wires file-backed publication', () => {
+        expect(server).toContain("req.path === '/api/backup/import' || req.path === '/api/charx/import' || req.path === '/api/risum/import'")
+        expect(server).toContain("app.post('/api/risum/import'")
+        const route = server.slice(server.indexOf("app.post('/api/risum/import'"), server.indexOf('// Pre-flight check: auth + size + disk space'))
+        expect(route).toContain('kvSetManyFromFilesAsync')
+        expect(route).not.toMatch(/risum[\s\S]{0,1600}Buffer\.concat\(chunks\)/i)
     })
 })

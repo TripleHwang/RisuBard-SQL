@@ -9,17 +9,18 @@
     import { risuChatParser } from "src/ts/process/scripts"
     import { runTrigger } from 'src/ts/process/triggers'
     import { sayTTS } from "src/ts/process/tts"
-    import { DBState, ReloadChatPointer, CurrentTriggerIdStore, popupStore } from 'src/ts/stores.svelte'
+    import { DBState, ReloadChatPointer, bumpReloadChatPointer, CurrentTriggerIdStore, popupStore } from 'src/ts/stores.svelte'
 
     import { capitalize, getUserIcon, getUserName, sleep } from "src/ts/util"
     import { onDestroy, onMount } from "svelte"
     import { type Unsubscriber } from "svelte/store"
     import { v4 as uuidv4, v4 } from 'uuid'
+    import { markSqlChatDirty, markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime'
     import { language } from "../../lang"
     import { alertClear, alertConfirm, alertConfirmMulti, alertInput, alertRequestData, alertWait, notifyError, notifyInfo, notifySuccess, type AlertAction } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
     import { getLLMCache, setLLMCache } from "../../ts/translator/translator"
-    import { getCurrentCharacter, getCurrentChat, setCurrentChat, type MessageGenerationInfo, type StreamingDisplayOptimizationMode } from "../../ts/storage/database.svelte"
+    import { getCurrentCharacter, getCurrentChat, setCurrentChat, type Chat, type MessageGenerationInfo, type StreamingDisplayOptimizationMode } from "../../ts/storage/database.svelte"
     import { selectedCharID } from "../../ts/stores.svelte"
     import { HideIconStore, ReloadGUIPointer, selIdState } from "../../ts/stores.svelte"
     import AutoresizeArea from "../UI/GUI/TextAreaResizable.svelte"
@@ -52,6 +53,8 @@
         isLastMemory: boolean;
         img?: string|Promise<string>;
         idx?: number;
+        /** Stable ownership across prepended pages; indexes are resolved at action time. */
+        messageId?: string;
         messageGenerationInfo?: MessageGenerationInfo|null;
         rerollIcon?: boolean|'dynamic'|'force';
         role?: string;
@@ -85,7 +88,8 @@
         largePortrait = false,
         isLastMemory,
         img = '',
-        idx = -1,
+        idx: initialIdx = -1,
+        messageId = '',
         rerollIcon = false,
         messageGenerationInfo = null,
         role = null,
@@ -109,6 +113,12 @@
         streamingOptimizationMode = 'off',
         rawStreamingText = message,
     }: Props = $props();
+
+    // A mounted row must never keep acting on the numeric position it had before
+    // an older page was prepended. Greetings intentionally retain index -1.
+    let idx = $derived(messageId
+        ? DBState.db.characters[selIdState.selId]?.chats?.[DBState.db.characters[selIdState.selId]?.chatPage]?.message.findIndex((candidate) => candidate.chatId === messageId) ?? -1
+        : initialIdx)
 
     let msgDisplay = $state('')
     let translated = $state(false)
@@ -172,6 +182,8 @@
             notifySuccess(language.messageRemoved)
         }
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message = msg
+        for (const removed of removedMessages) if (removed?.chatId) markSqlMessageDeleted(currentChat.id!, removed.chatId)
+        if ((currentChat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(currentChat.id!)
     }
 
     async function edit(){
@@ -180,6 +192,8 @@
         if (msg.swipes && msg.swipeId !== undefined) {
             msg.swipes[msg.swipeId] = message
         }
+        msg.chatId ||= uuidv4()
+        markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, msg.chatId!, true)
     }
 
     function handlePartialEditSave(e: CustomEvent<{ newData: string }>) {
@@ -190,6 +204,8 @@
             if (msg.swipes && msg.swipeId !== undefined) {
                 msg.swipes[msg.swipeId] = e.detail.newData
             }
+            msg.chatId ||= uuidv4()
+            markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, msg.chatId!, true)
             displaya(e.detail.newData)
         }
     }
@@ -227,10 +243,8 @@
         const chat = current?.chats?.[current.chatPage]
         if (!chat) return
         chat.scriptstate = writeFirstMessageStudioVariables(chat.scriptstate ?? {}, runtime.variables)
-        ReloadChatPointer.update((value) => ({
-            ...value,
-            [idx]: (value[idx] ?? 0) + 1,
-        }))
+        if (current?.chaId && chat.id) markSqlChatDirty(current.chaId, chat.id)
+        bumpReloadChatPointer(messageId)
     }
 
     async function getTranslationCacheKey(): Promise<string> {
@@ -336,10 +350,7 @@
 
         if(triggerResult) {
             setCurrentChat(triggerResult.chat)
-            ReloadChatPointer.update((v) => {
-                v[idx] = (v[idx] ?? 0) + 1
-                return v
-            })
+            bumpReloadChatPointer(messageId)
         }
         
         if(triggerName && triggerId) {
@@ -356,7 +367,8 @@
     );
 
     async function toggleBookmark() {
-        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage];
+        const currentCharacter = DBState.db.characters[selIdState.selId]
+        const chat = currentCharacter.chats[currentCharacter.chatPage];
         
         if(!chat.message[idx]) return;
 
@@ -366,6 +378,7 @@
         if (!messageId) {
             messageId = uuidv4();
             chat.message[idx].chatId = messageId;
+            markSqlMessageDirty(chat.id!, messageId, true)
         }
 
         chat.bookmarks ??= [];
@@ -404,6 +417,7 @@
         }
 
         chat.bookmarks = [...chat.bookmarks];
+        markSqlChatDirty(currentCharacter.chaId, chat.id!)
     }
 </script>
 
@@ -518,7 +532,7 @@
             {language.noMessage}
         </div>
     {:else}
-        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[idx] ?? 0)}
+        {@const chatReloadPointer = $ReloadGUIPointer + ($ReloadChatPointer[messageId] ?? 0)}
         {@const totalLengthPointer = (idx > totalLength - 6) ? totalLength : 0}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -601,12 +615,14 @@
                 {#if firstMessage}
                     <button class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-red-500 hover:text-red-400' : 'hover:text-primary')} onclick={async () => {
                         await sleep(1)
-                        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
+                        const currentCharacter = DBState.db.characters[selIdState.selId]
+                        const chat = currentCharacter.chats[currentCharacter.chatPage]
                         if(chat.firstMessageDisabled){
                             chat.firstMessageDisabled = false
                         } else if(await alertConfirm(language.disableFirstMessageConfirm)){
                             chat.firstMessageDisabled = true
                         }
+                        markSqlChatDirty(currentCharacter.chaId, chat.id!)
                     }}>
                         <EyeOff size={20}/>
                     </button>
@@ -1169,6 +1185,8 @@
         await sleep(1)
         const currentMessage = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].disabled = !currentMessage.disabled
+        currentMessage.chatId ||= uuidv4()
+        markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, currentMessage.chatId!, true)
     }}>
         <PowerOff size={20}/>
         {#if showNames}
@@ -1180,6 +1198,8 @@
         await sleep(1)
         const currentMessage = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].disabled = currentMessage.disabled === 'allBefore' ? false : 'allBefore'
+        currentMessage.chatId ||= uuidv4()
+        markSqlMessageDirty(DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].id!, currentMessage.chatId!, true)
     }}>
         <Scissors size={20}/>
         {#if showNames}
@@ -1383,10 +1403,7 @@
                             <span>{DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'Assistant' : 'User'}</span>
                             <button class="ml-2 text-textcolor2 hover:text-textcolor" onclick={() => {
                                 DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'user' : 'char'
-                                ReloadChatPointer.update((v) => {
-                                    v[idx] = (v[idx] ?? 0) + 1
-                                    return v
-                                })
+                                bumpReloadChatPointer(messageId)
                             }}><ArrowLeftRightIcon size="18" /></button>
                         </span>
                     {:else if !$HideIconStore}
@@ -1481,10 +1498,7 @@
                             <span>{DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'Assistant' : 'User'}</span>
                             <button class="ml-2 text-textcolor2 hover:text-textcolor" onclick={() => {
                                 DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'user' : 'char'
-                                ReloadChatPointer.update((v) => {
-                                    v[idx] = (v[idx] ?? 0) + 1
-                                    return v
-                                })
+                                bumpReloadChatPointer(messageId)
                             }}><ArrowLeftRightIcon size="18" /></button>
                         </span>
                     {:else if !blankMessage && !$HideIconStore}
@@ -1506,10 +1520,7 @@
                             <span>{DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'Assistant' : 'User'}</span>
                             <button class="ml-2 text-textcolor2 hover:text-textcolor" onclick={() => {
                                 DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].role === 'char' ? 'user' : 'char'
-                                ReloadChatPointer.update((v) => {
-                                    v[idx] = (v[idx] ?? 0) + 1
-                                    return v
-                                })
+                                bumpReloadChatPointer(messageId)
                             }}><ArrowLeftRightIcon size="18" /></button>
                         </span>
                     {:else if !blankMessage && !$HideIconStore}

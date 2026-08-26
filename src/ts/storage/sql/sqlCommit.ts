@@ -52,9 +52,12 @@ export interface SqlCommit {
     upserts: SqlPresetUpsert[];
     deletes: string[];
     order?: string[];
-    activeId?: string;
+    /** Reconcile the stored list to order, including removal of absent IDs. */
+    manifest?: boolean;
+    activeId?: string | null;
   };
   characters: SqlEntityUpsert[];
+  characterDeletes?: string[];
   characterIds?: string[];
   chats: SqlChatUpsert[];
   chatManifests: { characterId: string; ids: string[] }[];
@@ -83,6 +86,7 @@ export function createEmptySqlCommit(
     action,
     root: { upserts: [], deletes: [] },
     characters: [],
+    characterDeletes: [],
     chats: [],
     chatManifests: [],
     messages: [],
@@ -103,6 +107,7 @@ export function hasSqlCommitChanges(commit: SqlCommit): boolean {
       commit.presets?.order ||
       commit.presets?.activeId !== undefined ||
       commit.characters.length ||
+      commit.characterDeletes?.length ||
       commit.characterIds ||
       commit.chats.length ||
       commit.chatManifests.length ||
@@ -129,6 +134,7 @@ export function sqlChatData(value: Chat): unknown {
   delete data.messagesFullyLoaded;
   delete data.messageOffset;
   delete data.messageTotal;
+  delete data._sqlWindow;
   delete data.detailsLoaded;
   return data;
 }
