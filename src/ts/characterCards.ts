@@ -27,6 +27,16 @@ const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
 const NIGHTLY_HUB_URL = 'https://nightly.sv.risuai.xyz'
 export const hubURL = '/hub-proxy';
 
+function isReadableStreamLike(data: unknown): data is ReadableStream<Uint8Array> {
+    return !!data && typeof data === 'object' && typeof (data as { getReader?: unknown }).getReader === 'function'
+}
+
+function isUint8Array(data: unknown): data is Uint8Array {
+    return ArrayBuffer.isView(data)
+        && Object.prototype.toString.call(data) === '[object Uint8Array]'
+        && (data as Uint8Array).BYTES_PER_ELEMENT === 1
+}
+
 export function readFirstMessageStudioExtension(data: { extensions?: { risuai?: { firstMessageStudio?: unknown } } }): FirstMessageStudioProject | undefined {
     const project = data?.extensions?.risuai?.firstMessageStudio
     return project ? normalizeFirstMessageStudioProject(safeStructuredClone(project)) : undefined
@@ -93,10 +103,10 @@ export async function importCharacterProcess<T extends boolean = false>(f:{
         const isServerCharX = isNodeServer && fileName.endsWith('.charx')
 
         if(isServerCharX){
-            if(f.data instanceof ReadableStream){
+            if(isReadableStreamLike(f.data)){
                 throw new Error('Node CharX import requires a file or byte buffer')
             }
-            const blob = f.data instanceof Uint8Array ? new Blob([new Uint8Array(f.data)]) : f.data
+            const blob = isUint8Array(f.data) ? new Blob([new Uint8Array(f.data)]) : f.data
             const result = await forageStorage.importCharX(blob, (progress) => {
                 alertStore.set({
                     type: progress.phase === 'uploading' ? 'wait' : 'progress',

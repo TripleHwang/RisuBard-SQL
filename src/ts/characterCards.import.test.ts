@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { runInNewContext } from 'node:vm'
 
 const validCard = (assets: any[] = []) => ({
     spec: 'chara_card_v3',
@@ -99,6 +100,22 @@ describe('Node-assisted CharX import', () => {
         await expect(importCharacterProcess({ name: 'realm.charx', data: new ReadableStream() })).rejects.toThrow('Node CharX import requires a file or byte buffer')
         expect(state.importCharX).not.toHaveBeenCalled()
         expect(state.importerCalls).toBe(0)
+    })
+
+    test('rejects stream-like input from another realm before server upload', async () => {
+        const foreignStream = { getReader() { return {} } } as any
+        await expect(importCharacterProcess({ name: 'realm.charx', data: foreignStream })).rejects.toThrow('Node CharX import requires a file or byte buffer')
+        expect(state.importCharX).not.toHaveBeenCalled()
+        expect(state.importerCalls).toBe(0)
+    })
+
+    test('wraps exact bytes from a foreign Uint8Array in a Blob', async () => {
+        const foreignBytes = runInNewContext('new Uint8Array([4, 5, 6])') as Uint8Array
+        expect(foreignBytes).not.toBeInstanceOf(Uint8Array)
+        await importCharacterProcess({ name: 'realm.charx', data: foreignBytes })
+        const uploaded = state.importCharX.mock.calls[0][0]
+        expect(uploaded).toBeInstanceOf(Blob)
+        expect(new Uint8Array(await uploaded.arrayBuffer())).toEqual(new Uint8Array([4, 5, 6]))
     })
 
     test('keeps non-Node CharX on the local importer', async () => {
