@@ -23,7 +23,7 @@ const getVips = () => {
     }
     return _vipsPromise
 }
-const { kvGet, kvSet, kvSetMany, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvDel, kvList,
+const { kvGet, kvSet, kvSetMany, kvSetManyFromFilesAsync, kvReplacePrefixesAsync, kvReplacePrefixesFromFilesAsync, kvReplaceAllAsync, kvDel, kvList,
         kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue,
         gcChunks, reclaimableChunkBytes, objectStoreBytes, isDbBlobChunked, snapshotFootprint, repository: userDataRepository } = require('./db.cjs');
 const {
@@ -40,6 +40,8 @@ const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
+const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
+const { createCharXImportHandler } = require('./charx-import-route.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -783,8 +785,8 @@ app.use(
 );
 app.use(express.json({ limit: '100mb' }));
 app.use((req, res, next) => {
-    // Skip express.raw() for backup import — it must stream, not buffer into memory
-    if (req.path === '/api/backup/import') return next();
+    // Streaming imports must bypass express.raw(), which would buffer their full bodies.
+    if (req.path === '/api/backup/import' || req.path === '/api/charx/import') return next();
     return express.raw({ type: 'application/octet-stream', limit: '2gb' })(req, res, next);
 });
 app.use(express.text({ limit: '100mb' }));
@@ -4283,6 +4285,26 @@ app.get('/api/backup/export', async (req, res, next) => {
         next(error);
     }
 });
+
+app.post('/api/charx/import', createCharXImportHandler({
+    checkAuth,
+    checkActiveSession,
+    beginImport: () => {
+        if (importInProgress) return false;
+        importInProgress = true;
+        return true;
+    },
+    endImport: () => { importInProgress = false; },
+    importCharXStream,
+    publishAssets: entries => kvSetManyFromFilesAsync(entries),
+    stagingRoot: path.join(savePath, 'charx-imports'),
+    getAvailableBytes: () => {
+        const stats = require('fs').statfsSync(savePath);
+        return stats.bsize * stats.bavail;
+    },
+    limits: DEFAULT_CHARX_LIMITS,
+    logger,
+}));
 
 // Pre-flight check: auth + size + disk space before client starts uploading
 app.post('/api/backup/import/prepare', async (req, res, next) => {
