@@ -351,25 +351,6 @@ export function resetChatHydrationCacheForTesting(): void {
     runtimeChatHydrationCache.clear()
 }
 
-function touchSelectedRuntimeChat(): void {
-    try {
-        const database = getDatabase()
-        const character = database.characters?.[get(selectedCharID)]
-        const index = character?.chatPage ?? -1
-        if (character?.chaId && index >= 0) void touchHydratedChat(character.chaId, character.chats, index)
-    } catch {
-        // Storage may not be initialized while the selected-character store
-        // emits its initial value.
-    }
-}
-
-// Covers direct character-card and hotkey selections, which update the store
-// without necessarily routing through changeChar.
-// Some isolated storage consumers intentionally provide no Svelte store. The
-// explicit hydration/touch paths remain authoritative; this convenience
-// subscription must never make importing the storage module a requirement.
-selectedCharID?.subscribe?.(() => touchSelectedRuntimeChat())
-
 /**
  * Apply the newest bounded SQL message page to one stable chat slot.  The
  * reverse-page hydrator owns window metadata and duplicate suppression; this
