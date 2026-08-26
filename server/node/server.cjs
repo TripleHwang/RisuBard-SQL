@@ -56,6 +56,7 @@ const { createRisumImportHandler } = require('./risum-import-route.cjs');
 const { spoolSourceToOwnedFile } = require('./import-stream.cjs');
 const { createAssetUploadHandler } = require('./asset-upload-route.cjs');
 const { importSaveFolderZip, DEFAULT_SAVE_FOLDER_ZIP_LIMITS } = require('./save-folder-zip-import.cjs');
+const { createNdjsonResponseWriter } = require('./ndjson-response-writer.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -5393,7 +5394,7 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
 
     const controller = new AbortController();
     let staged;
-    const writeEvent = event => { if (!res.writableEnded && !res.destroyed) res.write(JSON.stringify(event) + '\n'); };
+    const ndjson = createNdjsonResponseWriter(res, { throttleMs: 250, signal: controller.signal });
     // IncomingMessage emits close after a normal fully-read request too; only
     // treat it as cancellation while the request was actually interrupted.
     const onRequestClose = () => { if (req.aborted || !req.complete) controller.abort(); };
@@ -5406,22 +5407,22 @@ app.post('/api/migrate/save-folder/upload', async (req, res, next) => {
         }
         req.once('aborted', () => controller.abort()); req.once('close', onRequestClose); res.once('close', onResponseClose);
         res.status(200).set({ 'content-type': 'application/x-ndjson', 'cache-control': 'no-cache, no-transform', 'x-accel-buffering': 'no' }); res.flushHeaders();
-        heartbeat = setInterval(() => writeEvent({ type: 'heartbeat' }), 5000);
+        heartbeat = setInterval(() => ndjson.heartbeat(), 5000);
         let received = 0;
-        const source = (async function* () { for await (const chunk of req) { received += chunk.length; writeEvent({ type: 'progress', phase: 'spooling', completed: received, total: Number.isFinite(contentLength) ? contentLength : received }); yield chunk; } })();
+        const source = (async function* () { for await (const chunk of req) { received += chunk.length; ndjson.progress({ type: 'progress', phase: 'spooling', completed: received, total: Number.isFinite(contentLength) ? contentLength : received }); yield chunk; } })();
         staged = await spoolSourceToOwnedFile(source, { stagingRoot: path.join(savePath, 'save-folder-imports'), prefix: 'upload-', filename: 'archive.zip', maxBytes: DEFAULT_SAVE_FOLDER_ZIP_LIMITS.compressedBytes, diskHeadroomBytes: DEFAULT_SAVE_FOLDER_ZIP_LIMITS.diskHeadroomBytes, signal: controller.signal,
             getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); } });
         const result = await importSaveFolderZip({ archivePath: staged.filePath, stagingRoot: path.join(savePath, 'save-folder-imports'), signal: controller.signal,
             getAvailableBytes: () => { const s = require('fs').statfsSync(savePath); return Number(s.bavail) * Number(s.bsize); },
             replaceAllFromFiles: replaceWithLegacySaveFileEntries,
-            onProgress: progress => writeEvent({ type: 'progress', ...progress }), });
-        writeEvent({ type: 'done', result }); res.end();
+            onProgress: progress => ndjson.progress({ type: 'progress', ...progress }), });
+        await ndjson.final({ type: 'done', result }); res.end();
     } catch (error) {
         const status = Number.isInteger(error?.status) ? error.status : 400;
         const event = { type: 'error', code: error?.code || 'SAVE_FOLDER_IMPORT_FAILED', status, message: error?.message || 'Import failed' };
-        if (res.headersSent) { writeEvent(event); if (!res.writableEnded) res.end(); } else res.status(status).json({ error: event.message, code: event.code });
+        if (res.headersSent) { try { await ndjson.final(event); } catch {} if (!res.writableEnded) res.end(); } else res.status(status).json({ error: event.message, code: event.code });
     } finally {
-        if (heartbeat) clearInterval(heartbeat); req.removeListener('close', onRequestClose); res.removeListener('close', onResponseClose);
+        if (heartbeat) clearInterval(heartbeat); ndjson.close(); req.removeListener('close', onRequestClose); res.removeListener('close', onResponseClose);
         if (staged?.ownedDir) await fs.rm(staged.ownedDir, { recursive: true, force: true }).catch(() => {});
         importInProgress = false;
         if (req.socket.server && prevRequestTimeout !== undefined) {

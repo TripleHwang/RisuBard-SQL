@@ -15,6 +15,7 @@ import {
     assembleChatContentPages,
     type ChatContentPageEnvelope,
 } from './chatContentPage'
+import { createIncrementalNdjsonParser } from './ndjsonStream'
 
 const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 200
 
@@ -328,6 +329,7 @@ export class NodeStorage{
             xhr.setRequestHeader('risu-auth', authHeader)
             xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
             if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
+
             xhr.onerror = () => reject(new Error('Asset upload request failed'))
             xhr.onabort = () => reject(new Error('Asset upload request aborted'))
             xhr.onload = () => {
@@ -1061,6 +1063,20 @@ export class NodeStorage{
             xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
             if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
 
+            let result: { imported: number } | null = null
+            let serverError: string | null = null
+            const parser = createIncrementalNdjsonParser((value) => {
+                const event = value as any
+                if (event?.type === 'progress' && event.phase === 'extracting' &&
+                    typeof event.completed === 'number' && typeof event.total === 'number') {
+                    onProgress?.(event.completed, event.total)
+                } else if (event?.type === 'done' && typeof event.result?.imported === 'number') {
+                    result = event.result
+                } else if (event?.type === 'error') {
+                    serverError = typeof event.message === 'string' ? event.message : 'zip import failed'
+                }
+            })
+
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {
                     onProgress?.(event.loaded, event.total)
@@ -1068,6 +1084,7 @@ export class NodeStorage{
             }
 
             xhr.onerror = () => reject(new Error('zip upload failed'))
+            xhr.onprogress = () => parser.drain(xhr.responseText)
             xhr.onload = () => {
                 if (xhr.status < 200 || xhr.status >= 300) {
                     let msg = `zip import error: ${xhr.status}`
@@ -1075,19 +1092,10 @@ export class NodeStorage{
                     reject(new Error(msg))
                     return
                 }
-                try {
-                    // Large save-folder imports use NDJSON so the server can
-                    // report extraction progress without retaining the ZIP in
-                    // browser memory.  Keep the public method result stable.
-                    const events = xhr.responseText.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
-                    const failure = events.find(event => event.type === 'error')
-                    if (failure) throw new Error(failure.message || 'zip import failed')
-                    const done = events.find(event => event.type === 'done')
-                    if (!done?.result) throw new Error('zip import did not complete')
-                    resolve({ ok: true, imported: done.result.imported })
-                } catch (error) {
-                    reject(error)
-                }
+                parser.drain(xhr.responseText, true)
+                if (serverError) reject(new Error(serverError))
+                else if (result) resolve({ ok: true, imported: result.imported })
+                else reject(new Error('zip import did not complete'))
             }
 
             xhr.send(file)
