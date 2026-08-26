@@ -8,6 +8,17 @@ import { sendChat } from "./index.svelte";
 import { chatGenKey, endGeneration } from "./generationState";
 import { loadLoreBookV3Prompt } from "./lorebook.svelte";
 import { runTrigger } from "./triggers";
+import { v4 as uuidv4 } from 'uuid';
+import { markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from '../storage/sql/sqlPersistenceRuntime';
+
+function markCommandMessage(message: { chatId?: string }, chatId: string, immediate = false) {
+    message.chatId ||= uuidv4()
+    markSqlMessageDirty(chatId, message.chatId, immediate)
+}
+function markCommandRemoval(chat: any, removed: Array<{ chatId?: string }>) {
+    for (const message of removed) if (message.chatId) markSqlMessageDeleted(chat.id, message.chatId)
+    if (chat.messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id)
+}
 
 export async function processMultiCommand(command:string) {
     let pipe = ''
@@ -100,8 +111,10 @@ async function processCommand(command:string, pipe:string):Promise<false | strin
         case 'send': {
             currentChat.message.push({
                 role: "user",
-                data: arg
+                data: arg,
+                chatId: uuidv4(),
             })
+            markCommandMessage(currentChat.message.at(-1)!, currentChat.id, true)
             setDatabase(db)
             return pipe
         }
@@ -109,8 +122,10 @@ async function processCommand(command:string, pipe:string):Promise<false | strin
             //name not implemented
             currentChat.message.push({
                 role: "char",
-                data: arg
+                data: arg,
+                chatId: uuidv4(),
             })
+            markCommandMessage(currentChat.message.at(-1)!, currentChat.id, true)
             setDatabase(db)
             return pipe
         }
@@ -118,23 +133,29 @@ async function processCommand(command:string, pipe:string):Promise<false | strin
             //works differently, but its close enough
             const addition = `<Comment>\n${arg}\n</Comment>`
             currentChat.message[currentChat.message.length-1].data += addition
+            markCommandMessage(currentChat.message.at(-1)!, currentChat.id, true)
             setDatabase(db)
             return pipe
         }
         case 'cut':{
             if(arg.includes('-')){
                 const [start, end] = arg.split('-')
+                const removed = currentChat.message.filter((_: any, index: number) => index < parseInt(start) || index >= parseInt(end))
                 currentChat.message = currentChat.message.slice(parseInt(start), parseInt(end))
+                markCommandRemoval(currentChat, removed)
                 setDatabase(db)
             }
             else if(!isNaN(parseInt(arg))){
                 const index = parseInt(arg)
-                currentChat.message = currentChat.message.splice(index, 1)
+                const removed = currentChat.message.splice(index, 1)
+                markCommandRemoval(currentChat, removed)
                 setDatabase(db)
             }
             else{ //For risu, doesn'ts work for STScript
                 const id = arg
+                const removed = currentChat.message.filter((e)=>e.chatId === id)
                 currentChat.message = currentChat.message.filter((e)=>e.chatId !== id)
+                markCommandRemoval(currentChat, removed)
                 setDatabase(db)
             }
             return pipe
@@ -142,7 +163,9 @@ async function processCommand(command:string, pipe:string):Promise<false | strin
         case 'del': {
             const size = parseInt(arg)
             if(!isNaN(size)){
+                const removed = currentChat.message.slice(0, Math.max(0, currentChat.message.length - size))
                 currentChat.message = currentChat.message.slice(currentChat.message.length-size)
+                markCommandRemoval(currentChat, removed)
                 setDatabase(db)
             }
             return pipe
@@ -165,12 +188,15 @@ async function processCommand(command:string, pipe:string):Promise<false | strin
             }
             for(const e of splited){
                 if(clearMode){
+                    markCommandRemoval(currentChat, currentChat.message)
                     currentChat.message = []
                 }
                 currentChat.message.push({
                     role: 'user',
-                    data: e
+                    data: e,
+                    chatId: uuidv4(),
                 })
+                markCommandMessage(currentChat.message.at(-1)!, currentChat.id, true)
                 await sendChat(-1)
                 // sendChat leaves its generation entry for the caller to release
                 // (DefaultChatScreen does the same after its own send). Without

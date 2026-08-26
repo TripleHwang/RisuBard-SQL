@@ -52,6 +52,7 @@ import { isMobile } from 'src/ts/platform'
     import { aiLawApplies, chatFoldedState, chatFoldedStateMessageIndex, downloadFile } from 'src/ts/globalApi.svelte';
     import { runTrigger } from 'src/ts/process/triggers';
     import { v4 } from 'uuid';
+    import { markSqlMessageDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime';
     import { processMultiCommand } from 'src/ts/process/command';
     import { postChatFile } from 'src/ts/process/files/multisend';
     import { getInlayAsset } from 'src/ts/process/files/inlays';
@@ -1196,8 +1197,11 @@ import { isMobile } from 'src/ts/platform'
                     <button type="button" aria-label={language.add} onclick={() => {
                         DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.push({
                             role: 'char',
-                            data: ''
+                            data: '',
+                            chatId: v4(),
                         })
+                        const currentChat = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
+                        markSqlMessageDirty(currentChat.id!, currentChat.message.at(-1)!.chatId!, true)
                         DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
                     }}
                          class="shrink-0 flex justify-center items-center w-9 h-9 rounded-full text-textcolor hover:bg-primary/20 transition-colors cursor-pointer"

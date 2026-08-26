@@ -14,6 +14,7 @@ import { processScript, processScriptFull, risuChatParser } from "./scripts";
 import { exampleMessage } from "./exampleMessages";
 import { sayTTS } from "./tts";
 import { v4 } from "uuid";
+import { markSqlMessageDirty } from '../storage/sql/sqlPersistenceRuntime';
 import { runTrigger } from "./triggers";
 import { HypaProcesser } from "./memory/hypamemory";
 import { additionalInformations } from "./embedding/addinfo";
@@ -2585,6 +2586,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 promptInfo,
                 chatId: generationId,
             })
+            markSqlMessageDirty(DBState.db.characters[selectedChar].chats[selectedChat].id!, generationId)
         }
         const performanceMode: StreamingDisplayOptimizationMode = DBState.db.streamingDisplayOptimizationMode ?? 'balanced'
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
@@ -2628,11 +2630,13 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     }
                     if(deferStreamingPostProcessing){
                         DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = reformatContent(prefix + nextResult)
+                        markSqlMessageDirty(currentChat.id!, DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].chatId!)
                         DBState.db.characters[selectedChar].reloadKeys += 1
                         continue
                     }
                     let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + nextResult), 'editoutput', msgIndex)
                     DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+                    markSqlMessageDirty(currentChat.id!, DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].chatId!)
                     emoChanged = result2.emoChanged
                     DBState.db.characters[selectedChar].reloadKeys += 1
                 } while(streamingFlushQueued || pendingStreamingResult !== null)
@@ -2692,6 +2696,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     else{
                         let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
                         DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+                        markSqlMessageDirty(currentChat.id!, DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].chatId!)
                         emoChanged = result2.emoChanged
                         DBState.db.characters[selectedChar].reloadKeys += 1
                     }
@@ -2718,6 +2723,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 if(deferStreamingPostProcessing && receivedStreamingResult){
                     let result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
                     DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+                    markSqlMessageDirty(currentChat.id!, DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].chatId!)
                     emoChanged = result2.emoChanged
                 }
             }
@@ -2745,6 +2751,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
         const inlayr = runInlayScreen(currentChar, currentChat.message[msgIndex].data)
         currentChat.message[msgIndex].data = inlayr.text
+        markSqlMessageDirty(currentChat.id!, currentChat.message[msgIndex].chatId!, true)
         DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
         if(inlayr.promise){
             const t = await inlayr.promise

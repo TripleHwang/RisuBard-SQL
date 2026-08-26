@@ -18,11 +18,13 @@ import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
 import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
+import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty } from './storage/sql/sqlPersistenceRuntime';
 
 export function createNewCharacter() {
     let db = getDatabase()
     const character = createBlankChar()
     db.characters.push(character)
+    markSqlCharacterDirty(character.chaId)
     pinCharacterVaultQuickAccess(db, character.chaId)
     checkCharOrder()
     return db.characters.length - 1
@@ -380,8 +382,10 @@ export async function importChat(){
                     if(!isFirst){
                         newChat.message.push({
                             role: presedLine.is_user ? "user" : 'char',
-                            data: formatTavernChat(presedLine.mes, db.characters[selectedID].name)
+                            data: formatTavernChat(presedLine.mes, db.characters[selectedID].name),
+                            chatId: v4(),
                         })
+                        markSqlMessageDirty(newChat.id!, newChat.message.at(-1)!.chatId!, true)
                     }
                 }
 
@@ -547,6 +551,8 @@ export function characterFormatUpdate(indexOrCharacter:number|character, arg:{
     if(!cha.chats[cha.chatPage].message){
         cha.chats[cha.chatPage].message = []
     }
+    cha.chats[cha.chatPage].id ||= uuidv4()
+    markSqlChatDirty(cha.chaId!, cha.chats[cha.chatPage].id!, true)
     if(!cha.type){
         cha.type = 'character'
     }

@@ -33,7 +33,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { syncActiveSqlDatabase } from './storage/sql/sqlBootstrap'
+import { flushSqlDirtyChanges, scheduleSqlCompatibilityAudit } from './storage/sql/sqlPersistenceRuntime'
 
 export const forageStorage = new AutoStorage()
 
@@ -842,7 +842,7 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
         // Its active SQL baseline is already canonical, so row-level commits
         // safely preserve root edits until the full runtime persistence work.
         if (metadataOnly) {
-            await syncActiveSqlDatabase(db)
+            await flushSqlDirtyChanges()
             return 'saved'
         }
 
@@ -1090,7 +1090,7 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
         }
 
         updateKnownChatsAfterSuccessfulSave(db, toSave)
-        await syncActiveSqlDatabase(db)
+        await flushSqlDirtyChanges()
 
         if (newEtag) {
             forageStorage.setDbEtag(newEtag)

@@ -2,7 +2,7 @@ import { safeStructuredClone } from "../../polyfill";
 import { isNodeServer } from "../../platform";
 import type { Database } from "../database.svelte";
 import type { ISqlStorage, SqlBootstrapStorage } from "./ISqlStorage";
-import { buildSqlDeltaCommit } from "./sqlDelta";
+import { activateSqlPersistenceRuntime, deactivateSqlPersistenceRuntime, flushSqlDirtyChanges } from "./sqlPersistenceRuntime";
 import { WebSqliteStorage } from "./webSqliteStorage";
 
 export interface SqlBootstrapResult {
@@ -79,8 +79,6 @@ export async function selectCanonicalDatabase(
 }
 
 let activeSqlStorage: ISqlStorage | null = null;
-let activeSqlBaseline: Database | null = null;
-let sqlCommitChain: Promise<void> = Promise.resolve();
 let pendingSqlStorage: ISqlStorage | null = null;
 
 async function createDefaultSqlStorage(): Promise<ISqlStorage> {
@@ -100,8 +98,7 @@ async function createDefaultSqlStorage(): Promise<ISqlStorage> {
 
 function activateSqlStorage(storage: ISqlStorage, database: Database): void {
   activeSqlStorage = storage;
-  activeSqlBaseline = safeStructuredClone(database);
-  sqlCommitChain = Promise.resolve();
+  activateSqlPersistenceRuntime(storage, database);
 }
 
 /** Open an already-migrated SQL graph before touching its legacy projection. */
@@ -188,7 +185,7 @@ export async function openStandaloneSql(
     activateSqlStorage(result.storage, result.database);
   } else {
     activeSqlStorage = null;
-    activeSqlBaseline = null;
+    deactivateSqlPersistenceRuntime();
   }
   return result;
 }
@@ -199,24 +196,14 @@ export function getActiveSqlStorage(): ISqlStorage | null {
 
 /** Serialize row-level commits so all writers share one monotonic revision. */
 export function syncActiveSqlDatabase(database: Database): Promise<void> {
-  const snapshot = safeStructuredClone(database);
-  const run = async () => {
-    if (!activeSqlStorage || !activeSqlBaseline) return;
-    const commit = buildSqlDeltaCommit(
-      activeSqlBaseline,
-      snapshot,
-      activeSqlStorage.getRevision(),
-    );
-    if (commit) await activeSqlStorage.commit(commit);
-    activeSqlBaseline = snapshot;
-  };
-  sqlCommitChain = sqlCommitChain.then(run, run);
-  return sqlCommitChain;
+  // Kept as a compatibility facade for callers outside the normal mutation
+  // path. Normal persistence is registry-driven and holds the live reference.
+  if (activeSqlStorage) activateSqlPersistenceRuntime(activeSqlStorage, database);
+  return flushSqlDirtyChanges();
 }
 
 export function setActiveSqlStorageForTesting(storage: ISqlStorage | null): void {
   activeSqlStorage = storage;
-  activeSqlBaseline = null;
-  sqlCommitChain = Promise.resolve();
+  if (!storage) deactivateSqlPersistenceRuntime();
   pendingSqlStorage = null;
 }

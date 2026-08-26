@@ -15,6 +15,7 @@
     import { onDestroy, onMount } from "svelte"
     import { type Unsubscriber } from "svelte/store"
     import { v4 as uuidv4, v4 } from 'uuid'
+    import { markSqlMessageDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime'
     import { language } from "../../lang"
     import { alertClear, alertConfirm, alertConfirmMulti, alertInput, alertRequestData, alertWait, notifyError, notifyInfo, notifySuccess, type AlertAction } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
@@ -366,6 +367,7 @@
         if (!messageId) {
             messageId = uuidv4();
             chat.message[idx].chatId = messageId;
+            markSqlMessageDirty(chat.id!, messageId, true)
         }
 
         chat.bookmarks ??= [];

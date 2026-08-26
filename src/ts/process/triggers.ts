@@ -16,6 +16,8 @@ import { generateAIImage } from "./stableDiff";
 import { writeInlayImage } from "./files/inlays";
 import { runScripted } from "./scriptings";
 import { calcString } from "./infunctions";
+import { markSqlMessageDirty, markSqlMessageManifestDirty } from '../storage/sql/sqlPersistenceRuntime';
+import { v4 } from 'uuid';
 
 
 export interface triggerscript{
@@ -1360,10 +1362,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'impersonate':{
                     const effectValue = risuChatParser(effect.value,{chara:char})
                     if(effect.role === 'user'){
-                        chat.message.push({role: 'user', data: effectValue})
+                        chat.message.push({role: 'user', data: effectValue, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     else if(effect.role === 'char'){
-                        chat.message.push({role: 'char', data: effectValue})
+                        chat.message.push({role: 'char', data: effectValue, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     break
                 }
@@ -1399,6 +1403,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     const start = Number(risuChatParser(effect.start,{chara:char}))
                     const end = Number(risuChatParser(effect.end,{chara:char}))
                     chat.message = chat.message.slice(start,end)
+                    if ((chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false) markSqlMessageManifestDirty(chat.id!)
                     break
                 }
                 case 'modifychat':{
@@ -1833,10 +1838,12 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                 case 'v2Impersonate':{
                     let value = effect.valueType === 'value' ? risuChatParser(effect.value,{chara:char}) : getVar(risuChatParser(effect.value,{chara:char}))
                     if(effect.role === 'user'){
-                        chat.message.push({role: 'user', data: value})
+                        chat.message.push({role: 'user', data: value, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     else if(effect.role === 'char'){
-                        chat.message.push({role: 'char', data: value})
+                        chat.message.push({role: 'char', data: value, chatId: v4()})
+                        markSqlMessageDirty(chat.id!, chat.message.at(-1)!.chatId!, true)
                     }
                     break
                 }
