@@ -24,9 +24,9 @@ describe('SQL mutation persistence contracts', () => {
         expect(triggers).toMatch(/messagesFullyLoaded[^\n]+!== false\) markSqlMessageManifestDirty/)
     })
 
-    it('marks bookmark metadata edits even when its message already has an id', () => {
+    it('persists bookmark metadata through the owning chat row', () => {
         const chat = source('src/lib/ChatScreens/Chat.svelte')
 
-        expect(chat).toMatch(/async function toggleBookmark\(\)[\s\S]*?chat\.bookmarks = \[\.\.\.chat\.bookmarks\];[\s\S]*?markSqlMessageDirty\(chat\.id!, messageId, true\)/)
+        expect(chat).toMatch(/async function toggleBookmark\(\)[\s\S]*?chat\.bookmarks = \[\.\.\.chat\.bookmarks\];[\s\S]*?markSqlChatDirty\(currentCharacter\.chaId, chat\.id!\)/)
     })
 })

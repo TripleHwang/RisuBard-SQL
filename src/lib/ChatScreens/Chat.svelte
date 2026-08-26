@@ -15,7 +15,7 @@
     import { onDestroy, onMount } from "svelte"
     import { type Unsubscriber } from "svelte/store"
     import { v4 as uuidv4, v4 } from 'uuid'
-    import { markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime'
+    import { markSqlChatDirty, markSqlMessageDeleted, markSqlMessageDirty, markSqlMessageManifestDirty } from 'src/ts/storage/sql/sqlPersistenceRuntime'
     import { language } from "../../lang"
     import { alertClear, alertConfirm, alertConfirmMulti, alertInput, alertRequestData, alertWait, notifyError, notifyInfo, notifySuccess, type AlertAction } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
@@ -234,6 +234,7 @@
         const chat = current?.chats?.[current.chatPage]
         if (!chat) return
         chat.scriptstate = writeFirstMessageStudioVariables(chat.scriptstate ?? {}, runtime.variables)
+        if (current?.chaId && chat.id) markSqlChatDirty(current.chaId, chat.id)
         ReloadChatPointer.update((value) => ({
             ...value,
             [idx]: (value[idx] ?? 0) + 1,
@@ -363,7 +364,8 @@
     );
 
     async function toggleBookmark() {
-        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage];
+        const currentCharacter = DBState.db.characters[selIdState.selId]
+        const chat = currentCharacter.chats[currentCharacter.chatPage];
         
         if(!chat.message[idx]) return;
 
@@ -412,7 +414,7 @@
         }
 
         chat.bookmarks = [...chat.bookmarks];
-        markSqlMessageDirty(chat.id!, messageId, true)
+        markSqlChatDirty(currentCharacter.chaId, chat.id!)
     }
 </script>
 
@@ -610,12 +612,14 @@
                 {#if firstMessage}
                     <button class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-red-500 hover:text-red-400' : 'hover:text-primary')} onclick={async () => {
                         await sleep(1)
-                        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
+                        const currentCharacter = DBState.db.characters[selIdState.selId]
+                        const chat = currentCharacter.chats[currentCharacter.chatPage]
                         if(chat.firstMessageDisabled){
                             chat.firstMessageDisabled = false
                         } else if(await alertConfirm(language.disableFirstMessageConfirm)){
                             chat.firstMessageDisabled = true
                         }
+                        markSqlChatDirty(currentCharacter.chaId, chat.id!)
                     }}>
                         <EyeOff size={20}/>
                     </button>
