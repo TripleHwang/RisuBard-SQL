@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -249,6 +249,42 @@ describe('server relational SQLite', () => {
       'SQL revision conflict',
     )
     storage.close()
+  })
+
+  it('checkpoints a successful replace-all commit before it is acknowledged', () => {
+    const root = mkdtempSync(join(tmpdir(), 'risu-relational-replace-all-'))
+    roots.push(root)
+    const storage = createRelationalSqlite({ dataRoot: root })
+
+    expect(storage.commit({
+      baseRevision: 0,
+      action: 'replace-all',
+      statements: [{
+        sql: 'INSERT INTO plugin_custom_storage (key, value) VALUES (?, ?)',
+        bind: ['migration', '"complete"'],
+      }],
+    })).toEqual({ revision: 1 })
+
+    const walPath = join(root, 'sql', 'risu-standalone.sqlite3-wal')
+    expect(existsSync(walPath)).toBe(true)
+    expect(statSync(walPath).size).toBe(0)
+    storage.close()
+
+    const reopened = createRelationalSqlite({ dataRoot: root })
+    expect(reopened.bootstrap()).toMatchObject({
+      status: 'ready', revision: 1,
+      pluginCustomStorage: { migration: 'complete' },
+    })
+    reopened.close()
+  })
+
+  it('checkpoints and closes relational SQL during graceful shutdown', () => {
+    const server = readFileSync('server/node/server.cjs', 'utf8')
+    const shutdownStart = server.indexOf("for (const sig of ['SIGTERM', 'SIGINT'])")
+    const shutdownSource = server.slice(shutdownStart, server.indexOf('(async () => {', shutdownStart))
+
+    expect(shutdownSource).toContain('relationalSql.checkpoint();')
+    expect(shutdownSource).toContain('relationalSql.close();')
   })
 
   it('reuses prepared statements only within an individual commit', () => {
