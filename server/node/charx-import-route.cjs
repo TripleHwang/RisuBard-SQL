@@ -2,6 +2,41 @@
 
 const { DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
 
+// Node's requestTimeout is a Server-wide deadline for receiving request bodies;
+// req.setTimeout() only changes the socket idle timer. There is no per-request
+// requestTimeout override, so keep this escape hatch as narrow as possible:
+// only while the CharX request body is still being received. The reference count
+// makes overlapping handlers safe, and the conditional restore preserves a
+// concurrent server configuration change. New connections during this small
+// window inherit no request-body deadline (but retain their socket idle timeout);
+// avoiding that requires a separate listener/proxy for large uploads.
+const requestTimeoutOverrides = new WeakMap();
+
+function suspendRequestTimeout(req) {
+  const server = req.socket && req.socket.server;
+  if (!server || typeof server.requestTimeout !== 'number' || server.requestTimeout === 0) return () => {};
+
+  let override = requestTimeoutOverrides.get(server);
+  if (!override) {
+    override = { original: server.requestTimeout, count: 0 };
+    requestTimeoutOverrides.set(server, override);
+    server.requestTimeout = 0;
+  }
+  override.count++;
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    override.count--;
+    if (override.count !== 0) return;
+    requestTimeoutOverrides.delete(server);
+    // Do not replace a timeout selected by another part of the server while
+    // this upload was active. A matching zero is still ours to restore.
+    if (server.requestTimeout === 0) server.requestTimeout = override.original;
+  };
+}
+
 function safeMessage(error) {
   switch (error && error.code) {
     case 'CHARX_LIMIT_EXCEEDED': return 'CharX archive exceeds the allowed limit';
@@ -34,6 +69,7 @@ function createCharXImportHandler(deps) {
     let acquired = false;
     let heartbeatTimer = null;
     let previousSocketTimeout;
+    let restoreRequestTimeout = () => {};
     let responseStarted = false;
     const controller = new AbortController();
     const abort = () => controller.abort();
@@ -77,8 +113,12 @@ function createCharXImportHandler(deps) {
       previousSocketTimeout = req.socket.timeout;
       req.socket.setTimeout(0);
       req.socket.setKeepAlive(true);
+      restoreRequestTimeout = suspendRequestTimeout(req);
       req.once('aborted', abort);
       req.once('close', onRequestClose);
+      // The server-wide body deadline is no longer needed after the upload is
+      // complete; restore it before archive extraction and asset publishing.
+      req.once('end', restoreRequestTimeout);
       res.once('close', onResponseClose);
 
       res.status(200);
@@ -135,7 +175,9 @@ function createCharXImportHandler(deps) {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       req.removeListener('aborted', abort);
       req.removeListener('close', onRequestClose);
+      req.removeListener('end', restoreRequestTimeout);
       res.removeListener('close', onResponseClose);
+      restoreRequestTimeout();
       if (req.socket) req.socket.setTimeout(previousSocketTimeout || 0);
       if (acquired) endImport();
     }

@@ -188,18 +188,71 @@ describe('createCharXImportHandler', () => {
         expect(progress.at(-1)).toEqual({ type: 'progress', completed: 1, total: 1 })
     })
 
-    it('does not mutate the shared server request timeout', async () => {
-        const { server } = makeApp()
-        const original = server.requestTimeout
-        let assignments = 0
-        Object.defineProperty(server, 'requestTimeout', {
-            configurable: true,
-            get: () => original,
-            set: () => { assignments++ },
+    it('temporarily disables the server body timeout and restores it after a successful import', async () => {
+        let requestTimeoutDuringImport: number | undefined
+        const { server } = makeApp({
+            importCharXStream: async (source: AsyncIterable<Uint8Array>) => {
+                requestTimeoutDuringImport = (source as any).socket.server.requestTimeout
+                for await (const _chunk of source) {}
+                return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
+            },
         })
+        server.requestTimeout = 123
         await request(server, 'x')
-        expect(assignments).toBe(0)
-        expect(server.requestTimeout).toBe(original)
+        expect(requestTimeoutDuringImport).toBe(0)
+        expect(server.requestTimeout).toBe(123)
+    })
+
+    it('accepts an active upload that outlasts the server body timeout', async () => {
+        const { server } = makeApp()
+        server.requestTimeout = 30
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+        const address = server.address() as { port: number }
+        const response = await new Promise<{ status: number, body: string }>((resolve, reject) => {
+            const client = http.request({
+                hostname: '127.0.0.1', port: address.port, path: '/api/charx/import', method: 'POST',
+                headers: { 'content-type': 'application/x-risu-charx', 'content-length': '1', accept: 'application/x-ndjson' },
+            }, res => {
+                let body = ''
+                res.setEncoding('utf8')
+                res.on('data', chunk => body += chunk)
+                res.on('end', () => resolve({ status: res.statusCode || 0, body }))
+            })
+            client.on('error', reject)
+            client.flushHeaders()
+            setTimeout(() => client.end('x'), 75)
+        })
+        expect(response.status).toBe(200)
+        expect(response.body).toContain('"type":"done"')
+        expect(server.requestTimeout).toBe(30)
+    })
+
+    it('restores the server body timeout after an import error', async () => {
+        const { server } = makeApp({
+            importCharXStream: async () => {
+                const error: any = new Error('invalid archive')
+                error.code = 'INVALID_CHARX'
+                error.status = 400
+                throw error
+            },
+        })
+        server.requestTimeout = 123
+        await request(server, 'x')
+        expect(server.requestTimeout).toBe(123)
+    })
+
+    it('does not overwrite a concurrent server body-timeout change during cleanup', async () => {
+        const { server } = makeApp({
+            importCharXStream: async (source: AsyncIterable<Uint8Array>) => {
+                expect((source as any).socket.server.requestTimeout).toBe(0)
+                ;(source as any).socket.server.requestTimeout = 456
+                for await (const _chunk of source) {}
+                return { card: { spec: 'chara_card_v3' }, moduleBase64: null, assets: {}, excludedFiles: [], warnings: [] }
+            },
+        })
+        server.requestTimeout = 123
+        await request(server, 'x')
+        expect(server.requestTimeout).toBe(456)
     })
 
     it('does not abort a normally completed response when Express closes it', async () => {
@@ -277,6 +330,7 @@ describe('createCharXImportHandler', () => {
                 }, { once: true })
             }),
         })
+        server.requestTimeout = 123
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
         const address = server.address() as { port: number }
         const client = http.request({ hostname: '127.0.0.1', port: address.port, path: '/api/charx/import', method: 'POST', headers: { 'content-type': 'application/x-risu-charx', 'content-length': '10', accept: 'application/x-ndjson' } })
@@ -288,5 +342,6 @@ describe('createCharXImportHandler', () => {
         await new Promise(resolve => setImmediate(resolve))
         expect(aborted).toBe(true)
         expect(calls).toContain('end')
+        expect(server.requestTimeout).toBe(123)
     })
 })
