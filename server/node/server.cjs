@@ -798,6 +798,17 @@ app.use(
     '/api/risubard/memory',
     createRisuBardMemoryJsonParser(express)
 );
+// This legacy endpoint accepts large chat writes. Install its limiter before
+// any body parser so rejected requests are not parsed into memory first.
+const chatContentWriteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 1200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many chat content save requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+app.use('/api/chat-content', chatContentWriteLimiter);
 app.use(express.json({ limit: '100mb' }));
 app.use((req, res, next) => {
     // Streaming imports must bypass express.raw(), which would buffer their full bodies.
@@ -1624,15 +1635,6 @@ const sqlReadLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many SQL read requests. Please wait and try again later.' },
-    validate: { xForwardedForHeader: false }
-});
-
-const chatContentWriteLimiter = rateLimit({
-    windowMs: 60 * 1000,
-    max: 1200,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many chat content save requests. Please wait and try again later.' },
     validate: { xForwardedForHeader: false }
 });
 
@@ -5211,7 +5213,7 @@ app.get('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
 });
 
 // POST /api/chat-content/:chaId/:chatIndex — save chat content to server
-app.post('/api/chat-content/:chaId/:chatIndex', chatContentWriteLimiter, async (req, res, next) => {
+app.post('/api/chat-content/:chaId/:chatIndex', async (req, res, next) => {
     if (!await checkAuth(req, res)) { return; }
     if (!checkActiveSession(req, res)) return;
     try {

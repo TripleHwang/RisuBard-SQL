@@ -33,6 +33,12 @@ describe('route rate limiting', () => {
         ]) {
             expect(server).toContain(`app.get('${route}', sqlReadLimiter,`)
         }
-        expect(server).toContain("app.post('/api/chat-content/:chaId/:chatIndex', chatContentWriteLimiter,")
+        const chatLimiter = server.indexOf('const chatContentWriteLimiter = rateLimit({')
+        const chatMiddleware = server.indexOf("app.use('/api/chat-content', chatContentWriteLimiter)")
+        const jsonParser = server.indexOf("app.use(express.json({ limit: '100mb' }))")
+        expect(chatLimiter).toBeGreaterThanOrEqual(0)
+        expect(chatMiddleware).toBeGreaterThan(chatLimiter)
+        expect(jsonParser).toBeGreaterThan(chatMiddleware)
+        expect(server).toContain("app.post('/api/chat-content/:chaId/:chatIndex', async")
     })
 })
