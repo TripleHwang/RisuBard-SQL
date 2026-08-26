@@ -85,13 +85,49 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
     const dataEnd = localOffset + 30 + localNameLength + localExtraLength + compressedSize;
     if (dataEnd > centralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
     if (flags & 8) {
-      const descriptor = readExact(fd, dataEnd, 16);
-      const signed = u32(descriptor, 0) === 0x08074b50; const base = signed ? 4 : 0;
+      const first = readExact(fd, dataEnd, 4);
+      const signed = u32(first, 0) === 0x08074b50;
+      const descriptor = signed ? Buffer.concat([first, readExact(fd, dataEnd + 4, 12)]) : Buffer.concat([first, readExact(fd, dataEnd + 4, 8)]);
+      const base = signed ? 4 : 0;
       if (dataEnd + (signed ? 16 : 12) > centralOffset || u32(descriptor, base) !== u32(h, 16) || u32(descriptor, base + 4) !== compressedSize || u32(descriptor, base + 8) !== originalSize) throw invalid('Invalid ZIP data descriptor');
     }
     at = end;
   }
   if (at !== centralOffset + centralSize) throw invalid('Invalid ZIP central directory');
+}
+
+function normalizeDescriptorHeadersForUnzip() {
+  let pending = Buffer.alloc(0), phase = 'header', remaining = 0, descriptor = false;
+  return (chunk, final) => {
+    pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
+    const output = [];
+    while (pending.length) {
+      if (phase === 'data') {
+        const take = Math.min(remaining, pending.length);
+        output.push(pending.subarray(0, take)); pending = pending.subarray(take); remaining -= take;
+        if (remaining) break;
+        phase = descriptor ? 'descriptor' : 'header';
+      } else if (phase === 'descriptor') {
+        if (pending.length < 4) break;
+        const length = u32(pending, 0) === 0x08074b50 ? 16 : 12;
+        if (pending.length < length) break;
+        output.push(pending.subarray(0, length)); pending = pending.subarray(length); phase = 'header';
+      } else {
+        if (pending.length < 4) break;
+        if (u32(pending, 0) !== 0x04034b50) { output.push(pending); pending = Buffer.alloc(0); break; }
+        if (pending.length < 30) break;
+        const headerLength = 30 + u16(pending, 26) + u16(pending, 28);
+        if (pending.length < headerLength) break;
+        const header = Buffer.from(pending.subarray(0, headerLength));
+        descriptor = !!(u16(header, 6) & 8); remaining = u32(header, 18);
+        // fflate recognizes only signed descriptors. With an advertised local size, clearing bit 3 lets it delimit either standard descriptor form synchronously.
+        if (descriptor && remaining) header[6] &= ~8;
+        output.push(header); pending = pending.subarray(headerLength); phase = 'data';
+      }
+    }
+    if (final && pending.length) output.push(pending);
+    return output;
+  };
 }
 
 async function importCharXStream(source, options) {
@@ -200,6 +236,7 @@ async function importCharXStream(source, options) {
     } catch (e) { currentError = normalizeError(e, invalid('Unable to read archive entry')); }
   });
   unzip.register(UnzipInflate);
+  const normalizeUnzipChunk = normalizeDescriptorHeadersForUnzip();
   try {
     for await (const input of source) {
       checkAbort();
@@ -214,11 +251,11 @@ async function importCharXStream(source, options) {
       if (compressed > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
       checkSpace('archive-write', chunk.length);
       fs.writeSync(archiveFd, chunk);
-      try { unzip.push(chunk, false); } catch (e) { throw currentError || invalid('Invalid or unsupported ZIP archive'); }
+      try { for (const unzipChunk of normalizeUnzipChunk(chunk, false)) unzip.push(unzipChunk, false); } catch (e) { throw currentError || invalid('Invalid or unsupported ZIP archive'); }
       checkAbort();
       onProgress({ compressedBytes: compressed, decompressedBytes: decompressed });
     }
-    try { unzip.push(new Uint8Array(0), true); } catch { throw currentError || invalid('Truncated or invalid ZIP archive'); }
+    try { for (const unzipChunk of normalizeUnzipChunk(new Uint8Array(0), true)) unzip.push(unzipChunk, true); } catch { throw currentError || invalid('Truncated or invalid ZIP archive'); }
     checkAbort();
     // fflate can finish a local-file stream without its central directory; CharX requires a complete ZIP.
     let eocd = -1;
@@ -245,6 +282,7 @@ async function importCharXStream(source, options) {
     throw normalizeError(e);
   } finally {
     try { if (archiveFd !== undefined) fs.closeSync(archiveFd); } catch {}
+    // UnzipInflate is synchronous and has no terminate()/worker to release; close every file descriptor before removing the owned directory.
     for (const state of active) { try { if (state.fd !== undefined) fs.closeSync(state.fd); } catch {} }
     try { await fsp.rm(ownedDir, { recursive: true, force: true }); } catch {}
   }

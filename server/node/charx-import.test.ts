@@ -5,7 +5,8 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { importCharXStream, CharXImportError } = require('./charx-import.cjs');
+const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
+const fsSync = require('node:fs');
 
 async function* chunks(bytes: Uint8Array, size = 13) {
   for (let at = 0; at < bytes.length; at += size) yield bytes.subarray(at, at + size);
@@ -30,11 +31,36 @@ async function writeLargeCharX(destination: string) {
   });
 }
 
-async function duplicateNameZip(name: string) {
+function crc32(bytes: Uint8Array) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+function u16le(value: number) { const out = new Uint8Array(2); new DataView(out.buffer).setUint16(0, value, true); return out; }
+function u32le(value: number) { const out = new Uint8Array(4); new DataView(out.buffer).setUint32(0, value, true); return out; }
+function zipWithDescriptors(signed: boolean) {
+  const records: Uint8Array[] = [], central: Uint8Array[] = []; let offset = 0;
+  for (const [name, text] of [['card.json', '{"spec":"chara_card_v3"}'], ['a.png', 'pixels']] as const) {
+    const nameBytes = strToU8(name), data = strToU8(text), crc = crc32(data);
+    const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBytes.length), u16le(0), nameBytes, data, ...(signed ? [Buffer.from([0x50, 0x4b, 0x07, 0x08])] : []), u32le(crc), u32le(data.length), u32le(data.length)]);
+    records.push(local);
+    central.push(Buffer.concat([Buffer.from([0x50, 0x4b, 0x01, 0x02]), u16le(20), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBytes.length), u16le(0), u16le(0), u16le(0), u16le(0), u32le(0), u32le(offset), nameBytes]));
+    offset += local.length;
+  }
+  const centralBytes = Buffer.concat(central);
+  return Buffer.concat([...records, centralBytes, Buffer.from([0x50, 0x4b, 0x05, 0x06]), u16le(0), u16le(0), u16le(2), u16le(2), u32le(centralBytes.length), u32le(offset), u16le(0)]);
+}
+
+async function rootDuplicateZip(rootName: 'card.json' | 'module.risum') {
   return await new Promise<Uint8Array>((resolve, reject) => {
     const pieces: Uint8Array[] = [];
     const zip = new Zip((error, data, final) => { if (error) reject(error); else { pieces.push(data); if (final) resolve(Buffer.concat(pieces)); } });
-    for (const content of ['one', 'two']) { const entry = new ZipPassThrough(name); zip.add(entry); entry.push(strToU8(content), true); }
+    for (const [name, content] of [['card.json', '{"spec":"chara_card_v3"}'], [rootName, rootName === 'card.json' ? '{"spec":"chara_card_v3"}' : 'one'], [rootName, rootName === 'card.json' ? '{"spec":"chara_card_v3"}' : 'two']] as const) {
+      const entry = new ZipPassThrough(name); zip.add(entry); entry.push(strToU8(content), true);
+    }
     zip.end();
   });
 }
@@ -151,6 +177,35 @@ describe('importCharXStream', () => {
     } finally { await Promise.all([rm(lowRoot, { recursive: true, force: true }), rm(publishRoot, { recursive: true, force: true })]); }
   });
 
+  test('checks capacity at the asset-write phase for descriptor assets with unknown metadata', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0; const phases: string[] = [];
+    try {
+      await expect(importCharXStream(chunks(zipWithDescriptors(false)), { stagingRoot, getAvailableBytes: ({ phase }: any) => { phases.push(phase); return phase === 'asset-write' ? 0 : Number.MAX_SAFE_INTEGER; }, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INSUFFICIENT_STORAGE' });
+      expect(phases).toContain('asset-write'); expect(published).toBe(0);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('checks capacity at true prepublish only after successful staging', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0; const phases: string[] = [];
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('asset') });
+    try {
+      await expect(importCharXStream(chunks(archive), { stagingRoot, getAvailableBytes: ({ phase }: any) => { phases.push(phase); return phase === 'publish' ? 0 : Number.MAX_SAFE_INTEGER; }, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INSUFFICIENT_STORAGE', status: 507 });
+      expect(phases).toContain('publish'); expect(published).toBe(0);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('uses actual asset writes for capacity when central advertised size is forged low', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0; const phases: string[] = [];
+    const forged = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': new Uint8Array(1024).fill(7) });
+    const view = new DataView(forged.buffer, forged.byteOffset, forged.byteLength); let central = view.getUint32(forged.length - 6, true);
+    central += 46 + view.getUint16(central + 28, true) + view.getUint16(central + 30, true) + view.getUint16(central + 32, true);
+    view.setUint32(central + 24, 0, true);
+    try {
+      await expect(importCharXStream(chunks(forged), { stagingRoot, getAvailableBytes: ({ phase }: any) => { phases.push(phase); return phase === 'asset-write' ? 0 : Number.MAX_SAFE_INTEGER; }, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INSUFFICIENT_STORAGE' });
+      expect(phases).toContain('asset-write'); expect(published).toBe(0);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test('aborts and removes its owned staging directory on publish failure', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('abc') });
@@ -200,6 +255,31 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
+  test.each([true, false])('imports a valid %s data-descriptor archive', async (signed) => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0;
+    const archive = zipWithDescriptors(signed); const descriptorAt = 30 + 'card.json'.length + strToU8('{"spec":"chara_card_v3"}').length;
+    const readSpy = vi.spyOn(fsSync, 'readSync');
+    try {
+      await expect(importCharXStream(chunks(archive, 7), { stagingRoot, publishAssets: async () => { published++; } })).resolves.toMatchObject({ assets: { 'a.png': expect.any(String) } });
+      expect(published).toBe(1);
+      expect(readSpy.mock.calls.some((call) => call[4] === descriptorAt && call[3] === 4)).toBe(true);
+      expect(readSpy.mock.calls.some((call) => call[4] === descriptorAt + 4 && call[3] === (signed ? 12 : 8))).toBe(true);
+    } finally { readSpy.mockRestore(); await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
+  test('rejects duplicate normalized central names before their unchanged local headers diverge', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-')); let published = 0;
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': strToU8('a'), 'b.png': strToU8('b') });
+    const forged = archive.slice(); const view = new DataView(forged.buffer, forged.byteOffset, forged.byteLength);
+    const central = view.getUint32(forged.length - 6, true); let second = central;
+    for (let found = 0; found < 2; found++) second += 46 + view.getUint16(second + 28, true) + view.getUint16(second + 30, true) + view.getUint16(second + 32, true);
+    forged.set(strToU8('a.png'), second + 46);
+    try {
+      await expect(importCharXStream(chunks(forged), { stagingRoot, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      expect(published).toBe(0);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test('enforces advertised and actual metadata, entry and total decompressed limits', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const base = { 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'module.risum': strToU8('module'), 'a.png': strToU8('asset') };
@@ -235,17 +315,24 @@ describe('importCharXStream', () => {
     } finally { spy.mockRestore(); await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
-  test('stops a source at the next iteration when it is aborted mid-stream', async () => {
+  test('aborts without source read-ahead, finalizes the source, and closes staging files', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
-    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': new Uint8Array(100_000) });
-    const controller = new AbortController(); let yielded = 0;
-    async function* source() { for (let at = 0; at < archive.length; at += 10) { yielded++; yield archive.subarray(at, at + 10); if (yielded === 1) controller.abort(); } }
+    const asset = Uint8Array.from({ length: 100_000 }, (_, index) => (index * 31) & 255);
+    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'a.png': asset });
+    const controller = new AbortController(); const sourceChunkSize = Math.ceil(archive.length / 2); let reads = 0, finalized = false, published = 0; const events: string[] = [];
+    const originalWriteSync = fsSync.writeSync.bind(fsSync);
+    const writeSpy = vi.spyOn(fsSync, 'writeSync').mockImplementation((...args: any[]) => { events.push('write'); return originalWriteSync(...args); });
+    async function* source() { try { for (let at = 0; at < archive.length; at += sourceChunkSize) { reads++; events.push(`source:${reads}`); yield archive.subarray(at, at + sourceChunkSize); if (reads === 1) controller.abort(); } } finally { finalized = true; } }
     try {
-      await expect(importCharXStream(source(), { stagingRoot, signal: controller.signal, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'IMPORT_ABORTED' });
-      // Async iteration obtains at most one next chunk before the loop observes abort.
-      expect(yielded).toBe(2);
+      await expect(importCharXStream(source(), { stagingRoot, signal: controller.signal, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'IMPORT_ABORTED' });
+      expect(reads).toBe(2); // The for-await loop requests at most one input chunk ahead of its completed synchronous writes.
+      expect(finalized).toBe(true); expect(published).toBe(0);
+      expect(events.indexOf('write')).toBeGreaterThan(events.indexOf('source:1'));
+      expect(events.indexOf('source:2')).toBeGreaterThan(events.indexOf('write'));
+      expect(events.slice(0, events.indexOf('source:2')).filter((event) => event === 'write')).toHaveLength(2);
+      expect(sourceChunkSize).toBeLessThanOrEqual(DEFAULT_CHARX_LIMITS.queuedWriteBytes);
       expect(await (await import('node:fs/promises')).readdir(stagingRoot)).toEqual([]);
-    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+    } finally { writeSpy.mockRestore(); await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
   test('rejects encrypted and unsupported-compression local entries', async () => {
@@ -259,16 +346,12 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
-  test.each(['card.json', 'module.risum'])('rejects duplicate local %s entries', async (duplicate) => {
+  test.each(['card.json', 'module.risum'] as const)('rejects duplicate root %s from an otherwise-valid archive before publishing', async (duplicate) => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    let published = 0;
     try {
-      const duplicateArchive = await duplicateNameZip(duplicate);
-      // module fixture still needs a root card; the card duplicate fixture is already self-contained.
-      const archive = duplicate === 'card.json' ? duplicateArchive : zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}') });
-      if (duplicate === 'module.risum') {
-        // Concatenate local/central ZIPs would invalidate EOCD, so the module duplicate itself is enough to prove early duplicate-local rejection.
-        await expect(importCharXStream(chunks(duplicateArchive), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
-      } else await expect(importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {} })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      await expect(importCharXStream(chunks(await rootDuplicateZip(duplicate)), { stagingRoot, publishAssets: async () => { published++; } })).rejects.toMatchObject({ code: 'INVALID_CHARX' });
+      expect(published).toBe(0);
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
