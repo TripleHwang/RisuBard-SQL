@@ -12,7 +12,7 @@ import { hasher } from "./parser/parser.svelte";
 import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
-import { isHydrating, saveChatToServer, ensureChatHydrated, chatToStub, classifyChat } from "./storage/chatStorage";
+import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, chatToStub, classifyChat } from "./storage/chatStorage";
 import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
@@ -2774,7 +2774,7 @@ export function changeChatTo(IdOrIndex: string | number) {
     char.chatPage = index
     const newChat = char.chats[index]
     if(newChat){
-        if(newChat._placeholder){
+        if(isChatHistoryIncomplete(newChat)){
             const capturedIndex = index
             let cancelled = false
             loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: () => {

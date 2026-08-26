@@ -122,6 +122,17 @@ export function isHydrating(chaId: string, chatId: string): boolean {
     return isHydrationActive(key)
 }
 
+/** True when the in-memory message array is not the canonical full history. */
+export function isChatHistoryIncomplete(chat: Chat | null | undefined): boolean {
+    if (!chat || chat._placeholder) return true
+    const runtime = chat as Chat & {
+        messagesLoaded?: boolean
+        messagesFullyLoaded?: boolean
+        _sqlWindow?: { hasOlder?: boolean }
+    }
+    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || runtime._sqlWindow?.hasOlder === true
+}
+
 /**
  * Hydrate a placeholder Chat in-place on the character's chats array.
  * If the slot is already a real Chat (not placeholder), returns it as-is.

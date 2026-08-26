@@ -305,7 +305,7 @@ import { isMobile } from 'src/ts/platform'
         const formerFirstId = currentChat[0]?.chatId
         await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
         const anchor = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
-        chatPage = getChatPageForMessage(Math.max(0, anchor - chatPageSize), currentChat.length, chatPageSize)
+        chatPage = getChatPageForMessage(Math.max(0, anchor), currentChat.length, chatPageSize)
         await tick()
         scrollToLoadedTop()
     }

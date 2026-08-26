@@ -6,7 +6,7 @@
 
     import type { Chat, ChatFolder, character } from "src/ts/storage/database.svelte";
     import { newChatModelDefaults } from "src/ts/storage/database.svelte";
-    import { ensureChatHydrated } from "src/ts/storage/chatStorage";
+    import { ensureChatHydrated, isChatHistoryIncomplete } from "src/ts/storage/chatStorage";
     import { DBState, ReloadGUIPointer } from 'src/ts/stores.svelte';
     import { selectedCharID, chatDeselected } from "src/ts/stores.svelte";
 
@@ -112,7 +112,7 @@
         )
         if(!confirmed) return
         const chatIdx = chara.chats.indexOf(chat)
-        if(chara.chats[chatIdx]?._placeholder){
+        if(isChatHistoryIncomplete(chara.chats[chatIdx])){
             await ensureChatHydrated(
                 chara.chats,
                 chatIdx,
@@ -120,8 +120,8 @@
             )
         }
         const sourceChat = chara.chats[chatIdx]
-        if(sourceChat?._placeholder){
-            alertError('Failed to load chat data.')
+        if(isChatHistoryIncomplete(sourceChat)){
+            alertError('Load earlier messages before copying this chat.')
             return
         }
         if(!sourceChat?.id || !(chara as character).chaId){

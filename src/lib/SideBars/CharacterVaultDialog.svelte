@@ -338,14 +338,15 @@
                 for (const source of DBState.db.characters) {
                     if (!selectedIds.includes(source.chaId)) continue
                     for (let index = 0; index < source.chats.length; index += 1) {
-                        if (source.chats[index]?._placeholder) {
+                        if (source.chats[index]?._placeholder || (source.chats[index] as any).messagesLoaded === false) {
                             const { ensureChatHydrated } = await import(
                                 'src/ts/storage/chatStorage'
                             )
                             await ensureChatHydrated(source.chats, index, source.chaId)
                         }
-                        if (source.chats[index]?._placeholder) {
-                            throw new Error(`${source.name}의 챗을 불러오지 못했습니다.`)
+                        const hydrated = source.chats[index] as any
+                        if (hydrated?._placeholder || hydrated?.messagesFullyLoaded === false || hydrated?._sqlWindow?.hasOlder) {
+                            throw new Error(`${source.name}: Load earlier messages before cloning.`)
                         }
                     }
                 }
