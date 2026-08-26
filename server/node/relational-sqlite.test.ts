@@ -53,9 +53,21 @@ describe('server relational SQLite', () => {
 
     expect(storage.loadChatMessages('chat-1', undefined, 2)).toMatchObject({
       messages: [{ chatId: 'message-2' }, { chatId: 'message-3' }],
+      before: 3,
       nextBefore: 1,
       total: 3,
       hasMore: true,
+    })
+  })
+
+  it('echoes the effective cursor while paging older messages in ascending order', () => {
+    const storage = seededReaderStorage()
+
+    expect(storage.loadChatMessages('chat-1', 2, 40)).toMatchObject({
+      before: 2,
+      messages: [{ chatId: 'message-1' }, { chatId: 'message-2' }],
+      nextBefore: 0,
+      hasMore: false,
     })
   })
 

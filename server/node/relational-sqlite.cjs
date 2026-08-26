@@ -294,7 +294,7 @@ function createRelationalSqlite(options) {
             }));
             const nextBefore = rows.length ? Math.min(...rows.map((row) => Number(row.position))) : null;
             return {
-                revision: revision(), chatId, messages, before: before ?? null, nextBefore, total,
+                revision: revision(), chatId, messages, before: normalizedBefore, nextBefore, total,
                 hasMore: nextBefore !== null && nextBefore > 0,
             };
         });
