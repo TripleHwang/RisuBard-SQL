@@ -13,6 +13,21 @@ export type SqlHydrationWindow = {
 type HydratableCharacter = character & { detailsLoaded?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
 
+/**
+ * Metadata bootstrap deliberately does not mutate partial character summaries.
+ * This normalizer is called only after the complete record response arrives;
+ * selection subsequently applies the broader legacy character migration.
+ */
+export function normalizeHydratedCharacter(value: character): character {
+  value.chats ??= [];
+  value.chatPage ??= 0;
+  value.customscript ??= [];
+  value.globalLore ??= [];
+  value.emotionImages ??= [];
+  (value as HydratableCharacter).detailsLoaded = true;
+  return value;
+}
+
 const DEFAULT_MESSAGE_LIMIT = 40;
 const characterHydrations = new Map<string, Promise<character | null>>();
 const chatHydrations = new Map<string, Promise<Chat | null>>();
@@ -61,8 +76,9 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
       if (!full) return null;
       const currentIndex = db.characters.findIndex((value) => value?.chaId === characterId);
       if (currentIndex === -1 || (db.characters[currentIndex] as HydratableCharacter | undefined)?.detailsLoaded !== false) return null;
-      db.characters[currentIndex] = full;
-      return full;
+      const normalized = normalizeHydratedCharacter(full);
+      db.characters[currentIndex] = normalized;
+      return normalized;
     } finally {
       characterHydrations.delete(characterId);
     }

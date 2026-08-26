@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ISqlStorage, SqlBootstrapStorage, SqlLoadDatabaseResult } from "./ISqlStorage";
 import {
   getActiveSqlStorage,
+  activateRecoveredSqlStorage,
   openExistingStandaloneSql,
   selectCanonicalDatabase,
   setActiveSqlStorageForTesting,
@@ -34,6 +35,35 @@ describe("standalone SQL bootstrap", () => {
     expect(result).toMatchObject({ usingSql: false, mode: "degraded", recoveryStorage: storage });
     expect(getActiveSqlStorage()).toBeNull();
     expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
+  });
+
+  it("marks a missing bootstrap endpoint as unsupported without allowing snapshot recovery", async () => {
+    setActiveSqlStorageForTesting(null);
+    const storage = {
+      ...fakeStorage([]),
+      backendKind: "server-sql" as const,
+      init: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (404)"), { status: 404 }); }),
+      loadBootstrap: vi.fn(),
+      loadRecoverySnapshot: vi.fn(),
+      loadCharacterHydration: vi.fn(),
+      loadChatMessageReversePage: vi.fn(),
+    } as unknown as SqlBootstrapStorage;
+
+    const result = await openExistingStandaloneSql(storage);
+
+    expect(result).toMatchObject({ usingSql: false, mode: "unsupported" });
+    expect(result?.recoveryStorage).toBeUndefined();
+    expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
+  });
+
+  it("activates recovered SQL storage so later edits retain the canonical revision", () => {
+    const storage = fakeStorage([]);
+    const database = { characters: [] } as any;
+
+    activateRecoveredSqlStorage(storage, database);
+
+    expect(getActiveSqlStorage()).toBe(storage);
+    setActiveSqlStorageForTesting(null);
   });
 
   it("opens existing SQL without requiring a legacy projection", async () => {

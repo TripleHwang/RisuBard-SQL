@@ -359,7 +359,8 @@ export function setPatchSyncBaseline(data: Database | null) {
     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
 }
 
-export async function saveDb() {
+export async function saveDb(options: { metadataOnly?: boolean } = {}) {
+    const metadataOnly = options.metadataOnly === true
     let changed = false
     let gotChannel = false
     const sessionID = v4()
@@ -452,12 +453,14 @@ export async function saveDb() {
     }
 
     let encoder = new RisuSaveEncoder()
-    await encoder.init(getDatabase(), {
-        compression: false
-    })
+    if (!metadataOnly) {
+        await encoder.init(getDatabase(), {
+            compression: false
+        })
+    }
 
     let patcher = new RisuSavePatcher()
-    if (supportsPatchSync) {
+    if (supportsPatchSync && !metadataOnly) {
         await patcher.init(patchSyncBaseline ?? getDatabase())
         patchSyncBaseline = null
     }
@@ -834,6 +837,15 @@ export async function saveDb() {
             return 'noop'
         }
 
+        // Metadata-first startup installs the normal reactive save hooks, but
+        // must not encode the partial character summaries into database.bin.
+        // Its active SQL baseline is already canonical, so row-level commits
+        // safely preserve root edits until the full runtime persistence work.
+        if (metadataOnly) {
+            await syncActiveSqlDatabase(db)
+            return 'saved'
+        }
+
         // ── Save changed chat content to server ─────────────────────────
         const failedChats: [string, string][] = []
         for (const [chaId, chatId] of collectChatsToPersist(db, toSave)) {
@@ -1161,7 +1173,7 @@ export async function saveDb() {
             continue
         }
         changed = false
-        if (requiresFullEncoderReload.state) {
+        if (!metadataOnly && requiresFullEncoderReload.state) {
             encoder = new RisuSaveEncoder()
             await encoder.init(getDatabase(), {
                 compression: false,

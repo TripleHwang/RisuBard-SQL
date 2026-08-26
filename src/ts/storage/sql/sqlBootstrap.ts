@@ -14,7 +14,7 @@ export interface SqlBootstrapResult {
 }
 
 export type ExistingSqlOpenResult = SqlBootstrapResult & {
-  mode: "metadata-first" | "degraded";
+  mode: "metadata-first" | "degraded" | "unsupported";
   recoveryStorage?: SqlBootstrapStorage;
 };
 
@@ -129,6 +129,16 @@ export async function openExistingStandaloneSql(
     console.error("Could not open existing standalone SQL database", error);
     pendingSqlStorage = null;
     if (storage?.backendKind === "server-sql" && "loadRecoverySnapshot" in storage) {
+      if (httpStatus(error) === 404) {
+        return {
+          database: {} as Database,
+          storage: null,
+          usingSql: false,
+          migrated: false,
+          mode: "unsupported",
+          error,
+        };
+      }
       return {
         database: {} as Database,
         storage: null,
@@ -141,6 +151,16 @@ export async function openExistingStandaloneSql(
     }
     return null;
   }
+}
+
+export function activateRecoveredSqlStorage(storage: ISqlStorage, database: Database): void {
+  activateSqlStorage(storage, database);
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("status" in error)) return undefined;
+  const status = Number(error.status);
+  return Number.isInteger(status) ? status : undefined;
 }
 
 export async function openStandaloneSql(

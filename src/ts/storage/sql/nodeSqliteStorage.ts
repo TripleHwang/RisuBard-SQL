@@ -49,6 +49,13 @@ interface ServerDump {
 
 type Statement = { sql: string; bind: unknown[] };
 
+export class SqlHttpError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "SqlHttpError";
+  }
+}
+
 function boundedLimit(value: number | undefined, fallback: number, maximum: number): number {
   const normalized = Number.isFinite(value) ? Math.floor(value!) : fallback;
   return Math.min(maximum, Math.max(1, normalized));
@@ -113,7 +120,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     } finally {
       markPerformance("bootstrap-fetch:end");
     }
-    if (!response.ok) throw new Error(`SQL bootstrap failed (${response.status})`);
+    if (!response.ok) throw new SqlHttpError(`SQL bootstrap failed (${response.status})`, response.status);
     const payload = this.validateBootstrap(await response.json());
     markPerformance("bootstrap-json:end");
     this.revision = payload.revision;
