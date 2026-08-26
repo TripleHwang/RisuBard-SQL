@@ -824,6 +824,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     const selected = DBState.db.characters[get(selectedCharID)]
     const selectedConversation = selected?.chats[selected.chatPage]
     if (selectedConversation?.risuBardWikiReboot) return false
+    if ((selectedConversation as (Chat & { messagesLoaded?: boolean }) | undefined)?.messagesLoaded === false) {
+        alertError('Chat is still loading. Please wait a moment.')
+        return false
+    }
+    if ((selectedConversation as (Chat & { _sqlWindow?: { hasOlder?: boolean } }) | undefined)?._sqlWindow?.hasOlder) {
+        alertError('Load earlier messages before generating.')
+        return false
+    }
 
     chatProcessStage.set(0)
     const abortSignal = arg.signal ?? (new AbortController()).signal

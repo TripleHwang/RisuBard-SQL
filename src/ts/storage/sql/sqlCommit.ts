@@ -129,6 +129,7 @@ export function sqlChatData(value: Chat): unknown {
   delete data.messagesFullyLoaded;
   delete data.messageOffset;
   delete data.messageTotal;
+  delete data._sqlWindow;
   delete data.detailsLoaded;
   return data;
 }

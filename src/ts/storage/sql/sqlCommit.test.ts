@@ -41,6 +41,7 @@ describe("RisuVault SQL row commits", () => {
     expect(commit.characters[0].data).not.toHaveProperty("chats");
     expect(commit.chats[0].data).not.toHaveProperty("message");
     expect(commit.chats[0].data).not.toHaveProperty("messagesLoaded");
+    expect(commit.chats[0].data).not.toHaveProperty("_sqlWindow");
     expect(commit.messages).toEqual([
       {
         id: "message-1",
@@ -49,6 +50,14 @@ describe("RisuVault SQL row commits", () => {
         data: { role: "user", data: "hello" },
       },
     ]);
+  });
+
+  it("does not serialize runtime SQL message windows", () => {
+    const database = {
+      characters: [{ chaId: "character-1", chats: [{ id: "chat-1", message: [], _sqlWindow: { total: 10 } }] }],
+      botPresets: [], botPresetsId: 0,
+    } as any;
+    expect(buildSqlReplaceCommit(database, 0).chats[0].data).not.toHaveProperty("_sqlWindow");
   });
 
   it("keeps normal commits bounded to the changed rows", async () => {

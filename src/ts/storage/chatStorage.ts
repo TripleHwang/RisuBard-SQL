@@ -1,6 +1,8 @@
 import { forageStorage } from "../globalApi.svelte"
 import { type Chat, type ChatStub, type ChatOrStub, isChatStub } from "./database.svelte"
 import { tick } from "svelte"
+import { getActiveSqlStorage } from "./sql/sqlBootstrap"
+import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
 
 // ── Stub ↔ Placeholder conversion ───────────────────────────────────────────
 
@@ -137,7 +139,9 @@ export async function ensureChatHydrated(
 ): Promise<Chat | null> {
     const slot = chats[index]
     if (!slot) return null
-    if (!slot._placeholder) return slot
+    const activeSql = getActiveSqlStorage()
+    const needsSqlWindow = activeSql?.backendKind === 'server-sql' && (slot as Chat & { messagesLoaded?: boolean }).messagesLoaded === false
+    if (!slot._placeholder && !needsSqlWindow) return slot
 
     const chatId = slot.id
     if (!chatId) return null
@@ -150,6 +154,15 @@ export async function ensureChatHydrated(
     const promise = (async () => {
         hydrationInFlight.add(key)
         try {
+            const sqlStorage = activeSql
+            if (sqlStorage?.backendKind === 'server-sql') {
+                const hydrated = await ensureChatMessageWindow({ chaId, chats } as any, index, 40)
+                if (!hydrated) return null
+                hydrationJustApplied.add(key)
+                await tick()
+                hydrationJustApplied.delete(key)
+                return hydrated
+            }
             const full = await fetchChatFromServer(chaId, index, chatId)
             if (!full) {
                 console.error(`[chatStorage] hydrate failed: chat not found on server (${key})`)

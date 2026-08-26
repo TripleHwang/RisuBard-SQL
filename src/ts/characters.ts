@@ -1,6 +1,7 @@
 import { get, writable } from "svelte/store";
 import { saveImage, setDatabase, type character, type Chat, defaultSdDataFunc, type loreBook, getDatabase, getCharacterByIndex, setCharacterByIndex, getCurrentChat, loadTogglesFromChat, normalizeChat, newChatModelDefaults } from "./storage/database.svelte";
 import { ensureChatHydrated } from "./storage/chatStorage";
+import { ensureCharacterHydrated } from "./storage/sql/sqlRuntimeHydration";
 import { alertAddCharacter, alertConfirm, alertError, alertSelect, alertStore, alertWait, notifySuccess, notifyInfo } from "./alert";
 import { loadingOverlayStore, chatDeselected } from "./stores.svelte";
 import { language } from "../lang";
@@ -763,12 +764,14 @@ export async function addCharacter(arg:{
     }
     let db = getDatabase()
     if(db.characters[db.characters.length-1]){
-        changeChar(db.characters.length-1, { clearNewBadge: false })
+        void changeChar(db.characters.length-1, { clearNewBadge: false })
     }
     MobileGUIStack.set(1)
 }
 
-export function changeChar(index: number, arg:{
+let characterSelectionIntent = 0
+
+export async function changeChar(index: number, arg:{
     reseter?:()=>any,
     clearNewBadge?:boolean,
 } = {}) {
@@ -778,8 +781,26 @@ export function changeChar(index: number, arg:{
     }
     const db = getDatabase()
     const char = db.characters[index]
+    if (!char) return
+    const intent = ++characterSelectionIntent
+    if ((char as character & { detailsLoaded?: boolean }).detailsLoaded === false) {
+        loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
+        try {
+            const hydrated = await ensureCharacterHydrated(db, index)
+            if (!hydrated || intent !== characterSelectionIntent) return
+        } finally {
+            if (intent === characterSelectionIntent) {
+                loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+            }
+        }
+    }
+    if (intent !== characterSelectionIntent) return
+    const currentIndex = db.characters.findIndex((value) => value?.chaId === char.chaId)
+    if (currentIndex === -1) return
+    index = currentIndex
+    const selectedCharacter = db.characters[index]
     if(arg.clearNewBadge !== false){
-      clearCharacterVaultNew(db, char.chaId)
+      clearCharacterVaultNew(db, selectedCharacter.chaId)
     }
     reseter();
     chatDeselected.set(false)
@@ -789,7 +810,7 @@ export function changeChar(index: number, arg:{
     selectedCharID.set(index);
     const chat = getCurrentChat()
     if(chat){
-        if(chat._placeholder){
+        if(chat._placeholder || (chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false){
             const db = getDatabase()
             const char = db.characters[index]
             const capturedIndex = index

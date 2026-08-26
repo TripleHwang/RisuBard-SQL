@@ -36,6 +36,7 @@
     import { abortGeneration, chatGenKey, endGeneration, generationStates, registerAbort } from "../../ts/process/generationState";
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
+    import { loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
     import { sleep } from "../../ts/util";
     import { language } from "../../lang";
     import { isExpTranslator, translate } from "../../ts/translator/translator";
@@ -136,7 +137,7 @@ import { isMobile } from 'src/ts/platform'
     let wikiRebootBlocksGeneration = $derived(
         blocksChatGeneration(currentChatSlot?.risuBardWikiReboot)
     )
-    let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder)
+    let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
     let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
@@ -249,7 +250,7 @@ import { isMobile } from 'src/ts/platform'
         if (!char) return null
         const chat = char.chats[char.chatPage]
         if (!chat) return null
-        if (!chat._placeholder) return chat
+        if (!chat._placeholder && (chat as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false) return chat
         return await ensureCurrentChatReady(char.chats, char.chatPage, char.chaId)
     }
 
@@ -295,6 +296,18 @@ import { isMobile } from 'src/ts/platform'
         await tick()
         if (scrollToLatest) chatsInstance?.scrollToLatestMessage()
         else scrollToLoadedTop()
+    }
+
+    async function selectPreviousChatPage() {
+        if (chatPage > 0) return selectChatPage(chatPage - 1)
+        const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
+        if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return
+        const formerFirstId = currentChat[0]?.chatId
+        await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+        const anchor = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
+        chatPage = getChatPageForMessage(Math.max(0, anchor), currentChat.length, chatPageSize)
+        await tick()
+        scrollToLoadedTop()
     }
 
     // Literal bottom of the scroll (end of the latest message).
@@ -1461,8 +1474,8 @@ import { isMobile } from 'src/ts/platform'
                     <button
                         data-chat-page-previous
                         class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page === 0}
-                        onclick={() => void selectChatPage(chatBounds.page - 1)}
+                        disabled={chatBounds.page === 0 && !(currentChatSlot as any)?._sqlWindow?.hasOlder}
+                        onclick={() => void selectPreviousChatPage()}
                     >{language.chatPagePrevious}</button>
                     <span class="min-w-20 text-center tabular-nums">
                         {chatBounds.page + 1} / {chatBounds.pageCount}
