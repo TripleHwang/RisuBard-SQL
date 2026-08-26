@@ -511,6 +511,10 @@ function createRelationalSqlite(options) {
                  VALUES (?, 1, 'database', ?, datetime('now'))`,
             ).run(nextRevision, String(payload?.action || 'sync').slice(0, 128));
             database.exec('COMMIT');
+            // The initial compatibility import can be large. Checkpoint its
+            // successful replacement before acknowledging it so a mobile
+            // runtime restart is not dependent on retaining a large WAL file.
+            if (payload?.action === 'replace-all') checkpoint();
             return { revision: nextRevision };
         } catch (error) {
             try { database.exec('ROLLBACK'); } catch {}

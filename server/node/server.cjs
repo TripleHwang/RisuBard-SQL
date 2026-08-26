@@ -793,6 +793,28 @@ app.use('/assets', express.static(path.join(process.cwd(), 'dist/assets'), {
     maxAge: '1y',
     immutable: true,
 }));
+
+// This route must precede the static file middleware. A direct /index.html
+// navigation is common for installed Android WebViews; serving the raw Vite
+// file there skips the server runtime flags and incorrectly selects browser
+// storage instead of the standalone SQL database.
+app.get(['/', '/index.html'], async (req, res, next) => {
+    const clientIP = req.ip || 'Unknown IP';
+    const timestamp = new Date().toISOString();
+    console.log(`[Server] ${timestamp} | Connection from: ${clientIP}`);
+
+    try {
+        const mainIndex = await fs.readFile(path.join(process.cwd(), 'dist', 'index.html'));
+        const root = htmlparser.parse(mainIndex);
+        const head = root.querySelector('head');
+        head.innerHTML = `<script>globalThis.__NODE__ = true; globalThis.__PATCH_SYNC__ = ${enablePatchSync}</script>` + head.innerHTML;
+
+        res.send(root.toString());
+    } catch (error) {
+        console.log(error);
+        next(error);
+    }
+});
 app.use(express.static(path.join(process.cwd(), 'dist'), {index: false, maxAge: 0}));
 app.use(
     '/api/risubard/memory',
@@ -2586,25 +2608,6 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     }
     return { assetsRestored, bytesReceived, coldStorageFailed };
 }
-
-app.get('/', async (req, res, next) => {
-
-    const clientIP = req.ip || 'Unknown IP';
-    const timestamp = new Date().toISOString();
-    console.log(`[Server] ${timestamp} | Connection from: ${clientIP}`);
-    
-    try {
-        const mainIndex = await fs.readFile(path.join(process.cwd(), 'dist', 'index.html'))
-        const root = htmlparser.parse(mainIndex)
-        const head = root.querySelector('head')
-        head.innerHTML = `<script>globalThis.__NODE__ = true; globalThis.__PATCH_SYNC__ = ${enablePatchSync}</script>` + head.innerHTML
-        
-        res.send(root.toString())
-    } catch (error) {
-        console.log(error)
-        next(error)
-    }
-})
 
 async function checkAuth(req, res, returnOnlyStatus = false, {allowExpired = false} = {}){
     try {
@@ -6861,6 +6864,12 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
         console.log(`[Server] Received ${sig}, flushing pending data...`);
         stopTunnel();
         try { await flushPendingDb(); } catch (e) { logger.error('[Server] Flush error:', e); }
+        try {
+            relationalSql.checkpoint();
+            relationalSql.close();
+        } catch (e) {
+            logger.error('[Server] SQL checkpoint/close error:', e);
+        }
         process.exit(0);
     });
 }
