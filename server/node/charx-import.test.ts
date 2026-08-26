@@ -143,10 +143,10 @@ describe('importCharXStream', () => {
     const lowRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const publishRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     try {
-      await expect(importCharXStream(chunks(archive), { stagingRoot: lowRoot, expectedCompressedBytes: archive.length, getAvailableBytes: async () => 0, publishAssets: async () => {} }))
+      await expect(importCharXStream(chunks(archive), { stagingRoot: lowRoot, expectedCompressedBytes: archive.length, getAvailableBytes: () => 0, publishAssets: async () => {} }))
         .rejects.toMatchObject({ code: 'INSUFFICIENT_STORAGE' });
       let calls = 0;
-      await expect(importCharXStream(chunks(archive), { stagingRoot: publishRoot, getAvailableBytes: async () => ++calls < 3 ? 999999999 : 0, publishAssets: async () => {} }))
+      await expect(importCharXStream(chunks(archive), { stagingRoot: publishRoot, getAvailableBytes: () => ++calls < 3 ? 999999999 : 0, publishAssets: async () => {} }))
         .rejects.toMatchObject({ code: 'INSUFFICIENT_STORAGE' });
     } finally { await Promise.all([rm(lowRoot, { recursive: true, force: true }), rm(publishRoot, { recursive: true, force: true })]); }
   });

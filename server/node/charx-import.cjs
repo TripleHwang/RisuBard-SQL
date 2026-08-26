@@ -82,7 +82,13 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
     const local = readExact(fd, localOffset, 30);
     if (u32(local, 0) !== 0x04034b50 || u16(local, 6) !== flags || u16(local, 8) !== method) throw invalid('ZIP local header mismatch');
     const localNameLength = u16(local, 26), localExtraLength = u16(local, 28);
-    if (localOffset + 30 + localNameLength + localExtraLength + compressedSize + ((flags & 8) ? 16 : 0) > centralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
+    const dataEnd = localOffset + 30 + localNameLength + localExtraLength + compressedSize;
+    if (dataEnd > centralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
+    if (flags & 8) {
+      const descriptor = readExact(fd, dataEnd, 16);
+      const signed = u32(descriptor, 0) === 0x08074b50; const base = signed ? 4 : 0;
+      if (dataEnd + (signed ? 16 : 12) > centralOffset || u32(descriptor, base) !== u32(h, 16) || u32(descriptor, base + 4) !== compressedSize || u32(descriptor, base + 8) !== originalSize) throw invalid('Invalid ZIP data descriptor');
+    }
     at = end;
   }
   if (at !== centralOffset + centralSize) throw invalid('Invalid ZIP central directory');
@@ -94,13 +100,12 @@ async function importCharXStream(source, options) {
   if (!stagingRoot || typeof publishAssets !== 'function') throw new TypeError('stagingRoot and publishAssets are required');
   if (signal && signal.aborted) throw aborted();
   if (expectedCompressedBytes > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
-  let available = Infinity;
-  const refreshSpace = async (needed) => {
+  const checkSpace = (phase, needed) => {
     if (!getAvailableBytes) return;
-    available = await getAvailableBytes();
-    if (available < needed + limits.diskHeadroomBytes) throw noSpace();
+    const available = getAvailableBytes({ phase, needed });
+    if (!Number.isFinite(available) || available < needed + limits.diskHeadroomBytes) throw noSpace();
   };
-  await refreshSpace(expectedCompressedBytes || 0);
+  checkSpace('preflight', expectedCompressedBytes || 0);
 
   await fsp.mkdir(stagingRoot, { recursive: true });
   const ownedDir = await fsp.mkdtemp(path.join(stagingRoot, 'charx-'));
@@ -119,12 +124,6 @@ async function importCharXStream(source, options) {
   let active = new Set();
 
   const checkAbort = () => { if (signal && signal.aborted) throw aborted(); if (currentError) throw currentError; };
-  const useSpace = (bytes) => {
-    if (getAvailableBytes) {
-      if (available < bytes + limits.diskHeadroomBytes) throw noSpace();
-      available -= bytes;
-    }
-  };
   const closeAsset = (state) => {
     if (state.fd !== undefined) { fs.fsyncSync(state.fd); fs.closeSync(state.fd); state.fd = undefined; }
     if (state.excluded) { try { fs.unlinkSync(state.sourcePath); } catch {} return; }
@@ -188,7 +187,8 @@ async function importCharXStream(source, options) {
               try { fs.unlinkSync(state.sourcePath); } catch {}
               excludedFiles.push(state.name); warnings.push(`Excluded oversized asset: ${state.name}`);
             } else {
-              useSpace(data.length);
+              // UnzipInflate and writeSync are synchronous: queued decompressed write bytes are always zero.
+              checkSpace('asset-write', data.length);
               fs.writeSync(state.fd, data);
               state.hash.update(data);
             }
@@ -212,8 +212,7 @@ async function importCharXStream(source, options) {
       }
       compressed += chunk.length;
       if (compressed > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
-      await refreshSpace(chunk.length);
-      useSpace(chunk.length);
+      checkSpace('archive-write', chunk.length);
       fs.writeSync(archiveFd, chunk);
       try { unzip.push(chunk, false); } catch (e) { throw currentError || invalid('Invalid or unsupported ZIP archive'); }
       checkAbort();
@@ -238,7 +237,7 @@ async function importCharXStream(source, options) {
     const moduleBase64 = modules.length ? Buffer.concat(modules[0]).toString('base64') : null;
     let stagedBytes = 0;
     for (const sourcePath of assetFiles.values()) stagedBytes += fs.statSync(sourcePath).size;
-    await refreshSpace(stagedBytes);
+    checkSpace('publish', stagedBytes);
     const published = [...assetFiles.entries()].map(([key, sourcePath]) => ({ key, sourcePath }));
     try { await publishAssets(published); } catch (e) { if (e && e.code === 'ENOSPC') throw noSpace(); throw new CharXImportError('ASSET_COMMIT_FAILED', 'Unable to publish CharX assets', 500); }
     return { card, moduleBase64, assets, excludedFiles, warnings };
