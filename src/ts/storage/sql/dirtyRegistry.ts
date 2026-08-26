@@ -31,6 +31,8 @@ export class DirtyRegistry {
     private readonly snapshotGenerations = new WeakMap<DirtySnapshot, Map<string, number>>()
     private timer: ReturnType<typeof setTimeout> | undefined
     private inFlight: Promise<void> | undefined
+    private inFlightGeneration = 0
+    private followUpRequested = false
 
     constructor(private readonly onFlush: () => Promise<void>) {}
 
@@ -116,6 +118,10 @@ export class DirtyRegistry {
         if (this.timer !== undefined) return
         this.timer = setTimeout(() => {
             this.timer = undefined
+            if (this.inFlight) {
+                if (this.generation > this.inFlightGeneration) this.followUpRequested = true
+                return
+            }
             void this.flushNow().catch(() => undefined)
         }, delay)
     }
@@ -124,6 +130,7 @@ export class DirtyRegistry {
         this.clearTimer()
         if (this.inFlight) return this.inFlight
 
+        this.inFlightGeneration = this.generation
         const flush = Promise.resolve().then(() => this.onFlush())
         this.inFlight = flush
         void flush.then(
@@ -212,6 +219,24 @@ export class DirtyRegistry {
     }
 
     private clearInFlight(flush: Promise<void>): void {
-        if (this.inFlight === flush) this.inFlight = undefined
+        if (this.inFlight !== flush) return
+        this.inFlight = undefined
+        if (this.followUpRequested && this.generation > this.inFlightGeneration && this.hasDirtyState()) {
+            this.followUpRequested = false
+            this.schedule(0)
+            return
+        }
+        this.followUpRequested = false
+    }
+
+    private hasDirtyState(): boolean {
+        return this.rootKeys.size > 0
+            || this.characterIds.size > 0
+            || this.chats.size > 0
+            || this.messages.size > 0
+            || this.messageManifestChatIds.size > 0
+            || this.messageDeletes.size > 0
+            || this.pluginStorageKeys.size > 0
+            || this.presetIds.size > 0
     }
 }

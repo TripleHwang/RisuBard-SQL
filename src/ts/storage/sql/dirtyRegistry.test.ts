@@ -101,6 +101,39 @@ describe('DirtyRegistry', () => {
         await expect(second).resolves.toBeUndefined()
     })
 
+    it('runs one follow-up flush when a scheduled change arrives during an in-flight flush', async () => {
+        vi.useFakeTimers()
+        let resolveFirst: (() => void) | undefined
+        const snapshots: ReturnType<DirtyRegistry['takeSnapshot']>[] = []
+        let calls = 0
+        let registry: DirtyRegistry
+        const flush = vi.fn(() => {
+            snapshots.push(registry.takeSnapshot())
+            calls += 1
+            return calls === 1
+                ? new Promise<void>(resolve => { resolveFirst = resolve })
+                : Promise.resolve()
+        })
+        registry = new DirtyRegistry(flush)
+        registry.markRoot('language')
+        registry.schedule(10)
+        vi.advanceTimersByTime(10)
+        await Promise.resolve()
+
+        registry.markRoot('theme')
+        registry.schedule(10)
+        vi.advanceTimersByTime(10)
+        expect(flush).toHaveBeenCalledOnce()
+
+        resolveFirst?.()
+        await Promise.resolve()
+        registry.acknowledge(snapshots[0])
+        await vi.advanceTimersByTimeAsync(0)
+
+        expect(flush).toHaveBeenCalledTimes(2)
+        expect(snapshots[1].rootKeys).toEqual(['theme'])
+    })
+
     it('keeps dirty state after a rejected flush so a later scheduled retry can succeed', async () => {
         vi.useFakeTimers()
         const flush = vi.fn()
