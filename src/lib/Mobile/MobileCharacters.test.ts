@@ -11,6 +11,9 @@ it('uses a fixed-height virtual list with stable character identity', () => {
   expect(source).toContain('data-virtual-index={index}')
   expect(source).toContain('tabindex={focusedIndex === index ? 0 : -1}')
   expect(source).toContain('itemsSignature={characters.map((char) => char.chaId).join')
+  const virtualList = readFileSync(resolve('src/lib/UI/VirtualCharacterList.svelte'), 'utf8')
+  expect(virtualList).toContain('onfocusout')
+  expect(virtualList).toContain('shouldRecoverListFocus(hasListFocus, focusedMounted)')
   expect(source).toContain('h-[68px]')
 })
 

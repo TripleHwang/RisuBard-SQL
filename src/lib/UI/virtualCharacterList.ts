@@ -28,3 +28,7 @@ export function reconcileFocus<T extends string | number>(keys: T[], focusedKey:
     const index = retained >= 0 ? retained : Math.min(Math.max(0, fallbackIndex), Math.max(0, keys.length - 1))
     return { key: keys[index] ?? null, index }
 }
+
+export function shouldRecoverListFocus(hasListFocus: boolean, focusedMounted: boolean) {
+    return hasListFocus && !focusedMounted
+}

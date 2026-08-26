@@ -48,8 +48,15 @@ function createAssetThumbnailService(options) {
         const updatedAt = options.getUpdatedAt(key)
         return updatedAt === null || updatedAt === undefined ? null : { object: String(updatedAt), updatedAt, size: 0 }
     })
-    const etag = hash => `"thumb-${transformVersion}-${hash}"`
-    const cacheKey = (key, metadata) => crypto.createHash('sha256').update(`${key}\0${metadata.updatedAt}\0${transformVersion}\0${options.maxSide ?? 320}\0${options.quality ?? 75}\0${metadata.object}`).digest('hex')
+    const transformFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+        version: transformVersion,
+        format: options.format ?? 'webp',
+        maxSide: options.maxSide ?? 320,
+        quality: options.quality ?? 75,
+        formatParams: options.formatParams ?? {},
+    })).digest('hex').slice(0, 16)
+    const etag = hash => `"thumb-${transformFingerprint}-${hash}"`
+    const cacheKey = (key, metadata) => crypto.createHash('sha256').update(`${key}\0${metadata.updatedAt}\0${transformFingerprint}\0${metadata.object}`).digest('hex')
     const trim = () => {
         while (cache.size > maxEntries || bytes > maxBytes) {
             const first = cache.entries().next().value

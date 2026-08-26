@@ -1,8 +1,14 @@
 import { expect, it } from 'vitest'
-import { nextRovingIndex, reconcileFocus, scrollTopForIndex, visibleRange } from './virtualCharacterList'
+import { nextRovingIndex, reconcileFocus, scrollTopForIndex, shouldRecoverListFocus, visibleRange } from './virtualCharacterList'
 
 it('keeps mounted rows to viewport plus overscan', () => {
   expect(visibleRange({ count: 200, scrollTop: 0, height: 680, rowHeight: 68, overscan: 8 })).toEqual({ start: 0, end: 18 })
+})
+
+it('recovers recycled focus only when the list owned focus', () => {
+  expect(shouldRecoverListFocus(true, false)).toBe(true)
+  expect(shouldRecoverListFocus(true, true)).toBe(false)
+  expect(shouldRecoverListFocus(false, false)).toBe(false)
 })
 
 it('retains focus by character key through filtering and reordering', () => {

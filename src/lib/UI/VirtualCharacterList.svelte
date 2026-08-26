@@ -1,6 +1,6 @@
 <script lang="ts">
     import { tick } from 'svelte'
-    import { nextRovingIndex, reconcileFocus, scrollTopForIndex, visibleRange } from './virtualCharacterList'
+    import { nextRovingIndex, reconcileFocus, scrollTopForIndex, shouldRecoverListFocus, visibleRange } from './virtualCharacterList'
 
     interface Props { count: number; itemsSignature: string; rowHeight?: number; overscan?: number; getKey?: (index: number) => string | number; children: import('svelte').Snippet<[number, number, string | number]> }
     let { count, itemsSignature, rowHeight = 68, overscan = 8, getKey = (index) => index, children }: Props = $props()
@@ -9,6 +9,7 @@
     let viewport: HTMLDivElement
     let focusedIndex = $state(0)
     let focusedKey = $state<string | number | null>(null)
+    let hasListFocus = $state(false)
     $effect(() => {
         const observer = new ResizeObserver(() => height = viewport.clientHeight)
         observer.observe(viewport); return () => observer.disconnect()
@@ -21,6 +22,12 @@
         const next = reconcileFocus(keys, focusedKey, focusedIndex)
         focusedKey = next.key
         focusedIndex = next.index
+    })
+    $effect(() => {
+        if (!shouldRecoverListFocus(hasListFocus, focusedMounted)) return
+        void tick().then(() => {
+            if (shouldRecoverListFocus(hasListFocus, focusedMounted)) viewport.focus()
+        })
     })
 
     async function focusIndex(index: number) {
@@ -41,8 +48,12 @@
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -- virtual scroller delegates keyboard focus to child buttons -->
 <div bind:this={viewport} class="h-full w-full overflow-y-auto" role="listbox" aria-label="Character list" tabindex={focusedMounted ? -1 : 0} aria-activedescendant={focusedMounted ? undefined : `virtual-character-${focusedKey}`} onscroll={() => scrollTop = viewport.scrollTop} onkeydown={onKeydown} onfocusin={(event) => {
+    hasListFocus = true
     const index = Number((event.target as HTMLElement).dataset.virtualIndex)
     if (Number.isInteger(index)) { focusedIndex = index; focusedKey = getKey(index) }
+}} onfocusout={(event) => {
+    const next = event.relatedTarget as Node | null
+    if (next && !viewport.contains(next)) hasListFocus = false
 }}>
     {#if !focusedMounted && focusedKey !== null}
         <span id={`virtual-character-${focusedKey}`} class="sr-only" role="option" aria-selected="true"></span>

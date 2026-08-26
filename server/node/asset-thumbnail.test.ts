@@ -74,6 +74,13 @@ describe('asset thumbnails', () => {
     expect(second.etag).not.toBe(first.etag)
   })
 
+  it('changes ETag when quality or max side changes', async () => {
+    const options = { getMetadata: () => ({ object: 'a'.repeat(64), updatedAt: 1, size: 5 }), get: () => Buffer.from('image'), transform: async () => Buffer.from('webp') }
+    const q75 = await createAssetThumbnailService({ ...options, quality: 75, maxSide: 320 }).get('assets/a.png')
+    expect((await createAssetThumbnailService({ ...options, quality: 60, maxSide: 320 }).get('assets/a.png', q75.etag)).status).toBe(200)
+    expect((await createAssetThumbnailService({ ...options, quality: 75, maxSide: 160 }).get('assets/a.png', q75.etag)).status).toBe(200)
+  })
+
   it('shares source get and inspection across identical concurrent requests', async () => {
     let reads = 0, inspections = 0
     const service = createAssetThumbnailService({
