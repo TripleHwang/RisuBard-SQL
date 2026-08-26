@@ -146,6 +146,14 @@ function createFileKv(options = {}) {
     }
     const objectWriteConcurrency = options.objectWriteConcurrency
         ?? Math.min(8, Math.max(1, (os.availableParallelism?.() ?? os.cpus().length) - 1));
+    const manifestWriter = options.manifestWriter ?? (next => atomicWriteJson(dataRoot, MANIFEST_PATH, next, {
+        validate: value => value?.schemaVersion === 1 && typeof value?.entries === 'object',
+    }));
+
+    function commitManifest(next) {
+        manifestWriter(next);
+        manifest = next;
+    }
 
     function saveManifest() {
         manifest.updatedAt = Date.now();
@@ -195,6 +203,14 @@ function createFileKv(options = {}) {
             const prepared = await writeObjectFromFileAsync(dataRoot, sourcePath);
             return [key, { object: prepared.hash, size: prepared.size, updatedAt: Date.now() }];
         });
+    }
+
+    async function kvSetManyFromFilesAsync(entries) {
+        const prepared = await prepareFileEntriesAsync(entries);
+        if (!entries.length) return;
+        const next = { schemaVersion: 1, updatedAt: Date.now(), entries: { ...manifest.entries } };
+        for (const [key, entry] of prepared) next.entries[key] = entry;
+        commitManifest(next);
     }
 
     function kvSetMany(entries) {
@@ -368,6 +384,7 @@ function createFileKv(options = {}) {
         kvGet,
         kvSet,
         kvSetMany,
+        kvSetManyFromFilesAsync,
         kvReplacePrefixes,
         kvReplacePrefixesAsync,
         kvReplacePrefixesFromFilesAsync,

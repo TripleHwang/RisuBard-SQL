@@ -14,6 +14,65 @@ function root() {
 afterEach(() => roots.splice(0).forEach(value => fs.rmSync(value, { recursive: true, force: true })))
 
 describe('file-native KV compatibility projection', () => {
+    it('adds staged files without replacing existing assets and persists the batch', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const firstPath = path.join(stagingRoot, 'first.bin')
+        const secondPath = path.join(stagingRoot, 'second.bin')
+        fs.writeFileSync(firstPath, Buffer.from('first'))
+        fs.writeFileSync(secondPath, Buffer.from('second'))
+        const store = createFileKv({ dataRoot })
+        store.kvSet('assets/existing', Buffer.from('existing'))
+
+        await store.kvSetManyFromFilesAsync([
+            { key: 'assets/first', sourcePath: firstPath },
+            { key: 'assets/second', sourcePath: secondPath },
+        ])
+
+        const reopened = createFileKv({ dataRoot })
+        expect(reopened.kvList('assets/')).toEqual(['assets/existing', 'assets/first', 'assets/second'])
+        expect(reopened.kvGet('assets/existing')?.toString()).toBe('existing')
+        expect(reopened.kvGet('assets/first')?.toString()).toBe('first')
+        expect(reopened.kvGet('assets/second')?.toString()).toBe('second')
+    })
+
+    it('does not publish any staged-file keys when one source cannot be prepared', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const validPath = path.join(stagingRoot, 'valid.bin')
+        fs.writeFileSync(validPath, Buffer.from('valid'))
+        const store = createFileKv({ dataRoot })
+
+        await expect(store.kvSetManyFromFilesAsync([
+            { key: 'assets/valid', sourcePath: validPath },
+            { key: 'assets/missing', sourcePath: path.join(stagingRoot, 'missing.bin') },
+        ])).rejects.toThrow()
+
+        expect(store.kvList('assets/')).toEqual([])
+        expect(createFileKv({ dataRoot }).kvList('assets/')).toEqual([])
+    })
+
+    it('keeps the previous manifest if staged-file batch publication fails', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'new.bin')
+        fs.writeFileSync(sourcePath, Buffer.from('new'))
+        createFileKv({ dataRoot }).kvSet('assets/existing', Buffer.from('existing'))
+        const store = createFileKv({
+            dataRoot,
+            manifestWriter: () => { throw new Error('manifest write failed') },
+        })
+
+        await expect(store.kvSetManyFromFilesAsync([
+            { key: 'assets/new', sourcePath },
+        ])).rejects.toThrow('manifest write failed')
+
+        expect(store.kvList('assets/')).toEqual(['assets/existing'])
+        const reopened = createFileKv({ dataRoot })
+        expect(reopened.kvList('assets/')).toEqual(['assets/existing'])
+        expect(reopened.kvGet('assets/existing')?.toString()).toBe('existing')
+    })
+
     it('publishes replacement values from staged files without loading them into entry buffers', async () => {
         const dataRoot = root()
         const stagingRoot = root()
