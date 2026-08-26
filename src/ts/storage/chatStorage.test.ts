@@ -346,6 +346,24 @@ describe('ChatHydrationCache', () => {
         expect(evicted).toEqual(['char-a/chat-2'])
         expect(cache.ids()).toEqual(['char-a/chat-1', 'char-a/chat-3'])
     })
+
+    test('bounds churn across flush awaits without changing LRU residency', async () => {
+        let active = 'char-a/chat-3'
+        const flush = vi.fn(() => {
+            active = active === 'char-a/chat-1' ? 'char-a/chat-2' : 'char-a/chat-1'
+            return Promise.resolve()
+        })
+        const evicted: string[] = []
+        const cache = new ChatHydrationCache({ maxChats: 2, flush, onEvict: key => evicted.push(key) })
+        await cache.touch('char-a', 'chat-1')
+        await cache.touch('char-a', 'chat-2')
+
+        await expect(cache.touch('char-a', 'chat-3', { getActiveKey: () => active })).resolves.toBe(false)
+
+        expect(flush).toHaveBeenCalledTimes(2)
+        expect(evicted).toEqual([])
+        expect(cache.ids()).toEqual(['char-a/chat-1', 'char-a/chat-2'])
+    })
 })
 
 describe('hydrateRecentChatPage', () => {

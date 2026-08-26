@@ -155,7 +155,10 @@ export class ChatHydrationCache {
 
     private async flushCandidate(options: ChatEvictionOptions): Promise<string | null> {
         let candidate = this.evictionCandidate(options)
-        while (candidate) {
+        // Selection and slot identity can churn while persistence awaits.
+        // Two stable-ID retries cover the normal reorder/replacement race; a
+        // third change is treated as contention and leaves residency intact.
+        for (let attempts = 0; candidate && attempts < 2; attempts++) {
             const token = await this.options.prepareEviction?.(candidate)
             if (token === false) return null
             await this.options.flush()
