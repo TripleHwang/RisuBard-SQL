@@ -59,6 +59,19 @@ function getWindow(chat: Chat): SqlHydrationWindow | undefined {
   return (chat as Chat & { _sqlWindow?: SqlHydrationWindow })._sqlWindow;
 }
 
+function attachCanonicalPositions(messages: Chat["message"], before: number | null): void {
+  if (before === null) return;
+  const firstPosition = before - messages.length;
+  for (const [index, message] of messages.entries()) {
+    Object.defineProperty(message, "_sqlPosition", {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: firstPosition + index,
+    });
+  }
+}
+
 export async function ensureCharacterHydrated(db: Database, characterIndex: number): Promise<character | null> {
   const summary = db.characters[characterIndex];
   if (!summary) return null;
@@ -107,6 +120,7 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
       const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
+      attachCanonicalPositions(page.messages, page.before);
       current.message = page.messages;
       current._placeholder = false;
       (current as HydratableChat).messagesLoaded = true;
@@ -154,6 +168,7 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
         setWindow(current, { ...window, hasOlder: false });
         return current;
       }
+      attachCanonicalPositions(older, page.before);
       current.message = [...older, ...current.message];
       (current as HydratableChat).messagesLoaded = true;
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
