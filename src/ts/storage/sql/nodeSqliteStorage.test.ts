@@ -101,6 +101,22 @@ function createClientWithBootstrap() {
 }
 
 describe("Node server SQLite client", () => {
+  it("closes bootstrap timing when the request rejects without snapshot fallback", async () => {
+    const requests: string[] = [];
+    performance.clearMarks("risu:bootstrap-fetch:start");
+    performance.clearMarks("risu:bootstrap-fetch:end");
+    const client = new NodeSqliteStorage(async (input) => {
+      requests.push(String(input));
+      throw new Error("network unavailable");
+    });
+
+    await expect(client.init()).rejects.toThrow("network unavailable");
+
+    expect(performance.getEntriesByName("risu:bootstrap-fetch:start", "mark")).toHaveLength(1);
+    expect(performance.getEntriesByName("risu:bootstrap-fetch:end", "mark")).toHaveLength(1);
+    expect(requests).toEqual(["/api/sql/bootstrap"]);
+  });
+
   it("migrates and round-trips a compatible Database graph", async () => {
     const { client, server } = createClient();
     const source = {

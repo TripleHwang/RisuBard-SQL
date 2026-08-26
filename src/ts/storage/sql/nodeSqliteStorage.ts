@@ -107,8 +107,12 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
 
   async loadBootstrap(): Promise<SqlBootstrapPayload> {
     markPerformance("bootstrap-fetch:start");
-    const response = await this.request("/api/sql/bootstrap");
-    markPerformance("bootstrap-fetch:end");
+    let response: Response;
+    try {
+      response = await this.request("/api/sql/bootstrap");
+    } finally {
+      markPerformance("bootstrap-fetch:end");
+    }
     if (!response.ok) throw new Error(`SQL bootstrap failed (${response.status})`);
     const payload = this.validateBootstrap(await response.json());
     markPerformance("bootstrap-json:end");
