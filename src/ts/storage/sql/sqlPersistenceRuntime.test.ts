@@ -154,4 +154,13 @@ describe('SQL persistence runtime', () => {
         auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
         expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ messages: [expect.objectContaining({ id: 'm-0', data: expect.objectContaining({ data: 'plugin edit' }) })] }))
     })
+
+    it('does not write an unsafe middle insertion in an incomplete resident history', async () => {
+        const storage = fakeStorageAtRevision(3); const database = fixtureDatabaseWithMessages(2)
+        database.characters[0].chats[0].messagesFullyLoaded = false
+        activateSqlPersistenceRuntime(storage, database); initializeSqlCompatibilityBaseline(database)
+        database.characters[0].chats[0].message.splice(1, 0, { chatId: 'm-middle', role: 'char', data: 'unsafe' })
+        auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
+        expect(storage.commit).not.toHaveBeenCalled()
+    })
 })

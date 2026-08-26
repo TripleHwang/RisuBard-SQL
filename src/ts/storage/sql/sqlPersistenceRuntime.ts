@@ -194,17 +194,20 @@ function snapshotCompatibility(database: Database): CompatibilityBaseline {
     const roots = new Map<string, string>()
     for (const key of Object.keys(database)) if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) roots.set(key, fingerprint((database as any)[key]))
     const plugins = new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
+    for (const preset of database.botPresets ?? []) preset.id ||= uuidv4()
     const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, fingerprint(preset)]))
     const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>(); const chatOrders = new Map<string, string[]>(); const messages = new Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>()
     for (const character of database.characters ?? []) {
-        if (!character?.chaId) continue
+        if (!character) continue
+        character.chaId ||= uuidv4()
         characters.set(character.chaId, fingerprint({ ...character, chats: undefined }))
+        for (const chat of character.chats ?? []) if (chat) chat.id ||= uuidv4()
         const ids = (character.chats ?? []).map(chat => chat?.id).filter((id): id is string => Boolean(id)); chatOrders.set(character.chaId, ids)
-        for (const chat of character.chats ?? []) if (chat?.id) {
+        for (const chat of character.chats ?? []) { if (!chat) continue; {
             chats.set(chat.id, { characterId: character.chaId, signature: fingerprint({ ...chat, message: undefined }) })
             const rows = chat.message ?? []; for (const message of rows) message.chatId ||= uuidv4()
             messages.set(chat.id, { order: rows.map(message => message.chatId!), values: new Map(rows.map(message => [message.chatId!, fingerprint(message)])), complete: (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false })
-        }
+        } }
     }
     return { roots, plugins, presets, characters, chats, messages, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
 }
@@ -237,6 +240,16 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
     }
     for (const [chatId, current] of next.messages) {
         const prior = previous.messages.get(chatId); if (!prior) continue
+        const survivingPrior = prior.order.filter(id => current.values.has(id))
+        const currentPrior = current.order.filter(id => prior.values.has(id))
+        const unsafePartialOrder = !prior.complete && (
+            survivingPrior.join('\u0000') !== currentPrior.join('\u0000') ||
+            current.order.slice(0, currentPrior.length).join('\u0000') !== currentPrior.join('\u0000')
+        )
+        if (unsafePartialOrder) {
+            console.warn(`[SQL compatibility audit] deferred unsafe middle message insertion/reorder in partial chat ${chatId}; hydrate it before retrying`)
+            continue
+        }
         for (const id of current.order) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
         for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
         if (prior.complete && current.complete && prior.order.join('\u0000') !== current.order.join('\u0000')) {
