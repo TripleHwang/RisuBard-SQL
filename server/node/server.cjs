@@ -54,6 +54,7 @@ const { createCharXImportHandler } = require('./charx-import-route.cjs');
 const { importRisumFile, DEFAULT_RISUM_LIMITS } = require('./risum-import.cjs');
 const { createRisumImportHandler } = require('./risum-import-route.cjs');
 const { spoolSourceToOwnedFile } = require('./import-stream.cjs');
+const { createAssetUploadHandler } = require('./asset-upload-route.cjs');
 const { importSaveFolderZip, DEFAULT_SAVE_FOLDER_ZIP_LIMITS } = require('./save-folder-zip-import.cjs');
 const {
     createRisuBardMemoryJsonParser,
@@ -799,7 +800,7 @@ app.use(
 app.use(express.json({ limit: '100mb' }));
 app.use((req, res, next) => {
     // Streaming imports must bypass express.raw(), which would buffer their full bodies.
-    if (req.path === '/api/backup/import' || req.path === '/api/charx/import' || req.path === '/api/risum/import' || req.path === '/api/migrate/save-folder/upload') return next();
+    if (req.path === '/api/backup/import' || req.path === '/api/charx/import' || req.path === '/api/risum/import' || req.path === '/api/migrate/save-folder/upload' || req.path === '/api/assets/upload') return next();
     return express.raw({ type: 'application/octet-stream', limit: '2gb' })(req, res, next);
 });
 app.use(express.text({ limit: '100mb' }));
@@ -4136,6 +4137,17 @@ app.post('/api/patch', async (req, res, next) => {
 
 // ─── Bulk asset endpoints (3-2-B) ─────────────────────────────────────────────
 const BULK_BATCH = 50;
+
+app.post('/api/assets/upload', createAssetUploadHandler({
+    checkAuth,
+    checkActiveSession,
+    kvSetManyFromFilesAsync,
+    stagingRoot: path.join(savePath, 'asset-uploads'),
+    getAvailableBytes: () => {
+        const stats = require('fs').statfsSync(savePath);
+        return Number(stats.bavail) * Number(stats.bsize);
+    },
+}));
 
 app.post('/api/assets/bulk-read', async (req, res, next) => {
     if(!await checkAuth(req, res)){ return; }

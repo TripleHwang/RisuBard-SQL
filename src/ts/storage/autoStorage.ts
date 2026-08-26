@@ -96,6 +96,7 @@ export class AutoStorage{
     // ── Bulk asset operations ──────────────────────────────────────────────────
     async getItems(keys: string[]) { return this.realStorage.getItems(keys) }
     async setItems(entries: {key: string, value: Uint8Array}[]) { return this.realStorage.setItems(entries) }
+    async setItemStreamed(key: string, value: Blob | Uint8Array) { await this.Init(); return this.realStorage.setItemStreamed(key, value) }
 
     // ── Server-side backup ─────────────────────────────────────────────────────
     async saveServerBackup(onProgress?: (current: number, total: number, bytes: number, totalBytes: number) => void) { await this.Init(); return this.realStorage.saveServerBackup(onProgress) }

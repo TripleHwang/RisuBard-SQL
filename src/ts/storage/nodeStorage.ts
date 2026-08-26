@@ -106,6 +106,9 @@ export type ServerRisumImportProgress =
 
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 50
+    private static readonly BULK_WRITE_CLIENT_BYTES = 32 * 1024 * 1024
+    /** JSON/base64 is retained for small compatibility writes only. */
+    private static readonly RAW_ASSET_UPLOAD_THRESHOLD = 8 * 1024 * 1024
 
     // Cross-device single-writer lock identity. Persisted in sessionStorage so
     // a reload or an OS tab restore of the SAME tab keeps the same identity —
@@ -272,6 +275,11 @@ export class NodeStorage{
     }
 
     async setItem(key:string, value:Uint8Array, etag?:string): Promise<string | null> {
+        if (key.startsWith('assets/') && value.byteLength > NodeStorage.RAW_ASSET_UPLOAD_THRESHOLD) {
+            if (etag) throw new Error('Conditional large asset writes are not supported')
+            await this.setItemStreamed(key, value)
+            return null
+        }
         const headers: Record<string, string> = {
             'content-type': 'application/octet-stream',
             'file-path': Buffer.from(key, 'utf-8').toString('hex')
@@ -303,6 +311,36 @@ export class NodeStorage{
     }
     async setItemConditional(key: string, value: Uint8Array, etag: string): Promise<string | null> {
         return await this.setItem(key, value, etag)
+    }
+
+    /**
+     * Upload a binary asset without base64 expansion or a browser-sized JSON
+     * string. The supplied Blob/Uint8Array is handed to XHR unchanged.
+     */
+    async setItemStreamed(key: string, value: Blob | Uint8Array): Promise<void> {
+        if (!key.startsWith('assets/')) throw new Error('Streamed uploads are limited to asset keys')
+        const authHeader = await this.createAuth()
+        await new Promise<void>((resolve, reject) => {
+            const xhr = new XMLHttpRequest()
+            xhr.open('POST', '/api/assets/upload')
+            xhr.setRequestHeader('content-type', 'application/octet-stream')
+            xhr.setRequestHeader('x-risu-asset-key', key)
+            xhr.setRequestHeader('risu-auth', authHeader)
+            xhr.setRequestHeader('x-session-id', NodeStorage.sessionId)
+            if (isUserActive()) xhr.setRequestHeader('x-user-active', '1')
+            xhr.onerror = () => reject(new Error('Asset upload request failed'))
+            xhr.onabort = () => reject(new Error('Asset upload request aborted'))
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) { resolve(); return }
+                let message = `Asset upload error: ${xhr.status}`
+                try {
+                    const body = JSON.parse(xhr.responseText)
+                    if (typeof body?.error === 'string') message = body.error
+                } catch { /* non-JSON error */ }
+                reject(new Error(message))
+            }
+            xhr.send(value as any)
+        })
     }
     async getItemWithEtag(key:string):Promise<{ value: Buffer | null, etag: string | null }> {
         const headers: Record<string, string> = {
@@ -514,8 +552,15 @@ export class NodeStorage{
     }
 
     async setItems(entries: {key: string, value: Uint8Array}[]) {
-        for (let i = 0; i < entries.length; i += NodeStorage.BULK_WRITE_CLIENT_BATCH) {
-            const batch = entries.slice(i, i + NodeStorage.BULK_WRITE_CLIENT_BATCH)
+        // Preserve input order, including duplicate keys. In particular, a
+        // large raw write must not leapfrog an earlier/later JSON fallback.
+        let smallBatch: {key: string, value: Uint8Array}[] = []
+        let smallBytes = 0
+        const flushSmall = async () => {
+            if (smallBatch.length === 0) return
+            const batch = smallBatch
+            smallBatch = []
+            smallBytes = 0
             const body = batch.map(e => ({
                 key: e.key,
                 value: Buffer.from(e.value).toString('base64')
@@ -529,6 +574,18 @@ export class NodeStorage{
             })
             if (da.status < 200 || da.status >= 300) throw 'setItems Error'
         }
+        for (const entry of entries) {
+            if (entry.key.startsWith('assets/') && entry.value.byteLength > NodeStorage.RAW_ASSET_UPLOAD_THRESHOLD) {
+                await flushSmall()
+                await this.setItemStreamed(entry.key, entry.value)
+                continue
+            }
+            if (smallBatch.length > 0 && smallBytes + entry.value.byteLength > NodeStorage.BULK_WRITE_CLIENT_BYTES) await flushSmall()
+            smallBatch.push(entry)
+            smallBytes += entry.value.byteLength
+            if (smallBatch.length >= NodeStorage.BULK_WRITE_CLIENT_BATCH || smallBytes >= NodeStorage.BULK_WRITE_CLIENT_BYTES) await flushSmall()
+        }
+        await flushSmall()
     }
 
     async exportBackup(opts?: ExportBackupOptions): Promise<Response> {
