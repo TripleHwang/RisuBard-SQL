@@ -14,6 +14,11 @@ function root() {
 }
 afterEach(() => roots.splice(0).forEach(value => fs.rmSync(value, { recursive: true, force: true })))
 
+async function waitForStagedSourceConsumption(sourcePath: string) {
+    while (fs.existsSync(sourcePath)) await new Promise<void>(resolve => setImmediate(resolve))
+    await new Promise<void>(resolve => setImmediate(resolve))
+}
+
 describe('file-native KV compatibility projection', () => {
     it('adds staged files without replacing existing assets and persists the batch', async () => {
         const dataRoot = root()
@@ -103,7 +108,7 @@ describe('file-native KV compatibility projection', () => {
         const first = store.kvSetManyFromFilesAsync([{ key: 'assets/first', sourcePath: firstPath }])
         await firstWriterStartedPromise
         const second = store.kvSetManyFromFilesAsync([{ key: 'assets/second', sourcePath: secondPath }])
-        await new Promise(resolve => setTimeout(resolve, 25))
+        await waitForStagedSourceConsumption(secondPath)
         releaseFirstWriter()
         await Promise.all([first, second])
 
@@ -118,18 +123,30 @@ describe('file-native KV compatibility projection', () => {
         const laterPath = path.join(stagingRoot, 'later.bin')
         fs.writeFileSync(failedPath, Buffer.from('failed'))
         fs.writeFileSync(laterPath, Buffer.from('later'))
+        let rejectFirstWriter!: () => void
+        let firstWriterStarted!: () => void
+        const firstWriterStartedPromise = new Promise<void>(resolve => { firstWriterStarted = resolve })
+        const firstWriterRelease = new Promise<void>(resolve => { rejectFirstWriter = resolve })
         let writes = 0
         const store = createFileKv({
             dataRoot,
-            manifestWriter: next => {
-                if (writes++ === 0) throw new Error('manifest write failed')
+            manifestWriter: async next => {
+                if (writes++ === 0) {
+                    firstWriterStarted()
+                    await firstWriterRelease
+                    throw new Error('manifest write failed')
+                }
                 atomicWriteJson(dataRoot, 'kv/manifest.json', next)
             },
         })
 
-        await expect(store.kvSetManyFromFilesAsync([{ key: 'assets/failed', sourcePath: failedPath }]))
-            .rejects.toThrow('manifest write failed')
-        await store.kvSetManyFromFilesAsync([{ key: 'assets/later', sourcePath: laterPath }])
+        const failed = store.kvSetManyFromFilesAsync([{ key: 'assets/failed', sourcePath: failedPath }])
+        await firstWriterStartedPromise
+        const later = store.kvSetManyFromFilesAsync([{ key: 'assets/later', sourcePath: laterPath }])
+        await waitForStagedSourceConsumption(laterPath)
+        rejectFirstWriter()
+        await expect(failed).rejects.toThrow('manifest write failed')
+        await later
 
         expect(store.kvList('assets/')).toEqual(['assets/later'])
         expect(createFileKv({ dataRoot }).kvList('assets/')).toEqual(['assets/later'])
