@@ -264,7 +264,7 @@
         if (c.trashed) return
         const index = getDatabase().characters.findIndex((ch) => ch.chaId === c.chaId)
         if (index === -1) return
-        changeChar(index)
+        void changeChar(index)
         settingsOpen.set(false)
     }
 

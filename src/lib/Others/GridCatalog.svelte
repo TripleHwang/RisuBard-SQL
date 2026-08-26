@@ -21,7 +21,7 @@
     let selected = $state(3)
 
     function selectAndClose(index = -1){
-        changeChar(index)
+        void changeChar(index)
         endGrid()
     }
 

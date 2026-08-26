@@ -141,14 +141,16 @@ describe('Character Vault sidebar integration', () => {
 
     test('clears the new-character badge through the shared access path', () => {
         const characters = source('src/ts/characters.ts')
-        const changeStart = characters.indexOf('export function changeChar(')
+        const changeStart = characters.indexOf('export async function changeChar(')
         const changeCharacter = characters.slice(changeStart)
         expect(characters).toContain(
             "import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'"
         )
-        expect(characters).toContain('changeChar(db.characters.length-1, { clearNewBadge: false })')
+        expect(characters).toContain('void changeChar(db.characters.length-1, { clearNewBadge: false })')
         expect(changeCharacter).toContain('if(arg.clearNewBadge !== false)')
-        expect(changeCharacter).toContain('clearCharacterVaultNew(db, char.chaId)')
+        expect(changeCharacter).toContain('clearCharacterVaultNew(db, selectedCharacter.chaId)')
+        expect(source('src/lib/SideBars/Sidebar.svelte')).toContain('void changeChar(index, { reseter })')
+        expect(source('src/lib/Mobile/MobileCharacters.svelte')).toContain('void changeChar(char.i)')
     })
 
     test('exposes one shared modal state from the app stores', () => {

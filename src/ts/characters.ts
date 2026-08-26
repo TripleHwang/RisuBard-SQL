@@ -175,11 +175,12 @@ export async function exportChat(page:number){
         const db = getDatabase()
         const char = db.characters[selectedID]
         // Ensure chat is hydrated before export
-        if(char.chats[page]?._placeholder){
+        if(char.chats[page]?._placeholder || (char.chats[page] as Chat & { messagesLoaded?: boolean }).messagesLoaded === false){
             await ensureChatHydrated(char.chats, page, char.chaId)
         }
-        if(char.chats[page]?._placeholder){
-            alertError('Failed to load chat data. Export aborted.')
+        const hydratedChat = char.chats[page] as Chat & { _sqlWindow?: { hasOlder?: boolean }; messagesFullyLoaded?: boolean }
+        if(hydratedChat?._placeholder || hydratedChat?.messagesFullyLoaded === false || hydratedChat?._sqlWindow?.hasOlder){
+            alertError('Load earlier messages before exporting this chat.')
             return
         }
         const chat = char.chats[page]
@@ -496,12 +497,13 @@ export async function exportAllChats() {
         const date = new Date().toISOString().replace(/[:.]/g, "-")
 
         for (let i = 0; i < char.chats.length; i++) {
-            if (char.chats[i]?._placeholder) {
+            if (char.chats[i]?._placeholder || (char.chats[i] as Chat & { messagesLoaded?: boolean }).messagesLoaded === false) {
                 alertWait(`Loading chat data... (${i + 1}/${char.chats.length})`)
                 await ensureChatHydrated(char.chats, i, char.chaId)
             }
-            if (char.chats[i]?._placeholder) {
-                alertError(`Failed to load chat data for "${char.chats[i].name}". Export aborted to prevent data loss.`)
+            const chat = char.chats[i] as Chat & { _sqlWindow?: { hasOlder?: boolean }; messagesFullyLoaded?: boolean }
+            if (chat?._placeholder || chat?.messagesFullyLoaded === false || chat?._sqlWindow?.hasOlder) {
+                alertError(`Load earlier messages before exporting "${chat.name}". Export aborted to prevent data loss.`)
                 return
             }
         }
@@ -783,10 +785,17 @@ export async function changeChar(index: number, arg:{
     const char = db.characters[index]
     if (!char) return
     const intent = ++characterSelectionIntent
+    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
     if ((char as character & { detailsLoaded?: boolean }).detailsLoaded === false) {
         loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
         try {
-            const hydrated = await ensureCharacterHydrated(db, index)
+            let hydrated: character | null
+            try {
+                hydrated = await ensureCharacterHydrated(db, index)
+            } catch (error) {
+                if (intent === characterSelectionIntent) alertError(error)
+                return
+            }
             if (!hydrated || intent !== characterSelectionIntent) return
         } finally {
             if (intent === characterSelectionIntent) {

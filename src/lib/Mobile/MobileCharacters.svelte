@@ -36,7 +36,7 @@
     {#each sortChar(DBState.db.characters) as char, i}
         {#if char.name.replace(/ /g,"").toLocaleLowerCase().includes(search.replace(/ /g,"").toLocaleLowerCase())}
             <button class="flex p-2 border-t-darkborderc gap-2 w-full" class:border-t={i !== 0} onclick={() => {
-                changeChar(char.i)
+                void changeChar(char.i)
                 endGrid()
             }}>
                 <BarIcon additionalStyle={getCharImage(char.image, 'css')}></BarIcon>

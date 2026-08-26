@@ -70,4 +70,23 @@ describe("SQL delta commits", () => {
       },
     ]);
   });
+
+  it("keeps canonical message rows when the current chat is only a partial SQL window", () => {
+    const before = database();
+    const after = structuredClone(before);
+    after.characters[0].chats[0].message = [after.characters[0].chats[0].message[1]];
+    after.characters[0].chats[0].name = "Renamed while windowed";
+    after.characters[0].chats[0].messagesLoaded = true;
+    after.characters[0].chats[0].messagesFullyLoaded = false;
+    Object.defineProperty(after.characters[0].chats[0], "_sqlWindow", {
+      enumerable: false,
+      value: { hasOlder: true },
+    });
+
+    const commit = buildSqlDeltaCommit(before, after, 3)!;
+
+    expect(commit.chats).toEqual([expect.objectContaining({ id: "chat-1" })]);
+    expect(commit.messages).toEqual([]);
+    expect(commit.messageManifests).toEqual([]);
+  });
 });

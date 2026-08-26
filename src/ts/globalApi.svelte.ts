@@ -3,7 +3,7 @@ import { v4 as uuidv4, v4 } from 'uuid';
 import { tick } from "svelte";
 import { get } from "svelte/store";
 import streamSaver from 'streamsaver';
-import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
+import { setDatabase, type Chat, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
@@ -13,6 +13,7 @@ import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
 import { isHydrating, saveChatToServer, ensureChatHydrated, chatToStub, classifyChat } from "./storage/chatStorage";
+import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
 import { supportsPatchSync } from "./platform";
@@ -843,6 +844,11 @@ export async function saveDb() {
             const chat = char.chats[chatIndex]
             // Skip placeholders — they have no real data to save
             if (!chat || chat._placeholder) continue
+            const partialSqlWindow = getActiveSqlStorage()?.backendKind === 'server-sql' &&
+                ((chat as Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }).messagesLoaded === false ||
+                (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false ||
+                (chat as Chat & { _sqlWindow?: { hasOlder?: boolean } })._sqlWindow?.hasOlder === true)
+            if (partialSqlWindow) continue
             try {
                 await saveChatToServer(chaId, chatIndex, chatId, chat)
             } catch (e) {

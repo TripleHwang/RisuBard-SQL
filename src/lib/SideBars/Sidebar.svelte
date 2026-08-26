@@ -99,7 +99,7 @@
   }
 
   function selectCharacter(index: number) {
-    changeChar(index, { reseter });
+    void changeChar(index, { reseter });
   }
 
   type sortTypeNormal = { type:'normal',id:string,img: string, index: number, name:string, isNew:boolean }

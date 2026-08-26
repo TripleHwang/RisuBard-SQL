@@ -3,6 +3,7 @@ import { type Chat, type ChatStub, type ChatOrStub, isChatStub } from "./databas
 import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
+import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
 
 // ── Stub ↔ Placeholder conversion ───────────────────────────────────────────
 
@@ -96,12 +97,6 @@ function chatKey(chaId: string, chatId: string): string {
     return `${chaId}/${chatId}`
 }
 
-/** Hydration in progress — suppress dirty tracking */
-export const hydrationInFlight = new Set<string>()
-
-/** Hydration just applied to memory — suppress until next tick */
-export const hydrationJustApplied = new Set<string>()
-
 /** Track in-flight hydration promises to avoid duplicate fetches */
 const hydrationPromises = new Map<string, Promise<Chat | null>>()
 
@@ -124,7 +119,7 @@ export async function saveChatToServer(chaId: string, chatIndex: number, chatId:
  */
 export function isHydrating(chaId: string, chatId: string): boolean {
     const key = chatKey(chaId, chatId)
-    return hydrationInFlight.has(key) || hydrationJustApplied.has(key)
+    return isHydrationActive(key)
 }
 
 /**
@@ -152,15 +147,15 @@ export async function ensureChatHydrated(
     if (existing) return existing
 
     const promise = (async () => {
-        hydrationInFlight.add(key)
+        beginHydration(key)
         try {
             const sqlStorage = activeSql
             if (sqlStorage?.backendKind === 'server-sql') {
                 const hydrated = await ensureChatMessageWindow({ chaId, chats } as any, index, 40)
                 if (!hydrated) return null
-                hydrationJustApplied.add(key)
+                beginHydrationApply(key)
                 await tick()
-                hydrationJustApplied.delete(key)
+                endHydrationApply(key)
                 return hydrated
             }
             const full = await fetchChatFromServer(chaId, index, chatId)
@@ -190,16 +185,16 @@ export async function ensureChatHydrated(
             await new Promise<void>(r => requestAnimationFrame(() => r()))
 
             // Apply to memory — mark JustApplied to suppress the reactive write-back
-            hydrationJustApplied.add(key)
+            beginHydrationApply(key)
             chats[currentIndex] = full
 
             // Wait one tick so Svelte reactivity settles before allowing dirty tracking
             await tick()
-            hydrationJustApplied.delete(key)
+            endHydrationApply(key)
 
             return full
         } finally {
-            hydrationInFlight.delete(key)
+            endHydration(key)
             hydrationPromises.delete(key)
         }
     })()

@@ -1,6 +1,8 @@
 import type { Chat, Database, character } from "../database.svelte";
 import type { SqlBootstrapStorage } from "./ISqlStorage";
 import { getActiveSqlStorage } from "./sqlBootstrap";
+import { tick } from "svelte";
+import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
 
 export type SqlHydrationWindow = {
   before: number | null;
@@ -83,6 +85,7 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
   if (existing) return existing;
 
   const hydration = (async () => {
+    beginHydration(key);
     try {
       const page = await storage.loadChatMessageReversePage(chatId, undefined, normalizeLimit(limit));
       const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
@@ -98,8 +101,12 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
         total: page.total,
         hasOlder: page.hasMore,
       });
+      beginHydrationApply(key);
+      await tick();
+      endHydrationApply(key);
       return current;
     } finally {
+      endHydration(key);
       chatHydrations.delete(key);
     }
   })();
@@ -119,6 +126,7 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
   if (existing) return existing;
 
   const hydration = (async () => {
+    beginHydration(key);
     try {
       const page = await storage.loadChatMessageReversePage(chatId, window.nextBefore ?? undefined, normalizeLimit(limit));
       const currentIndex = character.chats.findIndex((value) => value?.id === chatId);
@@ -139,8 +147,12 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
         total: page.total,
         hasOlder: page.hasMore,
       });
+      beginHydrationApply(key);
+      await tick();
+      endHydrationApply(key);
       return current;
     } finally {
+      endHydration(key);
       chatHydrations.delete(key);
     }
   })();
