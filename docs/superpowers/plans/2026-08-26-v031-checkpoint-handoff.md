@@ -165,3 +165,28 @@ Not run in this session:
 - Use additive commits only. Do not amend/rebase the shared branch: an earlier concurrent amend race was already recovered.
 - Before staging, run `git status --short` and stage only the current task's files; multiple subagents share one worktree.
 - Preserve the worktree until PR feedback is complete.
+
+## Continuation results (2026-08-26)
+
+Large Import Tasks 9-10 and the automated validation artifacts were completed in
+the continuation session:
+
+- The generated harness covers a 128 MiB default fixture and an opt-in 3 GiB
+  fixture without committing generated archives. The default run passed with the
+  3 GiB case skipped; three explicit 3 GiB runs passed in roughly 35-44 seconds
+  each, including the 512 MiB peak-RSS-increase assertion and staging cleanup.
+- The consolidated large-import server set passed 105 tests and its client set
+  passed 12 tests. The isolated remote-block migration suite passed 15 tests
+  after clients were corrected to await the terminal NDJSON event.
+- The full server suite passed 581 tests with one opt-in test skipped. The full
+  compatibility suite passed 61 tests with five platform/fixture skips.
+- Content-free runtime reporting, generated reference fixtures, deterministic
+  performance contracts, and real-device result templates were added. Focused
+  performance suites, `pnpm check`, `pnpm build`,
+  `pnpm check:standalone-release`, and `git diff --check` passed.
+
+Release readiness is still blocked. The iPhone/Android procedure in
+`docs/ko/v0.3.1-performance-release-checklist.md` remains unrun, so the package
+version remains `0.3.0.2`. In addition, unrelated concurrent README/intro work
+present in the worktree currently fails the brand-boundary and provider-reference
+contracts; those files were preserved and excluded from this continuation.
