@@ -4,6 +4,7 @@ import { encodeRisuSaveLegacy } from "../storage/risuSave";
 import { getDatabase, type Chat } from "../storage/database.svelte";
 import { fetchChatFromServer } from "../storage/chatStorage";
 import { language } from "src/lang";
+import { withSaverScope } from '../performance/saverMode';
 
 function formatBytes(bytes: number): string {
     if (bytes < 1024) return `${bytes} B`
@@ -47,8 +48,10 @@ async function streamBackupToDisk(response: Response, fallbackName: string){
 export async function SaveLocalBackup(){
     try {
         alertWait("Saving local backup...")
-        const response = await forageStorage.exportBackup()
-        await streamBackupToDisk(response, `risu-backup-${Date.now()}.bin`)
+        await withSaverScope('export', async () => {
+            const response = await forageStorage.exportBackup()
+            await streamBackupToDisk(response, `risu-backup-${Date.now()}.bin`)
+        })
         notifySuccess('Success')
     } catch (error) {
         console.error(error)
@@ -111,8 +114,10 @@ export async function SaveSettingsOnlyBackup(){
 
     try {
         alertWait("Saving settings backup...")
-        const response = await forageStorage.exportBackup({ mode: 'settings', moduleAssets: includeModuleAssets })
-        await streamBackupToDisk(response, `risu-settings-${Date.now()}.bin`)
+        await withSaverScope('export', async () => {
+            const response = await forageStorage.exportBackup({ mode: 'settings', moduleAssets: includeModuleAssets })
+            await streamBackupToDisk(response, `risu-settings-${Date.now()}.bin`)
+        })
         if (!includeModuleAssets) {
             alertMd(language.backupSettingsOnlyModuleAssetsSkipped)
         } else {
@@ -311,10 +316,10 @@ export function LoadLocalBackup(){
             const file = input.files[0];
             input.remove();
             alertWait(`Loading local Backup... (Uploading ${file.name})`);
-            const result = await forageStorage.importBackup(file, (loaded, total) => {
+            const result = await withSaverScope('import', () => forageStorage.importBackup(file, (loaded, total) => {
                 const progress = total > 0 ? ((loaded / total) * 100).toFixed(2) : '0.00'
                 alertWait(`Loading local Backup... (${progress}%)`)
-            })
+            }))
             if (result.coldStorageFailed && result.coldStorageFailed > 0) {
                 alertError(`Warning: ${result.coldStorageFailed} character(s) could not be restored from cold storage. The imported save may be incomplete. The app will now reload.`)
                 await waitAlert()
@@ -352,10 +357,10 @@ export async function ImportFromSaveZip() {
             if (!(await alertConfirm(language.backupLoadConfirm2))) return
 
             alertWait(`Uploading ${file.name}...`)
-            const result = await forageStorage.uploadSaveFolderZip(file, (loaded, total) => {
+            const result = await withSaverScope('import', () => forageStorage.uploadSaveFolderZip(file, (loaded, total) => {
                 const progress = total > 0 ? ((loaded / total) * 100).toFixed(2) : '0.00'
                 alertWait(`Uploading ${file.name}... (${progress}%)`)
-            })
+            }))
 
             alertStore.set({
                 type: "wait",

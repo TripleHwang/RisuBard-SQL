@@ -12,6 +12,7 @@ import {get} from "svelte/store"
 import { convertCharacterToModule, convertModuleToCharacter } from "../interchangeability"
 import { exportCharacterCard, importCharacterProcess } from "../characterCards"
 import { hasher } from "../parser/parser.svelte"
+import { withSaverScope } from '../performance/saverMode'
 
 export interface MCPModule{
     url: string
@@ -133,7 +134,7 @@ export async function exportModuleLegacy(module:RisuModule, arg:{
     return apb.buffer
 }
 
-export async function readModule(buf:Buffer):Promise<RisuModule> {
+async function readModuleScoped(buf:Buffer):Promise<RisuModule> {
     let pos = 0
 
     const readLength = () => {
@@ -321,6 +322,11 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
 
     module.id = v4()
     return module
+}
+
+/** Module archives can transiently hold decoded assets; release caches around the full read. */
+export async function readModule(buf: Buffer): Promise<RisuModule> {
+    return withSaverScope('import', () => readModuleScoped(buf))
 }
 
 export async function importModule(){

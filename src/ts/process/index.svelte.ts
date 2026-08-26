@@ -16,6 +16,7 @@ import { sayTTS } from "./tts";
 import { v4 } from "uuid";
 import { markSqlMessageDirty } from '../storage/sql/sqlPersistenceRuntime';
 import { StreamRenderScheduler } from '../markdown/streamRenderScheduler';
+import { saverModeStore } from '../performance/saverMode';
 import { findStreamingChat, findStreamingMessageTarget } from './streamingTarget';
 import { runTrigger } from "./triggers";
 import { HypaProcesser } from "./memory/hypamemory";
@@ -2596,7 +2597,11 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
         // Snapshot the mode for this generation. Saver Mode may choose a more
         // conservative mode for later generations without changing this one.
-        const performanceMode: StreamingDisplayOptimizationMode = DBState.db.streamingDisplayOptimizationMode ?? 'balanced'
+        // Snapshot once at stream start. Entering saver mode later must not
+        // mutate a generation that is already scheduling/rendering.
+        const performanceMode: StreamingDisplayOptimizationMode = get(saverModeStore)
+            ? 'strong'
+            : (DBState.db.streamingDisplayOptimizationMode ?? 'balanced')
         currentChat.isStreaming = true
         currentChat.activeStreamingDisplayOptimizationMode = performanceMode
         currentChar.reloadKeys += 1

@@ -61,6 +61,7 @@ import { isMobile } from 'src/ts/platform'
     import { loadChatDraft, scheduleSaveChatDraft, flushChatDraft, removeChatDraft } from 'src/ts/storage/chatDraft';
     import { blocksChatGeneration } from 'src/ts/risubard/wikiReboot';
     import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
+    import { saverModeStore } from 'src/ts/performance/saverMode';
 
     import Chats from './Chats.svelte';
     import Button from '../UI/GUI/Button.svelte';
@@ -1533,6 +1534,7 @@ import { isMobile } from 'src/ts/platform'
                 messages={currentChat}
                 pageStart={chatBounds.start}
                 pageEnd={chatBounds.end}
+                saverMode={$saverModeStore}
                 onReroll={reroll}
                 onNextSwipe={nextSwipe}
                 onDeleteSwipe={deleteSwipe}
