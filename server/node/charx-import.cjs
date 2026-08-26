@@ -73,38 +73,41 @@ function zipName(bytes) {
 }
 function validateCentralDirectory(fd, archiveSize, eocdOffset, entryLimit) {
   const e = readExact(fd, eocdOffset, 22);
-  const centralSize = u32(e, 12), centralOffset = u32(e, 16), count = u16(e, 10);
-  if (u16(e, 4) || u16(e, 6) || u16(e, 8) !== count || centralOffset + centralSize !== eocdOffset) throw invalid('Invalid ZIP central directory');
+  const centralSize = u32(e, 12), declaredCentralOffset = u32(e, 16), count = u16(e, 10);
+  const actualCentralOffset = eocdOffset - centralSize;
+  const offsetBias = actualCentralOffset - declaredCentralOffset;
+  if (u16(e, 4) || u16(e, 6) || u16(e, 8) !== count || !Number.isSafeInteger(archiveSize) || !Number.isSafeInteger(eocdOffset) || !Number.isSafeInteger(actualCentralOffset) || !Number.isSafeInteger(offsetBias) || actualCentralOffset < 0 || offsetBias < 0 || actualCentralOffset + centralSize !== eocdOffset || eocdOffset + 22 > archiveSize) throw invalid('Invalid ZIP central directory');
   if (count > entryLimit) throw limit('Archive has too many entries');
-  let at = centralOffset; const names = new Set(), entries = [];
+  let at = actualCentralOffset; const names = new Set(), entries = [];
   for (let i = 0; i < count; i++) {
     if (at + 46 > eocdOffset) throw invalid('Truncated ZIP central directory');
     const h = readExact(fd, at, 46);
     if (u32(h, 0) !== 0x02014b50) throw invalid('Invalid ZIP central directory');
     const flags = u16(h, 8), method = u16(h, 10), compressedSize = u32(h, 20), originalSize = u32(h, 24);
-    const nameLength = u16(h, 28), extraLength = u16(h, 30), commentLength = u16(h, 32), diskStart = u16(h, 34), localOffset = u32(h, 42);
+    const nameLength = u16(h, 28), extraLength = u16(h, 30), commentLength = u16(h, 32), diskStart = u16(h, 34), declaredLocalOffset = u32(h, 42);
+    const localOffset = declaredLocalOffset + offsetBias;
     const end = at + 46 + nameLength + extraLength + commentLength;
-    if ((flags & 1) || (method !== 0 && method !== 8) || diskStart || end > eocdOffset || compressedSize === 0xffffffff || originalSize === 0xffffffff || localOffset >= centralOffset) throw invalid('Unsupported or invalid ZIP entry');
+    if ((flags & 1) || (method !== 0 && method !== 8) || diskStart || end > eocdOffset || compressedSize === 0xffffffff || originalSize === 0xffffffff || declaredLocalOffset >= declaredCentralOffset || !Number.isSafeInteger(localOffset) || localOffset >= actualCentralOffset) throw invalid('Unsupported or invalid ZIP entry');
     const nameBytes = readExact(fd, at + 46, nameLength); const name = validateName(zipName(nameBytes), names);
     if (name.endsWith('/') && (compressedSize || originalSize)) throw invalid('Directory entries must be empty');
     const local = readExact(fd, localOffset, 30);
     if (u32(local, 0) !== 0x04034b50 || u16(local, 6) !== flags || u16(local, 8) !== method) throw invalid('ZIP local header mismatch');
     const localNameLength = u16(local, 26), localExtraLength = u16(local, 28);
     const dataEnd = localOffset + 30 + localNameLength + localExtraLength + compressedSize;
-    if (dataEnd > centralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
+    if (dataEnd > actualCentralOffset || zipName(readExact(fd, localOffset + 30, localNameLength)) !== name) throw invalid('ZIP local header mismatch');
     let descriptorLength = 0;
     if (flags & 8) {
       const first = readExact(fd, dataEnd, 4);
       const signed = u32(first, 0) === 0x08074b50;
       const descriptor = signed ? Buffer.concat([first, readExact(fd, dataEnd + 4, 12)]) : Buffer.concat([first, readExact(fd, dataEnd + 4, 8)]);
       const base = signed ? 4 : 0;
-      if (dataEnd + (signed ? 16 : 12) > centralOffset || u32(descriptor, base) !== u32(h, 16) || u32(descriptor, base + 4) !== compressedSize || u32(descriptor, base + 8) !== originalSize) throw invalid('Invalid ZIP data descriptor');
+      if (dataEnd + (signed ? 16 : 12) > actualCentralOffset || u32(descriptor, base) !== u32(h, 16) || u32(descriptor, base + 4) !== compressedSize || u32(descriptor, base + 8) !== originalSize) throw invalid('Invalid ZIP data descriptor');
       descriptorLength = signed ? 16 : 12;
     }
     entries.push({ name, flags, method, crc: u32(h, 16), compressedSize, originalSize, localOffset, headerLength: 30 + localNameLength + localExtraLength, dataOffset: localOffset + 30 + localNameLength + localExtraLength, descriptorLength });
     at = end;
   }
-  if (at !== centralOffset + centralSize) throw invalid('Invalid ZIP central directory');
+  if (at !== actualCentralOffset + centralSize) throw invalid('Invalid ZIP central directory');
   return entries;
 }
 
