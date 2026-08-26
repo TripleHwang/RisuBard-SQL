@@ -98,6 +98,26 @@ describe('createCharXImportHandler', () => {
         expect(failedResponse.body).not.toContain('Error:')
     })
 
+    it.each([
+        ['INVALID_CHARX', 400],
+        ['CHARX_LIMIT_EXCEEDED', 413],
+        ['INSUFFICIENT_STORAGE', 507],
+        ['ASSET_COMMIT_FAILED', 500],
+    ])('includes mapped status %i in post-header NDJSON errors for %s', async (code, status) => {
+        const { server } = makeApp({
+            importCharXStream: async () => {
+                const error: any = new Error('internal staging path must not escape')
+                error.code = code
+                error.status = status
+                throw error
+            },
+        })
+        const response = await request(server, 'x')
+        expect(response.status).toBe(200)
+        const event = response.body.split('\n').filter(Boolean).map(line => JSON.parse(line)).find(line => line.type === 'error')
+        expect(event).toMatchObject({ type: 'error', code, status })
+    })
+
     it('maps insufficient disk space to 507 before writing NDJSON headers', async () => {
         const { server, calls } = makeApp({ getAvailableBytes: () => 0 })
         const response = await request(server, 'x')

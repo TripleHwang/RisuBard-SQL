@@ -111,7 +111,7 @@ function createCharXImportHandler(deps) {
       const code = error && error.code === 'ENOSPC' ? 'INSUFFICIENT_STORAGE' : (error && error.code) || 'CHARX_IMPORT_FAILED';
       const message = safeMessage(error && error.code === 'ENOSPC' ? { code: 'INSUFFICIENT_STORAGE' } : error);
       if (responseStarted || res.headersSent) {
-        writeEvent({ type: 'error', code, message });
+        writeEvent({ type: 'error', code, status, message });
         if (!res.writableEnded) res.end();
       } else {
         writeJsonError(status, code, message);
