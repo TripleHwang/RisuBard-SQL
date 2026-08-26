@@ -29,7 +29,12 @@ class CharXImportError extends Error {
 function invalid(message) { return new CharXImportError('INVALID_CHARX', message); }
 function limit(message) { return new CharXImportError('CHARX_LIMIT_EXCEEDED', message, 413); }
 function noSpace(message = 'Insufficient disk space for CharX import') { return new CharXImportError('INSUFFICIENT_STORAGE', message, 507); }
-function aborted() { return new CharXImportError('ABORTED', 'CharX import aborted', 499); }
+function aborted() { return new CharXImportError('IMPORT_ABORTED', 'CharX import aborted', 499); }
+function normalizeError(error, fallback) {
+  if (error instanceof CharXImportError) return error;
+  if (error && error.code === 'ENOSPC') return noSpace();
+  return fallback || invalid('Unable to import CharX archive');
+}
 
 function validateName(name, seen) {
   if (!name || name.includes('\0') || name.includes('\\') || name.startsWith('/') || /^[A-Za-z]:/.test(name)) throw invalid('Invalid archive entry name');
@@ -71,7 +76,7 @@ async function importCharXStream(source, options) {
   const assetFiles = new Map();
   const excludedFiles = [];
   const warnings = [];
-  let cardCount = 0, moduleCount = 0, entryCount = 0, compressed = 0, decompressed = 0;
+  let cardCount = 0, moduleCount = 0, entryCount = 0, compressed = 0, decompressed = 0, advertisedTotal = 0;
   const zipTail = new Uint8Array(65557); let zipTailLength = 0;
   let currentError;
   let active = new Set();
@@ -84,7 +89,7 @@ async function importCharXStream(source, options) {
     }
   };
   const closeAsset = (state) => {
-    if (state.fd !== undefined) { fs.closeSync(state.fd); state.fd = undefined; }
+    if (state.fd !== undefined) { fs.fsyncSync(state.fd); fs.closeSync(state.fd); state.fd = undefined; }
     if (state.excluded) { try { fs.unlinkSync(state.sourcePath); } catch {} return; }
     const key = state.hash.digest('hex');
     const target = `assets/${key}.png`;
@@ -96,12 +101,26 @@ async function importCharXStream(source, options) {
     try {
       checkAbort();
       const name = validateName(file.name, seen);
+      const advertised = Number(file.originalSize) || 0;
+      advertisedTotal += advertised;
+      if (advertisedTotal > limits.decompressedBytes) throw limit('Archive exceeds decompressed limit');
       if (file.size && file.size > limits.decompressedBytes) throw limit('Archive entry exceeds decompressed limit');
       entryCount++;
       if (entryCount > limits.entries) throw limit('Archive has too many entries');
       if (file.name.endsWith('/')) return;
       const rootCard = name === 'card.json';
       const rootModule = name === 'module.risum';
+      if (rootCard && advertised > limits.cardBytes) throw limit('card.json exceeds limit');
+      if (rootModule && advertised > limits.moduleBytes) throw limit('module.risum exceeds limit');
+      if (!rootCard && !rootModule && !name.endsWith('.json') && advertised > limits.assetBytes) {
+        excludedFiles.push(name); warnings.push(`Excluded oversized asset: ${name}`);
+        file.ondata = (err, data) => {
+          if (err) { currentError = invalid('Unsupported or corrupt ZIP entry'); return; }
+          decompressed += data.length;
+          if (decompressed > limits.decompressedBytes) currentError = limit('Archive exceeds decompressed limit');
+        };
+        file.start(); return;
+      }
       if (rootCard && ++cardCount > 1) throw invalid('Archive must contain exactly one card.json');
       if (rootModule && ++moduleCount > 1) throw invalid('Archive may contain only one module.risum');
       const ignored = (!rootCard && !rootModule && name.endsWith('.json'));
@@ -138,16 +157,27 @@ async function importCharXStream(source, options) {
             }
           }
           if (final) { active.delete(state); if (state.kind === 'asset') closeAsset(state); else if (state.kind === 'card') cards.push(state.chunks); else if (state.kind === 'module') modules.push(state.chunks); }
-        } catch (e) { currentError = e instanceof CharXImportError ? e : invalid('Unable to extract archive entry'); }
+        } catch (e) { currentError = normalizeError(e, invalid('Unable to extract archive entry')); }
       };
       file.start();
-    } catch (e) { currentError = e instanceof CharXImportError ? e : invalid('Unable to read archive entry'); }
+    } catch (e) { currentError = normalizeError(e, invalid('Unable to read archive entry')); }
   });
   unzip.register(UnzipInflate);
+  let signature = 0, headerBytes = 0, flags = 0;
   try {
     for await (const input of source) {
       checkAbort();
       const chunk = input instanceof Uint8Array ? input : new Uint8Array(input);
+      // ZIP encryption is unsupported. This is deliberately incremental and only retains a few bytes.
+      for (const byte of chunk) {
+        if (headerBytes) {
+          if (headerBytes <= 2) flags |= byte << ((2 - headerBytes) * 8);
+          if (--headerBytes === 0 && (flags & 1)) throw invalid('Encrypted ZIP entries are unsupported');
+          continue;
+        }
+        signature = ((signature << 8) | byte) >>> 0;
+        if (signature === 0x504b0304) { headerBytes = 4; flags = 0; }
+      }
       if (chunk.length >= zipTail.length) { zipTail.set(chunk.subarray(chunk.length - zipTail.length)); zipTailLength = zipTail.length; }
       else {
         const keep = Math.min(zipTailLength, zipTail.length - chunk.length);
@@ -169,19 +199,26 @@ async function importCharXStream(source, options) {
       if (zipTail[i] === 0x50 && zipTail[i + 1] === 0x4b && zipTail[i + 2] === 0x05 && zipTail[i + 3] === 0x06 && i + 22 + zipTail[i + 20] + (zipTail[i + 21] << 8) === zipTailLength) { eocd = i; break; }
     }
     if (eocd < 0) throw invalid('Truncated or invalid ZIP archive');
+    const read16 = (at) => zipTail[at] | (zipTail[at + 1] << 8);
+    const read32 = (at) => (zipTail[at] | (zipTail[at + 1] << 8) | (zipTail[at + 2] << 16) | (zipTail[at + 3] * 0x1000000));
+    const eocdAbsolute = compressed - zipTailLength + eocd;
+    const disk = read16(eocd + 4), centralDisk = read16(eocd + 6);
+    const entriesOnDisk = read16(eocd + 8), centralEntries = read16(eocd + 10);
+    const centralSize = read32(eocd + 12), centralOffset = read32(eocd + 16);
+    if (disk !== 0 || centralDisk !== 0 || entriesOnDisk !== centralEntries || centralEntries !== entryCount || centralOffset + centralSize !== eocdAbsolute) throw invalid('Invalid ZIP central directory');
     if (active.size) throw invalid('Truncated ZIP archive');
     if (cardCount !== 1 || cards.length !== 1) throw invalid('Archive must contain exactly one card.json');
     const card = utf8Json(cards[0]);
     if (!card || card.spec !== 'chara_card_v3') throw invalid('card.json must be a chara_card_v3 card');
-    const moduleBase64 = modules.length ? Buffer.concat(modules[0]).toString('base64') : undefined;
+    const moduleBase64 = modules.length ? Buffer.concat(modules[0]).toString('base64') : null;
     let stagedBytes = 0;
     for (const sourcePath of assetFiles.values()) stagedBytes += fs.statSync(sourcePath).size;
     await refreshSpace(stagedBytes);
     const published = [...assetFiles.entries()].map(([key, sourcePath]) => ({ key, sourcePath }));
-    try { await publishAssets(published); } catch (e) { throw new CharXImportError('PUBLISH_FAILED', 'Unable to publish CharX assets', 500); }
+    try { await publishAssets(published); } catch (e) { if (e && e.code === 'ENOSPC') throw noSpace(); throw new CharXImportError('ASSET_COMMIT_FAILED', 'Unable to publish CharX assets', 500); }
     return { card, moduleBase64, assets, excludedFiles, warnings };
   } catch (e) {
-    throw e instanceof CharXImportError ? e : invalid('Unable to import CharX archive');
+    throw normalizeError(e);
   } finally {
     for (const state of active) { try { if (state.fd !== undefined) fs.closeSync(state.fd); } catch {} }
     try { await fsp.rm(ownedDir, { recursive: true, force: true }); } catch {}
