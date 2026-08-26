@@ -44,7 +44,7 @@ describe('spoolSourceToOwnedFile', () => {
     })).resolves.toMatchObject({ bytes: 4 })
     await expect(spoolSourceToOwnedFile(chunks([Buffer.alloc(5)]), {
       stagingRoot, prefix: 'limit-', filename: 'input', maxBytes: 4,
-    })).rejects.toMatchObject({ code: 'IMPORT_TOO_LARGE', status: 413 })
+    })).rejects.toMatchObject({ code: 'IMPORT_LIMIT_EXCEEDED', status: 413 })
     expect(await readdir(stagingRoot)).toHaveLength(1)
   })
 
@@ -82,6 +82,27 @@ describe('spoolSourceToOwnedFile', () => {
     expect(await readdir(stagingRoot)).toEqual([])
   })
 
+  it('aborts a source whose next chunk never resolves and closes that source', async () => {
+    const { spoolSourceToOwnedFile } = await import(modulePath)
+    const stagingRoot = await root(); const controller = new AbortController()
+    const source = {
+      next: vi.fn(() => new Promise<IteratorResult<Buffer>>(() => {})),
+      return: vi.fn(() => Promise.resolve({ done: true, value: undefined })),
+      destroy: vi.fn(),
+      [Symbol.asyncIterator]() { return this },
+    }
+    const pending = spoolSourceToOwnedFile(source, {
+      stagingRoot, prefix: 'blocked-', filename: 'input', maxBytes: 1, signal: controller.signal,
+    })
+    controller.abort()
+    await expect(Promise.race([
+      pending,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('abort did not settle')), 200)),
+    ])).rejects.toMatchObject({ code: 'IMPORT_ABORTED', status: 499 })
+    expect(source.return).toHaveBeenCalledOnce(); expect(source.destroy).toHaveBeenCalledOnce()
+    expect(await readdir(stagingRoot)).toEqual([])
+  })
+
   it('maps an ENOSPC write to insufficient storage and removes the owned directory', async () => {
     const { spoolSourceToOwnedFile } = await import(modulePath)
     const stagingRoot = await root(); const fsPromises = require('node:fs/promises'); const realOpen = fsPromises.open
@@ -115,19 +136,61 @@ describe('spoolSourceToOwnedFile', () => {
     expect(events).toEqual(['write', 'write', 'sync', 'close'])
   })
 
-  it('cleans staging when the source fails and rejects invalid inputs with status 400', async () => {
+  it('preserves source and filesystem failures while removing owned staging', async () => {
     const { spoolSourceToOwnedFile } = await import(modulePath)
     const stagingRoot = await root()
-    async function* broken() { yield Buffer.from('a'); throw new Error('source failed') }
+    const sourceFailure: any = new Error('source failed'); sourceFailure.status = 422
+    async function* broken() { yield Buffer.from('a'); throw sourceFailure }
     await expect(spoolSourceToOwnedFile(broken(), {
       stagingRoot, prefix: 'broken-', filename: 'input', maxBytes: 2,
-    })).rejects.toMatchObject({ code: 'INVALID_IMPORT_INPUT', status: 400 })
+    })).rejects.toBe(sourceFailure)
     expect(await readdir(stagingRoot)).toEqual([])
+    const fsPromises = require('node:fs/promises'); const accessFailure: any = new Error('denied'); accessFailure.code = 'EACCES'
+    vi.spyOn(fsPromises, 'mkdir').mockRejectedValueOnce(accessFailure)
+    await expect(spoolSourceToOwnedFile(chunks([Buffer.from('x')]), {
+      stagingRoot, prefix: 'denied-', filename: 'input', maxBytes: 1,
+    })).rejects.toBe(accessFailure)
+  })
+
+  it('preserves fsync failures while cleaning staging', async () => {
+    const { spoolSourceToOwnedFile } = await import(modulePath)
+    const stagingRoot = await root(); const fsPromises = require('node:fs/promises'); const realOpen = fsPromises.open
+    const syncFailure: any = new Error('sync failed'); syncFailure.code = 'EIO'
+    vi.spyOn(fsPromises, 'open').mockImplementationOnce(async (...args: any[]) => {
+      const handle = await realOpen(...args)
+      return { write: handle.write.bind(handle), sync: async () => { throw syncFailure }, close: handle.close.bind(handle) }
+    })
+    await expect(spoolSourceToOwnedFile(chunks([Buffer.from('x')]), {
+      stagingRoot, prefix: 'sync-', filename: 'input', maxBytes: 1,
+    })).rejects.toBe(syncFailure)
+    expect(await readdir(stagingRoot)).toEqual([])
+  })
+
+  it('rejects invalid chunks, filenames, and broken capacity contracts with status 400', async () => {
+    const { spoolSourceToOwnedFile } = await import(modulePath)
+    const stagingRoot = await root()
     await expect(spoolSourceToOwnedFile(chunks([Buffer.from('x')]), {
       stagingRoot, prefix: 'bad-', filename: 'input', maxBytes: -1,
     })).rejects.toMatchObject({ status: 400 })
     await expect(spoolSourceToOwnedFile(chunks([{} as any]), {
       stagingRoot, prefix: 'bad-', filename: 'input', maxBytes: 1,
     })).rejects.toMatchObject({ status: 400 })
+    for (const filename of ['.', '..', 'nested/input', 'nested\\input']) {
+      await expect(spoolSourceToOwnedFile(chunks([Buffer.from('x')]), {
+        stagingRoot, prefix: 'bad-', filename, maxBytes: 1,
+      })).rejects.toMatchObject({ status: 400 })
+    }
+    await expect(spoolSourceToOwnedFile(chunks([Buffer.from('x')]), {
+      stagingRoot, prefix: 'bad-', filename: 'input', maxBytes: 1, getAvailableBytes: () => Number.NaN,
+    })).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('preserves a capacity probe failure as a server failure after cleanup', async () => {
+    const { spoolSourceToOwnedFile } = await import(modulePath)
+    const stagingRoot = await root(); const probeFailure = new Error('statfs failed')
+    await expect(spoolSourceToOwnedFile(chunks([Buffer.from('x')]), {
+      stagingRoot, prefix: 'probe-', filename: 'input', maxBytes: 1, getAvailableBytes: () => { throw probeFailure },
+    })).rejects.toBe(probeFailure)
+    expect(await readdir(stagingRoot)).toEqual([])
   })
 })
