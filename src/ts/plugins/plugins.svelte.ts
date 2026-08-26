@@ -23,12 +23,12 @@ export function hasMetadataOnlyCharacters(db: { characters?: any[] }): boolean {
     return (db.characters ?? []).some((character) => character?.detailsLoaded === false)
 }
 
-export function isPluginCharacterComplete(character: any): boolean {
-    return !!character && character.detailsLoaded !== false
-}
-
 export function isPluginChatComplete(chat: any): boolean {
     return !!chat && chat._placeholder !== true && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
+}
+
+export function isPluginCharacterComplete(character: any): boolean {
+    return !!character && character.detailsLoaded !== false && Array.isArray(character.chats) && character.chats.every(isPluginChatComplete)
 }
 
 interface ProviderPlugin {

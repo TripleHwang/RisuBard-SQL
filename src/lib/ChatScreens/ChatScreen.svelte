@@ -17,7 +17,7 @@
     import { notifyError, notifySuccess } from 'src/ts/alert';
     import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
-    import { pluginLoadingStore } from 'src/ts/plugins/plugins.svelte';
+    import { pluginStateStore } from 'src/ts/plugins/plugins.svelte';
     import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad } from 'src/ts/risubard/memorySaveSlots';
     let openChatList = $state(false)
     let openModuleList = $state(false)
@@ -222,8 +222,13 @@
 {#if openChatList}
     <ChatList close={() => {openChatList = false}}/>
 {:else if openModuleList}
-    {#if $pluginLoadingStore}
+    {#if $pluginStateStore === 'idle' || $pluginStateStore === 'loading'}
         <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 text-textcolor">Loading plugins…</div>
+    {:else if $pluginStateStore === 'failed'}
+        <div class="fixed inset-0 z-50 flex flex-col gap-3 items-center justify-center bg-black/40 text-textcolor">
+            <span>Plugin initialization failed. Module tools are unavailable.</span>
+            <button class="rounded bg-darkbutton px-3 py-2" onclick={() => { openModuleList = false }}>Close</button>
+        </div>
     {:else}
         <ModuleChatMenu close={() => {openModuleList = false}}/>
     {/if}
