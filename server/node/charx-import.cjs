@@ -149,7 +149,7 @@ async function importCharXStream(source, options) {
     if (state.excluded) { try { fs.unlinkSync(state.sourcePath); } catch {} return; }
     const key = state.hash.digest('hex');
     const target = `assets/${key}.png`;
-    if (!assetFiles.has(key)) assetFiles.set(key, state.sourcePath);
+    if (!assetFiles.has(target)) assetFiles.set(target, state.sourcePath);
     else { try { fs.unlinkSync(state.sourcePath); } catch {} }
     assets[state.name] = target;
   };
