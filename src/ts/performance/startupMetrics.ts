@@ -57,8 +57,6 @@ export function measurePerformance(
             : performance.measure(measureName, startName, endName)
 
         bestEffort(() => performance.clearMeasures?.(measureName))
-        bestEffort(() => performance.clearMarks?.(startName))
-        if (endName !== undefined) bestEffort(() => performance.clearMarks?.(endName))
         return measure
     }
     catch {

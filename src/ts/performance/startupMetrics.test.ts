@@ -53,7 +53,7 @@ describe('startup metrics', () => {
         expect(clearMarks.mock.invocationCallOrder[1]).toBeLessThan(mark.mock.invocationCallOrder[1])
     })
 
-    test('clears a successful measurement and its consumed marks', () => {
+    test('clears a successful measurement without consuming its marks', () => {
         const measure = vi.fn(() => ({ duration: 42 } as PerformanceMeasure))
         const clearMeasures = vi.fn()
         const clearMarks = vi.fn()
@@ -67,8 +67,39 @@ describe('startup metrics', () => {
 
         expect(result).toEqual({ duration: 42 })
         expect(clearMeasures).toHaveBeenCalledWith('risu:character-hydration')
-        expect(clearMarks).toHaveBeenCalledWith('risu:character-hydration:start')
-        expect(clearMarks).toHaveBeenCalledWith('risu:character-hydration:end')
+        expect(clearMarks).not.toHaveBeenCalled()
+    })
+
+    test('preserves shared marks for sequential bootstrap measurements', () => {
+        const marks = new Set<string>()
+        const clearMeasures = vi.fn()
+        const clearMarks = vi.fn((name: string) => marks.delete(name))
+        const mark = vi.fn((name: string) => marks.add(name))
+        const measure = vi.fn((name: string, start: string, end: string) => {
+            if (!marks.has(start) || !marks.has(end)) throw new Error(`missing mark for ${name}`)
+            return { duration: 42 } as PerformanceMeasure
+        })
+        vi.stubGlobal('performance', { mark, measure, clearMarks, clearMeasures })
+
+        markPerformance('bootstrap-fetch:start')
+        markPerformance('bootstrap-fetch:end')
+        markPerformance('bootstrap-json:end')
+
+        const fetchMeasure = measurePerformance(
+            'bootstrap-fetch',
+            'bootstrap-fetch:start',
+            'bootstrap-fetch:end',
+        )
+        const jsonMeasure = measurePerformance(
+            'bootstrap-json',
+            'bootstrap-fetch:end',
+            'bootstrap-json:end',
+        )
+
+        expect(fetchMeasure).not.toBeNull()
+        expect(jsonMeasure).not.toBeNull()
+        expect(clearMeasures).toHaveBeenCalledWith('risu:bootstrap-fetch')
+        expect(clearMeasures).toHaveBeenCalledWith('risu:bootstrap-json')
     })
 
     test('observes only long tasks above 100ms when supported', () => {
