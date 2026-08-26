@@ -15,6 +15,7 @@ import { getInlayAsset, setInlayAsset, getInlayInfosBatch, type InlayAsset } fro
 import { getInlayMeta, setInlayMeta, type InlayAssetMeta } from './process/files/inlayMeta'
 import { PngChunk } from './pngChunk'
 import { reencodeImage } from './process/files/inlays'
+import { withSaverScope } from './performance/saverMode'
 import { resolvePersonaById } from './personaScopes'
 
 // ── Types ──
@@ -390,7 +391,7 @@ async function importInlays(
 
 // ── Export ──
 
-export async function exportCharacterPackage(
+async function exportCharacterPackageInner(
     charIndex: number,
     options: {
         includeCharacter: boolean
@@ -617,9 +618,16 @@ export async function exportCharacterPackage(
     }
 }
 
+export async function exportCharacterPackage(
+    charIndex: number,
+    options: { includeCharacter: boolean; includeChats: boolean; includePersona: boolean; includeInlays: boolean },
+): Promise<void> {
+    return withSaverScope('export', () => exportCharacterPackageInner(charIndex, options))
+}
+
 // ── Import (new character) ──
 
-export async function importCharacterPackage(): Promise<void> {
+async function importCharacterPackageInner(): Promise<void> {
     try {
         const file = await selectSingleFile(['zip'])
         if (!file) return
@@ -701,6 +709,10 @@ export async function importCharacterPackage(): Promise<void> {
     } catch (error) {
         alertError(error)
     }
+}
+
+export async function importCharacterPackage(): Promise<void> {
+    return withSaverScope('import', () => importCharacterPackageInner())
 }
 
 // ── Import to existing character ──

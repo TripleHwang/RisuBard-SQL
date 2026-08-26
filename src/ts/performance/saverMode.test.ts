@@ -31,6 +31,28 @@ describe('SaverModeCoordinator', () => {
         expect(saver.state).toBe('normal')
     })
 
+    for (const failingStep of ['evict', 'window', 'clear'] as const) {
+        it(`returns to normal and schedules a retry when ${failingStep} rejects`, async () => {
+            const timers: Array<() => void> = []
+            const actions = {
+                flush: async () => undefined,
+                evictChats: async () => undefined,
+                setWindow: (_limit: 40 | 60) => undefined,
+                clearCaches: () => undefined,
+                setTimer: (callback: () => void) => { timers.push(callback); return timers.length as unknown as ReturnType<typeof setTimeout> },
+                clearTimer: () => undefined,
+            }
+            if (failingStep === 'evict') actions.evictChats = async () => { throw new Error('evict') }
+            if (failingStep === 'window') actions.setWindow = () => { throw new Error('window') }
+            if (failingStep === 'clear') actions.clearCaches = () => { throw new Error('clear') }
+            const saver = new SaverModeCoordinator(actions)
+
+            await expect(saver.enter('background')).rejects.toThrow(failingStep)
+            expect(saver.state).toBe('normal')
+            expect(timers).toHaveLength(1)
+        })
+    }
+
     it('serializes overlapping transitions and only leaves after 30 visible focused seconds', async () => {
         let now = 0
         let visible = true
@@ -90,9 +112,13 @@ describe('SaverModeCoordinator', () => {
             now: () => now, setTimer: callback => { scheduled.push(callback); return scheduled.length as unknown as ReturnType<typeof setTimeout> }, clearTimer: () => undefined,
         })
         await saver.enter('background')
+        now = 15_000
         await saver.enter('cache-budget')
+        expect(scheduled).toHaveLength(2)
         now = 30_000
         expect(await saver.tryLeave()).toBe(false)
+        now = 45_000
+        expect(await saver.tryLeave()).toBe(true)
     })
 
     it('enters after two supported long tasks above 100ms in one minute', async () => {

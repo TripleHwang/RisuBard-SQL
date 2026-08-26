@@ -18,6 +18,7 @@ import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
 import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
+import { withSaverScope } from './performance/saverMode'
 import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
 
 /** Assign identities before a chat becomes visible, then mark its parent before rows. */
@@ -190,6 +191,7 @@ export async function exportChat(page:number){
         const mode = await alertSelect(['Export as JSON', "Export as TXT", "Export as HTML File", "Export as HTML Embed"])
         const doTranslate = (mode === '2' || mode === '3') ? (await alertSelect([language.translateContent, language.doNotTranslate])) === '0' : false
         const anonymous = (mode === '2' || mode === '3') ? ((await alertSelect([language.includePersonaName, language.hidePersonaName])) === '1') : false
+        await withSaverScope('export', async () => {
         const selectedID = get(selectedCharID)
         const db = getDatabase()
         const char = db.characters[selectedID]
@@ -365,6 +367,7 @@ export async function exportChat(page:number){
 
         }
         notifySuccess(language.successExport)
+        })
     } catch (error) {
         alertError(error)
     }
@@ -525,6 +528,7 @@ export async function importChat(){
 
 export async function exportAllChats() {
     try {
+        await withSaverScope('export', async () => {
         const selectedID = get(selectedCharID)
         const db = getDatabase()
         const char = db.characters[selectedID]
@@ -552,6 +556,7 @@ export async function exportAllChats() {
         }), 'utf-8')
         await downloadFile(`${char.name}_all_chats_${date}`.replace(/[<>:"/\\|?*.,]/g, "") + '.json', stringl)
         notifySuccess(language.successExport)
+        })
     } catch (error) {
         alertError(error)
     }

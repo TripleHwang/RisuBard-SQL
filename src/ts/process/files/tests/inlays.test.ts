@@ -12,6 +12,8 @@ import {
     setInlayAsset,
     writeInlayImage,
     __resetInlayStorageForTest,
+    clearInlayRuntimeCache,
+    getInlayRuntimeCacheStats,
 } from '../inlays'
 
 //#region module mocks
@@ -86,6 +88,11 @@ vi.mock('src/ts/process/files/inlayMeta', () => ({
 
 vi.mock('uuid', () => ({
     v4: vi.fn(() => 'test-uuid-1234'),
+}))
+vi.mock('src/ts/stores.svelte', () => ({
+    selectedCharID: { subscribe: vi.fn(() => () => undefined) },
+    selIdState: { selId: undefined },
+    DBState: { db: { characters: [] } },
 }))
 
 const { getDatabaseMock } = vi.hoisted(() => ({
@@ -184,6 +191,18 @@ describe('setInlayAsset', () => {
             type: 'image',
             width: 20,
         })
+    })
+})
+
+describe('saver cache reclamation', () => {
+    test('drops inlay LRU bytes and gallery metadata without touching stored assets', async () => {
+        await setInlayAsset('saver-cache', {
+            data: new Blob(['cached-data']), ext: 'png', name: 'cache.png', type: 'image', width: 1, height: 1,
+        })
+        expect(getInlayRuntimeCacheStats().bytes).toBeGreaterThan(0)
+        clearInlayRuntimeCache()
+        expect(getInlayRuntimeCacheStats()).toEqual({ entries: 0, bytes: 0, galleryItems: 0 })
+        expect(await getInlayAsset('saver-cache')).not.toBeNull()
     })
 })
 

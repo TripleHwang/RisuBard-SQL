@@ -35,10 +35,11 @@ import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
 import { markPerformance } from './performance/startupMetrics'
-import { installSaverModeLifecycle } from './performance/saverMode'
-import { configureSaverModeActions } from './performance/saverMode'
+import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
 import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
+import { clearParserRuntimeCaches } from './parser/parser.svelte'
+import { clearInlayRuntimeCache } from './process/files/inlays'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
 let dataLoading = false
@@ -236,6 +237,7 @@ export async function loadData() {
             }
             loadedStore.set(true)
             configureSaverModeActions({ flush: flushSqlDirtyChanges, evictChats: evictHydratedChats })
+            registerRuntimeCacheOwners(clearParserRuntimeCaches, clearInlayRuntimeCache)
             installSaverModeLifecycle()
             markPerformance('first-interactive')
             selectedCharID.set(-1)

@@ -92,23 +92,25 @@ export class SaverModeCoordinator {
                 this.visibleFocusedSince = null
                 this.clearTimer(this.leaveTimer)
                 this.leaveTimer = null
+                this.scheduleLeave()
                 return
             }
             this.setState('entering')
-            // Failure must leave DOM/cache/hydration state exactly as it was.
             try {
                 await this.actions.flush()
+                await this.actions.evictChats()
+                this.actions.setWindow(40)
+                this.actions.clearCaches()
+                this.visibleFocusedSince = this.visibleAndFocused() ? this.now() : null
+                this.setState('saver')
+                this.scheduleLeave()
             } catch (error) {
+                // Every entering action is best-effort but all failures must
+                // release the transition state and retry later.
                 this.setState('normal')
                 this.scheduleRetry(_reason)
                 throw error
             }
-            await this.actions.evictChats()
-            this.actions.setWindow(40)
-            this.actions.clearCaches()
-            this.visibleFocusedSince = this.visibleAndFocused() ? this.now() : null
-            this.setState('saver')
-            this.scheduleLeave()
         })
     }
 
@@ -164,6 +166,14 @@ export class SaverModeCoordinator {
 
 export const saverModeStore = writable(false)
 export const reclaimableCaches = new ReclaimableCacheRegistry()
+let runtimeCacheOwnersRegistered = false
+
+/** Called once from bootstrap so module imports never retain cache ownership implicitly. */
+export function registerRuntimeCacheOwners(...owners: Array<() => void>): void {
+    if (runtimeCacheOwnersRegistered) return
+    runtimeCacheOwnersRegistered = true
+    for (const owner of owners) reclaimableCaches.register(owner)
+}
 let flushRuntimeDirtyChanges: () => Promise<void> = async () => undefined
 let evictRuntimeChats: () => Promise<void> = async () => undefined
 export const saverMode = new SaverModeCoordinator({

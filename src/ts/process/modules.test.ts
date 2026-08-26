@@ -65,7 +65,10 @@ vi.mock('../stores.svelte', () => ({
     moduleBackgroundEmbedding: { set: vi.fn() },
     ReloadGUIPointer: { set: vi.fn() },
 }))
-vi.mock('svelte/store', () => ({ get: vi.fn(() => 0) }))
+vi.mock('svelte/store', () => ({
+    get: vi.fn(() => 0),
+    writable: vi.fn((value: unknown) => ({ set: vi.fn(), subscribe: vi.fn(() => () => undefined), update: vi.fn(), value })),
+}))
 vi.mock('../interchangeability', () => ({
     convertCharacterToModule: vi.fn(),
     convertModuleToCharacter: vi.fn(),

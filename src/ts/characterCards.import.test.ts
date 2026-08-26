@@ -41,7 +41,7 @@ vi.mock('./globalApi.svelte', () => ({
 }))
 vi.mock('./process/modules', () => ({ exportModuleLegacy: vi.fn(), readModule: (...args: any[]) => state.readModule(...args) }))
 vi.mock('./util', async (importOriginal) => ({ ...(await importOriginal<typeof import('./util')>()), selectFileByDom: vi.fn(() => state.selectedFiles) }))
-vi.mock('./stores.svelte', () => ({ selectedCharID: { set: vi.fn() } }))
+vi.mock('./stores.svelte', () => ({ selectedCharID: { set: vi.fn(), subscribe: vi.fn(() => () => undefined) } }))
 vi.mock('./routing', () => ({ openSettings: vi.fn(), SettingsRoute: {} }))
 vi.mock('./media', () => ({ compressImage: vi.fn(), getImageType: vi.fn() }))
 vi.mock('./parser/parser.svelte', () => ({ hasher: vi.fn(), risuChatParser: vi.fn() }))
