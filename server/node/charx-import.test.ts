@@ -45,7 +45,8 @@ function zipWithDescriptors(signed: boolean) {
   const records: Uint8Array[] = [], central: Uint8Array[] = []; let offset = 0;
   for (const [name, text] of [['card.json', '{"spec":"chara_card_v3"}'], ['a.png', 'pixels']] as const) {
     const nameBytes = strToU8(name), data = strToU8(text), crc = crc32(data);
-    const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBytes.length), u16le(0), nameBytes, data, ...(signed ? [Buffer.from([0x50, 0x4b, 0x07, 0x08])] : []), u32le(crc), u32le(data.length), u32le(data.length)]);
+    // Bit 3 means the local CRC and sizes are intentionally unknown until the data descriptor.
+    const local = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(0), u32le(0), u32le(0), u16le(nameBytes.length), u16le(0), nameBytes, data, ...(signed ? [Buffer.from([0x50, 0x4b, 0x07, 0x08])] : []), u32le(crc), u32le(data.length), u32le(data.length)]);
     records.push(local);
     central.push(Buffer.concat([Buffer.from([0x50, 0x4b, 0x01, 0x02]), u16le(20), u16le(20), u16le(8), u16le(0), u16le(0), u16le(0), u32le(crc), u32le(data.length), u32le(data.length), u16le(nameBytes.length), u16le(0), u16le(0), u16le(0), u16le(0), u32le(0), u32le(offset), nameBytes]));
     offset += local.length;
@@ -175,6 +176,15 @@ describe('importCharXStream', () => {
       await expect(importCharXStream(chunks(archive), { stagingRoot: publishRoot, getAvailableBytes: () => ++calls < 3 ? 999999999 : 0, publishAssets: async () => {} }))
         .rejects.toMatchObject({ code: 'INSUFFICIENT_STORAGE' });
     } finally { await Promise.all([rm(lowRoot, { recursive: true, force: true }), rm(publishRoot, { recursive: true, force: true })]); }
+  });
+
+  test('rejects asynchronous capacity callbacks because writes require a synchronous answer', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    try {
+      const result = importCharXStream(chunks(zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}') })), { stagingRoot, getAvailableBytes: async () => Number.MAX_SAFE_INTEGER, publishAssets: async () => {} });
+      await expect(result).rejects.toBeInstanceOf(TypeError);
+      await expect(result).rejects.toThrow('getAvailableBytes must return a finite number synchronously');
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
   test('checks capacity at the asset-write phase for descriptor assets with unknown metadata', async () => {

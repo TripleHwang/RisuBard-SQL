@@ -96,13 +96,28 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryCount) {
   if (at !== centralOffset + centralSize) throw invalid('Invalid ZIP central directory');
 }
 
-function normalizeDescriptorHeadersForUnzip() {
-  let pending = Buffer.alloc(0), phase = 'header', remaining = 0, descriptor = false;
+function normalizeUnsignedDescriptorsForUnzip() {
+  let pending = Buffer.alloc(0), phase = 'header', remaining = 0, descriptor = false, unknownCompressed = 0;
+  const emitUnknown = (output) => {
+    for (let at = 0; at + 12 <= pending.length; at++) {
+      const signed = at + 16 <= pending.length && u32(pending, at) === 0x08074b50 && u32(pending, at + 8) === unknownCompressed + at;
+      const unsigned = u32(pending, at + 4) === unknownCompressed + at;
+      if (!signed && !unsigned) continue;
+      if (at) { output.push(pending.subarray(0, at)); unknownCompressed += at; }
+      if (unsigned) output.push(Buffer.from([0x50, 0x4b, 0x07, 0x08]));
+      const length = signed ? 16 : 12;
+      output.push(pending.subarray(at, at + length)); pending = pending.subarray(at + length); phase = 'header'; return true;
+    }
+    const keep = Math.min(15, pending.length);
+    if (pending.length > keep) { const data = pending.subarray(0, pending.length - keep); output.push(data); unknownCompressed += data.length; pending = pending.subarray(pending.length - keep); }
+    return false;
+  };
   return (chunk, final) => {
     pending = pending.length ? Buffer.concat([pending, chunk]) : Buffer.from(chunk);
     const output = [];
     while (pending.length) {
-      if (phase === 'data') {
+      if (phase === 'unknown') { if (!emitUnknown(output)) break; }
+      else if (phase === 'data') {
         const take = Math.min(remaining, pending.length);
         output.push(pending.subarray(0, take)); pending = pending.subarray(take); remaining -= take;
         if (remaining) break;
@@ -118,11 +133,10 @@ function normalizeDescriptorHeadersForUnzip() {
         if (pending.length < 30) break;
         const headerLength = 30 + u16(pending, 26) + u16(pending, 28);
         if (pending.length < headerLength) break;
-        const header = Buffer.from(pending.subarray(0, headerLength));
+        const header = pending.subarray(0, headerLength);
         descriptor = !!(u16(header, 6) & 8); remaining = u32(header, 18);
-        // fflate recognizes only signed descriptors. With an advertised local size, clearing bit 3 lets it delimit either standard descriptor form synchronously.
-        if (descriptor && remaining) header[6] &= ~8;
-        output.push(header); pending = pending.subarray(headerLength); phase = 'data';
+        output.push(header); pending = pending.subarray(headerLength);
+        if (descriptor && !remaining) { unknownCompressed = 0; phase = 'unknown'; } else phase = 'data';
       }
     }
     if (final && pending.length) output.push(pending);
@@ -136,9 +150,11 @@ async function importCharXStream(source, options) {
   if (!stagingRoot || typeof publishAssets !== 'function') throw new TypeError('stagingRoot and publishAssets are required');
   if (signal && signal.aborted) throw aborted();
   if (expectedCompressedBytes > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
+  /** getAvailableBytes must synchronously return a finite byte count immediately before each write (for example fs.statfsSync). */
   const checkSpace = (phase, needed) => {
     if (!getAvailableBytes) return;
     const available = getAvailableBytes({ phase, needed });
+    if (available && typeof available.then === 'function') throw new TypeError('getAvailableBytes must return a finite number synchronously');
     if (!Number.isFinite(available) || available < needed + limits.diskHeadroomBytes) throw noSpace();
   };
   checkSpace('preflight', expectedCompressedBytes || 0);
@@ -236,7 +252,7 @@ async function importCharXStream(source, options) {
     } catch (e) { currentError = normalizeError(e, invalid('Unable to read archive entry')); }
   });
   unzip.register(UnzipInflate);
-  const normalizeUnzipChunk = normalizeDescriptorHeadersForUnzip();
+  const normalizeUnzipChunk = normalizeUnsignedDescriptorsForUnzip();
   try {
     for await (const input of source) {
       checkAbort();
