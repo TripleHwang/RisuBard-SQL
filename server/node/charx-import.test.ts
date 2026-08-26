@@ -396,6 +396,20 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
+  test('preserves a decomposed Unicode asset name referenced verbatim by card.json', async () => {
+    const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
+    const assetName = 'assets/e\u0301.png';
+    const card = { spec: 'chara_card_v3', image: assetName };
+    try {
+      const result = await importCharXStream(chunks(zipSync({
+        'card.json': strToU8(JSON.stringify(card)),
+        [assetName]: strToU8('pixels'),
+      })), { stagingRoot, publishAssets: async () => {} });
+      expect(result.card.image).toBe(assetName);
+      expect(Object.keys(result.assets)).toEqual([assetName]);
+    } finally { await rm(stagingRoot, { recursive: true, force: true }); }
+  });
+
   test('maps staging ENOSPC to insufficient storage and cleans staging', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const fs = require('node:fs');

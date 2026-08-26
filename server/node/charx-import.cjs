@@ -44,12 +44,12 @@ function normalizeError(error, fallback) {
 
 function validateName(name, seen) {
   if (!name || name.includes('\0') || name.includes('\\') || name.startsWith('/') || /^[A-Za-z]:/.test(name)) throw invalid('Invalid archive entry name');
-  const normalized = name.normalize('NFC');
-  if (seen.has(normalized)) throw invalid('Duplicate archive entry name');
-  seen.add(normalized);
-  const components = normalized.endsWith('/') ? normalized.slice(0, -1).split('/') : normalized.split('/');
+  const normalizedKey = name.normalize('NFC');
+  if (seen.has(normalizedKey)) throw invalid('Duplicate archive entry name');
+  seen.add(normalizedKey);
+  const components = name.endsWith('/') ? name.slice(0, -1).split('/') : name.split('/');
   if (!components.length || components.some((part) => part === '.' || part === '..' || part === '')) throw invalid('Invalid archive entry name');
-  return normalized;
+  return name;
 }
 
 function utf8Json(chunks) {
@@ -68,7 +68,7 @@ function u16(b, at) { return b[at] | (b[at + 1] << 8); }
 function u32(b, at) { return b[at] + b[at + 1] * 0x100 + b[at + 2] * 0x10000 + b[at + 3] * 0x1000000; }
 function crc32Update(crc, bytes) { for (const byte of bytes) crc = (CRC32_TABLE[(crc ^ byte) & 255] ^ (crc >>> 8)) >>> 0; return crc; }
 function zipName(bytes) {
-  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).normalize('NFC'); }
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { throw invalid('Invalid UTF-8 ZIP entry name'); }
 }
 function validateCentralDirectory(fd, archiveSize, eocdOffset, entryLimit) {
@@ -85,8 +85,7 @@ function validateCentralDirectory(fd, archiveSize, eocdOffset, entryLimit) {
     const nameLength = u16(h, 28), extraLength = u16(h, 30), commentLength = u16(h, 32), diskStart = u16(h, 34), localOffset = u32(h, 42);
     const end = at + 46 + nameLength + extraLength + commentLength;
     if ((flags & 1) || (method !== 0 && method !== 8) || diskStart || end > eocdOffset || compressedSize === 0xffffffff || originalSize === 0xffffffff || localOffset >= centralOffset) throw invalid('Unsupported or invalid ZIP entry');
-    const nameBytes = readExact(fd, at + 46, nameLength); const name = zipName(nameBytes);
-    if (names.has(name)) throw invalid('Duplicate archive entry name'); names.add(name);
+    const nameBytes = readExact(fd, at + 46, nameLength); const name = validateName(zipName(nameBytes), names);
     if (name.endsWith('/') && (compressedSize || originalSize)) throw invalid('Directory entries must be empty');
     const local = readExact(fd, localOffset, 30);
     if (u32(local, 0) !== 0x04034b50 || u16(local, 6) !== flags || u16(local, 8) !== method) throw invalid('ZIP local header mismatch');
