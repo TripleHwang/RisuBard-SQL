@@ -86,7 +86,7 @@
     // viewport (size class supplies max-width upper bound on desktop).
     const contentBase =
         'fixed left-1/2 top-1/2 w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 ' +
-        'bg-darkbg border border-darkborderc rounded-md shadow-lg ' +
+        'risu-modal-surface ' +
         'p-4 flex flex-col gap-4 max-h-[90vh] overflow-y-auto outline-none ' +
         'data-[state=open]:animate-in data-[state=closed]:animate-out ' +
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 ' +
@@ -96,7 +96,7 @@
 <Dialog.Root bind:open {onOpenChange}>
     <Dialog.Portal>
         <Dialog.Overlay
-            class={cn('fixed inset-0 bg-overlay/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier], overlayClass)}
+            class={cn('risu-modal-overlay fixed inset-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier], overlayClass)}
         />
         <Dialog.Content
             bind:ref={contentElement}
@@ -113,7 +113,7 @@
             interactOutsideBehavior={closeOnOutsideClick ? 'close' : 'ignore'}
         >
             {#if headerActions || title || description || closable}
-                <div class="flex flex-col gap-1 pr-8 relative">
+                <div class="risu-modal-header flex flex-col gap-1 pr-10 relative">
                     {@render headerActions?.()}
                     {#if title}
                         <Dialog.Title class="text-lg font-semibold text-textcolor leading-tight">
@@ -127,7 +127,7 @@
                     {/if}
                     {#if closable}
                         <Dialog.Close
-                            class={cn('absolute right-0 top-0 text-textcolor2 hover:text-textcolor transition-colors rounded-sm focus-visible:ring-2 focus-visible:ring-borderc/50 outline-none cursor-pointer', closeClass)}
+                            class={cn('risu-modal-close absolute right-0 -top-1 outline-none cursor-pointer', closeClass)}
                             aria-label={closeAriaLabel}
                         >
                             <XIcon size={18} />

@@ -269,6 +269,46 @@
   }
 }
 
+/* Canonical modal visual contract. Kept outside Tailwind layers so legacy
+   utility-heavy modal markup cannot accidentally override the surface. */
+.risu-modal-overlay {
+  background: color-mix(in srgb, var(--color-overlay) 58%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.risu-modal-surface {
+  color: var(--color-textcolor);
+  background: var(--color-darkbg);
+  border: 1px solid var(--color-darkborderc);
+  border-radius: 1rem;
+  box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
+}
+
+.risu-modal-header {
+  padding-bottom: .85rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-darkborderc) 72%, transparent);
+}
+
+.risu-modal-close {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-textcolor2);
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.risu-modal-close:hover {
+  color: var(--color-textcolor);
+  background: color-mix(in srgb, var(--color-selected) 68%, transparent);
+}
+
+.risu-modal-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);
+  outline-offset: 2px;
+}
+
 body {
   margin: 0;
   padding: 0;

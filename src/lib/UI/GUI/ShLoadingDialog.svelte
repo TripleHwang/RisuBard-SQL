@@ -45,7 +45,7 @@
     // viewport (max-w-md caps the upper bound on desktop).
     const contentBase =
         'fixed left-1/2 top-1/2 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 ' +
-        'bg-darkbg border border-darkborderc rounded-md shadow-lg ' +
+        'risu-modal-surface ' +
         'p-6 flex flex-col gap-4 items-center outline-none ' +
         'data-[state=open]:animate-in data-[state=closed]:animate-out ' +
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 ' +
@@ -55,7 +55,7 @@
 <Dialog.Root bind:open>
     <Dialog.Portal>
         <Dialog.Overlay
-            class={cn('fixed inset-0 bg-overlay/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier])}
+            class={cn('risu-modal-overlay fixed inset-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier])}
         />
         <Dialog.Content
             class={cn(contentBase, tierClasses[tier], contentClass)}
