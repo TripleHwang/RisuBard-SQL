@@ -1581,10 +1581,10 @@
 {/snippet}
 
 
-<div class="absolute inset-0 z-50 bg-overlay/60 flex justify-center items-center p-4">
-  <div class="bg-darkbg rounded-md w-full max-w-4xl max-h-full overflow-hidden flex flex-col">
+<div class="risu-modal-overlay absolute inset-0 z-50 bg-overlay/60 flex justify-center items-center p-4">
+  <div class="risu-modal-surface bg-darkbg rounded-md w-full max-w-4xl max-h-full overflow-hidden flex flex-col">
     
-    <div class="flex items-center justify-between px-4 py-3 border-b border-darkborderc">
+    <div class="risu-modal-header flex items-center justify-between px-4 py-3 border-b border-darkborderc">
       <div class="flex items-center gap-4 flex-wrap">
         {@render pillRadioGroup('Diff', 'diffStyle', diffOptions, diffStyle, (v) => (diffStyle = v as DiffStyle))}
         {@render pillRadioGroup('Format', 'formatStyle', formatOptions, formatStyle, (v) => (formatStyle = v as FormatStyle), isFlatText)}
@@ -1597,7 +1597,7 @@
         {/if}
       </div>
 
-      <button class="text-textcolor2 hover:text-primary" onclick={(e) => {handleClose()}}>
+      <button class="risu-modal-close text-textcolor2 hover:text-primary" onclick={(e) => {handleClose()}}>
         <XIcon size={20}/>
       </button>
     </div>

@@ -57,15 +57,15 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-    class="fixed top-0 left-0 w-full h-full bg-overlay/50 backdrop-blur-sm flex items-center justify-center z-50"
+    class="risu-modal-overlay fixed top-0 left-0 w-full h-full bg-overlay/50 backdrop-blur-sm flex items-center justify-center z-50"
     onclick={() => (popUpEditorStore.open = false)}
 >
     <div
-        class="bg-darkbg rounded-lg p-4 w-11/12 h-11/12 flex flex-col gap-2"
+        class="risu-modal-surface bg-darkbg rounded-lg p-4 w-11/12 h-11/12 flex flex-col gap-2"
         onclick={(e) => e.stopPropagation()}
     >
          <!-- Header Toolbar -->
-         <div class="flex items-center justify-between">
+         <div class="risu-modal-header flex items-center justify-between">
             <h2 class="text-xl font-bold">Popup Editor</h2>
             <div class="flex items-center gap-2">
                 {#if ['markdown', 'cbs'].includes(languageMode)}

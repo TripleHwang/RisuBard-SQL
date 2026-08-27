@@ -753,8 +753,7 @@
 <style>
     :global(.character-vault-dialog) {
         overflow: hidden;
-        background:
-            linear-gradient(145deg, color-mix(in srgb, var(--color-darkbg) 94%, var(--color-warning) 6%), var(--color-darkbg));
+        background: var(--color-darkbg);
     }
     :global(.character-vault-body) { min-height: 0; flex: 1; }
     .vault-title { display: inline-flex; align-items: center; gap: .45rem; font-family: var(--risu-font-family); letter-spacing: -.02em; }

@@ -189,8 +189,8 @@
 }}></svelte:window>
 
 {#if $alertStore.type !== 'none' &&  $alertStore.type !== 'cardexport' && $alertStore.type !== 'branches' && $alertStore.type !== 'selectModule' && $alertStore.type !== 'pukmakkurit' && $alertStore.type !== 'error' && $alertStore.type !== 'normal' && $alertStore.type !== 'markdown' && $alertStore.type !== 'ask' && $alertStore.type !== 'pluginconfirm' && $alertStore.type !== 'tos' && $alertStore.type !== 'input' && $alertStore.type !== 'select' && $alertStore.type !== 'wait' && $alertStore.type !== 'wait2' && $alertStore.type !== 'progress' && $alertStore.type !== 'confirmMulti'}
-    <div class="absolute w-full h-full z-50 bg-overlay/50 flex justify-center items-center">
-        <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
+    <div class="risu-modal-overlay absolute w-full h-full z-50 bg-overlay/50 flex justify-center items-center">
+        <div class="risu-modal-surface bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
             {#if $alertStore.type === 'selectChar'}
                 <h2 class="text-success mt-0 mb-2 w-40 max-w-full">Select</h2>
             {/if}
@@ -202,7 +202,7 @@
             {/if}
 
             {#if $alertStore.type === 'login'}
-                <div class="fixed top-0 left-0 bg-overlay/50 w-full h-full flex justify-center items-center">
+                <div class="risu-modal-overlay fixed top-0 left-0 bg-overlay/50 w-full h-full flex justify-center items-center">
                     <iframe src={hubURL + '/hub/login'} title="login" class="w-full h-full">
                     </iframe>
                 </div>
@@ -461,8 +461,8 @@
 
 {:else if $alertStore.type === 'cardexport'}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div  class="fixed top-0 left-0 h-full w-full bg-overlay/50 flex flex-col z-50 items-center justify-center" role="button" tabindex="0" onclick={close}>
-        <div class="bg-darkbg rounded-md p-4 max-w-full flex flex-col w-2xl" role="button" tabindex="0" onclick={(e) => {
+    <div  class="risu-modal-overlay fixed top-0 left-0 h-full w-full bg-overlay/50 flex flex-col z-50 items-center justify-center" role="button" tabindex="0" onclick={close}>
+        <div class="risu-modal-surface bg-darkbg rounded-md p-4 max-w-full flex flex-col w-2xl" role="button" tabindex="0" onclick={(e) => {
             e.stopPropagation()
         }}>
             <h1 class="font-bold text-2xl w-full">
@@ -547,14 +547,14 @@
     <!-- Log Generator by dootaang, GPL3 -->
     <!-- Svelte, Typescript version by Kwaroran -->
     
-    <div class="absolute w-full h-full z-50 bg-overlay/50 flex justify-center items-center">
-        <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
+    <div class="risu-modal-overlay absolute w-full h-full z-50 bg-overlay/50 flex justify-center items-center">
+        <div class="risu-modal-surface bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
             <h2 class="text-success mt-0 mb-2 w-40 max-w-full">{language.preview}</h2>
 
         </div>
     </div>
 {:else if $alertStore.type === 'branches'}
-    <div class="absolute w-full h-full z-50 bg-overlay/80 flex justify-center items-center overflow-x-auto overflow-y-auto">
+    <div class="risu-modal-overlay absolute w-full h-full z-50 bg-overlay/80 flex justify-center items-center overflow-x-auto overflow-y-auto">
         {#if branchHover !== null}
             <div class="z-30 whitespace-pre-wrap p-4 text-textcolor bg-darkbg border-darkborderc border rounded-md absolute" style="top: {branchHover.y * 80 + 24}px; left: {(branchHover.x + 1) * 80 + 24}px">
                 {branchHover.content}

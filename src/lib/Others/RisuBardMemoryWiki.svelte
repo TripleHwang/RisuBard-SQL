@@ -857,7 +857,7 @@
     </div>
     {#if findReplaceOpen && wiki?.mode === 'markdown'}
         <div
-            class="find-replace-overlay"
+            class="risu-modal-overlay find-replace-overlay"
             data-find-replace-overlay
             role="presentation"
             onclick={(event) => {
@@ -865,7 +865,7 @@
             }}
         >
             <div
-                class="find-replace-dialog"
+                class="risu-modal-surface find-replace-dialog"
                 data-find-replace-dialog
                 role="dialog"
                 aria-modal="true"
@@ -1114,14 +1114,17 @@
         display: grid;
         place-items: start center;
         padding: clamp(4rem, 12vh, 7rem) 1rem 1rem;
-        background: color-mix(in srgb, var(--color-overlay) 18%, transparent);
+        background: color-mix(in srgb, var(--color-overlay) 58%, transparent);
+        backdrop-filter: blur(4px);
     }
     .find-replace-dialog {
         width: min(27rem, 100%);
         max-height: calc(100% - 1rem);
         overflow: hidden;
-        border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 24%, var(--risu-theme-darkborderc));
-        border-radius: .65rem;
+        border: 1px solid var(--color-darkborderc);
+        border-radius: 1rem;
+        background: var(--color-darkbg);
+        box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
         background: var(--risu-theme-bgcolor);
         box-shadow: 0 1rem 2.8rem color-mix(in srgb, var(--color-shadow) 38%, transparent);
     }

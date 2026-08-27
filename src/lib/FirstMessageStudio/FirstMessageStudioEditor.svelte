@@ -474,7 +474,7 @@
 </script>
 
 <div
-    class="overlay"
+    class="risu-modal-overlay overlay"
     role="dialog"
     aria-modal="true"
     aria-label="퍼스트 메시지 스튜디오"
@@ -486,8 +486,8 @@
         if (event.key === 'Escape') onClose()
     }}
 >
-    <section class="shell">
-        <header class="topbar">
+    <section class="risu-modal-surface shell">
+        <header class="risu-modal-header topbar">
             <div class="title-row" data-studio-title-row>
                 <h2>퍼스트 메시지 스튜디오</h2>
                 <p>누구나 쉽게 만드는 퍼스트 메시지</p>
@@ -498,7 +498,7 @@
                 </label>
             </div>
             <div class="top-actions" data-studio-top-actions>
-                <button type="button" aria-label="닫기" onclick={onClose}>✕</button>
+                <button class="risu-modal-close" type="button" aria-label="닫기" onclick={onClose}>✕</button>
             </div>
         </header>
 
@@ -896,8 +896,8 @@
 </div>
 
 <style>
-    .overlay{position:fixed;z-index:1000;inset:0;padding:1.25rem;background:color-mix(in srgb, var(--color-overlay) 80%, transparent)}
-    .shell{display:grid;grid-template-rows:auto 1fr auto;width:min(96rem,100%);height:100%;margin:auto;overflow:hidden;border:1px solid var(--risu-theme-darkborderc);border-radius:1rem;color:var(--risu-theme-textcolor);background:var(--risu-theme-bgcolor);box-shadow:0 2rem 6rem color-mix(in srgb, var(--color-shadow) 50%, transparent)}
+    .overlay{position:fixed;z-index:1000;inset:0;padding:1.25rem;background:color-mix(in srgb, var(--color-overlay) 58%, transparent);backdrop-filter:blur(4px)}
+    .shell{display:grid;grid-template-rows:auto 1fr auto;width:min(96rem,100%);height:100%;margin:auto;overflow:hidden;border:1px solid var(--color-darkborderc);border-radius:1rem;color:var(--color-textcolor);background:var(--color-darkbg);box-shadow:0 1.5rem 4rem color-mix(in srgb, var(--color-shadow) 32%, transparent)}
     .topbar,.footer{display:flex;align-items:center;justify-content:space-between;gap:1rem}
     .topbar{padding:1rem 1.25rem;border-bottom:1px solid var(--risu-theme-darkborderc);background:var(--risu-theme-darkbg)}
     .title-row{display:flex;min-width:0;flex:1;align-items:center;gap:1rem}.topbar h2{flex:none;margin:0;font-size:1.3rem}.topbar p{overflow:hidden;margin:0;color:var(--risu-theme-textcolor2);font-size:.78rem;font-weight:700;text-overflow:ellipsis;white-space:nowrap}

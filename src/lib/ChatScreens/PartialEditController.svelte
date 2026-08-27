@@ -627,9 +627,9 @@
 {#snippet MatchSelectionModal(mode: MatchingMode, matches: RangeResultWithContext[], title: string)}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) cancelMatchSelection(); }}>
-        <div class="partial-match-selection-modal">
-            <div class="match-selection-header">
+    <div class="risu-modal-overlay partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) cancelMatchSelection(); }}>
+        <div class="risu-modal-surface partial-match-selection-modal">
+            <div class="risu-modal-header match-selection-header">
                 <span class="match-selection-title">{title}</span>
                 <span class="match-count">{matches.length} {language.partialEdit.matchesFound}</span>
             </div>
@@ -675,9 +675,9 @@
 {#if showMatchFailedModal}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) showMatchFailedModal = false; }}>
-        <div class="partial-match-failed-modal">
-            <div class="partial-match-failed-header">
+    <div class="risu-modal-overlay partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) showMatchFailedModal = false; }}>
+        <div class="risu-modal-surface partial-match-failed-modal">
+            <div class="risu-modal-header partial-match-failed-header">
                 <span class="partial-match-failed-title">{language.partialEdit.matchFailedTitle}</span>
             </div>
             <p class="partial-match-failed-message">{language.partialEdit.matchFailedMessage}</p>
@@ -699,9 +699,9 @@
 {#if isConfirmingDelete}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) handleCancelDelete(); }}>
-        <div class="partial-delete-modal">
-            <div class="partial-delete-header">
+    <div class="risu-modal-overlay partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) handleCancelDelete(); }}>
+        <div class="risu-modal-surface partial-delete-modal">
+            <div class="risu-modal-header partial-delete-header">
                 <span class="partial-delete-title">{language.partialEdit.deleteModalTitle}</span>
                 <div class="partial-match-meta">
                     <span class="partial-match-hint">
@@ -749,9 +749,9 @@
 {#if isEditing}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) handleCancel(); }}>
-        <div class="partial-edit-modal">
-            <div class="partial-edit-header">
+    <div class="risu-modal-overlay partial-edit-overlay" onclick={(e) => { if (e.target === e.currentTarget) handleCancel(); }}>
+        <div class="risu-modal-surface partial-edit-modal">
+            <div class="risu-modal-header partial-edit-header">
                 <span class="partial-edit-title">{language.partialEdit.editModalTitle}</span>
                 <div class="partial-match-meta">
                     <span class="partial-match-hint">
@@ -807,7 +807,7 @@
         width: 32px;
         height: 32px;
         padding: 8px;
-        background: var(--color-bgcolor);
+        background: var(--color-darkbg);
         border: 1px solid var(--color-darkborderc);
         border-radius: 6px;
         cursor: pointer;
@@ -829,7 +829,7 @@
     }
 
     .partial-match-failed-modal {
-        background: var(--color-bgcolor);
+        background: var(--color-darkbg);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;
@@ -927,7 +927,8 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: color-mix(in srgb, var(--color-overlay) 40%, transparent);
+        background: color-mix(in srgb, var(--color-overlay) 58%, transparent);
+        backdrop-filter: blur(4px);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -935,7 +936,7 @@
     }
 
     .partial-edit-modal {
-        background: var(--color-bgcolor);
+        background: var(--color-darkbg);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;
@@ -1045,7 +1046,7 @@
 
     /* Match Selection Modal */
     .partial-match-selection-modal {
-        background: var(--color-bgcolor);
+        background: var(--color-darkbg);
         border-radius: 12px;
         padding: 20px;
         width: 50vw;

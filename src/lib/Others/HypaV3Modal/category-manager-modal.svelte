@@ -123,9 +123,9 @@
 
 <!-- Category Manager Modal -->
 {#if categoryManagerState.isOpen}
-  <div class="fixed inset-0 z-50 p-4 bg-overlay/70 flex items-center justify-center">
-    <div class="bg-darkbg rounded-lg p-6 w-full max-w-md">
-      <div class="flex justify-between items-center mb-6">
+  <div class="risu-modal-overlay fixed inset-0 z-50 p-4 bg-overlay/70 flex items-center justify-center">
+    <div class="risu-modal-surface bg-darkbg rounded-lg p-6 w-full max-w-md">
+      <div class="risu-modal-header flex justify-between items-center mb-6">
         <h2 class="text-lg font-semibold text-textcolor">{language.hypaV3Modal.categoryManager}</h2>
         <div class="flex items-center gap-2">
           <!-- Add Category Button -->
@@ -137,7 +137,7 @@
           </button>
           <!-- Close Button -->
           <button
-            class="p-2 text-textcolor2 hover:text-textcolor transition-colors"
+            class="risu-modal-close p-2 text-textcolor2 hover:text-textcolor transition-colors"
             onclick={closeCategoryManager}
           >
             <XIcon class="w-5 h-5" />

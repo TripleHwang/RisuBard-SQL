@@ -336,7 +336,7 @@
 </ShDialog>
 
 <style>
-    :global(.save-slot-dialog) { width: min(70.4rem, calc(100vw - 2rem)); max-width: none; min-width: min(44rem, calc(100vw - 2rem)); height: 91vh; max-height: 91vh; overflow: hidden; background: linear-gradient(145deg, color-mix(in srgb, var(--color-darkbg) 94%, var(--color-selected) 6%), var(--color-darkbg)); }
+    :global(.save-slot-dialog) { width: min(70.4rem, calc(100vw - 2rem)); max-width: none; min-width: min(44rem, calc(100vw - 2rem)); height: 91vh; max-height: 91vh; overflow: hidden; background: var(--color-darkbg); }
     :global(.save-slot-dialog__body) { flex: 1; min-height: 0; }
     .save-dialog-header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 1rem; }
     .save-dialog-header__modes { display: flex; gap: .5rem; }

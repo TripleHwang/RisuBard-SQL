@@ -75,9 +75,9 @@
     })
 </script>
 
-<div class="persona-manager-backdrop">
-    <dialog open class="persona-manager" style={`--persona-manager-width: ${managerWidth}px`} aria-labelledby="persona-manager-title">
-        <header>
+<div class="risu-modal-overlay persona-manager-backdrop">
+    <dialog open class="risu-modal-surface persona-manager" style={`--persona-manager-width: ${managerWidth}px`} aria-labelledby="persona-manager-title">
+        <header class="risu-modal-header">
             <div class="persona-manager-title">
                 <h1 id="persona-manager-title">{language.persona}</h1>
                 <button
@@ -90,7 +90,7 @@
                     <CircleQuestionMarkIcon size={16} />
                 </button>
             </div>
-            <button class="close-button" aria-label={language.settingsWorkspace.personaManager.close} title={language.settingsWorkspace.personaManager.close} onclick={close}>
+            <button class="risu-modal-close close-button" aria-label={language.settingsWorkspace.personaManager.close} title={language.settingsWorkspace.personaManager.close} onclick={close}>
                 <XIcon size={20} />
             </button>
         </header>
@@ -118,8 +118,8 @@
         justify-content: center;
         align-items: center;
         padding: 1rem;
-        background: color-mix(in srgb, var(--color-overlay) 42%, transparent);
-        backdrop-filter: blur(5px);
+        background: color-mix(in srgb, var(--color-overlay) 58%, transparent);
+        backdrop-filter: blur(4px);
     }
 
     .persona-manager {
@@ -130,11 +130,11 @@
         display: flex;
         flex-direction: column;
         overflow: hidden;
-        color: var(--risu-theme-textcolor);
-        background: var(--risu-theme-bgcolor);
-        border: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 78%, transparent);
+        color: var(--color-textcolor);
+        background: var(--color-darkbg);
+        border: 1px solid var(--color-darkborderc);
         border-radius: 1rem;
-        box-shadow: 0 24px 80px color-mix(in srgb, var(--color-shadow) 28%, transparent);
+        box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
     }
 
     header {

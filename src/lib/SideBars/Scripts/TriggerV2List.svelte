@@ -2313,7 +2313,7 @@
 <Portal>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="text-textcolor absolute top-0 bottom-0 bg-overlay/50 max-w-full w-full h-full z-40 flex justify-center items-center"
+    <div class="risu-modal-overlay text-textcolor absolute top-0 bottom-0 bg-overlay/50 max-w-full w-full h-full z-40 flex justify-center items-center"
          onclick={(e) => {
              if (e.target === e.currentTarget) {
                  contextMenu = false
@@ -2434,7 +2434,7 @@
                 {/if}
             </div>
         {/if}
-        <div class="max-w-full p-2 border border-darkborderc bg-bgcolor flex max-h-full flex-col-reverse md:flex-row overflow-y-auto md:overflow-y-visible" 
+        <div class="risu-modal-surface max-w-full p-2 border border-darkborderc bg-bgcolor flex max-h-full flex-col-reverse md:flex-row overflow-y-auto md:overflow-y-visible"
              class:w-7xl={menuMode === 0} 
              class:w-3xl={menuMode !== 0} 
              class:h-full={menuMode!==2}
