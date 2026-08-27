@@ -1589,6 +1589,9 @@ export const languageEnglish = {
     imageTranslation: "Image Translation",
     banCharacterset: "Auto Regenerate On Characterset",
     realmDirectOpen: "Directly open character in RisuRealm",
+    // {} = how many RisuRealm results this version could not read; the rest are shown normally
+    realmResultsPartiallySkipped: "{} RisuRealm results could not be read by this version and were skipped.",
+    realmResultsUnreadable: "None of the RisuRealm results could be read by this version. Updating RisuVault may fix this.",
     showPromptComparison: "Show Prompt Comparison",
     inlayErrorResponse: "Inlay Error Response",
     triggerOn: "Trigger On",

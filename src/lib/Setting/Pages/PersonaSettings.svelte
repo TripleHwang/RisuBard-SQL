@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onDestroy, onMount, tick } from 'svelte'
+    import { SvelteSet } from 'svelte/reactivity'
     import Sortable from 'sortablejs/modular/sortable.core.esm.js'
     import { v4 } from 'uuid'
     import { Maximize2Icon, PlusIcon, SparklesIcon } from '@lucide/svelte'
@@ -57,7 +58,17 @@
     // Icons that already 404'd (already-deleted asset). Keyed by icon path
     // so a real load failure falls back to a placeholder instead of a
     // broken-image icon.
-    let brokenPersonaIcons = $state(new Set<string>())
+    //
+    // Must be a SvelteSet: a plain Set inside $state() is NOT deep-proxied by
+    // Svelte 5 (proxy.js only proxies plain objects/arrays), so `.add()` would
+    // signal nothing and the {#if} guard would never re-evaluate.
+    //
+    // Deliberately component-scoped, not module-scoped: App.svelte remounts
+    // PersonaManager every time the tab opens, so the verdict is dropped and
+    // the icon re-tried. An <img> error event carries no status code, so a
+    // transient network failure is indistinguishable from a real 404 -- keeping
+    // the verdict short-lived is what makes that safe.
+    let brokenPersonaIcons = $state<Set<string>>(new SvelteSet())
 
     const currentCharacter = $derived(DBState.db.characters[$selectedCharID])
 

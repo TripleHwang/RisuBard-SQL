@@ -35,7 +35,10 @@ const MAX_SQL_READ_LIMIT = 100;
 // SQLite primary-key traversal, so this candidate cap cannot trigger a full
 // table sort before the limit; final relevance ordering happens afterward.
 const MAX_MESSAGE_SEARCH_SCAN_ROWS = 50_000;
-const DEFERRED_BOOTSTRAP_KEYS = new Set(['plugins', 'pluginV2', 'personas', 'loreBook', 'modules', 'globalscript', 'customScripts', 'scripts', 'promptCollections', 'prompts', 'loadouts', 'translatorPresets']);
+// Shared verbatim with the client guard in
+// src/ts/storage/sql/rootWritePolicy.ts -- see deferredBootstrapKeys.cjs's
+// header for why this list must never be hand-copied.
+const { DEFERRED_BOOTSTRAP_KEYS } = require('./deferredBootstrapKeys.cjs');
 
 function statementTable(sql) {
     const normalized = String(sql || '').trim();

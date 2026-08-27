@@ -8,6 +8,7 @@ import {
   type SqlCommit,
 } from "./sqlCommit";
 import { getSqlPosition, getSqlWindow, setSqlPosition } from "./sqlRuntimeMeta";
+import { planRootWrite } from "./rootWritePolicy";
 
 const ROOT_EXCLUSIONS = new Set([
   "characters",
@@ -98,11 +99,15 @@ export function buildSqlDirtyCommit(
 ): SqlCommit {
   const commit = createEmptySqlCommit(baseRevision, "dirty-sync");
 
+  // A root key that is merely ABSENT must never become a cascading DELETE for
+  // user-owned content, and a deferred key must not be written in either
+  // direction before hydration has landed. `planRootWrite` owns both rules;
+  // see rootWritePolicy.ts for why the value alone cannot decide this.
   for (const key of dirty.rootKeys) {
     if (ROOT_EXCLUSIONS.has(key)) continue;
-    const value = (database as unknown as Record<string, unknown>)[key];
-    if (value === undefined || typeof value === "function") commit.root.deletes.push(key);
-    else commit.root.upserts.push({ key, value });
+    const plan = planRootWrite(database as unknown as Record<string, unknown>, key);
+    if (plan.action === "upsert") commit.root.upserts.push({ key, value: plan.value });
+    else if (plan.action === "delete") commit.root.deletes.push(key);
   }
 
   for (const characterId of dirty.characterIds) {

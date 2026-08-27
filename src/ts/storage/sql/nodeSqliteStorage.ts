@@ -40,6 +40,12 @@ import {
   type SqlCommit,
   type SqlCommitResult,
 } from "./sqlCommit";
+import {
+  armDeferredRootWriteGate,
+  DEFERRED_ROOT_KEYS,
+  isDeferredRootHydrationReady,
+  markDeferredRootHydrationApplied,
+} from "./rootWritePolicy";
 
 type AuthenticatedRequest = (
   input: RequestInfo | URL,
@@ -101,10 +107,21 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   private bootstrapPayload: SqlBootstrapPayload | null = null;
   private deferredBootstrapPayload: SqlDeferredBootstrapPayload | null = null;
 
-  constructor(private readonly request: AuthenticatedRequest) {}
+  constructor(private readonly request: AuthenticatedRequest) {
+    // This backend is the only one that withholds root keys from its first
+    // payload, so its mere existence is what arms the write gate. Arming here
+    // (rather than from bootstrap.ts) is the point: no ordering of startup
+    // calls can leave deferred keys writable while they are still unloaded.
+    armDeferredRootWriteGate();
+  }
 
   isEnabled(): boolean {
     return this.enabled;
+  }
+
+  /** True once deferred root keys are safe to upsert or delete. */
+  isDeferredHydrationReady(): boolean {
+    return isDeferredRootHydrationReady();
   }
 
   getRevision(): number {
@@ -235,6 +252,15 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     this.bootstrapPayload = null;
     this.deferredBootstrapPayload = null;
     const database = this.rebuild(dump);
+    // The recovery snapshot is the complete graph, deferred keys included, so
+    // it satisfies the gate on its own -- without this the recovery path would
+    // leave every deferred key permanently unwritable.
+    if (database) {
+      markDeferredRootHydrationApplied(
+        Object.keys(database as unknown as Record<string, unknown>)
+          .filter((key) => DEFERRED_ROOT_KEYS.has(key)),
+      );
+    }
     return { status: database ? "ready" : "empty", revision: dump.revision, database };
   }
 
@@ -346,8 +372,16 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return { status: payload.status, revision: payload.revision, database };
   }
 
-  async hydrateDeferredDatabase(database: Database): Promise<void> {
-    const payload = await this.loadDeferredBootstrap();
+  /**
+   * Applies a deferred payload to `database` and reports which deferred root
+   * keys it actually carried. Returns without touching the global readiness
+   * flag: only the public `hydrateDeferredDatabase` below may flip that, and
+   * only for the live database.
+   */
+  private applyDeferredPayload(
+    database: Database,
+    payload: SqlDeferredBootstrapPayload,
+  ): string[] {
     Object.assign(database as object, payload.settings, {
       pluginCustomStorage: payload.pluginCustomStorage,
       botPresets: payload.botPresets,
@@ -357,6 +391,21 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       (preset) => preset.id === activePresetId,
     ));
     delete (database as unknown as Record<string, unknown>).activeBotPresetId;
+    return Object.keys(payload.settings).filter((key) => DEFERRED_ROOT_KEYS.has(key));
+  }
+
+  /**
+   * Hydrates the deferred half of the bootstrap and opens the deferred root
+   * write gate. Resolves to the deferred keys the server actually returned; a
+   * deferred key missing from that list simply has no stored row yet, which is
+   * why the gate is one flag rather than a per-key check (a per-key gate would
+   * make the first ever write to such a key impossible).
+   */
+  async hydrateDeferredDatabase(database: Database): Promise<string[]> {
+    const payload = await this.loadDeferredBootstrap();
+    const applied = this.applyDeferredPayload(database, payload);
+    markDeferredRootHydrationApplied(applied);
+    return applied;
   }
 
   async loadCharacterHydration(characterId: string): Promise<character | null> {
@@ -526,9 +575,15 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return true;
   }
 
+  /**
+   * A throwaway full graph for the legacy single-domain read helpers below.
+   * It deliberately does NOT open the deferred write gate: this database is
+   * not the one the persistence runtime commits from, and opening the gate
+   * here would declare the LIVE graph hydrated while it still is not.
+   */
   private async current(): Promise<Database> {
     const database = (await this.loadDatabase({ shallow: true }))?.database ?? ({} as Database);
-    await this.hydrateDeferredDatabase(database);
+    this.applyDeferredPayload(database, await this.loadDeferredBootstrap());
     return database;
   }
 

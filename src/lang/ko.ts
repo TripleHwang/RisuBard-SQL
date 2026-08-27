@@ -1702,6 +1702,11 @@ export const languageKorean = {
   imageTranslation: "이미지 번역",
   banCharacterset: "문자 집합으로 자동 재생성",
   realmDirectOpen: "RisuRealm 미리보기에서 바로 열기",
+  // {} = 이 버전이 읽지 못한 RisuRealm 결과 수. 나머지 결과는 그대로 표시된다.
+  realmResultsPartiallySkipped:
+    "이 버전에서 읽을 수 없는 RisuRealm 결과 {}개를 건너뛰었습니다.",
+  realmResultsUnreadable:
+    "이 버전에서는 RisuRealm 결과를 하나도 읽을 수 없습니다. RisuVault를 업데이트하면 해결될 수 있습니다.",
   showPromptComparison: "프롬프트 비교 보기",
   inlayErrorResponse: "인레이 오류 응답",
   triggerOn: "활성화 조건",

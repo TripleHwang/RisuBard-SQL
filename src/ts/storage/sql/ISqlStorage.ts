@@ -239,7 +239,10 @@ export interface ISqlStorage {
 export interface SqlBootstrapStorage extends ISqlStorage {
   loadBootstrap(): Promise<SqlBootstrapPayload>;
   loadDeferredBootstrap(): Promise<SqlDeferredBootstrapPayload>;
-  hydrateDeferredDatabase(database: Database): Promise<void>;
+  /** Resolves to the deferred root keys the server actually returned. */
+  hydrateDeferredDatabase(database: Database): Promise<string[]>;
+  /** True once deferred root keys are safe to upsert or delete. */
+  isDeferredHydrationReady(): boolean;
   migrateLegacy(retry?: boolean): Promise<{ status: "ready" | "failed"; revision: number }>;
   loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null>;
   loadCharacterHydration(characterId: string): Promise<character | null>;

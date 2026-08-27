@@ -75,6 +75,7 @@
     reorderCharacterVaultSidebarShortcuts,
   } from "src/ts/characterVault";
   import { getEffectivePersona } from "src/ts/personaScopes";
+  import { SvelteSet } from 'svelte/reactivity';
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
   import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
@@ -98,7 +99,10 @@
   // getUncleanables/cleanChunks). Keyed by icon path so a real load
   // failure falls back to a placeholder instead of a broken-image icon,
   // without hiding an icon that simply hasn't loaded yet.
-  let brokenPersonaIcons = $state(new Set<string>())
+  // NOTE: must be a SvelteSet -- a plain Set inside $state() is NOT deep-proxied
+  // by Svelte 5 (proxy.js only proxies plain objects/arrays), so `.add()` would
+  // signal nothing and the {#if} guard would never re-evaluate.
+  let brokenPersonaIcons = $state<Set<string>>(new SvelteSet())
 
   function reseter() {
     menuMode = 0;

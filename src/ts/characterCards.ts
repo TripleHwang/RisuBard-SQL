@@ -23,7 +23,7 @@ import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } fr
 import { isNodeServer } from './platform'
 import { withSaverScope } from './performance/saverMode'
 import { isStartupMutationReady, runStartupMutation } from './startupReadiness'
-import { normalizeRealmBrowseCard } from './realmBrowseCache'
+import { RealmBrowseUnreadableError, reportRealmBrowseScreening, screenRealmBrowseCards } from './realmBrowseCache'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -1756,6 +1756,8 @@ export type RealmBrowseQuery = {
 export type RealmBrowseResult = {
     cards: hubType[]
     additionalHTML: string
+    /** Cards the validator refused; the remaining `cards` are still displayable. */
+    droppedCards: number
 }
 
 function isRealmNetworkError(error: unknown): boolean {
@@ -1801,13 +1803,16 @@ export async function getRisuHub(
             ? (body as { cards: unknown[] }).cards
             : null
     if (!rawCards) throw new Error('RisuRealm response has an invalid card list')
-    const cards = rawCards.slice(0, 100).map(normalizeRealmBrowseCard)
-    if (cards.some((card) => card === null)) throw new Error('RisuRealm response has an invalid card')
+    // One card this client cannot read must not take the whole page down: keep the readable ones,
+    // report the rest once, and fail only when nothing at all survived.
+    const screening = screenRealmBrowseCards(rawCards.slice(0, 100))
+    reportRealmBrowseScreening('browse response', screening)
+    if (screening.cards.length === 0 && screening.dropped > 0) throw new RealmBrowseUnreadableError(screening)
     const additionalHTML = body && !Array.isArray(body) && typeof body === 'object'
         && typeof (body as { additionalHTML?: unknown }).additionalHTML === 'string'
         ? (body as { additionalHTML: string }).additionalHTML
         : ''
-    return { cards: cards as hubType[], additionalHTML }
+    return { cards: screening.cards, additionalHTML, droppedCards: screening.dropped }
 }
 
 export async function downloadRisuHub(id:string, arg:{

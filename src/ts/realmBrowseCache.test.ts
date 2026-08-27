@@ -10,9 +10,11 @@ vi.mock('./storage/persistentKv', () => persistent)
 
 import {
     DEFAULT_REALM_BROWSE_CACHE_KEY,
+    inspectRealmBrowseCard,
     isDefaultRealmBrowseQuery,
     normalizeRealmBrowseCard,
     readDefaultRealmBrowseCache,
+    screenRealmBrowseCards,
     writeDefaultRealmBrowseCache,
 } from './realmBrowseCache'
 
@@ -116,6 +118,54 @@ describe('RisuRealm default browse cache', () => {
         }
     })
 
+    test('names the failing field and the card id when it refuses a card', () => {
+        expect(inspectRealmBrowseCard(card({ id: 'bad-tags', tags: Array.from({ length: 33 }, () => 'tag') })).rejection)
+            .toEqual({ field: 'tags', id: 'bad-tags' })
+        expect(inspectRealmBrowseCard(card({ id: 'long-desc', desc: 'x'.repeat(8_193) })).rejection)
+            .toEqual({ field: 'desc', id: 'long-desc' })
+        expect(inspectRealmBrowseCard(card({ id: 'inline', img: 'data:image/png;base64,AAAA' })).rejection)
+            .toEqual({ field: 'img', id: 'inline' })
+        // An unusable id cannot be reported, and must never be echoed back into the log.
+        expect(inspectRealmBrowseCard(card({ id: 12 })).rejection).toEqual({ field: 'id', id: null })
+        expect(inspectRealmBrowseCard('not a card').rejection).toEqual({ field: 'card', id: null })
+    })
+
+    test('degrades an unrecognized viewScreen mode to none instead of refusing the card', () => {
+        expect(inspectRealmBrowseCard(card({ viewScreen: 'holodeck' }))).toMatchObject({
+            card: { viewScreen: 'none' },
+            degradedViewScreen: true,
+        })
+        expect(inspectRealmBrowseCard(card({ viewScreen: { mode: 'nested' } }))).toMatchObject({
+            card: { viewScreen: 'none' },
+            degradedViewScreen: true,
+        })
+        expect(inspectRealmBrowseCard(card({ viewScreen: 'emotion' }))).toMatchObject({
+            card: { viewScreen: 'emotion' },
+            degradedViewScreen: false,
+        })
+        expect(inspectRealmBrowseCard(card({ viewScreen: '' })).degradedViewScreen).toBe(false)
+    })
+
+    test('screens a mixed list into the readable cards plus a bounded rejection report', () => {
+        const screening = screenRealmBrowseCards([
+            card({ id: 'ok-1' }),
+            card({ id: 'bad-1', name: '' }),
+            card({ id: 'bad-2', hot: Number.NaN }),
+            card({ id: 'bad-3', hidden: 'yes' }),
+            card({ id: 'bad-4', license: 'x'.repeat(8_193) }),
+            card({ id: 'ok-2', viewScreen: 'future-mode' }),
+        ])
+
+        expect(screening.cards.map((entry) => entry.id)).toEqual(['ok-1', 'ok-2'])
+        expect(screening.dropped).toBe(4)
+        expect(screening.degraded).toBe(1)
+        expect(screening.reasons).toEqual([
+            { field: 'name', id: 'bad-1' },
+            { field: 'hot', id: 'bad-2' },
+            { field: 'hidden', id: 'bad-3' },
+        ])
+    })
+
     test('reads fresh valid cards but rejects expired, malformed, and oversized entries', async () => {
         persistent.readPersistentJson.mockResolvedValue({ version: 1, fetchedAt: now, cards: [card()] })
         await expect(readDefaultRealmBrowseCache(now)).resolves.toEqual([card()])
@@ -164,5 +214,34 @@ describe('RisuRealm default browse cache', () => {
 
         persistent.readPersistentJson.mockResolvedValue({ version: 1, fetchedAt: now, cards: [card({ img: 'resource/character-image' })] })
         await expect(readDefaultRealmBrowseCache(now)).resolves.toEqual([card({ img: 'resource/character-image' })])
+    })
+
+    test('keeps the readable remainder of a cache entry but discards one that is entirely unreadable', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+        persistent.readPersistentJson.mockResolvedValue({
+            version: 1,
+            fetchedAt: now,
+            cards: [card({ id: 'kept' }), card({ id: 'corrupt', hot: 'not a number' })],
+        })
+        await expect(readDefaultRealmBrowseCache(now)).resolves.toEqual([card({ id: 'kept' })])
+        expect(warn).toHaveBeenCalledTimes(1)
+        expect(warn.mock.calls[0][0]).toContain('default browse cache')
+        expect(warn.mock.calls[0][0]).toContain('hot (id corrupt)')
+
+        // Nothing readable left means the stored entry is corrupt rather than merely stale.
+        persistent.readPersistentJson.mockResolvedValue({
+            version: 1,
+            fetchedAt: now,
+            cards: [card({ id: 'corrupt', hot: 'not a number' })],
+        })
+        await expect(readDefaultRealmBrowseCache(now)).resolves.toBeNull()
+        warn.mockRestore()
+    })
+
+    test('keeps the write path strict because we only ever persist cards this validator accepted', async () => {
+        await expect(writeDefaultRealmBrowseCache([card({ hot: 'not a number' as unknown as number })], now))
+            .rejects.toThrow('Invalid RisuRealm browse cache payload')
+        expect(persistent.writePersistentJson).not.toHaveBeenCalled()
     })
 })

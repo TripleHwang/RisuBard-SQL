@@ -4,7 +4,7 @@ import { ensureChatHydrated } from "./storage/chatStorage";
 import { ensureCharacterHydrated } from "./storage/sql/sqlRuntimeHydration";
 import { getSqlWindow } from "./storage/sql/sqlRuntimeMeta";
 import { alertAddCharacter, alertConfirm, alertError, alertSelect, alertStore, alertWait, notifySuccess, notifyInfo } from "./alert";
-import { loadingOverlayStore, chatDeselected } from "./stores.svelte";
+import { loadingOverlayStore, chatDeselected, startupHydrationErrorStore } from "./stores.svelte";
 import { language } from "../lang";
 import { checkNullish, findCharacterbyId, findCharacterIndexbyId, getUserName, selectMultipleFile, selectSingleFile } from "./util";
 import { v4 as uuidv4, v4 } from 'uuid';
@@ -847,21 +847,45 @@ async function hydrateCharacterForSafeSelection(index: number): Promise<boolean>
     return (hydrated as (character & { detailsLoaded?: boolean }) | null)?.detailsLoaded === true
 }
 
+/**
+ * Deferred startup that has already failed does not resume by itself: bootstrap
+ * only calls `resumeDeferredCharacterSelection` after a successful hydration
+ * pass, so anything queued while `startupHydrationErrorStore` is set would wait
+ * forever. Refuse the selection instead of parking it.
+ */
+function isDeferredStartupResumable(): boolean {
+    return !get(startupHydrationErrorStore)
+}
+
 export async function changeChar(index: number, arg:{
     reseter?:()=>any,
     clearNewBadge?:boolean,
 } = {}) {
     const metric = runtimeMetrics.start('chat-selection')
+    // The overlay is a full-screen, click-eating layer, so its lifetime is an
+    // invariant of this function rather than a pairing maintained by hand:
+    // every exit that does not hand ownership to `activateCharacter` takes it
+    // back down, including early returns and throws.
+    let ownsOverlay = false
+    let intent = characterSelectionIntent
     try {
     const reseter = arg.reseter ?? (() => {})
     const db = getDatabase()
     const char = db.characters[index]
     if (!char) return
-    const intent = ++characterSelectionIntent
+    intent = ++characterSelectionIntent
     const startupReady = isStartupMutationReady()
+    if (!startupReady && !isDeferredStartupResumable()) {
+        // Also takes down whatever an older, now superseded selection had up:
+        // this call owns the newest intent, so nothing else will clear it.
+        clearDeferredCharacterSelection()
+        alertError(new Error('Startup data could not finish loading, so characters cannot be opened yet. Retry loading it from a settings panel, or reload the app.'))
+        return
+    }
     if (startupReady) deferredCharacterSelectionArg = undefined
     else deferredCharacterSelectionArg = arg
-    loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
+    loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: () => clearDeferredCharacterSelection() })
+    ownsOverlay = true
     let activationIndex = -1
     const activateNow = await startupCharacterSelectionQueue.select({
         ready: startupReady,
@@ -877,9 +901,15 @@ export async function changeChar(index: number, arg:{
             alertError(error ?? new Error('Unable to load the selected character. Please try again.'))
         },
     })
+    // A parked selection waits on deferred hydration, which can take an
+    // unbounded amount of time; nothing may block the whole UI on it. The
+    // overlay is raised again by `activateCharacter` once the work restarts.
     if (!activateNow) return
+    // From here `activateCharacter`'s own finally owns the overlay.
+    ownsOverlay = false
     await activateCharacter(activationIndex, arg, intent)
     } finally {
+        if (ownsOverlay && intent === characterSelectionIntent) loadingOverlayStore.set({ active: false, text: '', onCancel: null })
         runtimeMetrics.end(metric)
     }
 }
@@ -889,12 +919,23 @@ export async function resumeDeferredCharacterSelection(): Promise<boolean> {
     const metric = runtimeMetrics.start('chat-selection')
     try {
         let activationIndex = -1
+        const hadPending = startupCharacterSelectionQueue.hasPending()
         const activateNow = startupCharacterSelectionQueue.resume({
             ready: isStartupMutationReady(),
             findIndex: (characterId) => getDatabase().characters.findIndex((value) => value?.chaId === characterId),
             fullSelect: (fullIndex) => { activationIndex = fullIndex },
         })
-        if (!activateNow) return false
+        if (!activateNow) {
+            // A parked selection that resolved to nothing (character deleted,
+            // still not ready) ends here: release its state and any overlay it
+            // was still holding. Without a pending selection this call belongs
+            // to somebody else's in-flight load, so leave their overlay alone.
+            if (hadPending) {
+                deferredCharacterSelectionArg = undefined
+                loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+            }
+            return false
+        }
         const arg = deferredCharacterSelectionArg ?? {}
         deferredCharacterSelectionArg = undefined
         await activateCharacter(activationIndex, arg, ++characterSelectionIntent)
@@ -904,7 +945,13 @@ export async function resumeDeferredCharacterSelection(): Promise<boolean> {
     }
 }
 
-/** Releases a deferred selection before startup presents its retry prompt. */
+/**
+ * Releases a deferred selection before startup presents its retry prompt, and
+ * backs the loading overlay's cancel button. Bumping the intent is what keeps
+ * the state consistent: an activation still in flight sees a stale intent at
+ * every await point, so it neither commits `selectedCharID` nor re-touches the
+ * overlay, leaving the previously selected character exactly as it was.
+ */
 export function clearDeferredCharacterSelection(): void {
     characterSelectionIntent++
     deferredCharacterSelectionArg = undefined
