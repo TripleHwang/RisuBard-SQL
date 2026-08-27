@@ -28,6 +28,8 @@ const WRITABLE_TABLES = new Set(TABLES.filter((table) => (
 )));
 const DEFAULT_MESSAGE_PAGE_LIMIT = 40;
 const MAX_MESSAGE_PAGE_LIMIT = 100;
+/** Rows allowed to share one position before a reverse page refuses to widen. */
+const MAX_TIED_POSITION_GROUP = 500;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
 const MAX_SQL_READ_KEY_LENGTH = 256;
 const MAX_SQL_READ_LIMIT = 100;
@@ -353,12 +355,35 @@ function createRelationalSqlite(options) {
             const descendingRows = database.prepare(
                 'SELECT id, position FROM messages WHERE chat_id = ? AND position < ? ORDER BY position DESC, id DESC LIMIT ?',
             ).all(chatId, normalizedBefore, limit + 1);
-            const extraRow = descendingRows[limit];
-            const boundaryRow = descendingRows[limit - 1];
+            let pageRows = descendingRows.slice(0, limit);
+            let extraRow = descendingRows[limit];
+            const boundaryRow = pageRows[pageRows.length - 1];
+            // `messages(chat_id, position)` has no UNIQUE constraint, so ties
+            // are representable. The cursor is position-only, so a tied group
+            // split across a page boundary would be lost forever: the next
+            // request asks for `position < tie` and skips the remainder. This
+            // used to be a hard error at whatever depth the tie happened to
+            // sit at, which made the whole chat's history unreadable past that
+            // point. Pull the rest of the group into THIS page instead — the
+            // page then briefly exceeds `limit`, which no caller requires, and
+            // the next cursor still lands strictly below the group.
             if (extraRow && boundaryRow && Number(extraRow.position) === Number(boundaryRow.position)) {
-                throw new Error('Reverse message page would split tied SQL positions');
+                const tiedPosition = Number(extraRow.position);
+                const tiedGroup = database.prepare(
+                    'SELECT id, position FROM messages WHERE chat_id = ? AND position = ? ORDER BY id DESC LIMIT ?',
+                ).all(chatId, tiedPosition, MAX_TIED_POSITION_GROUP + 1);
+                // A group larger than this is not real chat data; returning it
+                // whole would blow the page up without bound, so the original
+                // hard error is kept for that case alone.
+                if (tiedGroup.length > MAX_TIED_POSITION_GROUP) {
+                    throw new Error('Reverse message page would split tied SQL positions');
+                }
+                pageRows = pageRows.filter((row) => Number(row.position) !== tiedPosition).concat(tiedGroup);
+                extraRow = database.prepare(
+                    'SELECT id, position FROM messages WHERE chat_id = ? AND position < ? ORDER BY position DESC, id DESC LIMIT 1',
+                ).get(chatId, tiedPosition);
             }
-            const rows = descendingRows.slice(0, limit).reverse();
+            const rows = pageRows.reverse();
             const ids = rows.map((row) => row.id);
             const nodeRows = ids.length
                 ? database.prepare(`SELECT * FROM message_extension_nodes WHERE chat_id = ? AND message_id IN (${ids.map(() => '?').join(',')}) ORDER BY message_id, node_id`).all(chatId, ...ids)
@@ -373,10 +398,21 @@ function createRelationalSqlite(options) {
                 ...(rebuildRelationalValue(byId.get(row.id) || []) || {}), chatId: row.id,
             }));
             const positions = rows.map((row) => Number(row.position));
-            const nextBefore = rows.length ? Math.min(...rows.map((row) => Number(row.position))) : null;
+            const hasMore = Boolean(extraRow);
+            // `nextBefore` is a CURSOR, not a description of this page: it is
+            // the `before` value for the NEXT request, and it is null exactly
+            // when there is no next request. `rows` ascends, so rows[0] holds
+            // the page's lowest position.
+            //
+            // It used to be the lowest position unconditionally, which made
+            // every final non-empty page contradict the client's boundary
+            // check — the deterministic, retry-proof "scroll up until it dies"
+            // stall. See src/ts/storage/sql/reversePageContract.ts, which both
+            // sides now share.
+            const nextBefore = hasMore && rows.length ? Number(rows[0].position) : null;
             return {
                 revision: revision(), chatId, messages, positions, nextPosition, before: normalizedBefore, nextBefore, total,
-                hasMore: Boolean(extraRow),
+                hasMore,
             };
         });
     }

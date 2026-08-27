@@ -21,7 +21,10 @@ vi.mock('../alert', () => ({ notifySuccess: () => {}, alertError: () => {} }))
 vi.mock('../../lang', () => ({ language: {}, changeLanguage: () => {} }))
 vi.mock('../plugins/apiV3/v3.svelte', () => ({ loadV3Plugins: () => Promise.resolve() }))
 vi.mock('../plugins/apiV3/transpiler', () => ({ pluginCodeTranspiler: () => '' }))
-vi.mock('../plugins/pluginUpdate', () => ({ runPluginUpdate: () => Promise.resolve() }))
+vi.mock('../plugins/pluginUpdate', async (importOriginal) => ({
+    ...await importOriginal<typeof import('../plugins/pluginUpdate')>(),
+    runPluginUpdate: () => Promise.resolve(),
+}))
 vi.mock('../builtin/pagefold', () => ({ loadBuiltInPageFoldPlugin: () => Promise.resolve(), PAGEFOLD_PLUGIN_NAME: 'pagefold' }))
 
 const storesModule = await import('../stores.svelte')

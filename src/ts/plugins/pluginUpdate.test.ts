@@ -3,12 +3,17 @@ import fs from 'node:fs'
 import { mount, unmount } from 'svelte'
 
 import {
+    comparePluginVersions,
+    parseDeclaredPluginUpdateURL,
+    parseDeclaredPluginVersion,
+    parseDeclaredPluginVersionFromPartial,
     PluginUpdateRejection,
     runInstalledPluginUpdateAction,
     runPluginUpdate,
     type PluginUpdateTarget,
 } from './pluginUpdate'
 import PluginSettings from 'src/lib/Setting/Pages/PluginSettings.svelte'
+import { languageEnglish } from 'src/lang/en'
 
 const ui = vi.hoisted(() => ({
     db: {
@@ -21,6 +26,7 @@ const ui = vi.hoisted(() => ({
     alertConfirm: vi.fn(),
     notifySuccess: vi.fn(),
     notifyError: vi.fn(),
+    notifyInfo: vi.fn(),
 }))
 
 vi.mock('src/ts/plugins/plugins.svelte', () => ({
@@ -46,6 +52,7 @@ vi.mock('src/ts/alert', () => ({
     alertSelect: vi.fn(),
     notifySuccess: ui.notifySuccess,
     notifyError: ui.notifyError,
+    notifyInfo: ui.notifyInfo,
 }))
 vi.mock('src/ts/globalApi.svelte', async (importOriginal) => ({
     ...await importOriginal<typeof import('src/ts/globalApi.svelte')>(),
@@ -82,6 +89,7 @@ describe('plugin updater', () => {
         ui.alertConfirm.mockReset()
         ui.notifySuccess.mockReset()
         ui.notifyError.mockReset()
+        ui.notifyInfo.mockReset()
     })
 
     test('the plugin-row plus action waits for the installed update and preserves custom storage', async () => {
@@ -120,6 +128,74 @@ describe('plugin updater', () => {
         await vi.waitFor(() => expect(ui.notifySuccess).toHaveBeenCalledOnce())
         expect(installed.script).toBe(source)
         expect(ui.db.pluginCustomStorage).toEqual({ 'Test Plugin:preferences': { theme: 'dark' } })
+        expect(ui.notifyError).not.toHaveBeenCalled()
+    })
+
+    test('a failed update tells the user WHICH stage failed instead of a bare generic message', async () => {
+        const installed = {
+            ...plugin(),
+            versionOfPlugin: '1.0.0',
+            enabled: true,
+            version: '3.0',
+            arguments: {},
+            realArg: {},
+            customLink: [],
+            argMeta: {},
+        }
+        ui.db.plugins = [installed]
+        ui.checkPluginUpdate.mockResolvedValue({ version: '2.0.0', updateURL: installed.updateURL })
+        ui.alertConfirm.mockResolvedValue(true)
+        ui.updatePlugin.mockResolvedValue({
+            ok: false,
+            stage: 'download',
+            code: 'http-404',
+            detail: 'HTTP 404 https://internal.example/secret-path.js',
+        })
+
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(PluginSettings, { target })
+        await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-plugin-update]')).not.toBeNull())
+        document.querySelector<HTMLButtonElement>('[data-plugin-update]')!.click()
+
+        await vi.waitFor(() => expect(ui.notifyError).toHaveBeenCalledOnce())
+        const message = String(ui.notifyError.mock.calls[0][0])
+        // The stage reaches the user...
+        expect(message).toContain(languageEnglish.pluginUpdateStageDownload)
+        // ...but the machine-readable code and the raw detail (which can carry
+        // a URL) never leave the console.
+        expect(message).not.toContain('http-404')
+        expect(message).not.toContain('secret-path.js')
+        expect(ui.notifySuccess).not.toHaveBeenCalled()
+    })
+
+    test('a successful update that moved its source tells the user where it moved to', async () => {
+        const installed = {
+            ...plugin(),
+            versionOfPlugin: '1.0.0',
+            enabled: true,
+            version: '3.0',
+            arguments: {},
+            realArg: {},
+            customLink: [],
+            argMeta: {},
+        }
+        ui.db.plugins = [installed]
+        ui.checkPluginUpdate.mockResolvedValue({ version: '2.0.0', updateURL: installed.updateURL })
+        ui.alertConfirm.mockResolvedValue(true)
+        ui.updatePlugin.mockResolvedValue({
+            ok: true,
+            version: '2.0.0',
+            updateURLChanged: { from: installed.updateURL, to: 'https://new.example.com/plugin.js' },
+        })
+
+        const target = document.body.appendChild(document.createElement('div'))
+        mounted = mount(PluginSettings, { target })
+        await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-plugin-update]')).not.toBeNull())
+        document.querySelector<HTMLButtonElement>('[data-plugin-update]')!.click()
+
+        await vi.waitFor(() => expect(ui.notifySuccess).toHaveBeenCalledOnce())
+        await vi.waitFor(() => expect(ui.notifyInfo).toHaveBeenCalledOnce())
+        expect(String(ui.notifyInfo.mock.calls[0][0])).toContain('https://new.example.com/plugin.js')
         expect(ui.notifyError).not.toHaveBeenCalled()
     })
 
@@ -362,7 +438,11 @@ describe('plugin updater', () => {
             readInstalled: () => ({ name: 'Test Plugin', script: 'different', updateURL: 'https://different.example.com/plugin.js' }),
         })
 
-        expect(result).toEqual({ ok: false, stage: 'verify', code: 'update-url-mismatch' })
+        expect(result.ok).toBe(false)
+        if (result.ok === false) {
+            expect(result.stage).toBe('verify')
+            expect(result.code).toBe('update-url-mismatch')
+        }
     })
 
     test('a successful update check followed by a full-download failure is reported as a download failure, not a generic one', async () => {
@@ -382,5 +462,83 @@ describe('plugin updater', () => {
         })
 
         expect(result).toEqual({ ok: false, stage: 'download', code: 'http-500', detail: 'HTTP 500' })
+    })
+})
+
+describe('requestImmediateSave with no persistence runtime', () => {
+    test('rejects instead of pretending the state was saved', async () => {
+        // `requestImmediateSaveImpl` is only assigned by a persistence runtime
+        // (saveDb() or startMetadataPersistence()). The standalone Node build
+        // boots metadata-first and used to assign neither, so this call
+        // resolved having written nothing -- and importPlugin(), which awaits
+        // it as its durable-save step, reported a success that did not survive
+        // a reload. A caller demanding durability must now be told the truth.
+        const real = await vi.importActual<typeof import('src/ts/globalApi.svelte')>('src/ts/globalApi.svelte')
+
+        await expect(real.requestImmediateSave({ rejectOnFailure: true })).rejects.toThrow(/could not be saved/)
+        // Fire-and-forget callers (many of them run during startup, before any
+        // runtime exists) must stay harmless.
+        await expect(Promise.resolve(real.requestImmediateSave())).resolves.toBeUndefined()
+    })
+})
+
+describe('comparePluginVersions', () => {
+    test('orders plain numeric versions', () => {
+        expect(comparePluginVersions('1.2.4', '1.2.3')).toBe(1)
+        expect(comparePluginVersions('1.2.3', '1.10.0')).toBe(-1)
+        expect(comparePluginVersions('2.0.0', '2.0.0')).toBe(0)
+        expect(comparePluginVersions('1.2', '1.2.0')).toBe(0)
+    })
+
+    test('tolerates a leading v instead of collapsing the major to zero', () => {
+        // The old `.split('.').map(Number)` with a `NaN || 0` fallback read
+        // "v1.2.3" as 0.2.3, so a v-tagged upstream release looked older than
+        // an untagged 1.0.0 and the update was never offered.
+        expect(comparePluginVersions('v1.2.3', '1.2.3')).toBe(0)
+        expect(comparePluginVersions('v2.0.0', '1.9.9')).toBe(1)
+        expect(comparePluginVersions('V1.0.0', '0.9.0')).toBe(1)
+    })
+
+    test('sorts a prerelease below the matching release', () => {
+        // Previously "1.2.3-beta" parsed as 1.2.0 (Number('3-beta') is NaN),
+        // which made a prerelease compare as OLDER than 1.2.1 rather than
+        // just below 1.2.3.
+        expect(comparePluginVersions('1.2.3-beta', '1.2.3')).toBe(-1)
+        expect(comparePluginVersions('1.2.3', '1.2.3-beta')).toBe(1)
+        expect(comparePluginVersions('1.2.3-beta.2', '1.2.3-beta.1')).toBe(1)
+        expect(comparePluginVersions('1.2.3-beta', '1.2.2')).toBe(1)
+    })
+
+    test('ignores build metadata and garbage instead of dragging the whole compare down', () => {
+        expect(comparePluginVersions('1.2.3+build.5', '1.2.3')).toBe(0)
+        expect(comparePluginVersions('1.2.3abc', '1.2.3')).toBe(0)
+        expect(comparePluginVersions('', '0.0.0')).toBe(0)
+    })
+})
+
+describe('plugin metadata parsing', () => {
+    const source = [
+        '//@name Test Plugin',
+        '//@version 1.2.3',
+        '//@update-url https://example.com/plugin.js',
+        'const example = "//@version 9.9.9"',
+    ].join('\n')
+
+    test('reads the version and update URL from a complete source', () => {
+        expect(parseDeclaredPluginVersion(source)).toBe('1.2.3')
+        expect(parseDeclaredPluginUpdateURL(source)).toBe('https://example.com/plugin.js')
+    })
+
+    test('is anchored to the start of a line, so a quoted lookalike cannot win', () => {
+        const decoy = ['const example = "//@version 9.9.9"', '//@version 1.0.0', ''].join('\n')
+        expect(parseDeclaredPluginVersion(decoy)).toBe('1.0.0')
+    })
+
+    test('refuses a version line the ranged probe only received half of', () => {
+        // What a 512-byte Range window can hand back. Reading "1.2" out of
+        // this is worse than reading nothing: it compares as a real version.
+        const truncated = '//@name Test Plugin\n//@version 1.2'
+        expect(parseDeclaredPluginVersionFromPartial(truncated)).toBeUndefined()
+        expect(parseDeclaredPluginVersionFromPartial(truncated + '.3\n')).toBe('1.2.3')
     })
 })

@@ -12,6 +12,7 @@ import { runLuaEditTrigger } from "./scriptings";
 import { pluginV2 } from "../plugins/plugins.svelte";
 import { runTrigger } from "./triggers";
 import { prepareDynamicAssetSearch } from './dynamicAssetSearch'
+import { defaultScriptFlag, normalizeScriptFlag, tryCompileScriptRegex } from './scriptFlags'
 
 const dreg = /{{data}}/g
 const randomness = /\|\|\|/g
@@ -94,12 +95,19 @@ function getScriptCache(hash:string){
 }
 
 function compileScriptRegex(input:string, flag:string):RegExp|null{
-    try{
-        return new RegExp(input, flag)
+    const compiled = tryCompileScriptRegex(input, flag)
+    if(compiled.regex){
+        return compiled.regex
     }
-    catch{
-        return null
-    }
+    // Without this the script is dropped for the rest of the session with no log,
+    // no alert and nothing in the UI — the failure is indistinguishable from a
+    // pattern that simply never matches. console.error survives the production
+    // build (vite.config.ts strips only console.log/debug/table and assert.*).
+    console.error(
+        `[RisuAI] regex script skipped: /${input}/${flag} failed to compile`,
+        compiled.error
+    )
+    return null
 }
 
 export function resetScriptCache(){
@@ -164,24 +172,25 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
 
             let outScript2 = script.out.replaceAll("$n", "\n")
             let outScript = outScript2.replace(dreg, "$&")
-            let flag = 'g'
+            // Normalize first, then apply the move_* adjustment. The old order
+            // normalized last, so a flag left empty by the move_* 'g' removal —
+            // or by action tags being peeled off a flag that had whitespace
+            // around them, e.g. "<cbs> <no_end_nl>" -> " " -> "" — fell through
+            // to a hardcoded 'u'. That silently dropped 'g' (only the first match
+            // in a message got replaced) and imposed Unicode-strict parsing, under
+            // which patterns that are perfectly legal with 'g' throw at compile
+            // time (`a\-b`, `a{b`) and the whole script was then discarded.
+            // normalizeScriptFlag drops whitespace and unsupported letters,
+            // de-duplicates, and falls back to the documented default 'g'.
+            let flag = defaultScriptFlag
             if(script.ableFlag){
-                flag = script.flag || 'g'
+                flag = normalizeScriptFlag(script.flag)
             }
             if(outScript.startsWith('@@move_top') || outScript.startsWith('@@move_bottom') || pscript.actions.includes('move_top') || pscript.actions.includes('move_bottom')){
                 flag = flag.replace('g', '') //temperary fix
             }
             if(outScript.endsWith('>') && !pscript.actions.includes('no_end_nl')){
                 outScript += '\n'
-            }
-            //remove unsupported flag
-            flag = flag.trim().replace(/[^dgimsuvy]/g, '')
-
-            //remove repeated flags
-            flag = flag.split('').filter((v, i, a) => a.indexOf(v) === i).join('')
-            
-            if(flag.length === 0){
-                flag = 'u'
             }
 
             let input = script.in

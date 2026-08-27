@@ -2,6 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+// The client's own validator, imported rather than reimplemented: these tests
+// are only worth anything if both sides are the shipped code.
+import { reversePageCursor, validateOlderReversePage } from '../../src/ts/storage/sql/reversePageContract'
 
 const { createRelationalSqlite, statementTable } = require('./relational-sqlite.cjs')
 
@@ -223,7 +226,7 @@ describe('server relational SQLite', () => {
     })
   })
 
-  it('rejects a page that would split tied message positions', () => {
+  it('widens a page to cover a tied position group instead of refusing to serve it', () => {
     const storage = seededReaderStorage()
     storage.commit({
       baseRevision: 1,
@@ -231,16 +234,38 @@ describe('server relational SQLite', () => {
       statements: [{ sql: 'UPDATE messages SET position = ? WHERE chat_id = ? AND id IN (?, ?)', bind: [9, 'chat-1', 'message-2', 'message-3'] }],
     })
 
-    expect(() => storage.loadChatMessages('chat-1', undefined, 1)).toThrow(/tied.*position/i)
+    // The cursor is position-only, so splitting a tie would drop the rest of
+    // the group forever. This used to be a hard error, which made every chat
+    // holding a tie unreadable past the tie's depth. The page exceeds the
+    // requested limit of 1 instead, and the cursor lands ON the tie so the
+    // next request (`position < 9`) picks up cleanly below it.
+    const page = storage.loadChatMessages('chat-1', undefined, 1)
+    expect(page).toMatchObject({
+      messages: [{ chatId: 'message-2' }, { chatId: 'message-3' }],
+      positions: [9, 9],
+      nextBefore: 9,
+      hasMore: true,
+    })
+
+    expect(storage.loadChatMessages('chat-1', page.nextBefore, 1)).toMatchObject({
+      messages: [{ chatId: 'message-1' }],
+      positions: [0],
+      nextBefore: null,
+      hasMore: false,
+    })
   })
 
   it('echoes the effective cursor while paging older messages in ascending order', () => {
     const storage = seededReaderStorage()
 
+    // `nextBefore` is the cursor for the NEXT request, so a page with nothing
+    // older reports null rather than its own lowest position. Reporting the
+    // position made every terminal page contradict the client's boundary
+    // check, which is what stalled scrolling up at the oldest message.
     expect(storage.loadChatMessages('chat-1', 2, 40)).toMatchObject({
       before: 2,
       messages: [{ chatId: 'message-1' }, { chatId: 'message-2' }],
-      nextBefore: 0,
+      nextBefore: null,
       hasMore: false,
     })
   })
@@ -377,6 +402,107 @@ describe('server relational SQLite', () => {
   })
 })
 
+// The two shipped reverse-page bugs were both invisible to the client suite
+// because its fixtures hand-wrote a page shape the server never produces
+// (`nextBefore: null` on a terminal page). These cases pin the two sides
+// against each other: real server responses, the real client validator, no
+// fixture in between.
+describe('reverse page contract, server against the real client validator', () => {
+  /** Replays exactly what `loadOlderChatMessages` does, page after page. */
+  function walkToOldestMessage(storage: any, chatId: string, limit: number) {
+    const first = storage.loadChatMessages(chatId, undefined, limit)
+    let loaded: { chatId?: string }[] = [...first.messages]
+    let hasOlder: boolean = first.hasMore
+    let cursor = reversePageCursor(first)
+    const pages = [first]
+
+    // Bounded so a cursor that fails to advance fails the test rather than
+    // hanging it — that is the shape of the bug being guarded against.
+    for (let guard = 0; hasOlder && cursor !== null; guard += 1) {
+      expect(guard).toBeLessThan(50)
+      const page = storage.loadChatMessages(chatId, cursor, limit)
+      validateOlderReversePage(
+        page,
+        { nextBefore: cursor },
+        new Set(loaded.map((message) => message.chatId)),
+        loaded.length,
+      )
+      loaded = [...page.messages, ...loaded]
+      hasOlder = page.hasMore
+      cursor = reversePageCursor(page)
+      pages.push(page)
+    }
+
+    return { loaded, pages, hasOlder, cursor }
+  }
+
+  it('walks a sparse chat all the way to its oldest message without the validator rejecting a page', () => {
+    // Real positions have gaps: appended messages mint from a watermark that
+    // only rises, and deletions leave holes. 0, 4, 8 ... is normal data.
+    const storage = messageWalkStorage(Array.from({ length: 9 }, (_, index) => index * 4))
+
+    const walk = walkToOldestMessage(storage, 'walk-chat', 4)
+
+    expect(walk.loaded.map((message) => message.chatId)).toEqual(
+      Array.from({ length: 9 }, (_, index) => `walk-${index}`),
+    )
+    // Terminal state: nothing left to ask for, and the cursor says so, so the
+    // UI stops instead of re-requesting the same page behind a Retry button.
+    expect(walk.hasOlder).toBe(false)
+    expect(walk.cursor).toBeNull()
+    expect(walk.pages.at(-1)).toMatchObject({ hasMore: false, nextBefore: null })
+  })
+
+  it('walks a chat whose message count is an exact multiple of the page limit', () => {
+    // The boundary case where the last full page is followed by nothing: the
+    // limit+1 lookahead must report hasMore false on the page that lands
+    // exactly on the oldest message, not hand out an empty extra page.
+    const storage = messageWalkStorage([0, 1, 2, 3, 4, 5, 6, 7])
+
+    const walk = walkToOldestMessage(storage, 'walk-chat', 4)
+
+    expect(walk.loaded).toHaveLength(8)
+    expect(walk.pages).toHaveLength(2)
+    expect(walk.pages.every((page: any) => page.messages.length === 4)).toBe(true)
+    expect(walk.cursor).toBeNull()
+  })
+
+  it('walks a chat holding tied positions, which the server no longer refuses to serve', () => {
+    // Two messages share position 8. The server widens the page over the whole
+    // tied group; the validator accepts non-decreasing positions inside a page.
+    const storage = messageWalkStorage([0, 4, 8, 8, 12, 16])
+
+    const walk = walkToOldestMessage(storage, 'walk-chat', 2)
+
+    expect(walk.loaded.map((message) => message.chatId)).toEqual(
+      ['walk-0', 'walk-1', 'walk-2', 'walk-3', 'walk-4', 'walk-5'],
+    )
+    expect(walk.cursor).toBeNull()
+  })
+
+  it('reports a chat with a single message as terminal on its very first page', () => {
+    const storage = messageWalkStorage([0])
+
+    expect(storage.loadChatMessages('walk-chat', undefined, 40)).toMatchObject({
+      messages: [{ chatId: 'walk-0' }],
+      positions: [0],
+      hasMore: false,
+      nextBefore: null,
+    })
+  })
+
+  it('reports an empty chat as terminal, so no older page is ever requested', () => {
+    // A chat whose messages were all deleted. `before` normalizes to
+    // MAX(position)+1 over nothing, i.e. 0, and the page is empty and terminal
+    // — the client's `hasOlder` guard then means the validator never runs.
+    const storage = messageWalkStorage([])
+
+    expect(storage.loadChatMessages('walk-chat', undefined, 40)).toMatchObject({
+      messages: [], positions: [], before: 0, nextBefore: null, total: 0, hasMore: false,
+    })
+  })
+})
+
 function seededReaderStorage() {
   const root = mkdtempSync(join(tmpdir(), 'risu-relational-reader-'))
   roots.push(root)
@@ -419,6 +545,27 @@ function seededReaderStorage() {
         { sql: 'INSERT INTO messages (chat_id, id, position, role, sent_time, content_text) VALUES (?, ?, ?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, position - 1, 'user', position, position === 1 ? 'message 1 100%_\\' : `message ${position}`] },
         { sql: 'INSERT INTO message_extension_nodes (chat_id, message_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, 0, null, 0, null, 'object', null] },
         { sql: 'INSERT INTO message_extension_nodes (chat_id, message_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['chat-1', `message-${position}`, 1, 0, 0, 'content', 'string', `message ${position}`] },
+      ]),
+    ],
+  })
+  readerStorages.push(storage)
+  return storage
+}
+
+/** One character, one chat, messages at exactly the positions given. */
+function messageWalkStorage(positions: number[]) {
+  const root = mkdtempSync(join(tmpdir(), 'risu-relational-walk-'))
+  roots.push(root)
+  const storage = createRelationalSqlite({ dataRoot: root })
+  storage.commit({
+    baseRevision: 0,
+    action: 'seed-walk',
+    statements: [
+      { sql: 'INSERT INTO characters (id, position, kind, name) VALUES (?, ?, ?, ?)', bind: ['walk-character', 0, 'character', 'Walker'] },
+      { sql: 'INSERT INTO chats (id, character_id, position, name) VALUES (?, ?, ?, ?)', bind: ['walk-chat', 'walk-character', 0, 'Walk'] },
+      ...positions.flatMap((position, index) => [
+        { sql: 'INSERT INTO messages (chat_id, id, position, role, content_text) VALUES (?, ?, ?, ?, ?)', bind: ['walk-chat', `walk-${index}`, position, 'user', `walk ${index}`] },
+        { sql: 'INSERT INTO message_extension_nodes (chat_id, message_id, node_id, parent_node_id, node_order, object_key, value_type, text_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', bind: ['walk-chat', `walk-${index}`, 0, null, 0, null, 'object', null] },
       ]),
     ],
   })

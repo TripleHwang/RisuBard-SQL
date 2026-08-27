@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
-    import { XIcon } from "@lucide/svelte";
+    import { TriangleAlertIcon, XIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import { ReloadGUIPointer } from "src/ts/stores.svelte";
     import { alertConfirm } from "src/ts/alert";
@@ -12,7 +12,8 @@
     import OptionInput from "../../UI/GUI/OptionInput.svelte";
     import Accordion from "src/lib/UI/Accordion.svelte";
   import NumberInput from "src/lib/UI/GUI/NumberInput.svelte";
-  
+  import { defaultScriptFlag, findUnknownScriptFlagActions, normalizeScriptFlag, scriptFlagContains, toggleScriptFlag, tryCompileScriptRegex } from "src/ts/process/scriptFlags";
+
 interface Props {
     value: customscript;
     onRemove?: () => void;
@@ -29,22 +30,44 @@ interface Props {
     idx
   }: Props = $props();
 
+    // Both of these delegate to src/ts/process/scriptFlags.ts so the editor and the
+    // script runner agree on where a <tag> ends and a RegExp flag letter begins.
+    // Toggling used to edit the raw string, so turning a letter off deleted the
+    // first matching character *inside* a tag: "<cbs>s" -> "<cb>s",
+    // "<move_top>m" -> "<ove_top>m". The action then silently became unknown, and
+    // since the free-text flag box below is commented out there was no way back.
     const checkFlagContain = (flag:string, matchFlag:string) => {
-        if(flag.length === 1){
-            matchFlag = value.flag.replace(/<(.+?)>/g, '')
-        }
-        return matchFlag.includes(flag)
+        return scriptFlagContains(matchFlag, flag)
     }
 
     const toggleFlag = (flag:string) => {
-        console.log(flag, checkFlagContain(flag, value.flag), value.flag)
-        if(checkFlagContain(flag, value.flag)){
-            value.flag = value.flag.replace(flag, '')
-        }
-        else{
-            value.flag += flag
-        }
+        value.flag = toggleScriptFlag(value.flag, flag)
     }
+
+    // A script whose pattern cannot compile is dropped at render time forever and
+    // silently. Surface it here, where it can actually be fixed.
+    const regexError = $derived.by(() => {
+        if(!value.in){
+            return null
+        }
+        const flag = value.ableFlag ? normalizeScriptFlag(value.flag) : defaultScriptFlag
+        const compiled = tryCompileScriptRegex(value.in, flag)
+        if(compiled.error){
+            return `Invalid regex /${value.in}/${flag} — ${compiled.error.message}`
+        }
+        return null
+    })
+
+    // Saves written before the toggle fix can carry a tag with a letter chewed
+    // out of it (<cb>, <ove_top>). Guessing the intent back is not safe, so the
+    // tag is reported rather than rewritten.
+    const unknownActions = $derived(value.ableFlag ? findUnknownScriptFlagActions(value.flag) : [])
+
+    const flagWarning = $derived(unknownActions.length === 0
+        ? null
+        : `Unknown flag action ${unknownActions.map((a) => `<${a}>`).join(', ')} — this does nothing. Remove it or pick the intended flag below.`)
+
+    const scriptBroken = $derived(regexError !== null || flagWarning !== null)
 
     const getOrder = (flag:string) => {
         const order = flag.match(/<order (-?\d+)>/)?.[1]
@@ -104,6 +127,13 @@ interface Props {
             }
         }}>
             <span>{value.comment.length === 0 ? 'Unnamed Script' : value.comment}</span>
+            {#if scriptBroken}
+                <!-- Visible while the row is collapsed too, so a broken script can be
+                     found without opening every entry in the list. -->
+                <span class="ml-2 flex items-center text-red-500" title={regexError ?? flagWarning}>
+                    <TriangleAlertIcon size={16} />
+                </span>
+            {/if}
         </button>
         <button class="valuer" onclick={async () => {
             const d = await alertConfirm(language.removeConfirm + value.comment)
@@ -135,6 +165,9 @@ interface Props {
             </SelectInput>
             <span class="text-textcolor mt-6">IN:</span>
             <TextInput className="mt-2" bind:value={value.in} />
+            {#if regexError}
+                <span class="text-red-500 text-sm mt-1 break-all">{regexError}</span>
+            {/if}
             <span class="text-textcolor mt-6">OUT:</span>
             <TextAreaInput className="mt-2 mb-4" highlight autocomplete="off" bind:value={value.out} onInput={(e) => {
                 $ReloadGUIPointer += 1
@@ -143,6 +176,9 @@ interface Props {
                 <!-- <span class="text-textcolor mt-6">FLAG:</span>
                 <TextInput bind:value={value.flag} /> -->
                 <Accordion styled name="FLAGS">
+                    {#if flagWarning}
+                        <span class="text-red-500 text-sm break-all">{flagWarning}</span>
+                    {/if}
                     <span class="text-textcolor mt-3">Normal Flag</span>
                     <div class="grid w-full grid-cols-2 rounded-md border border-darkborderc">
                         {#each flags as flag, i}
