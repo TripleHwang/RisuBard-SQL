@@ -347,6 +347,14 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       throw new Error("Invalid SQL character payload");
     }
     this.acceptReadRevision(payload.revision);
+    // SAFE: `payload` (and therefore `payload.character`) was just produced
+    // by `await response.json()` a few lines above — a freshly parsed JSON
+    // tree that has never been touched by Svelte reactivity. `defineProperty`
+    // here can never hit a `$state` proxy's `defineProperty` trap
+    // (`state_descriptors_fixed`); the object only enters `DBState.db` later,
+    // via `applyHydratedCharacter`'s plain assignment
+    // `db.characters[currentIndex] = normalized` in sqlRuntimeHydration.ts,
+    // by which point this property is already attached.
     if (payload.characterBodyCollapsed === true) Object.defineProperty(payload.character, "_sqlCharacterBodyCollapsed", { configurable: true, enumerable: false, value: true });
     return payload.character;
     } finally {

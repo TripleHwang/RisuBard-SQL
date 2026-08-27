@@ -198,6 +198,20 @@ async function ensureChatBodyHydrated(
             : [],
         ),
       );
+      // SAFE: `merged` is a brand-new plain object literal produced by object
+      // spread. Object spread always constructs a fresh ordinary object via
+      // CreateDataPropertyOrThrow — it can never itself be (or become) a
+      // Svelte `$state` proxy, regardless of whether `full`/`current` are
+      // proxies. `defineProperty` below therefore always runs against a
+      // plain target and never hits Svelte's proxy `defineProperty` trap
+      // (`state_descriptors_fixed`). `merged` only enters the reactive tree
+      // afterwards, via the plain assignment `character.chats[currentIndex]
+      // = merged` a few lines down — and Svelte's proxy preserves a
+      // non-enumerable descriptor that was already present on the target
+      // object it wraps (see `getOwnPropertyDescriptor` in
+      // node_modules/svelte's client proxy), so these fields stay hidden
+      // from `Object.keys`/`JSON.stringify`/`for...in` even once `merged`
+      // becomes reactive.
       const merged = { ...full, ...summaryMetadata, message: current.message ?? full.message ?? [] } as Chat;
       Object.defineProperty(merged, "_sqlHydrationRevision", { configurable: true, enumerable: false, value: response.revision });
       Object.defineProperty(merged, "_sqlMetadataOverrides", { configurable: true, enumerable: false, value: { ...carriedMetadata, ...summaryMetadata } });
