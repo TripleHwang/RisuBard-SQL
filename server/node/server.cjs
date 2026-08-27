@@ -65,7 +65,7 @@ const {
 } = require('./risubard-memory-routes.cjs');
 // Shared verbatim with the client's src/ts/globalApi.svelte.ts:getUncleanables() so
 // the two orphan-asset rule sets cannot drift apart. See that file for history.
-const { isAssetKeyValue, collectPersonaAssetRefs } = require('../../shared/assetOwnership.cjs');
+const { isAssetKeyValue, collectPersonaAssetRefs } = require('./assetOwnership.cjs');
 const { applyPatch } = require('fast-json-patch');
 const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON, normalizeForwardHeaders, hasRemoteBlocks } = require('./utils.cjs');
 const { readBoundedRisuSave, MAX_REPAIR_BACKUP_BYTES } = require('./sql-repair-decode.cjs');
@@ -5761,7 +5761,7 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
             // Character-scoped personas (as opposed to the global
             // dbObj.personas below) live entirely on the character record.
             // Their icons must be collected here or they look orphaned and
-            // get mislabeled as deletable -- see shared/assetOwnership.cjs.
+            // get mislabeled as deletable -- see ./assetOwnership.cjs.
             collectPersonaAssetRefs(cha.personas, add, { includeModuleAssets });
         }
     }
