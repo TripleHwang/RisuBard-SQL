@@ -206,9 +206,10 @@ describe('Character Vault sidebar integration', () => {
         }
     })
 
-    test('renders wider 4:3 character cards with the open action in the portrait', () => {
+    test('renders square character cards with a hover title and the open action in the portrait', () => {
         const dialog = source('src/lib/SideBars/CharacterVaultDialog.svelte')
-        expect(dialog).toContain('aspect-ratio: 4 / 3')
+        expect(dialog).toContain('aspect-ratio: 1')
+        expect(dialog).toContain('.character-card:hover .character-caption')
         expect(dialog).toContain('class="open-character"')
         expect(dialog.indexOf('class="open-character"'))
             .toBeLessThan(dialog.indexOf('class="character-caption"'))

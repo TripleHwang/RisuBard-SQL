@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     renameMemorySaveSlot: vi.fn(),
     deleteMemorySaveSlot: vi.fn(),
     alertConfirm: vi.fn(),
+    alertInput: vi.fn(),
     createAuth: vi.fn(async () => 'auth'),
 }))
 
@@ -24,7 +25,7 @@ vi.mock('src/ts/risubard/memorySaveSlots', () => ({
 }))
 vi.mock('src/ts/alert', () => ({
     alertConfirm: mocks.alertConfirm,
-    alertInput: vi.fn(),
+    alertInput: mocks.alertInput,
 }))
 vi.mock('src/ts/globalApi.svelte', () => ({
     forageStorage: { createAuth: mocks.createAuth },
@@ -52,6 +53,8 @@ describe('RisuBardSaveSlotsDialog', () => {
             { role: 'char', data: '성문이 열렸다.' },
         ])
         mocks.alertConfirm.mockReset().mockResolvedValue(true)
+        mocks.alertInput.mockReset()
+        mocks.renameMemorySaveSlot.mockReset()
     })
     afterEach(async () => {
         if (mounted) await unmount(mounted)
@@ -97,6 +100,38 @@ describe('RisuBardSaveSlotsDialog', () => {
         expect(document.body.querySelector('[data-save-file-load]')
             ?.className).toContain('save-slot__action')
         expect(document.body.querySelector('[data-save-file-new]')).toBeNull()
+    })
+
+    test('renames a manual save from the edit button inside its card', async () => {
+        mocks.alertInput.mockResolvedValue('성문 돌파 직전')
+        mocks.renameMemorySaveSlot.mockResolvedValue({
+            saveId: 'save-1', sourceChatId: 'chat-1',
+            sourceChatName: '성문 돌파 직전',
+            createdAt: '2026-08-14T08:00:00.000Z', turnCount: 7,
+            latestMessageId: 'assistant-1',
+        })
+        render()
+
+        await vi.waitFor(() => expect(document.body.textContent).toContain('SAVE 01'))
+        const manualCard = document.body.querySelector('[data-save-slot-kind="manual"]')
+        const rename = manualCard?.querySelector<HTMLButtonElement>('[data-save-file-rename]')
+        expect(rename).not.toBeNull()
+        expect(rename?.className).toContain('save-slot__rename')
+        expect(document.body.querySelector('.save-ledger__toolbar > [data-save-file-rename]')).toBeNull()
+
+        rename!.click()
+
+        await vi.waitFor(() => expect(mocks.alertInput).toHaveBeenCalledWith(
+            '저장된 파일 이름 변경', [], '성문 앞'
+        ))
+        await vi.waitFor(() => expect(mocks.renameMemorySaveSlot).toHaveBeenCalledWith(
+            expect.objectContaining({
+                characterId: 'character',
+                saveId: 'save-1',
+                name: '성문 돌파 직전',
+            })
+        ))
+        await vi.waitFor(() => expect(manualCard?.textContent).toContain('성문 돌파 직전'))
     })
 
     test.each(['save', 'load'] as const)('switches both ways from %s without losing the selected preview or writing data', async (initialMode) => {

@@ -799,14 +799,14 @@
     .cover-control { grid-template-columns: minmax(6rem, 1fr) auto auto; }
     .cover-control > span { grid-column: 1 / -1; }
     .character-grid { display: grid; min-height: 0; flex: 1; grid-template-columns: repeat(auto-fill, minmax(12rem, 13rem)); align-content: start; gap: .65rem; overflow-y: auto; padding: .75rem; padding-bottom: 5rem; }
-    .character-card { overflow: hidden; cursor: grab; border: 1px solid var(--color-darkborderc); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); transition: border-color 120ms ease, opacity 120ms ease, transform 120ms ease; }
+    .character-card { position: relative; aspect-ratio: 1; overflow: hidden; cursor: grab; border: 1px solid var(--color-darkborderc); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 88%, var(--color-selected) 12%); transition: border-color 120ms ease, opacity 120ms ease, transform 120ms ease; }
     .character-card:hover { transform: translateY(-1px); border-color: var(--color-borderc); }
     .character-card:focus-visible { outline: 2px solid var(--color-warning); outline-offset: 2px; }
     .character-card.selected { border-color: var(--color-warning); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warning) 35%, transparent); }
     .character-card.dragging { cursor: grabbing; opacity: .42; transform: scale(.98); }
-    .portrait { position: relative; display: grid; aspect-ratio: 4 / 3; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--color-selected) 45%, var(--color-darkbg)); color: var(--color-textcolor2); }
+    .portrait { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; background: color-mix(in srgb, var(--color-selected) 45%, var(--color-darkbg)); color: var(--color-textcolor2); }
     .portrait img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
-    .select-character, .pin-character, .open-character, .rename-character { position: absolute; display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border: 1px solid color-mix(in srgb, var(--color-media-text) 22%, transparent); border-radius: .38rem; background: color-mix(in srgb, var(--color-media-bg) 62%, transparent); color: var(--color-media-text); backdrop-filter: blur(6px); }
+    .select-character, .pin-character, .open-character, .rename-character { position: absolute; z-index: 2; display: grid; width: 1.55rem; height: 1.55rem; place-items: center; border: 1px solid color-mix(in srgb, var(--color-media-text) 22%, transparent); border-radius: .38rem; background: color-mix(in srgb, var(--color-media-bg) 62%, transparent); color: var(--color-media-text); backdrop-filter: blur(6px); }
     .select-character { left: .38rem; }
     .select-character, .pin-character { top: .38rem; }
     .pin-character, .open-character { right: .38rem; }
@@ -815,8 +815,9 @@
     .open-character:hover, .rename-character:hover { border-color: var(--color-warning); color: var(--color-warning); }
     .select-character[aria-pressed=true] { border-color: var(--color-warning-border); background: var(--color-warning); color: var(--color-on-warning); }
     .pin-character.pinned { color: var(--color-warning); }
-    .character-caption { padding: .5rem .55rem; }
-    .character-caption strong { display: block; overflow: hidden; color: var(--color-textcolor); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+    .character-caption { position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; padding: 2.35rem; background: color-mix(in srgb, var(--color-media-bg) 72%, transparent); opacity: 0; pointer-events: none; text-align: center; transition: opacity 160ms ease; }
+    .character-card:hover .character-caption, .character-card:focus-visible .character-caption, .character-card:focus-within .character-caption { opacity: 1; }
+    .character-caption strong { display: block; max-width: 100%; overflow: hidden; color: var(--color-media-text); font-size: clamp(1rem, 1.65vw, 1.4rem); font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; text-shadow: 0 .12rem .5rem color-mix(in srgb, var(--color-shadow) 72%, transparent); text-wrap: balance; }
     .empty-vault { grid-column: 1 / -1; display: flex; min-height: 12rem; align-items: center; justify-content: center; gap: .45rem; color: var(--color-textcolor2); font-size: .8rem; }
     .bulk-dock { position: absolute; right: .75rem; bottom: .75rem; left: .75rem; display: flex; align-items: center; gap: .5rem; padding: .55rem; border: 1px solid color-mix(in srgb, var(--color-warning) 45%, var(--color-darkborderc)); border-radius: .55rem; background: color-mix(in srgb, var(--color-darkbg) 91%, var(--color-warning) 9%); box-shadow: 0 .9rem 2.4rem color-mix(in srgb, var(--color-shadow) 36%, transparent); }
     .bulk-dock strong { color: var(--color-textcolor); font-size: .74rem; white-space: nowrap; }
