@@ -7,6 +7,7 @@ import type {
   Database,
   Message,
 } from "../database.svelte";
+import { stripSqlRuntimeMeta } from "./sqlRuntimeMeta";
 
 export interface SqlSettingUpsert {
   key: string;
@@ -124,7 +125,11 @@ export function sqlCharacterData(value: character): unknown {
   delete data.chats;
   delete data.chaId;
   delete data.detailsLoaded;
-  return data;
+  // Object spread copies symbol-keyed own properties (unlike structuredClone
+  // / JSON.stringify / $state.snapshot), so any runtime SQL metadata attached
+  // to `value` must be stripped explicitly before this becomes persisted row
+  // data. See ./sqlRuntimeMeta.
+  return stripSqlRuntimeMeta(data);
 }
 
 export function sqlChatData(value: Chat): unknown {
@@ -139,12 +144,16 @@ export function sqlChatData(value: Chat): unknown {
   delete data._sqlWindow;
   delete data.detailsLoaded;
   delete data.characterId;
-  return data;
+  // See stripSqlRuntimeMeta: spread copies the Symbol-keyed runtime window,
+  // which the string-key `delete data._sqlWindow` above cannot reach.
+  return stripSqlRuntimeMeta(data);
 }
 
 export function sqlMessageData(value: Message): unknown {
   const { chatId: _messageId, ...data } = value;
-  return data;
+  // See stripSqlRuntimeMeta: rest-destructuring copies the Symbol-keyed
+  // runtime SQL position the same way spread does.
+  return stripSqlRuntimeMeta(data);
 }
 
 function ensureId(value: { id?: string }): string {

@@ -5,7 +5,10 @@ import {
   buildSqlReplaceCommit,
   createEmptySqlCommit,
   hasSqlCommitChanges,
+  sqlChatData,
+  sqlMessageData,
 } from "./sqlCommit";
+import { hasSqlRuntimeMeta, setSqlPosition, setSqlWindow } from "./sqlRuntimeMeta";
 
 describe("RisuVault SQL row commits", () => {
   it("splits legacy snapshots into character, chat and message rows", () => {
@@ -58,6 +61,27 @@ describe("RisuVault SQL row commits", () => {
       botPresets: [], botPresetsId: 0,
     } as any;
     expect(buildSqlReplaceCommit(database, 0).chats[0].data).not.toHaveProperty("_sqlWindow");
+  });
+
+  it("strips the Symbol-keyed runtime SQL window/position from spread chat and message data", () => {
+    // sqlChatData/sqlMessageData build their output with `{ ...value }` /
+    // rest-destructuring, which (unlike structuredClone/JSON/$state.snapshot)
+    // DOES copy Symbol-keyed own properties. Attach real runtime metadata via
+    // the accessors (as sqlRuntimeHydration/sqlDirtyCommit do) and verify it
+    // never reaches the persisted row data.
+    const chat = { id: "chat-1", name: "Chat", message: [] } as any;
+    setSqlWindow(chat, { hasOlder: true, total: 10 });
+    expect(hasSqlRuntimeMeta(chat)).toBe(true);
+    const chatData = sqlChatData(chat) as object;
+    expect(hasSqlRuntimeMeta(chatData)).toBe(false);
+    expect(Object.getOwnPropertySymbols(chatData)).toHaveLength(0);
+
+    const message = { chatId: "message-1", role: "user", data: "hello" } as any;
+    setSqlPosition(message, 4);
+    expect(hasSqlRuntimeMeta(message)).toBe(true);
+    const messageData = sqlMessageData(message) as object;
+    expect(hasSqlRuntimeMeta(messageData)).toBe(false);
+    expect(Object.getOwnPropertySymbols(messageData)).toHaveLength(0);
   });
 
   it("keeps normal commits bounded to the changed rows", async () => {

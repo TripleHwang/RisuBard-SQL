@@ -5,14 +5,9 @@ import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
 import { chatHydrationKey } from "../chatHydrationKey";
 import { validateOlderMessagePage } from "../../chatWindow";
+import { getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } from "./sqlRuntimeMeta";
 
-export type SqlHydrationWindow = {
-  before: number | null;
-  nextBefore: number | null;
-  total: number;
-  hasOlder: boolean;
-  nextPosition: number;
-};
+export type { SqlHydrationWindow };
 type HydratableCharacter = character & { detailsLoaded?: boolean };
 type CollapsedCharacter = character & { _sqlCharacterBodyCollapsed?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
@@ -64,27 +59,17 @@ function normalizeLimit(limit?: number): number {
 }
 
 function setWindow(chat: Chat, window: SqlHydrationWindow): void {
-  Object.defineProperty(chat, "_sqlWindow", {
-    configurable: true,
-    enumerable: false,
-    writable: true,
-    value: window,
-  });
+  setSqlWindow(chat, window);
 }
 
 function getWindow(chat: Chat): SqlHydrationWindow | undefined {
-  return (chat as Chat & { _sqlWindow?: SqlHydrationWindow })._sqlWindow;
+  return getSqlWindow(chat);
 }
 
 function attachCanonicalPositions(messages: Chat["message"], positions: number[] | undefined): void {
   if (!positions || positions.length !== messages.length) return;
   for (const [index, message] of messages.entries()) {
-    Object.defineProperty(message, "_sqlPosition", {
-      configurable: true,
-      enumerable: false,
-      writable: true,
-      value: positions[index],
-    });
+    setSqlPosition(message, positions[index]);
   }
 }
 

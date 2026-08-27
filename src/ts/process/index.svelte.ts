@@ -15,6 +15,7 @@ import { exampleMessage } from "./exampleMessages";
 import { sayTTS } from "./tts";
 import { v4 } from "uuid";
 import { markSqlMessageDirty } from '../storage/sql/sqlPersistenceRuntime';
+import { getSqlWindow } from '../storage/sql/sqlRuntimeMeta';
 import { StreamRenderScheduler } from '../markdown/streamRenderScheduler';
 import { saverModeStore } from '../performance/saverMode';
 import { findStreamingChat, findStreamingMessageTarget } from './streamingTarget';
@@ -835,7 +836,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         alertError('Chat is still loading. Please wait a moment.')
         return false
     }
-    if ((selectedConversation as (Chat & { _sqlWindow?: { hasOlder?: boolean } }) | undefined)?._sqlWindow?.hasOlder) {
+    if (getSqlWindow(selectedConversation)?.hasOlder) {
         alertError('Load earlier messages before generating.')
         return false
     }

@@ -1,4 +1,5 @@
 import { describe, test, expect, vi } from 'vitest'
+import { getSqlWindow } from './sql/sqlRuntimeMeta'
 
 const activeStorage = vi.hoisted(() => ({ current: null as any }))
 const runtimeState = vi.hoisted(() => {
@@ -379,7 +380,7 @@ describe('hydrateRecentChatPage', () => {
 
         expect(loadChatMessageReversePage).toHaveBeenCalledWith('chat-1', undefined, 40)
         expect(hydrated?.message.map((message: any) => message.chatId)).toEqual(['m-39', 'm-40'])
-        expect((hydrated as any)._sqlWindow).toMatchObject({ hasOlder: true, total: 41 })
+        expect(getSqlWindow(hydrated)).toMatchObject({ hasOlder: true, total: 41 })
     })
 
     test('touches the hydrated ID after its slot reorders during the page await', async () => {

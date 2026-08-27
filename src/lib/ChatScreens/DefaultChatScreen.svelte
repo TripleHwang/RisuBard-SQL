@@ -30,6 +30,7 @@
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
     import { loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
+    import { getSqlWindow } from '../../ts/storage/sql/sqlRuntimeMeta';
     import { sleep } from "../../ts/util";
     import { language } from "../../lang";
     import { isExpTranslator, translate } from "../../ts/translator/translator";
@@ -115,7 +116,7 @@ import { isMobile } from 'src/ts/platform'
     let historyLoadFailed = $state(false)
     let oldestHistoryMessageMounted = $state(false)
     const createHistoryController = () => createContinuousHistoryController({
-        hasOlder: () => !!(currentChatSlot as any)?._sqlWindow?.hasOlder,
+        hasOlder: () => !!getSqlWindow(currentChatSlot)?.hasOlder,
         isScrollable: () => {
             const container = document.querySelector('.default-chat-screen') as HTMLElement | null
             return !!container && container.scrollHeight > container.clientHeight
@@ -274,8 +275,8 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function loadOlderHistory(): Promise<boolean> {
-        const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
-        if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return false
+        const chat = currentCharacter?.chats[currentCharacter.chatPage] as ChatData | undefined
+        if (!getSqlWindow(chat)?.hasOlder || !currentCharacter) return false
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
         const firstVisible = container
             ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-id]'))
@@ -1550,7 +1551,7 @@ import { isMobile } from 'src/ts/platform'
                 </button>
             {/if}
 
-            {#if (currentChatSlot as any)?._sqlWindow?.hasOlder !== true && oldestHistoryMessageMounted}
+            {#if getSqlWindow(currentChatSlot)?.hasOlder !== true && oldestHistoryMessageMounted}
                 <Chat
                     character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
                     name={DBState.db.characters[$selectedCharID].name}

@@ -13,6 +13,7 @@ import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
 import { runPluginUpdate } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
+import { getSqlWindow } from "../storage/sql/sqlRuntimeMeta";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -24,7 +25,7 @@ export function hasMetadataOnlyCharacters(db: { characters?: any[] }): boolean {
 }
 
 export function isPluginChatComplete(chat: any): boolean {
-    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
+    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && getSqlWindow(chat)?.hasOlder !== true
 }
 
 export function isPluginCharacterComplete(character: any): boolean {
