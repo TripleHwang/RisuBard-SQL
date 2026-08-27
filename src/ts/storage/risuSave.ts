@@ -92,6 +92,23 @@ enum RisuSaveType {
     PLUGIN_STORAGE = 11,
 }
 
+/**
+ * Block types whose failure must NOT be swallowed. Each of these owns a whole
+ * root domain of irreplaceable user content: if the block fails to parse, the
+ * old code logged and continued, leaving e.g. `db.plugins` undefined. A
+ * "successfully decoded" database that is silently missing a domain then feeds
+ * the SQL dirty-commit path, where a missing root key used to be translated
+ * into a cascading `DELETE FROM system_settings` -- turning a recoverable
+ * parse error into permanent data loss. Failing the decode is the safe answer:
+ * the on-disk save is still intact and can be retried or repaired.
+ */
+const CRITICAL_BLOCK_TYPES = new Map<RisuSaveType, string>([
+    [RisuSaveType.ROOT, 'root'],
+    [RisuSaveType.PLUGINS, 'plugins'],
+    [RisuSaveType.MODULES, 'modules'],
+    [RisuSaveType.PLUGIN_STORAGE, 'pluginCustomStorage'],
+])
+
 type EncodeBlockArg = {
     compression:boolean
     data:string
@@ -583,8 +600,14 @@ export class RisuSaveDecoder {
             } catch (error) {
                 console.error(`Error processing block ${this.blocks[key].name}:`, error);
 
-                if(this.blocks[key].type === RisuSaveType.ROOT){
-                    throw new Error('Failed to decode root block, cannot proceed with decoding RisuSave data');
+                const criticalDomain = CRITICAL_BLOCK_TYPES.get(this.blocks[key].type);
+                if(criticalDomain){
+                    throw new Error(
+                        `Failed to decode the "${criticalDomain}" block of this RisuSave` +
+                        ` (block "${this.blocks[key].name}"), cannot proceed with decoding RisuSave data:` +
+                        ` ${error instanceof Error ? error.message : String(error)}`,
+                        { cause: error },
+                    );
                 }
             }
         }

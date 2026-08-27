@@ -829,6 +829,17 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             if (toSave.modules) {
                 mergedDb.modules = safeStructuredClone(localDb.modules)
             }
+            // `plugins` and `pluginCustomStorage` are excluded from the blanket
+            // root copy above for the same reason as botPresets/modules -- the
+            // server copy wins unless this client actually changed them. They
+            // used to have no restore branch at all, so a rebase silently
+            // dropped every local plugin change before setDatabase(mergedDb).
+            if (toSave.plugins) {
+                mergedDb.plugins = safeStructuredClone(localDb.plugins)
+            }
+            if (toSave.pluginCustomStorage) {
+                mergedDb.pluginCustomStorage = safeStructuredClone(localDb.pluginCustomStorage)
+            }
 
             const trackedCharIds = new Set<string>(toSave.character.filter(Boolean))
             for (const trackedChat of toSave.chat) {

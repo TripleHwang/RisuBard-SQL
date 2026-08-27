@@ -14,6 +14,7 @@ import { pluginCodeTranspiler } from "./apiV3/transpiler";
 import { PluginUpdateRejection, runPluginUpdate, type PluginUpdateResult } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 import { getSqlWindow } from "../storage/sql/sqlRuntimeMeta";
+import { isStartupMutationReady } from "../startupReadiness";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -503,6 +504,15 @@ export async function importPlugin(code:string|null = null, argu:{
             enabled: true
         }
 
+        // `plugins` is a DEFERRED bootstrap key (see
+        // server/node/deferredBootstrapKeys.cjs), so before hydration lands
+        // `db.plugins` is legitimately undefined and materialising it as `[]`
+        // here would publish an empty list the user never asked for. Refuse
+        // the import instead of writing over the not-yet-loaded value.
+        if (db.plugins === undefined && !isStartupMutationReady()) {
+            rejectImport('save', 'plugins-not-hydrated', 'The installed plugin list has not finished loading yet. Wait for startup to complete and try again.')
+            return
+        }
         db.plugins ??= []
 
         const oldPluginIndex = db.plugins.findIndex((p: RisuPlugin) => p.name === pluginData.name);
@@ -525,6 +535,15 @@ export async function importPlugin(code:string|null = null, argu:{
         }
         else if(!isUpdate || argu.isHotReload){
             db.plugins.push(pluginData)
+        }
+        else {
+            // isUpdate && oldPluginIndex === -1 && !isHotReload: neither branch
+            // above runs, so nothing is installed and the old code fell through
+            // to a "success" that only surfaced later as
+            // verify/not-installed-after-import. The row we were told to update
+            // is not in the list -- say so here instead.
+            rejectImport('policy', 'update-target-missing', `Plugin "${pluginData.name}" is not installed, so it cannot be updated.`)
+            return
         }
 
         if(argu.isHotReload && !hotReloading.includes(pluginData.name)){
