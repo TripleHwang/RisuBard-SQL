@@ -123,8 +123,8 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             continue
         }
     }
-    await loadDeferredModules()
     await resumeDeferredCharacterSelection()
+    await loadDeferredModules()
     await dispatchStartupURLImport(characterURLImport)
 }
 

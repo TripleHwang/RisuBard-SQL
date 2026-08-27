@@ -2,19 +2,44 @@ import { describe, expect, test, vi } from 'vitest'
 import { createStartupCharacterSelectionQueue } from './startupCharacterSelection'
 
 describe('startup character selection queue', () => {
-    test('keeps summary selection responsive while queueing only the latest pending character', () => {
+    test('waits for the latest targeted full-record hydration before selecting and mutating', async () => {
         const queue = createStartupCharacterSelectionQueue()
         let selectedCharacterId: string | undefined
         const safeSelect = vi.fn((index: number) => {
             selectedCharacterId = index === 1 ? 'first' : 'latest'
         })
         const fullSelect = vi.fn()
+        let resolveFirst: (value: boolean) => void = () => {}
+        let resolveLatest: (value: boolean) => void = () => {}
+        const firstHydration = new Promise<boolean>((resolve) => { resolveFirst = resolve })
+        const latestHydration = new Promise<boolean>((resolve) => { resolveLatest = resolve })
 
-        expect(queue.select({ ready: false, characterId: 'first', index: 1, safeSelect, fullSelect })).toBe(false)
-        expect(queue.select({ ready: false, characterId: 'latest', index: 2, safeSelect, fullSelect })).toBe(false)
-        expect(safeSelect).toHaveBeenNthCalledWith(1, 1)
-        expect(safeSelect).toHaveBeenNthCalledWith(2, 2)
+        const first = queue.select({
+            ready: false,
+            characterId: 'first',
+            index: 1,
+            hydrate: () => firstHydration,
+            findIndex: (id) => id === 'first' ? 4 : -1,
+            safeSelect,
+            fullSelect,
+        })
+        expect(safeSelect).not.toHaveBeenCalled()
+        expect(fullSelect).not.toHaveBeenCalled()
+
+        const latest = queue.select({
+            ready: false,
+            characterId: 'latest',
+            index: 2,
+            hydrate: () => latestHydration,
+            findIndex: (id) => id === 'latest' ? 7 : -1,
+            safeSelect,
+            fullSelect,
+        })
+        resolveLatest(true)
+        expect(await latest).toBe(false)
         expect(selectedCharacterId).toBe('latest')
+        expect(safeSelect).toHaveBeenCalledOnce()
+        expect(safeSelect).toHaveBeenCalledWith(7)
         expect(fullSelect).not.toHaveBeenCalled()
 
         // A declined or failed deferred hydration keeps the UI selection but
@@ -26,16 +51,27 @@ describe('startup character selection queue', () => {
         expect(queue.resume({ ready: true, findIndex: (id) => id === 'latest' ? 7 : -1, fullSelect })).toBe(true)
         expect(fullSelect).toHaveBeenCalledWith(7)
         expect(queue.resume({ ready: true, findIndex: vi.fn(), fullSelect })).toBe(false)
+
+        resolveFirst(true)
+        expect(await first).toBe(false)
+        expect(safeSelect).toHaveBeenCalledOnce()
     })
 
-    test('runs the ready path immediately without queueing a duplicate activation', () => {
+    test('runs the ready path immediately without waiting for targeted hydration', async () => {
         const queue = createStartupCharacterSelectionQueue()
         const safeSelect = vi.fn()
         const fullSelect = vi.fn()
 
-        expect(queue.select({ ready: false, characterId: 'old-pending', index: 1, safeSelect, fullSelect })).toBe(false)
-        expect(queue.select({ ready: true, characterId: 'ready', index: 3, safeSelect, fullSelect })).toBe(true)
-        expect(safeSelect).toHaveBeenCalledOnce()
+        expect(await queue.select({
+            ready: true,
+            characterId: 'ready',
+            index: 3,
+            hydrate: vi.fn(),
+            findIndex: vi.fn(),
+            safeSelect,
+            fullSelect,
+        })).toBe(true)
+        expect(safeSelect).not.toHaveBeenCalled()
         expect(fullSelect).toHaveBeenCalledWith(3)
         expect(queue.resume({ ready: true, findIndex: vi.fn(), fullSelect })).toBe(false)
     })

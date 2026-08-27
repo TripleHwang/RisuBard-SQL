@@ -833,13 +833,21 @@ let deferredCharacterSelectionArg: {
 } | undefined
 
 function selectCharacterSafely(index: number, reseter: () => any): void {
-    // Selecting a summary is safe on the metadata shell. Invalidate an older
-    // activation, but do not touch character/chat data until it is complete.
-    characterSelectionIntent++
+    // This runs only after targeted record hydration. It deliberately leaves
+    // character/chat mutations for the post-deferred activation.
     loadingOverlayStore.set({ active: false, text: '', onCancel: null })
     reseter()
     chatDeselected.set(false)
     selectedCharID.set(index)
+}
+
+async function hydrateCharacterForSafeSelection(index: number): Promise<boolean> {
+    const db = getDatabase()
+    const char = db.characters[index]
+    if (!char) return false
+    if ((char as character & { detailsLoaded?: boolean }).detailsLoaded === true) return true
+    const hydrated = await ensureCharacterHydrated(db, index)
+    return (hydrated as (character & { detailsLoaded?: boolean }) | null)?.detailsLoaded === true
 }
 
 export async function changeChar(index: number, arg:{
@@ -852,21 +860,24 @@ export async function changeChar(index: number, arg:{
     const db = getDatabase()
     const char = db.characters[index]
     if (!char) return
+    const intent = ++characterSelectionIntent
     const startupReady = isStartupMutationReady()
     if (startupReady) deferredCharacterSelectionArg = undefined
+    else deferredCharacterSelectionArg = arg
     let activationIndex = -1
-    const activateNow = startupCharacterSelectionQueue.select({
+    const activateNow = await startupCharacterSelectionQueue.select({
         ready: startupReady,
         characterId: char.chaId,
         index,
-        safeSelect: (safeIndex) => selectCharacterSafely(safeIndex, reseter),
+        hydrate: hydrateCharacterForSafeSelection,
+        findIndex: (characterId) => getDatabase().characters.findIndex((value) => value?.chaId === characterId),
+        safeSelect: (safeIndex) => {
+            if (intent === characterSelectionIntent) selectCharacterSafely(safeIndex, reseter)
+        },
         fullSelect: (fullIndex) => { activationIndex = fullIndex },
     })
-    if (!activateNow) {
-        deferredCharacterSelectionArg = arg
-        return
-    }
-    await activateCharacter(activationIndex, arg)
+    if (!activateNow) return
+    await activateCharacter(activationIndex, arg, intent)
     } finally {
         runtimeMetrics.end(metric)
     }
@@ -885,7 +896,7 @@ export async function resumeDeferredCharacterSelection(): Promise<boolean> {
         if (!activateNow) return false
         const arg = deferredCharacterSelectionArg ?? {}
         deferredCharacterSelectionArg = undefined
-        await activateCharacter(activationIndex, arg)
+        await activateCharacter(activationIndex, arg, ++characterSelectionIntent)
         return true
     } finally {
         runtimeMetrics.end(metric)
@@ -895,7 +906,7 @@ export async function resumeDeferredCharacterSelection(): Promise<boolean> {
 async function activateCharacter(index: number, arg: {
     reseter?:()=>any,
     clearNewBadge?:boolean,
-}) {
+}, intent: number) {
     const reseter = arg.reseter ?? (() => {})
     if(get(doingChat)){
       return
@@ -903,7 +914,6 @@ async function activateCharacter(index: number, arg: {
     const db = getDatabase()
     const char = db.characters[index]
     if (!char) return
-    const intent = ++characterSelectionIntent
     loadingOverlayStore.set({ active: false, text: '', onCancel: null })
     if ((char as character & { detailsLoaded?: boolean }).detailsLoaded === false) {
         loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
