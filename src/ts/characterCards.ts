@@ -1,6 +1,6 @@
 import { writable, type Writable } from "svelte/store"
 import { alertCardExport, alertConfirm, alertError, alertInput, alertStore, alertTOS, alertWait, notifySuccess, notifyError } from "./alert"
-import { defaultSdDataFunc, type character, setDatabase, type customscript, type loreSettings, type loreBook, type triggerscript, importPreset, getDatabase, setDatabaseLite, appVer, newChatModelDefaults } from "./storage/database.svelte"
+import { defaultSdDataFunc, type character, type Chat, setDatabase, type customscript, type loreSettings, type loreBook, type triggerscript, importPreset, getDatabase, setDatabaseLite, appVer, newChatModelDefaults } from "./storage/database.svelte"
 import { resolveLorebookMatchingMode } from "./process/lorebookMatching"
 import { isLorebookEntryEnabled } from "./process/lorebookActivation"
 import { checkNullish, decryptBuffer, isKnownUri, selectFileByDom, sleep } from "./util"
@@ -643,7 +643,7 @@ function convertOffSpecCards(charaData:OldTavernChar|CharacterCardV2Risu, imgp:s
         loreExt = a.loreExt
     }
 
-    return {
+    const character = {
         name: data.name ?? 'unknown name',
         firstMessage: data.first_mes ?? 'unknown first message',
         desc:  data.description ?? '',
@@ -683,7 +683,10 @@ function convertOffSpecCards(charaData:OldTavernChar|CharacterCardV2Risu, imgp:s
         loreSettings: loresettings,
         chatFolders: []
         
-    }
+    } as character & { detailsLoaded?: boolean }
+    character.detailsLoaded = true
+    ;(character.chats[0] as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
+    return character
 }
 
 export async function exportChar(charaID:number):Promise<string> {
@@ -1008,6 +1011,8 @@ async function importCharacterCardSpec<T extends boolean = false>(card:Character
         prebuiltAssetStyle: data?.extensions?.risuai?.prebuiltAssetStyle ?? '',
         customModuleToggle: data?.extensions?.risuai?.toggles ?? '',
     }
+    ;(char as typeof char & { detailsLoaded?: boolean }).detailsLoaded = true
+    ;(char.chats[0] as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
 
     if(card.spec === 'chara_card_v3'){
         char.group_only_greetings = card.data.group_only_greetings ?? []

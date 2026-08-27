@@ -26,6 +26,7 @@ import { createStartupCharacterSelectionQueue } from './startupCharacterSelectio
 
 /** Assign identities before a chat becomes visible, then mark its parent before rows. */
 function markImportedChat(characterId: string, chat: Chat): void {
+    ;(chat as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
     chat.id ||= uuidv4()
     for (const message of chat.message ?? []) message.chatId ||= uuidv4()
     markSqlChatDirty(characterId, chat.id, true)
@@ -586,6 +587,7 @@ export function characterFormatUpdate(indexOrCharacter:number|character, arg:{
             localLore: [],
             ...newChatModelDefaults()
         }]
+        ;(cha.chats[0] as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
     }
     if(!cha.chats[cha.chatPage]){
         cha.chatPage = 0
@@ -697,7 +699,7 @@ export function updateLorebooks(book:loreBook[]){
 
 // SYNC: server/node/server.cjs promoteFailedColdStorageStub() mirrors these defaults.
 export function createBlankChar():character{
-    return {
+    const character = {
         name: '',
         firstMessage: '',
         desc: '',
@@ -748,7 +750,10 @@ export function createBlankChar():character{
             effect: []
         }],
         additionalText: ''
-    }
+    } as character & { detailsLoaded?: boolean }
+    character.detailsLoaded = true
+    ;(character.chats[0] as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
+    return character
 }
 
 

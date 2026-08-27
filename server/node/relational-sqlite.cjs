@@ -246,6 +246,7 @@ function createRelationalSqlite(options) {
     function summaryChat(row, detailsLoaded) {
         return {
             id: row.id,
+            characterId: row.character_id,
             name: row.name,
             note: row.note,
             folderId: row.folder_id ?? undefined,
@@ -299,11 +300,21 @@ function createRelationalSqlite(options) {
 
     function loadCharacter(characterId) {
         return inReadTransaction(() => {
-            if (!database.prepare('SELECT 1 FROM characters WHERE id = ?').get(characterId)) return null;
+            const row = database.prepare('SELECT * FROM characters WHERE id = ?').get(characterId);
+            if (!row) return null;
             const character = readNodeValue('character_extension_nodes', 'character_id = ?', [characterId]) || {};
-            character.chaId = characterId;
-            character.detailsLoaded = true;
-            character.chats = loadChatSummaryRows(characterId).map((row) => summaryChat(row, true));
+            Object.assign(character, {
+                chaId: characterId,
+                type: row.kind,
+                name: row.name,
+                image: row.image ?? '',
+                trashTime: row.trash_time ?? undefined,
+                creationDate: row.creation_time ?? undefined,
+                modificationDate: row.modification_time ?? undefined,
+                lastInteraction: row.last_interaction_time ?? undefined,
+                detailsLoaded: true,
+                chats: loadChatSummaryRows(characterId).map((chat) => summaryChat(chat, false)),
+            });
             return { revision: revision(), character };
         });
     }

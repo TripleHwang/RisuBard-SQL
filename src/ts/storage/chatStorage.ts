@@ -4,6 +4,7 @@ import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
+import { chatHydrationKey } from './chatHydrationKey'
 import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRuntime"
 import { isChatGenerating } from "../process/generationState"
 import { selectedCharID } from "../stores.svelte"
@@ -392,7 +393,7 @@ export async function saveChatToServer(chaId: string, chatIndex: number, chatId:
  * Check if a specific chat is currently being hydrated (for dirty tracking suppression).
  */
 export function isHydrating(chaId: string, chatId: string): boolean {
-    const key = chatKey(chaId, chatId)
+    const key = chatHydrationKey(chaId, chatId)
     return isHydrationActive(key)
 }
 
@@ -428,7 +429,7 @@ export async function ensureChatHydrated(
 
     const chatId = slot.id
     if (!chatId) return null
-    const key = chatKey(chaId, chatId)
+    const key = chatHydrationKey(chaId, chatId)
 
     // Deduplicate concurrent hydration for the same chat
     const existing = hydrationPromises.get(key)

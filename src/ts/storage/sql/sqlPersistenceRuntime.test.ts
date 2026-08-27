@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock(import('../../stores.svelte'), () => ({
+    DBState: { db: { characters: [], enabledModules: [], modules: [] } },
+    selIdState: { selId: 0 },
+} as any))
+
 import type { ISqlStorage } from './ISqlStorage'
 import { beginHydration, endHydration } from '../hydrationState'
 import { SqlRevisionConflictError } from './sqlCommit'
+import { buildSqlDirtyCommit } from './sqlDirtyCommit'
+import { applySqliteCommit } from './sqliteCommit'
+import { createBlankChar } from '../../characters'
 import {
     activateSqlPersistenceRuntime,
     auditSqlCompatibilityDatabase,
@@ -89,10 +97,10 @@ describe('SQL persistence runtime', () => {
     it('does not mark a message while its character/chat hydration is active', async () => {
         const storage = fakeStorageAtRevision(3)
         activateSqlPersistenceRuntime(storage, fixtureDatabaseWithMessages(1))
-        beginHydration('character-a/chat-a')
+        beginHydration(JSON.stringify(['character-a', 'chat-a']))
         markSqlMessageDirty('chat-a', 'm-0', true)
         await Promise.resolve()
-        endHydration('character-a/chat-a')
+        endHydration(JSON.stringify(['character-a', 'chat-a']))
         expect(storage.commit).not.toHaveBeenCalled()
     })
 
@@ -179,5 +187,55 @@ describe('SQL persistence runtime', () => {
         database.characters[0].chats[0].messagesFullyLoaded = true
         auditSqlCompatibilityDatabase(database); await flushSqlDirtyChanges()
         expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ messageManifests: [{ chatId: 'chat-a', ids: ['m-0', 'm-middle', 'm-1'] }] }))
+    })
+
+    it('preserves unloaded character and chat bodies while allowing summary metadata updates', async () => {
+        const database = {
+            characters: [{
+                chaId: 'character-a', name: 'Renamed', image: 'new.png', detailsLoaded: false,
+                chats: [{ id: 'chat-a', name: 'Moved chat', note: 'summary note', detailsLoaded: false, message: [] }],
+            }], botPresets: [], pluginCustomStorage: {},
+        } as any
+        const commit = buildSqlDirtyCommit(database, {
+            rootKeys: [], characterIds: ['character-a'],
+            chats: [{ characterId: 'character-a', chatId: 'chat-a', manifest: false }],
+            messages: [], messageManifestChatIds: [], messageDeletes: [], pluginStorageKeys: [], presetIds: [],
+        }, 3)
+        const statements: string[] = []
+        await applySqliteCommit(commit, (sql) => { statements.push(sql) })
+
+        expect(commit.characters[0]).toMatchObject({ replaceBody: false, position: 0 })
+        expect(commit.chats[0]).toMatchObject({ replaceBody: false, position: 0 })
+        expect(statements.some((sql) => /character_extension_nodes|character_tags|chat_extension_nodes/.test(sql))).toBe(false)
+
+        database.characters[0].detailsLoaded = true
+        database.characters[0].chats[0].detailsLoaded = true
+        const loadedCommit = buildSqlDirtyCommit(database, {
+            rootKeys: [], characterIds: ['character-a'],
+            chats: [{ characterId: 'character-a', chatId: 'chat-a', manifest: false }],
+            messages: [], messageManifestChatIds: [], messageDeletes: [], pluginStorageKeys: [], presetIds: [],
+        }, 4)
+        expect(loadedCommit.characters[0]).toMatchObject({ replaceBody: true })
+        expect(loadedCommit.chats[0]).toMatchObject({ replaceBody: true })
+    })
+
+    it('persists bodies from a concrete newly created character and chat', async () => {
+        const character = createBlankChar() as any
+        character.chaId = 'new-character'
+        character.desc = 'full character body'
+        character.tags = ['imported-tag']
+        character.chats[0].id = 'new-chat'
+        character.chats[0].note = 'full chat body'
+        const commit = buildSqlDirtyCommit({ characters: [character], botPresets: [], pluginCustomStorage: {} } as any, {
+            rootKeys: [], characterIds: ['new-character'],
+            chats: [{ characterId: 'new-character', chatId: 'new-chat', manifest: false }],
+            messages: [], messageManifestChatIds: [], messageDeletes: [], pluginStorageKeys: [], presetIds: [],
+        }, 3)
+        const statements: string[] = []
+        await applySqliteCommit(commit, (sql) => { statements.push(sql) })
+
+        expect(commit.characters[0]).toMatchObject({ replaceBody: true })
+        expect(commit.chats[0]).toMatchObject({ replaceBody: true })
+        expect(statements.some((sql) => /character_extension_nodes|character_tags|chat_extension_nodes/.test(sql))).toBe(true)
     })
 })

@@ -307,9 +307,17 @@ function importChatsToCharacter(
             }
             targetChar.chatFolders = [...importedFolders, ...existingFolders]
         }
-        targetChar.chats.unshift(...importedChats.map(chat => normalizeChat(chat)))
+        targetChar.chats.unshift(...importedChats.map(chat => {
+            const normalized = normalizeChat(chat)
+            ;(normalized as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
+            return normalized
+        }))
     } else {
-        targetChar.chats = importedChats.map(chat => normalizeChat(chat))
+        targetChar.chats = importedChats.map(chat => {
+            const normalized = normalizeChat(chat)
+            ;(normalized as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
+            return normalized
+        })
         if (chatsJson.folders && Array.isArray(chatsJson.folders)) {
             targetChar.chatFolders = chatsJson.folders
         }

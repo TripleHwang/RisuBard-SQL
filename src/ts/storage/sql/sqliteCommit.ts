@@ -338,24 +338,26 @@ export async function applySqliteCommit(
         data.lastInteraction ?? null,
       ],
     );
-    await replaceNodes(
-      execute,
-      "character_extension_nodes",
-      ["character_id"],
-      [entry.id],
-      data,
-    );
-    await execute("DELETE FROM character_tags WHERE character_id = ?", [
-      entry.id,
-    ]);
-    if (Array.isArray(data.tags))
-      for (const [position, tag] of data.tags.entries()) {
-        if (typeof tag === "string")
-          await execute(
-            "INSERT INTO character_tags (character_id, position, tag) VALUES (?, ?, ?)",
-            [entry.id, position, tag],
-          );
-      }
+    if (entry.replaceBody !== false) {
+      await replaceNodes(
+        execute,
+        "character_extension_nodes",
+        ["character_id"],
+        [entry.id],
+        data,
+      );
+      await execute("DELETE FROM character_tags WHERE character_id = ?", [
+        entry.id,
+      ]);
+      if (Array.isArray(data.tags))
+        for (const [position, tag] of data.tags.entries()) {
+          if (typeof tag === "string")
+            await execute(
+              "INSERT INTO character_tags (character_id, position, tag) VALUES (?, ?, ?)",
+              [entry.id, position, tag],
+            );
+        }
+    }
   }
   if (commit.characterDeletes?.length) {
     await execute(
@@ -391,13 +393,14 @@ export async function applySqliteCommit(
         data.lastDate ?? null,
       ],
     );
-    await replaceNodes(
-      execute,
-      "chat_extension_nodes",
-      ["chat_id"],
-      [entry.id],
-      data,
-    );
+    if (entry.replaceBody !== false)
+      await replaceNodes(
+        execute,
+        "chat_extension_nodes",
+        ["chat_id"],
+        [entry.id],
+        data,
+      );
   }
   for (const manifest of commit.chatManifests) {
     if (!manifest.ids.length)

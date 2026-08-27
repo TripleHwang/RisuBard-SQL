@@ -3815,6 +3815,21 @@ app.get('/api/sql/characters/:characterId', sqlReadLimiter, async (req, res, nex
     }
 });
 
+app.get('/api/sql/chats/:chatId', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const id = String(req.params.chatId || '');
+    if (!id || id.length > 256) {
+        return res.status(400).json({ error: 'Invalid chat id' });
+    }
+    try {
+        const result = relationalSql.loadChat(id);
+        if (!result) return res.status(404).json({ error: 'Chat not found' });
+        res.set('Cache-Control', 'no-store').json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
 app.get('/api/sql/chats/:chatId/messages', sqlReadLimiter, async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     const id = String(req.params.chatId || '');

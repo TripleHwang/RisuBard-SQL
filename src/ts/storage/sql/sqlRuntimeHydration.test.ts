@@ -8,6 +8,7 @@ vi.mock("./sqlBootstrap", () => ({
 
 import {
   ensureCharacterHydrated,
+  ensureChatHydrated,
   ensureChatMessageWindow,
   loadOlderChatMessages,
 } from "./sqlRuntimeHydration";
@@ -171,5 +172,95 @@ describe("Node SQL runtime hydration", () => {
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(reverse).toHaveBeenCalledOnce();
+  });
+
+  it("hydrates a chat body by stable ID before loading its bounded recent message page", async () => {
+    const loadChatHydration = vi.fn(async () => ({ revision: 1, chat: { id: "chat-1", characterId: "character-1", name: "Stored", custom: { preserved: true }, message: [], detailsLoaded: true } }));
+    const reverse = vi.fn(async () => ({ revision: 1, chatId: "chat-1", messages: [{ chatId: "m1" }], positions: [0], nextPosition: 1, before: null, nextBefore: null, total: 1, hasMore: false }));
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration, loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", name: "Summary", detailsLoaded: false, message: [] }] } as any;
+
+    await ensureChatHydrated(character, 0, 40);
+
+    expect(loadChatHydration).toHaveBeenCalledWith("chat-1");
+    expect(reverse).toHaveBeenCalledWith("chat-1", undefined, 40);
+    expect(character.chats[0]).toMatchObject({ id: "chat-1", custom: { preserved: true }, detailsLoaded: true, message: [{ chatId: "m1" }] });
+  });
+
+  it("keeps a summary metadata edit made while chat body hydration is in flight", async () => {
+    const pending = deferred<any>();
+    const loadChatHydration = vi.fn(() => pending.promise);
+    const reverse = vi.fn(async () => ({ revision: 1, chatId: "chat-1", messages: [], positions: [], nextPosition: 0, before: null, nextBefore: null, total: 0, hasMore: false }));
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration, loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", name: "Summary", note: "old", folderId: "folder-1", detailsLoaded: false, message: [] }] } as any;
+
+    const hydration = ensureChatHydrated(character, 0, 40);
+    character.chats[0].name = "Locally renamed";
+    character.chats[0].note = "local note";
+    character.chats[0].folderId = "folder-2";
+    pending.resolve({ revision: 1, chat: { id: "chat-1", characterId: "character-1", name: "Stored", note: "stored", folderId: "folder-1", custom: { preserved: true }, message: [], detailsLoaded: true } });
+
+    await hydration;
+
+    expect(character.chats[0]).toMatchObject({ name: "Locally renamed", note: "local note", folderId: "folder-2", custom: { preserved: true } });
+  });
+
+  it("uses newer server summary metadata unless that field changed during body loading", async () => {
+    const pending = deferred<any>();
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration: vi.fn(() => pending.promise), loadChatMessageReversePage: vi.fn(async () => ({ revision: 1, chatId: "chat", messages: [], positions: [], nextPosition: 0, before: null, nextBefore: null, total: 0, hasMore: false })) };
+    const character = { chaId: "char", chats: [{ id: "chat", name: "stale", note: "unchanged", detailsLoaded: false, message: [] }] } as any;
+    const hydration = ensureChatHydrated(character, 0);
+    character.chats[0].name = "local";
+    pending.resolve({ revision: 1, chat: { id: "chat", characterId: "char", name: "server", note: "server-note", message: [] } });
+    await hydration;
+    expect(character.chats[0]).toMatchObject({ name: "local", note: "server-note" });
+  });
+
+  it("rejects a body owned by a different character", async () => {
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration: vi.fn(async () => ({ revision: 1, chat: { id: "chat", characterId: "other", message: [] } })), loadChatMessageReversePage: vi.fn() };
+    await expect(ensureChatHydrated({ chaId: "char", chats: [{ id: "chat", detailsLoaded: false, message: [] }] } as any, 0)).rejects.toThrow(/owner mismatch/i);
+  });
+
+  it("does not deduplicate distinct slash-containing character and chat IDs", async () => {
+    const pending = deferred<any>(); const loadChatHydration = vi.fn(() => pending.promise);
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration, loadChatMessageReversePage: vi.fn(async () => ({ revision: 1, chatId: "b/c", messages: [], positions: [], nextPosition: 0, before: null, nextBefore: null, total: 0, hasMore: false })) };
+    const first = ensureChatHydrated({ chaId: "a/b", chats: [{ id: "c", detailsLoaded: false, message: [] }] } as any, 0);
+    const second = ensureChatHydrated({ chaId: "a", chats: [{ id: "b/c", detailsLoaded: false, message: [] }] } as any, 0);
+    expect(loadChatHydration).toHaveBeenCalledTimes(2);
+    pending.resolve({ revision: 1, chat: { id: "c", characterId: "a/b", message: [] } });
+    await first; await second.catch(() => null);
+  });
+
+  it("retries chat hydration when the message page revision changes between reads", async () => {
+    const loadChatHydration = vi.fn()
+      .mockResolvedValueOnce({ revision: 1, chat: { id: "chat", characterId: "char", name: "old body", message: [] } })
+      .mockResolvedValueOnce({ revision: 2, chat: { id: "chat", characterId: "char", name: "new body", message: [] } });
+    const loadChatMessageReversePage = vi.fn()
+      .mockResolvedValueOnce({ revision: 2, chatId: "chat", messages: [{ chatId: "mixed" }], positions: [0], nextPosition: 1, before: 1, nextBefore: null, total: 1, hasMore: false })
+      .mockResolvedValueOnce({ revision: 2, chatId: "chat", messages: [{ chatId: "consistent" }], positions: [0], nextPosition: 1, before: 1, nextBefore: null, total: 1, hasMore: false });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration, loadChatMessageReversePage };
+    const character = { chaId: "char", chats: [{ id: "chat", detailsLoaded: false, message: [] }] } as any;
+
+    await expect(ensureChatHydrated(character, 0)).resolves.toMatchObject({ name: "new body", message: [{ chatId: "consistent" }] });
+    expect(loadChatHydration).toHaveBeenCalledTimes(2);
+    expect(loadChatMessageReversePage).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves an in-flight metadata edit across a revision retry", async () => {
+    const firstBody = deferred<any>();
+    const loadChatHydration = vi.fn()
+      .mockImplementationOnce(() => firstBody.promise)
+      .mockResolvedValueOnce({ revision: 2, chat: { id: "chat", characterId: "char", name: "server replacement", message: [] } });
+    const loadChatMessageReversePage = vi.fn()
+      .mockResolvedValueOnce({ revision: 2, chatId: "chat", messages: [], positions: [], nextPosition: 0, before: 0, nextBefore: null, total: 0, hasMore: false })
+      .mockResolvedValueOnce({ revision: 2, chatId: "chat", messages: [], positions: [], nextPosition: 0, before: 0, nextBefore: null, total: 0, hasMore: false });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration, loadChatMessageReversePage };
+    const character = { chaId: "char", chats: [{ id: "chat", name: "stale", detailsLoaded: false, message: [] }] } as any;
+
+    const hydration = ensureChatHydrated(character, 0);
+    character.chats[0].name = "local edit";
+    firstBody.resolve({ revision: 1, chat: { id: "chat", characterId: "char", name: "local edit", message: [] } });
+
+    await expect(hydration).resolves.toMatchObject({ name: "local edit" });
   });
 });

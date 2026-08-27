@@ -112,7 +112,12 @@ export function buildSqlDirtyCommit(
       continue;
     }
     const [currentCharacter, position] = found;
-    commit.characters.push({ id: characterId, position, data: sqlCharacterData(currentCharacter) });
+    commit.characters.push({
+      id: characterId,
+      position,
+      data: sqlCharacterData(currentCharacter),
+      replaceBody: (currentCharacter as character & { detailsLoaded?: boolean }).detailsLoaded === true,
+    });
   }
 
   for (const dirtyChat of dirty.chats) {
@@ -133,6 +138,7 @@ export function buildSqlDirtyCommit(
       characterId: dirtyChat.characterId,
       position,
       data: sqlChatData(chat),
+      replaceBody: (chat as Chat & { detailsLoaded?: boolean }).detailsLoaded === true,
     });
     if (dirtyChat.manifest) {
       commit.chatManifests.push({

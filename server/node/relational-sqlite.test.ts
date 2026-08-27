@@ -130,10 +130,34 @@ describe('server relational SQLite', () => {
       },
     })
     expect(storage.loadChat('chat-1')).toMatchObject({
-      chat: { id: 'chat-1', note: 'summary', message: [], messagesLoaded: false },
+      chat: { id: 'chat-1', characterId: 'character-1', note: 'summary', message: [], messagesLoaded: false },
     })
     expect(storage.loadCharacter('missing')).toBeNull()
     expect(storage.loadChat('missing')).toBeNull()
+  })
+
+  it('preserves extension nodes and tags through summary-only character and chat updates', () => {
+    const storage = seededReaderStorage()
+    const before = storage.dump().tables
+    const characterNodes = JSON.stringify(before.character_extension_nodes)
+    const characterTags = JSON.stringify(before.character_tags)
+    const chatNodes = JSON.stringify(before.chat_extension_nodes)
+
+    storage.commit({
+      baseRevision: 1,
+      action: 'summary-only-update',
+      statements: [
+        { sql: 'UPDATE characters SET position = ?, name = ?, image = ? WHERE id = ?', bind: [4, 'Alice Renamed', 'new.png', 'character-1'] },
+        { sql: 'UPDATE chats SET position = ?, name = ?, note = ? WHERE id = ?', bind: [6, 'Chat Renamed', 'new note', 'chat-1'] },
+      ],
+    })
+
+    const after = storage.dump().tables
+    expect(JSON.stringify(after.character_extension_nodes)).toBe(characterNodes)
+    expect(JSON.stringify(after.character_tags)).toBe(characterTags)
+    expect(JSON.stringify(after.chat_extension_nodes)).toBe(chatNodes)
+    expect(storage.loadCharacter('character-1')?.character).toMatchObject({ name: 'Alice Renamed', greeting: 'Hello', chats: [{ id: 'chat-1', detailsLoaded: false }] })
+    expect(storage.loadChat('chat-1')?.chat).toMatchObject({ name: 'Chat Renamed', note: 'new note', custom: 'chat detail' })
   })
 
   it('maintains chat message counters without making bootstrap aggregate messages', () => {
