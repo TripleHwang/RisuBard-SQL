@@ -42,7 +42,7 @@ import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
-import { scheduleAfterTwoAnimationFrames } from './startupReadiness'
+import { dispatchStartupURLImport, scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
 let dataLoading = false
@@ -123,6 +123,7 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
         }
     }
     await loadDeferredModules()
+    await dispatchStartupURLImport(characterURLImport)
 }
 
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
@@ -319,8 +320,8 @@ export async function loadData() {
             scheduleAfterFirstPaint(() => cleanChunks(), 5_000)
             scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))
             scheduleAfterFirstPaint(() => initModelJobRecovery())
-            scheduleAfterFirstPaint(() => {
-                if (getDatabase().didFirstSetup) characterURLImport()
+            if (!deferredSqlStorage) scheduleAfterFirstPaint(() => {
+                if (getDatabase().didFirstSetup) void dispatchStartupURLImport(characterURLImport)
             })
             if (import.meta.env.VITE_RISU_TOS === 'TRUE') {
                 alertTOS().then((a) => {

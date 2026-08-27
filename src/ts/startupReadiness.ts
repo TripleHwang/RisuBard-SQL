@@ -11,6 +11,20 @@ export function runStartupMutation<T>(mutation: () => T): T | undefined {
     return mutation()
 }
 
+/** Dispatches URL-driven imports only when the complete database is writable. */
+export async function dispatchStartupURLImport<T>(
+    importer: () => T | Promise<T>,
+): Promise<boolean> {
+    let invoked = false
+    const result = runStartupMutation(() => {
+        invoked = true
+        return importer()
+    })
+    if (!invoked) return false
+    await result
+    return true
+}
+
 export function scheduleAfterTwoAnimationFrames(
     task: () => void | Promise<void>,
     requestFrame: (callback: FrameRequestCallback) => number = typeof globalThis.requestAnimationFrame === 'function'

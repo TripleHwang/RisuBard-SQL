@@ -22,7 +22,7 @@ import { pinCharacterVaultQuickAccess } from './characterVault'
 import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } from './firstMessageStudio'
 import { isNodeServer } from './platform'
 import { withSaverScope } from './performance/saverMode'
-import { isStartupMutationReady } from './startupReadiness'
+import { isStartupMutationReady, runStartupMutation } from './startupReadiness'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -426,7 +426,7 @@ export const getRealmInfo = async (realmPath:string) => {
 
 export const showRealmInfoStore:Writable<null|hubType> = writable(null)
 
-export async function characterURLImport() {
+async function characterURLImportWhenReady() {
     const realmPath = (new URLSearchParams(location.search)).get('realm')
     try {
         if(realmPath){
@@ -616,6 +616,10 @@ export async function characterURLImport() {
             }
         }
     }
+}
+
+export async function characterURLImport() {
+    return runStartupMutation(() => characterURLImportWhenReady())
 }
 
 
