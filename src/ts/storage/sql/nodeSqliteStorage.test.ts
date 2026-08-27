@@ -423,4 +423,65 @@ describe("Node server SQLite client", () => {
       "/api/sql/cold-storage?limit=100&after=cold-a",
     ]);
   });
+
+  // The backup census is what lets the UI say "3 of 12 checked" instead of
+  // claiming an exhaustive search. It has to survive the HTTP hop intact.
+  describe("character repair result transport", () => {
+    const repairWith = (payload: unknown) => {
+      const client = new NodeSqliteStorage(async () => Response.json(payload));
+      return client.repairCollapsedCharacter("char-1");
+    };
+
+    it("carries the reason and the full census through to the caller", async () => {
+      await expect(repairWith({
+        status: "unavailable",
+        revision: 7,
+        reason: "absent-from-examined",
+        backups: { total: 12, examined: 3, unreadable: 2, skipped: 7 },
+      })).resolves.toEqual({
+        status: "unavailable",
+        revision: 7,
+        reason: "absent-from-examined",
+        backups: { total: 12, examined: 3, unreadable: 2, skipped: 7 },
+      });
+    });
+
+    it.each([
+      ["absent-from-all", { total: 4, examined: 4, unreadable: 0, skipped: 0 }],
+      ["all-unreadable", { total: 5, examined: 0, unreadable: 5, skipped: 0 }],
+      ["no-backups", { total: 0, examined: 0, unreadable: 0, skipped: 0 }],
+    ])("preserves the %s census exactly", async (reason, backups) => {
+      const result = await repairWith({ status: "unavailable", revision: 1, reason, backups });
+      expect(result.reason).toBe(reason);
+      expect(result.backups).toEqual(backups);
+    });
+
+    it("drops a census that violates total === examined + unreadable + skipped", async () => {
+      // Better to show the count-free unknown message than to quote arithmetic
+      // the server never produced.
+      const result = await repairWith({
+        status: "unavailable", revision: 1, reason: "absent-from-examined",
+        backups: { total: 12, examined: 3, unreadable: 2, skipped: 2 },
+      });
+      expect(result.backups).toBeUndefined();
+      expect(result.reason).toBe("absent-from-examined");
+    });
+
+    it.each([
+      ["a missing census", undefined],
+      ["a non-object census", 5],
+      ["a negative count", { total: 1, examined: -1, unreadable: 1, skipped: 1 }],
+      ["a fractional count", { total: 2, examined: 1.5, unreadable: 0.5, skipped: 0 }],
+      ["a missing field", { total: 3, examined: 1, unreadable: 2 }],
+      ["a non-numeric field", { total: "many", examined: 1, unreadable: 2, skipped: 0 }],
+    ])("drops %s rather than partially trusting it", async (_label, backups) => {
+      const result = await repairWith({ status: "unavailable", revision: 1, reason: "all-unreadable", backups });
+      expect(result.backups).toBeUndefined();
+    });
+
+    it("omits reason and census entirely on a successful repair", async () => {
+      await expect(repairWith({ status: "repaired", revision: 3 }))
+        .resolves.toEqual({ status: "repaired", revision: 3 });
+    });
+  });
 });

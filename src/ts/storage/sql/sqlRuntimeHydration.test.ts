@@ -11,7 +11,10 @@ import {
   ensureChatHydrated,
   ensureChatMessageWindow,
   loadOlderChatMessages,
+  repairUnavailableMessage,
 } from "./sqlRuntimeHydration";
+import { languageEnglish } from "src/lang/en";
+import { languageKorean } from "src/lang/ko";
 import { getSqlPosition, getSqlWindow, hasSqlRuntimeMeta } from "./sqlRuntimeMeta";
 
 function deferred<T>() {
@@ -219,8 +222,12 @@ describe("Node SQL runtime hydration", () => {
     expect(repairCollapsedCharacter).toHaveBeenCalledTimes(1);
     expect(loadCharacterHydration).toHaveBeenCalledTimes(2);
 
+    // An `unavailable` repair rejects with the user-facing message for its
+    // reason code. With no reason and no census the server told us nothing we
+    // can quote, so this is the unknown-reason wording — and it must still
+    // reassure the user that nothing was modified.
     activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(async () => ({ chaId: "character-1", _sqlCharacterBodyCollapsed: true, chats: [] })), repairCollapsedCharacter: vi.fn(async () => ({ status: "unavailable", revision: 1 })), loadChatMessageReversePage: vi.fn() };
-    await expect(ensureCharacterHydrated({ characters: [{ chaId: "character-1", detailsLoaded: false, chats: [] }] } as any, 0)).rejects.toThrow(/repair/i);
+    await expect(ensureCharacterHydrated({ characters: [{ chaId: "character-1", detailsLoaded: false, chats: [] }] } as any, 0)).rejects.toThrow(/could not be recovered/i);
 
     const concurrentLoad = vi.fn()
       .mockResolvedValueOnce({ chaId: "character-1", _sqlCharacterBodyCollapsed: true, chats: [] })
@@ -289,5 +296,105 @@ describe("Node SQL runtime hydration", () => {
     firstBody.resolve({ revision: 1, chat: { id: "chat", characterId: "char", name: "local edit", message: [] } });
 
     await expect(hydration).resolves.toMatchObject({ name: "local edit" });
+  });
+});
+
+// The whole point of the reason/census contract is that the message the user
+// reads never claims more than the server actually examined. These lock that
+// down at the exact place the claim is made.
+describe("repair unavailable messaging", () => {
+  const census = (total: number, examined: number, unreadable: number, skipped: number) =>
+    ({ total, examined, unreadable, skipped });
+
+  it("only says the character is in no backup when every backup was examined", () => {
+    const message = repairUnavailableMessage({
+      status: "unavailable", revision: 1, reason: "absent-from-all", backups: census(4, 4, 0, 0),
+    });
+    expect(message).toContain("4");
+    expect(message).toMatch(/all 4 of your backups were checked/i);
+  });
+
+  it("names both the checked and the unchecked counts when coverage was partial", () => {
+    // 12 exist, 3 read, 2 unreadable, 7 never opened -> 3 checked, 9 not.
+    const message = repairUnavailableMessage({
+      status: "unavailable", revision: 1, reason: "absent-from-examined", backups: census(12, 3, 2, 7),
+    });
+    expect(message).toMatch(/not in the 3 backups that could be read, and 9 could not be checked/i);
+    // Must NOT assert absence across everything.
+    expect(message).not.toMatch(/all .* backups were checked/i);
+    expect(message).not.toMatch(/none contained/i);
+  });
+
+  it("says nothing about presence when no backup could be read", () => {
+    const message = repairUnavailableMessage({
+      status: "unavailable", revision: 1, reason: "all-unreadable", backups: census(5, 0, 5, 0),
+    });
+    expect(message).toMatch(/none of your 5 backups could be read/i);
+    expect(message).not.toMatch(/not (in|found)/i);
+  });
+
+  it("distinguishes having no backups at all from having searched them", () => {
+    const message = repairUnavailableMessage({ status: "unavailable", revision: 1, reason: "no-backups", backups: census(0, 0, 0, 0) });
+    expect(message).toMatch(/no backups/i);
+    expect(message).not.toMatch(/could not be read/i);
+    // No placeholder to fill, so it works even without a census.
+    expect(repairUnavailableMessage({ status: "unavailable", revision: 1, reason: "no-backups" })).toBe(message);
+  });
+
+  it("falls back to the unknown-reason wording rather than quoting an unmeasured count", () => {
+    for (const reason of ["absent-from-all", "absent-from-examined", "all-unreadable"]) {
+      const message = repairUnavailableMessage({ status: "unavailable", revision: 1, reason });
+      expect(message).toBe(languageEnglish.sqlCharacterRepairUnavailableUnknown);
+      expect(message).not.toContain("{}");
+    }
+    expect(repairUnavailableMessage({ status: "unavailable", revision: 1, reason: "something-new" }))
+      .toBe(languageEnglish.sqlCharacterRepairUnavailableUnknown);
+    expect(repairUnavailableMessage({ status: "unavailable", revision: 1 }))
+      .toBe(languageEnglish.sqlCharacterRepairUnavailableUnknown);
+  });
+
+  it("never leaves an unfilled placeholder in any reason's message", () => {
+    for (const reason of ["no-backups", "all-unreadable", "absent-from-examined", "absent-from-all", "bogus"]) {
+      const message = repairUnavailableMessage({
+        status: "unavailable", revision: 1, reason, backups: census(9, 2, 3, 4),
+      });
+      expect(message).not.toContain("{}");
+      expect(message.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("tells the user nothing was changed, so a failed repair reads as recoverable", () => {
+    for (const reason of ["no-backups", "all-unreadable", "absent-from-examined", "absent-from-all", "bogus"]) {
+      const message = repairUnavailableMessage({
+        status: "unavailable", revision: 1, reason, backups: census(9, 2, 3, 4),
+      });
+      expect(message).toMatch(/nothing was changed/i);
+    }
+  });
+
+  it("keeps EN and KO placeholder counts identical so neither can drop or invent a number", () => {
+    const keys = [
+      "sqlCharacterRepairUnavailableNoBackups",
+      "sqlCharacterRepairUnavailableAllUnreadable",
+      "sqlCharacterRepairUnavailableAbsentFromExamined",
+      "sqlCharacterRepairUnavailableAbsentFromAll",
+      "sqlCharacterRepairUnavailableUnknown",
+    ] as const;
+    const expected = { sqlCharacterRepairUnavailableNoBackups: 0, sqlCharacterRepairUnavailableAllUnreadable: 1, sqlCharacterRepairUnavailableAbsentFromExamined: 2, sqlCharacterRepairUnavailableAbsentFromAll: 1, sqlCharacterRepairUnavailableUnknown: 0 } as Record<string, number>;
+    for (const key of keys) {
+      const en = languageEnglish[key];
+      const ko = languageKorean[key];
+      expect(typeof en, key).toBe("string");
+      expect(typeof ko, key).toBe("string");
+      expect((en.match(/\{\}/g) ?? []).length, `EN ${key}`).toBe(expected[key]);
+      expect((ko.match(/\{\}/g) ?? []).length, `KO ${key}`).toBe(expected[key]);
+    }
+  });
+
+  it("retires the old overstating keys so they cannot be reintroduced", () => {
+    expect(languageEnglish).not.toHaveProperty("sqlCharacterRepairUnavailableNoCandidate");
+    expect(languageEnglish).not.toHaveProperty("sqlCharacterRepairUnavailableDecodeFailed");
+    expect(languageKorean).not.toHaveProperty("sqlCharacterRepairUnavailableNoCandidate");
+    expect(languageKorean).not.toHaveProperty("sqlCharacterRepairUnavailableDecodeFailed");
   });
 });

@@ -2781,8 +2781,23 @@ export const languageEnglish = {
             other: "Other context",
         },
     },
-    sqlCharacterRepairUnavailableNoCandidate: "This character's data could not be found in any backup, so it could not be recovered.",
-    sqlCharacterRepairUnavailableDecodeFailed: "This character's backups could not be read, so it could not be recovered.",
+    // Character-repair failure messages. Each is bound to one reason code and
+    // may only claim as much as that code actually established — see
+    // server/node/sql-character-repair.cjs REPAIR_UNAVAILABLE_REASON. Only
+    // ...AbsentFromAll is permitted to say "any backup".
+    // All of them state that nothing was changed, because a failed repair
+    // leaves the stored row byte-for-byte untouched and the user needs to know
+    // that retrying or importing a backup is still safe.
+    // `{}` placeholders are filled positionally with `.replace("{}", value)`
+    // at the call site, in the order documented per key.
+    sqlCharacterRepairUnavailableNoBackups: "This character's saved details are missing, and this server has no backups to recover them from. Nothing was changed, so importing a backup file you kept elsewhere can still restore it.",
+    // {} = total number of backups that exist
+    sqlCharacterRepairUnavailableAllUnreadable: "None of your {} backups could be read, so we could not check whether this character is in them. Nothing was changed — try again, or import an older backup file directly.",
+    // {} = backups read and searched, then {} = backups that could not be checked
+    sqlCharacterRepairUnavailableAbsentFromExamined: "This character was not in the {} backups that could be read, and {} could not be checked. Nothing was changed, so one of the unchecked backups may still have it.",
+    // {} = total number of backups, all of which were read and searched
+    sqlCharacterRepairUnavailableAbsentFromAll: "All {} of your backups were checked and none contained this character's details. Nothing was changed, so a backup file kept outside this server may still have it.",
+    sqlCharacterRepairUnavailableUnknown: "This character could not be recovered, and the reason could not be determined. Nothing was changed, so it is safe to try again.",
 
 } satisfies I18nTranslation;
 

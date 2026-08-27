@@ -874,8 +874,14 @@ const sqlLegacyMigration = createSqlLegacyMigration({
 // decode sweep. Each individual read is already bounded by
 // MAX_REPAIR_BACKUP_BYTES (raw) / MAX_REPAIR_DECOMPRESSED_BYTES (decoded)
 // inside readBoundedRisuSave — this budget bounds the SUM across candidates.
-const MAX_REPAIR_DBBACKUP_CANDIDATES = 3;
-const MAX_REPAIR_DBBACKUP_TOTAL_BYTES = 3 * MAX_REPAIR_BACKUP_BYTES; // ~192MB raw, mirrors the per-file cap x3
+// Widened from 3 to 8: three snapshots is a thin net for a last-resort
+// recovery, and the character being repaired may only survive in an older one.
+// It is still a hard ceiling, and — crucially — whatever the budgets drop is
+// now REPORTED to the caller as `skipped` rather than silently vanishing, so
+// the failure message can say "N checked, M not checked" instead of pretending
+// the sweep was exhaustive.
+const MAX_REPAIR_DBBACKUP_CANDIDATES = 8;
+const MAX_REPAIR_DBBACKUP_TOTAL_BYTES = 8 * MAX_REPAIR_BACKUP_BYTES; // mirrors the per-file cap x the candidate ceiling
 const sqlCharacterRepair = createSqlCharacterRepair({
     relationalSql,
     // Prioritized, bounded recovery-source list — tried in this exact order
@@ -894,6 +900,12 @@ const sqlCharacterRepair = createSqlCharacterRepair({
     // A single missing/corrupt/empty-bodied candidate must never abort the
     // whole repair — that was the original bug — so each candidate is its
     // own thunk and the repair module tries them one at a time.
+    // Returns `{ candidates, total }`. `total` counts every backup source that
+    // EXISTS — not just the ones that fit the budgets — because the repair
+    // module needs that number to tell "we checked all of them and it isn't
+    // there" apart from "we checked the ones we could afford to open". Without
+    // it the failure message would keep claiming an exhaustive search it never
+    // performed.
     readBackupCandidates: async () => {
         const candidates = [];
         const preMigrationRaw = kvGet('database/pre-sql-migration-v1.bin');
@@ -901,22 +913,33 @@ const sqlCharacterRepair = createSqlCharacterRepair({
         const legacyRaw = kvGet('database/database.bin');
         if (legacyRaw) candidates.push(() => readBoundedRisuSave(legacyRaw));
 
-        const dbbackupEntries = kvListWithSizes(DB_BACKUP_PREFIX)
-            .map(({ key, size }) => {
+        const dbbackupEntries = kvList(DB_BACKUP_PREFIX)
+            .map((key) => {
                 const tsRaw = parseInt(key.slice(DB_BACKUP_PREFIX.length, -4), 10);
-                return { key, size, ts: Number.isFinite(tsRaw) ? tsRaw : 0 };
+                // Logical size, not kvListWithSizes' on-disk footprint: a
+                // chunked snapshot reports a tiny marker there, which would
+                // let the byte budget wave through far more bytes than it
+                // thinks. The budget must be measured in the bytes actually
+                // handed to the bounded decoder.
+                return { key, size: kvSize(key) || 0, ts: Number.isFinite(tsRaw) ? tsRaw : 0 };
             })
             .sort((a, b) => b.ts - a.ts);
+        // Everything that exists: the two fixed sources above (only when
+        // present) plus every dbbackup-* snapshot on disk.
+        const total = candidates.length + dbbackupEntries.length;
         let usedBytes = 0;
         let usedDbbackupCount = 0;
         for (const entry of dbbackupEntries) {
             if (usedDbbackupCount >= MAX_REPAIR_DBBACKUP_CANDIDATES) break;
-            if (usedBytes + entry.size > MAX_REPAIR_DBBACKUP_TOTAL_BYTES) break;
+            // `continue`, not `break`: one oversized snapshot in the middle of
+            // the list must not hide every smaller, still-affordable snapshot
+            // behind it.
+            if (usedBytes + entry.size > MAX_REPAIR_DBBACKUP_TOTAL_BYTES) continue;
             usedBytes += entry.size;
             usedDbbackupCount += 1;
             candidates.push(() => readBoundedRisuSave(kvGet(entry.key)));
         }
-        return candidates;
+        return { candidates, total };
     },
 })
 let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
