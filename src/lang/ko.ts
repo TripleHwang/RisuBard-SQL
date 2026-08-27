@@ -618,10 +618,15 @@ export const languageKorean = {
   sidebarChatListLabel: "챗 목록",
   saveChatFileAction: "저장하기",
   loadChatFileAction: "불러오기",
+  risuBardQuickSave: "퀵세이브",
+  risuBardQuickLoad: "퀵로드",
   risuBardShowSaveLoadShortcuts: "세이브 / 로드 바로가기 버튼 보이기",
   risuBardSaveLoadShortcutClose: "세이브/로드 바로가기 닫기",
   risuBardSaveLoadShortcutHideConfirm: "세이브/로드 버튼을 끌까요? Bardwiki / 공통 옵션에서 다시 켤 수 있습니다",
+  risuBardAutosaveInterval: "자동저장 간격 (턴)",
+  risuBardAutosaveRetention: "자동저장 최대 보관 수",
   removeChat: "이 메시지를 삭제하시겠습니까?",
+  bardWikiDeleteBlocked: "이 메시지는 이미 BardWiki의 근거로 사용되어 안전하게 삭제할 수 없습니다. 이전 시점으로 돌아가려면 저장 및 불러오기를 사용하세요. 이미 대화와 위키가 어긋난 경우 위키 리부트를 실행하세요.",
   loreBook: "로어북",
   lorebookWorkspace: {
     open: "로어북 작업공간 열기",
@@ -2118,6 +2123,7 @@ export const languageKorean = {
   disableFirstMessageConfirm: "퍼스널 메세지를 비활성화할까요? 컨텍스트에서 제외됩니다.",
   bookmark: "북마크",
   branch: "분기점",
+  bardWikiHistoricalBranchBlocked: "BardWiki가 있는 대화는 이전 메시지에서 안전하게 분기할 수 없습니다. 먼저 저장 및 불러오기로 해당 시점으로 돌아가세요. 이미 대화와 위키가 어긋난 경우 위키 리부트를 실행하세요.",
   fetchLogConsent:
     "플러그인 {} 이(가) 로그를 가져오려고 합니다. 민감한 정보가 노출될 수 있습니다. 허용하시겠습니까?",
   getFullDatabaseConsent:
@@ -2908,6 +2914,7 @@ export const languageKorean = {
   risuBardWikiRebootTwoTurnSummary: "호출 수와 반복 문맥을 절약",
   risuBardWikiRebootTwoTurnTooltip: "장점: 의미 분석 호출 수와 반복 프롬프트 토큰을 줄입니다. 정본 갱신은 별도 호출될 수 있습니다. 단점: 한 번에 해석할 내용이 많아져 세부 정밀도가 다소 낮을 수 있습니다.",
   risuBardWikiRebootChatLocked: "BardWiki 리부트가 끝나거나 취소될 때까지 새 응답을 생성할 수 없습니다.",
+  risuBardWikiGenerationChatLocked: "BardWiki 갱신이 끝날 때까지 새 응답을 생성할 수 없습니다.",
   risuBardGraphCurrent: "현재 그래프",
   risuBardGraphNodes: "노드",
   risuBardGraphRelations: "관계",

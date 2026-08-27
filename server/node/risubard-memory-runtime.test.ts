@@ -190,7 +190,7 @@ describe('RisuBard memory CommonJS runtime', () => {
         })
     })
 
-    test('serializes a pre-turn Markdown wiki snapshot', async () => {
+    test('serializes a bounded Markdown wiki reboot checkpoint', async () => {
         const { createRuntimeMemoryService } = require(
             './risubard-memory-runtime.cjs'
         )
@@ -199,14 +199,26 @@ describe('RisuBard memory CommonJS runtime', () => {
         )
         const service = createRuntimeMemoryService(userDataDirectory)
         await service.saveManualWikiDocument({
-            characterId: 'character', chatId: 'chat', type: 'character',
+            characterId: 'character', chatId: 'reboot-job', type: 'character',
             title: '라비안', markdown: '# 라비안\n\n이전 상태.',
         })
 
-        await expect(service.snapshotWikiBeforeTurn({
-            characterId: 'character', chatId: 'chat',
+        await expect(service.beginWikiRebootBatch({
+            characterId: 'character', chatId: 'reboot-job',
             sourceMessageIds: ['user-1', 'assistant-1'],
+            eventSourceGroups: [['user-1', 'assistant-1']],
         })).resolves.toMatchObject({ canonicalCount: 1 })
+        const receipt = {
+            sourceMessageIds: ['user-1', 'assistant-1'], eventIds: [],
+            changes: [], warnings: [], recordedAt: 'now',
+        }
+        await expect(service.recordWikiRebootBatch({
+            characterId: 'character', chatId: 'reboot-job', receipt,
+        })).resolves.toEqual(receipt)
+        await expect(service.completeWikiRebootBatch({
+            characterId: 'character', chatId: 'reboot-job',
+            sourceMessageIds: receipt.sourceMessageIds,
+        })).resolves.toEqual({ removed: true })
     })
 
     test('reveals only a persisted wiki document path through the injected opener', async () => {

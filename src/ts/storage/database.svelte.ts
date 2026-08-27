@@ -41,6 +41,10 @@ import {
 import { normalizeWikiRebootJob } from '../risubard/wikiReboot';
 import type { CanonicalTurnReceipt } from '../risubard/memoryWiki';
 import {
+    normalizeAutosaveInterval,
+    normalizeAutosaveRetention,
+} from '../risubard/memorySavePolicy';
+import {
     normalizeWikiPromptPresetState,
     type WikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
@@ -839,6 +843,12 @@ export function setDatabase(data:Database){
             ? data.risuBardAutoWikiEnabled
             : true
     data.showRisuBardSaveLoadShortcuts ??= true
+    data.risuBardAutosaveInterval = normalizeAutosaveInterval(
+        data.risuBardAutosaveInterval
+    )
+    data.risuBardAutosaveRetention = normalizeAutosaveRetention(
+        data.risuBardAutosaveRetention
+    )
     data.risuBardRecentMessageCount = Number.isSafeInteger(data.risuBardRecentMessageCount)
         && data.risuBardRecentMessageCount! >= 1
         ? data.risuBardRecentMessageCount
@@ -1526,6 +1536,8 @@ export interface Database{
     risuBardMemoryDockRatio?: number
     risuBardMemoryWorkspaceHeight?: number
     showRisuBardSaveLoadShortcuts?: boolean
+    risuBardAutosaveInterval?: number
+    risuBardAutosaveRetention?: number
     risuBardSaveLoadShortcutPlacement?:
         | import('../risubard/saveLoadShortcutLayout').SaveLoadShortcutPlacement
         | { xRatio: number, yRatio: number }
@@ -2414,6 +2426,7 @@ export interface Chat{
     risuBardWikiGuide?: string
     risuBardSettings?: import('../risubard/risuBardSettings').RisuBardChatSettings
     risuBardWikiReboot?: import('../risubard/wikiReboot').WikiRebootJob
+    risuBardLastAutosaveTurn?: number
     sdData?:string
     suggestMessages?:string[]
     isStreaming?:boolean

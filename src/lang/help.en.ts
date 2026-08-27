@@ -413,6 +413,10 @@ export const helpEn = {
             "Show folder names on folder icons in the character grid. Makes large folder collections easier to scan.",
         showRequestStatus:
             "Show a floating chat-request toast with the live phase, injected context items and their token counts, total input tokens, thinking/output tokens, and speed. Contents are never stored; turning it off hides the notification entirely.",
+        risuBardAutosaveInterval:
+            "Choose how many turns pass between autosaves. An interval of 5 saves turns 1, 6, 11, and so on.",
+        risuBardAutosaveRetention:
+            "Maximum rotating autosave files kept per chat. After the limit, the oldest autosave slot is overwritten.",
         risuBardRecentMessages:
             "Maximum number of recent user and assistant messages sent to wiki analysis after a response completes.",
         risuBardResponseRecentMessages:

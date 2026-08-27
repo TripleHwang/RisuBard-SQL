@@ -338,12 +338,6 @@ describe('stored response memory analysis', () => {
             fetchImpl: vi.fn(async (input) => {
                 const url = String(input)
                 calls.push(url)
-                if (url.endsWith('/wiki/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'bounded-v1-fallback',
@@ -374,14 +368,6 @@ describe('stored response memory analysis', () => {
                         documents: [],
                     }))
                 }
-                if (url.endsWith('/wiki/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        sourceMessageIds: ['message-1'],
-                        eventIds: ['event.message-1'],
-                        changes: [], warnings: [], recordedAt: '2026-08-12',
-                    }))
-                }
                 return new Response(JSON.stringify({
                     facts: [],
                     events: [],
@@ -404,13 +390,17 @@ describe('stored response memory analysis', () => {
         })).resolves.toMatchObject({
             facts: [],
             events: [],
+            canonicalReceipt: {
+                sourceMessageIds: ['message-1'],
+                eventIds: [],
+                changes: [],
+                warnings: [],
+            },
         })
         expect(calls).toEqual([
             '/api/risubard/memory/view',
-            '/api/risubard/memory/wiki/snapshot',
             '/api/risubard/memory/inquiry',
             '/api/risubard/memory/wiki/save',
-            '/api/risubard/memory/wiki/receipt',
         ])
         expect(JSON.parse(submittedSchema)).toMatchObject({
             type: 'object',
@@ -468,12 +458,6 @@ describe('stored response memory analysis', () => {
                         documents: [],
                     }))
                 }
-                if (url.endsWith('/wiki/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'bounded-v1-fallback',
@@ -491,16 +475,6 @@ describe('stored response memory analysis', () => {
                             hopCount: 0,
                             auxiliaryModelCalls: 0,
                         },
-                    }))
-                }
-                if (url.endsWith('/wiki/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        sourceMessageIds: ['message-1'],
-                        eventIds: [],
-                        changes: [],
-                        warnings: [],
-                        recordedAt: '2026-08-13',
                     }))
                 }
                 throw new Error(`Unexpected request: ${url}`)
@@ -1206,11 +1180,6 @@ describe('stored response memory analysis', () => {
                         health: { danglingLinks: [], unlinkedDocumentIds: [] },
                     }))
                 }
-                if (url.endsWith('/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1', canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'v2-current', graphRevision: 0, indexRevision: 0,
@@ -1221,14 +1190,6 @@ describe('stored response memory analysis', () => {
                             selectedTokens: 0, hopCount: 0,
                             auxiliaryModelCalls: 0,
                         },
-                    }))
-                }
-                if (url.endsWith('/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1',
-                        sourceMessageIds: ['assistant-1'],
-                        eventIds: [], changes: [], warnings: [],
-                        recordedAt: '2026-08-13T00:00:00.000Z',
                     }))
                 }
                 return new Response(JSON.stringify({ ok: true }))
@@ -1305,11 +1266,6 @@ describe('stored response memory analysis', () => {
                         health: { danglingLinks: [], unlinkedDocumentIds: [] },
                     }))
                 }
-                if (url.endsWith('/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1', canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'v2-current', graphRevision: 0, indexRevision: 0,
@@ -1333,14 +1289,6 @@ describe('stored response memory analysis', () => {
                         content: body.markdown, links: [], contextMode: 'auto',
                         contentHash: `hash-${body.title}`,
                         reviewStatus: 'reviewed',
-                    }))
-                }
-                if (url.endsWith('/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1',
-                        sourceMessageIds: ['assistant-1'], eventIds: [],
-                        changes: [], warnings: [],
-                        recordedAt: '2026-08-13T00:00:00.000Z',
                     }))
                 }
                 return new Response(JSON.stringify({ id: 'event-1' }))
@@ -1434,7 +1382,10 @@ describe('stored response memory analysis', () => {
                 role: 'assistant',
                 content: 'The accepted turn.',
             }],
-        })).resolves.toBeUndefined()
+        })).resolves.toMatchObject({
+            sourceMessageIds: ['message-1'],
+            changes: [],
+        })
         expect(requestModel).toHaveBeenCalledOnce()
     })
 

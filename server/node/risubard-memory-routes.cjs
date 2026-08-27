@@ -39,6 +39,46 @@ function validInquiryTokenBudget(value) {
         && value.target <= value.maximum
 }
 
+function validRebootSources(body, includeGroups) {
+    const groups = body?.eventSourceGroups
+    return hasBoundedId(body?.characterId)
+        && hasBoundedId(body?.chatId)
+        && body.chatId.startsWith('reboot-')
+        && Array.isArray(body.sourceMessageIds)
+        && body.sourceMessageIds.length >= 1
+        && body.sourceMessageIds.length <= 12
+        && body.sourceMessageIds.every(hasBoundedId)
+        && (!includeGroups || (Array.isArray(groups)
+            && groups.length >= 1 && groups.length <= 2
+            && groups.every((group) => Array.isArray(group)
+                && group.length >= 1 && group.length <= 2
+                && group.every(hasBoundedId))))
+}
+
+function validCanonicalReceipt(value) {
+    return hasExactKeys(value, [
+        'sourceMessageIds', 'eventIds', 'changes', 'warnings', 'recordedAt',
+    ])
+        && Array.isArray(value.sourceMessageIds)
+        && value.sourceMessageIds.every(hasBoundedId)
+        && Array.isArray(value.eventIds)
+        && value.eventIds.every(hasBoundedId)
+        && Array.isArray(value.warnings)
+        && value.warnings.every((warning) => typeof warning === 'string')
+        && typeof value.recordedAt === 'string'
+        && Array.isArray(value.changes)
+        && value.changes.every((change) => hasExactKeys(change, [
+            'documentId', 'type', 'title', 'relativePath', 'action', 'afterHash',
+        ])
+            && hasBoundedId(change.documentId)
+            && ['character', 'location', 'scene', 'faction', 'item',
+                'concept', 'other'].includes(change.type)
+            && typeof change.title === 'string'
+            && typeof change.relativePath === 'string'
+            && (change.action === 'create' || change.action === 'update')
+            && hasBoundedId(change.afterHash))
+}
+
 function createRisuBardMemoryJsonParser(express) {
     return express.json({ limit: '512kb', strict: true })
 }
@@ -599,8 +639,10 @@ function registerRisuBardMemoryRoutes(app, options) {
                         && !hasBoundedId(req.body.expectedContentHash))
                     || ![
                         'character', 'location', 'scene', 'faction', 'item',
-                        'concept', 'other',
+                        'concept', 'other', 'event',
                     ].includes(req.body.type)
+                    || (req.body.type === 'event'
+                        && req.body.documentId === undefined)
                     || typeof req.body.title !== 'string'
                     || req.body.title.trim().length === 0
                     || req.body.title.length > 160
@@ -783,114 +825,80 @@ function registerRisuBardMemoryRoutes(app, options) {
     )
 
     app.post(
-        '/api/risubard/memory/wiki/snapshot',
+        '/api/risubard/memory/wiki/reboot/begin',
         async (req, res, next) => {
             try {
                 if (!await options.auth(req, res)) return
                 if (!hasExactKeys(req.body, [
                     'characterId', 'chatId', 'sourceMessageIds',
+                    'eventSourceGroups',
                 ])
-                    || !hasBoundedId(req.body.characterId)
-                    || !hasBoundedId(req.body.chatId)
-                    || !Array.isArray(req.body.sourceMessageIds)
-                    || req.body.sourceMessageIds.length < 1
-                    || !req.body.sourceMessageIds.every(hasBoundedId)) {
+                    || !validRebootSources(req.body, true)) {
                     res.status(400).send({
-                        error: 'Invalid Markdown wiki snapshot request',
+                        error: 'Invalid Markdown wiki reboot begin request',
                     })
                     return
                 }
-                res.send(await options.service.snapshotWikiBeforeTurn(req.body))
-            }
-            catch (error) {
-                next(error)
-            }
-        }
-    )
-
-    app.post(
-        '/api/risubard/memory/wiki/receipt',
-        async (req, res, next) => {
-            try {
-                if (!await options.auth(req, res)) return
-                const optionalEvent = req.body?.eventId === undefined
-                    ? []
-                    : ['eventId']
-                const validChanges = Array.isArray(req.body?.changes)
-                    && req.body.changes.every((change) => isRecord(change)
-                        && hasExactKeys(change, [
-                            'documentId', 'type', 'title',
-                            'relativePath', 'afterHash',
-                        ])
-                        && hasBoundedId(change.documentId)
-                        && ['character', 'location', 'scene', 'faction',
-                            'item', 'concept', 'other'].includes(change.type)
-                        && typeof change.title === 'string'
-                        && change.title.length > 0
-                        && change.title.length <= 160
-                        && typeof change.relativePath === 'string'
-                        && change.relativePath.length > 0
-                        && change.relativePath.length <= 1_024
-                        && hasBoundedId(change.afterHash))
-                if (!hasExactKeys(req.body, [
-                    'characterId', 'chatId', 'snapshotId',
-                    'sourceMessageIds', ...optionalEvent, 'changes', 'warnings',
-                ])
-                    || !hasBoundedId(req.body.characterId)
-                    || !hasBoundedId(req.body.chatId)
-                    || !hasBoundedId(req.body.snapshotId)
-                    || (req.body.eventId !== undefined
-                        && !hasBoundedId(req.body.eventId))
-                    || !Array.isArray(req.body.sourceMessageIds)
-                    || req.body.sourceMessageIds.length < 1
-                    || !req.body.sourceMessageIds.every(hasBoundedId)
-                    || !validChanges
-                    || !Array.isArray(req.body.warnings)
-                    || !req.body.warnings.every((warning) =>
-                        typeof warning === 'string'
-                        && warning.length > 0
-                        && warning.length <= 500
-                    )) {
-                    res.status(400).send({
-                        error: 'Invalid Markdown wiki turn receipt',
-                    })
-                    return
-                }
-                res.send(await options.service.recordWikiTurnReceipt(req.body))
-            }
-            catch (error) {
-                next(error)
-            }
-        }
-    )
-
-    app.post(
-        '/api/risubard/memory/wiki/receipt/undo',
-        async (req, res, next) => {
-            try {
-                if (!await options.auth(req, res)) return
-                const keys = ['characterId', 'chatId', 'snapshotId']
-                if (!hasExactKeys(req.body, [
-                    ...keys,
-                    ...(req.body?.documentId === undefined
-                        ? []
-                        : ['documentId']),
-                ])
-                    || !hasBoundedId(req.body.characterId)
-                    || !hasBoundedId(req.body.chatId)
-                    || !hasBoundedId(req.body.snapshotId)
-                    || (req.body.documentId !== undefined
-                        && !hasBoundedId(req.body.documentId))) {
-                    res.status(400).send({
-                        error: 'Invalid Markdown wiki turn undo',
-                    })
-                    return
-                }
-                res.send(await options.service.undoWikiTurnReceipt(req.body))
+                res.send(await options.service.beginWikiRebootBatch(req.body))
             }
             catch (error) {
                 if (error instanceof Error
-                    && error.message.includes('undo conflict')) {
+                    && error.message.startsWith(
+                        'Wiki reboot recovery conflict:'
+                    )) {
+                    res.status(409).send({ error: error.message })
+                    return
+                }
+                next(error)
+            }
+        }
+    )
+
+    app.post(
+        '/api/risubard/memory/wiki/reboot/record',
+        async (req, res, next) => {
+            try {
+                if (!await options.auth(req, res)) return
+                if (!hasExactKeys(req.body, [
+                    'characterId', 'chatId', 'receipt',
+                ])
+                    || !hasBoundedId(req.body.characterId)
+                    || !hasBoundedId(req.body.chatId)
+                    || !req.body.chatId.startsWith('reboot-')
+                    || !validCanonicalReceipt(req.body.receipt)) {
+                    res.status(400).send({
+                        error: 'Invalid Markdown wiki reboot receipt',
+                    })
+                    return
+                }
+                res.send(await options.service.recordWikiRebootBatch(req.body))
+            }
+            catch (error) {
+                next(error)
+            }
+        }
+    )
+
+    app.post(
+        '/api/risubard/memory/wiki/reboot/complete',
+        async (req, res, next) => {
+            try {
+                if (!await options.auth(req, res)) return
+                if (!hasExactKeys(req.body, [
+                    'characterId', 'chatId', 'sourceMessageIds',
+                ]) || !validRebootSources(req.body, false)) {
+                    res.status(400).send({
+                        error: 'Invalid Markdown wiki reboot completion',
+                    })
+                    return
+                }
+                res.send(await options.service.completeWikiRebootBatch(req.body))
+            }
+            catch (error) {
+                if (error instanceof Error
+                    && error.message.startsWith(
+                        'Wiki reboot recovery conflict:'
+                    )) {
                     res.status(409).send({ error: error.message })
                     return
                 }

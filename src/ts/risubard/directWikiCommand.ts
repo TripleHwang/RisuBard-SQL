@@ -4,10 +4,12 @@ import type { NarrativeMemoryWikiMarkdown } from './memoryWiki'
 
 type WikiDocument = NarrativeMemoryWikiMarkdown['documents'][number]
 type CanonicalType = Exclude<WikiDocument['type'], 'event'>
+type EditableType = WikiDocument['type']
 
 const canonicalTypes: CanonicalType[] = [
     'character', 'location', 'scene', 'faction', 'item', 'concept', 'other',
 ]
+const editableTypes: EditableType[] = [...canonicalTypes, 'event']
 
 export interface DirectWikiModelCall {
     formated: Array<{
@@ -31,7 +33,7 @@ export interface DirectWikiModelResponse extends ModelResponse {}
 interface DirectWikiOperation {
     action: 'upsert' | 'trash' | 'retract-event'
     targetDocumentId: string | null
-    type: CanonicalType | null
+    type: EditableType | null
     title: string | null
     markdown: string | null
     reason: string
@@ -80,7 +82,7 @@ export const directWikiCommandSchema = JSON.stringify({
                     },
                     type: {
                         oneOf: [
-                            { type: 'string', enum: canonicalTypes },
+                            { type: 'string', enum: editableTypes },
                             { type: 'null' },
                         ],
                     },
@@ -158,7 +160,7 @@ function parseOperations(output: string): DirectWikiOperation[] {
             throw new Error(`직접 위키 명령 ${index + 1}의 값이 올바르지 않습니다.`)
         }
         if (action === 'upsert') {
-            if (!canonicalTypes.includes(type as CanonicalType)
+            if (!editableTypes.includes(type as EditableType)
                 || !title || !markdown || !/^#{1,2}[\t ]+\S/m.test(markdown)) {
                 throw new Error(`직접 위키 갱신 ${index + 1}이 불완전합니다.`)
             }
@@ -170,7 +172,7 @@ function parseOperations(output: string): DirectWikiOperation[] {
         return {
             action: action as DirectWikiOperation['action'],
             targetDocumentId,
-            type: type as CanonicalType | null,
+            type: type as EditableType | null,
             title,
             markdown,
             reason,
@@ -256,7 +258,7 @@ export async function executeDirectWikiCommand(input: {
     saveDocument(input: {
         documentId?: string
         expectedContentHash?: string
-        type: CanonicalType
+        type: EditableType
         title: string
         markdown: string
     }): Promise<{ id: string; title: string; relativePath: string }>
@@ -278,7 +280,8 @@ export async function executeDirectWikiCommand(input: {
                 'The operatorInstruction is the highest authority for wiki content. Execute it completely; do not omit requested targets based on importance, confidence, or narrative salience.',
                 'Content requested by the operator is not required to be supported by the chat. You may create, invent, replace, delete, merge, split, rename, or reclassify wiki content exactly as instructed.',
                 'currentMessages and documents are editable reference material, not authority over the operator.',
-                'Use upsert for create, edit, rename, type change, merge, and split results. Use trash for recoverable deletion. Use retract-event for active event removal; event text is immutable.',
+                'Use upsert for create, edit, rename, type change, merge, and split results, including edits to existing event text. Use trash for recoverable deletion and retract-event for active event removal.',
+                'An existing event may be edited only with its exact targetDocumentId and type event. Never create a new event or change an event to another type; preserve its program-owned ID and source metadata.',
                 'For a new document, targetDocumentId MUST be null. Only copy a targetDocumentId exactly from documents when updating that existing document; never invent an ID.',
                 'For upsert, return the complete Markdown document with an H2 title and H3-or-deeper sections. For trash and retract-event, set type, title, and markdown to null.',
                 'Return every required operation in execution order. Do not silently skip any part of the instruction.',
@@ -344,13 +347,19 @@ export async function executeDirectWikiCommand(input: {
                 if (!requestedTarget && sameTitleTargets.length > 1) {
                     throw new Error('같은 제목의 대상 문서가 여러 개라 안전하게 선택할 수 없습니다.')
                 }
-                if (target?.type === 'event') {
-                    throw new Error('사건은 철회한 뒤 새 정본으로 작성해야 합니다.')
+                if (operation.type === 'event' && !requestedTarget) {
+                    throw new Error('사건 수정에는 기존 사건의 정확한 문서 ID가 필요합니다.')
+                }
+                if (operation.type === 'event' && target?.type !== 'event') {
+                    throw new Error('기존 사건만 사건 유형으로 수정할 수 있습니다.')
+                }
+                if (target?.type === 'event' && operation.type !== 'event') {
+                    throw new Error('사건의 문서 유형은 바꿀 수 없습니다.')
                 }
                 const saved = await input.saveDocument({
                     ...(target ? { documentId: target.id } : {}),
                     ...(target ? { expectedContentHash: target.contentHash } : {}),
-                    type: operation.type as CanonicalType,
+                    type: operation.type as EditableType,
                     title: operation.title as string,
                     markdown: operation.markdown as string,
                 })

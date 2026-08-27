@@ -123,6 +123,12 @@ describe('memory save slots', () => {
         const scene = join(source.directory, 'wiki', 'current-scene.md')
         await fs.mkdir(dirname(scene), { recursive: true })
         await fs.writeFile(scene, '# 현재 장면\n\n성문 앞이다.', 'utf8')
+        for (const internal of ['.risubard-snapshots', '.risubard-recovery']) {
+            await fs.mkdir(join(source.directory, 'wiki', internal), {
+                recursive: true,
+            })
+            await fs.writeFile(join(source.directory, 'wiki', internal, 'x'), 'x')
+        }
 
         const saved = await createMemorySaveSlot({
             userDataDirectory: root,
@@ -145,6 +151,14 @@ describe('memory save slots', () => {
             createdAt: '2026-08-14T08:00:00.000Z',
             latestEvent: { title: '성문이 열렸다' },
         })
+        const savedWorkspace = resolveMemoryWorkspace(
+            root, 'character', 'save-slot:save-1'
+        )
+        for (const internal of ['.risubard-snapshots', '.risubard-recovery']) {
+            await expect(fs.access(join(
+                savedWorkspace.directory, 'wiki', internal
+            ))).rejects.toMatchObject({ code: 'ENOENT' })
+        }
         expect(await listMemorySaveSlots({
             userDataDirectory: root,
             characterId: 'character',

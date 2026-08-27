@@ -4,6 +4,10 @@ import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { resolveMemoryWorkspace } from './risubard-memory-workspace'
 import { inquireMarkdownDocuments } from './risubard-markdown-inquiry'
 import { detectWikiWritingLanguage, localizeWikiHeadings, normalizeWikiWritingLanguage, wikiWritingHeadings, type WikiWritingLanguage } from '../../src/ts/risubard/wikiWritingLanguage'
+import {
+    parseCanonicalTurnReceipt,
+    type CanonicalTurnReceipt,
+} from '../../src/ts/risubard/canonicalTurnReceipt'
 
 export interface MarkdownWikiDocument {
     id: string
@@ -45,38 +49,15 @@ export interface MarkdownWikiHealth {
     unlinkedDocumentIds: string[]
 }
 
-export interface CanonicalTurnReceiptChange {
-    documentId: string
-    type: CanonicalMarkdownWikiDocumentType
-    title: string
-    relativePath: string
-    action: 'create' | 'update'
-    beforeHash: string | null
-    afterHash: string
-    undoneAt?: string
-    undoConflict?: 'changed-after-turn' | 'missing-after-turn'
-}
-
-export interface CanonicalTurnReceipt {
-    snapshotId: string
-    sourceMessageIds: string[]
-    eventIds: string[]
-    changes: CanonicalTurnReceiptChange[]
-    warnings: string[]
-    recordedAt: string
-    undoneAt?: string
-}
-
-interface TurnSnapshotManifest {
-    snapshotId: string
+interface RebootRecoveryManifest {
+    version: 1
     created: string
     sourceMessageIds: string[]
+    eventSourceGroups: string[][]
     documents: Array<{
         id: string
-        type: MarkdownWikiDocumentType
+        type: CanonicalMarkdownWikiDocumentType
         relativePath: string
-        updated: string
-        contentHash?: string
     }>
     receipt?: CanonicalTurnReceipt
 }
@@ -89,6 +70,7 @@ export interface MarkdownWikiWorkspace {
     historyDirectory: string
     trashDirectory: string
     snapshotsDirectory: string
+    recoveryDirectory: string
     reviewDirectory: string
     sceneFile: string
     indexFile: string
@@ -96,7 +78,8 @@ export interface MarkdownWikiWorkspace {
 
 type WikiFileSystem = Pick<
     typeof nodeFs,
-    'mkdir' | 'readFile' | 'readdir' | 'rename' | 'rm' | 'writeFile'
+    'lstat' | 'mkdir' | 'readFile' | 'readdir' | 'realpath' | 'rename'
+    | 'rm' | 'writeFile'
 >
 
 function required(value: string, label: string): string {
@@ -184,6 +167,58 @@ function appendKnownDocumentLinks(
         )
     }
     return `${content}\n\n${heading}\n\n${bullets}`
+}
+
+function parseRebootRecoveryManifest(value: unknown): RebootRecoveryManifest {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new Error('invalid manifest object')
+    }
+    const record = value as Record<string, unknown>
+    const hasReceipt = record.receipt !== undefined
+    const expectedKeys = [
+        'version', 'created', 'sourceMessageIds', 'eventSourceGroups',
+        'documents', ...(hasReceipt ? ['receipt'] : []),
+    ]
+    const canonicalTypes: readonly string[] = [
+        'character', 'location', 'scene', 'faction', 'item', 'concept', 'other',
+    ]
+    if (Object.keys(record).length !== expectedKeys.length
+        || !expectedKeys.every((key) => Object.hasOwn(record, key))
+        || record.version !== 1
+        || typeof record.created !== 'string'
+        || !Array.isArray(record.sourceMessageIds)
+        || !record.sourceMessageIds.every((id) => typeof id === 'string')
+        || !Array.isArray(record.eventSourceGroups)
+        || !record.eventSourceGroups.every((group) => Array.isArray(group)
+            && group.every((id) => typeof id === 'string'))
+        || !Array.isArray(record.documents)) {
+        throw new Error('invalid manifest fields')
+    }
+    const documents = record.documents.map((value) => {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+            throw new Error('invalid manifest document')
+        }
+        const document = value as Record<string, unknown>
+        if (Object.keys(document).length !== 3
+            || typeof document.id !== 'string'
+            || !canonicalTypes.includes(String(document.type))
+            || typeof document.relativePath !== 'string'
+            || isAbsolute(document.relativePath)
+            || document.relativePath.split(/[\\/]/).includes('..')) {
+            throw new Error('invalid manifest document')
+        }
+        return document as unknown as RebootRecoveryManifest['documents'][number]
+    })
+    return {
+        version: 1,
+        created: record.created,
+        sourceMessageIds: record.sourceMessageIds as string[],
+        eventSourceGroups: record.eventSourceGroups as string[][],
+        documents,
+        ...(hasReceipt ? {
+            receipt: parseCanonicalTurnReceipt(record.receipt),
+        } : {}),
+    }
 }
 
 function removeCharacterEventLinksFromRelatedDocuments(
@@ -450,6 +485,7 @@ export function resolveMarkdownWikiWorkspace(
         historyDirectory: resolve(directory, '.risubard-history'),
         trashDirectory: resolve(directory, '.risubard-trash'),
         snapshotsDirectory: resolve(directory, '.risubard-snapshots'),
+        recoveryDirectory: resolve(directory, '.risubard-recovery'),
         reviewDirectory: resolve(directory, '.risubard-review'),
         sceneFile: resolve(directory, 'current-scene.md'),
         indexFile: resolve(directory, 'index.md'),
@@ -468,6 +504,105 @@ export function createMarkdownNarrativeWiki(
     const workspaceFor = (characterId: string, chatId: string) =>
         resolveMarkdownWikiWorkspace(userDataDirectory, characterId, chatId)
     const documentCache = new Map<string, MarkdownWikiDocument[]>()
+
+    const cleanupLegacySnapshots = async (
+        characterId: string,
+        chatId: string
+    ): Promise<void> => {
+        const memory = resolveMemoryWorkspace(
+            userDataDirectory,
+            characterId,
+            chatId
+        )
+        const workspace = workspaceFor(characterId, chatId)
+        let memoryStatus: Awaited<ReturnType<WikiFileSystem['lstat']>>
+        let wikiStatus: Awaited<ReturnType<WikiFileSystem['lstat']>>
+        try {
+            memoryStatus = await fileSystem.lstat(memory.directory)
+            wikiStatus = await fileSystem.lstat(workspace.directory)
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+            throw error
+        }
+        if (memoryStatus.isSymbolicLink() || !memoryStatus.isDirectory()
+            || wikiStatus.isSymbolicLink() || !wikiStatus.isDirectory()) {
+            throw new Error('Wiki workspace is unsafe')
+        }
+        const [realMemory, realWiki] = await Promise.all([
+            fileSystem.realpath(memory.directory),
+            fileSystem.realpath(workspace.directory),
+        ])
+        const relation = relative(realMemory, realWiki)
+        if (relation === '' || isAbsolute(relation) || relation === '..'
+            || relation.startsWith(`..${process.platform === 'win32'
+                ? '\\' : '/'}`)) {
+            throw new Error('Wiki workspace escapes its memory workspace')
+        }
+        let snapshotsStatus: Awaited<ReturnType<WikiFileSystem['lstat']>>
+        try {
+            snapshotsStatus = await fileSystem.lstat(
+                workspace.snapshotsDirectory
+            )
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+            throw error
+        }
+        if (snapshotsStatus.isSymbolicLink()) {
+            await fileSystem.rm(workspace.snapshotsDirectory, { force: true })
+            return
+        }
+        await fileSystem.rm(workspace.snapshotsDirectory, {
+            recursive: snapshotsStatus.isDirectory(),
+            force: true,
+        })
+    }
+
+    const recoveryPaths = (workspace: MarkdownWikiWorkspace) => ({
+        published: join(workspace.recoveryDirectory, 'reboot-batch'),
+        creating: join(workspace.recoveryDirectory, 'reboot-batch.creating'),
+    })
+
+    const removeRecoveryArtifact = async (path: string): Promise<void> => {
+        let status: Awaited<ReturnType<WikiFileSystem['lstat']>>
+        try {
+            status = await fileSystem.lstat(path)
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+            throw error
+        }
+        await fileSystem.rm(path, {
+            recursive: status.isDirectory() && !status.isSymbolicLink(),
+            force: true,
+        })
+    }
+
+    const hasPublishedRecovery = async (
+        workspace: MarkdownWikiWorkspace
+    ): Promise<boolean> => {
+        const { published } = recoveryPaths(workspace)
+        try {
+            const status = await fileSystem.lstat(published)
+            if (status.isSymbolicLink() || !status.isDirectory()) {
+                throw new Error('Wiki reboot recovery checkpoint is unsafe')
+            }
+            return true
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+            throw error
+        }
+    }
+
+    const cleanupUnpublishedRecovery = async (
+        workspace: MarkdownWikiWorkspace
+    ): Promise<boolean> => {
+        if (await hasPublishedRecovery(workspace)) return false
+        await removeRecoveryArtifact(recoveryPaths(workspace).creating)
+        return true
+    }
 
     const readDocuments = async (
         characterId: string,
@@ -530,6 +665,7 @@ export function createMarkdownNarrativeWiki(
         characterId: string,
         chatId: string
     ): Promise<MarkdownWikiDocument[]> => {
+        await cleanupLegacySnapshots(characterId, chatId)
         const documents = await readDocuments(characterId, chatId)
         documentCache.set(workspaceFor(characterId, chatId).directory, documents)
         return documents
@@ -539,7 +675,9 @@ export function createMarkdownNarrativeWiki(
         characterId: string,
         chatId: string
     ): Promise<MarkdownWikiDocument[]> => {
-        const key = workspaceFor(characterId, chatId).directory
+        const workspace = workspaceFor(characterId, chatId)
+        await cleanupLegacySnapshots(characterId, chatId)
+        const key = workspace.directory
         return documentCache.get(key)
             ?? refreshDocuments(characterId, chatId)
     }
@@ -600,39 +738,39 @@ export function createMarkdownNarrativeWiki(
                 return normalized
             })
             const workspace = workspaceFor(input.characterId, input.chatId)
-            const snapshotId = `turn-${stableId(sourceMessageIds)}`
-            const snapshotDirectory = join(
-                workspace.snapshotsDirectory,
-                snapshotId
-            )
-            const manifestFile = join(snapshotDirectory, 'manifest.json')
-            let manifest: TurnSnapshotManifest
+            const recoveryDirectory = recoveryPaths(workspace).published
+            const manifestFile = join(recoveryDirectory, 'manifest.json')
+            let manifest: RebootRecoveryManifest
             try {
-                manifest = JSON.parse(await fileSystem.readFile(
+                manifest = parseRebootRecoveryManifest(JSON.parse(
+                    await fileSystem.readFile(
                     manifestFile,
                     'utf8'
-                )) as TurnSnapshotManifest
+                )))
             }
             catch (error) {
-                if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT'
+                    && await cleanupUnpublishedRecovery(workspace)) return null
                 throw error
             }
-            if (manifest.snapshotId !== snapshotId
+            if (manifest.version !== 1
                 || JSON.stringify(manifest.sourceMessageIds)
                     !== JSON.stringify(sourceMessageIds)
+                || JSON.stringify(manifest.eventSourceGroups)
+                    !== JSON.stringify(eventSourceGroups)
                 || !Array.isArray(manifest.documents)) {
-                throw new Error('Wiki reboot snapshot is invalid')
+                throw new Error('Wiki reboot recovery checkpoint is invalid')
             }
-            if (manifest.receipt?.snapshotId === snapshotId) {
-                return manifest.receipt
+            if (manifest.receipt) {
+                return parseCanonicalTurnReceipt(manifest.receipt)
             }
             const current = await loadDocuments(
                 input.characterId,
                 input.chatId
             )
-            const baselineCanonical = new Map(manifest.documents
-                .filter((document) => document.type !== 'event')
-                .map((document) => [document.id, document]))
+            const baselineCanonical = new Map(manifest.documents.map(
+                (document) => [document.id, document]
+            ))
             const exactEventSources = new Set(eventSourceGroups.map((group) =>
                 JSON.stringify(group)
             ))
@@ -656,7 +794,7 @@ export function createMarkdownNarrativeWiki(
             }
             for (const document of baselineCanonical.values()) {
                 const source = join(
-                    snapshotDirectory,
+                    recoveryDirectory,
                     ...document.relativePath.split('/')
                 )
                 const target = join(
@@ -673,294 +811,150 @@ export function createMarkdownNarrativeWiki(
                 )
             }
             await rebuildIndex(input.characterId, input.chatId)
+            await fileSystem.rm(recoveryDirectory, {
+                recursive: true,
+                force: true,
+            })
             return null
         },
-        async snapshotBeforeTurn(input: {
+        async beginRebootBatch(input: {
             characterId: string
             chatId: string
             sourceMessageIds: string[]
-        }): Promise<{ snapshotId: string; canonicalCount: number }> {
+            eventSourceGroups: string[][]
+        }): Promise<{ canonicalCount: number }> {
             const sourceMessageIds = input.sourceMessageIds.map((id) =>
-                required(id, 'sourceMessageId')
+                required(id, 'Source message ID')
             )
-            if (sourceMessageIds.length === 0) {
-                throw new Error('Wiki snapshot requires at least one source')
+            const eventSourceGroups = input.eventSourceGroups.map((group) =>
+                group.map((id) => required(id, 'Event source message ID'))
+            )
+            if (sourceMessageIds.length < 1 || sourceMessageIds.length > 12
+                || eventSourceGroups.length < 1
+                || eventSourceGroups.length > 2
+                || eventSourceGroups.some((group) =>
+                    group.length < 1 || group.length > 2)) {
+                throw new Error('Invalid reboot recovery sources')
             }
             const workspace = workspaceFor(input.characterId, input.chatId)
             const documents = await loadDocuments(input.characterId, input.chatId)
             const canonical = documents.filter((document) =>
                 document.type !== 'event'
             )
-            const snapshotId = `turn-${stableId(sourceMessageIds)}`
-            const snapshotDirectory = join(
-                workspace.snapshotsDirectory,
-                snapshotId
-            )
-            const manifestFile = join(snapshotDirectory, 'manifest.json')
+            const {
+                published: recoveryDirectory,
+                creating: creatingDirectory,
+            } = recoveryPaths(workspace)
+            const manifestFile = join(recoveryDirectory, 'manifest.json')
             try {
-                const manifest = JSON.parse(await fileSystem.readFile(
-                    manifestFile,
-                    'utf8'
-                )) as {
-                    snapshotId?: unknown
-                    sourceMessageIds?: unknown
-                    documents?: unknown
+                const existing = parseRebootRecoveryManifest(JSON.parse(
+                    await fileSystem.readFile(manifestFile, 'utf8')
+                ))
+                try {
+                    await Promise.all(existing.documents.map((document) =>
+                        fileSystem.readFile(join(
+                            recoveryDirectory,
+                            ...document.relativePath.split('/')
+                        ))
+                    ))
                 }
-                if (manifest.snapshotId !== snapshotId
-                    || JSON.stringify(manifest.sourceMessageIds)
-                        !== JSON.stringify(sourceMessageIds)
-                    || !Array.isArray(manifest.documents)) {
-                    throw new Error('Existing wiki snapshot manifest is invalid')
+                catch (error) {
+                    throw new Error(
+                        'Wiki reboot recovery conflict: existing checkpoint is invalid',
+                        { cause: error }
+                    )
                 }
-                return {
-                    snapshotId,
-                    canonicalCount: manifest.documents.filter((document) =>
-                        typeof document === 'object'
-                        && document !== null
-                        && (document as { type?: unknown }).type !== 'event'
-                    ).length,
+                if (existing.receipt) {
+                    throw new Error(
+                        'Wiki reboot recovery conflict: completed batch awaits cleanup'
+                    )
                 }
+                throw new Error(
+                    'Wiki reboot recovery conflict: checkpoint already in flight'
+                )
             }
             catch (error) {
+                if (error instanceof Error
+                    && error.message.startsWith(
+                        'Wiki reboot recovery conflict:'
+                    )) throw error
                 if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-                    throw error
+                    throw new Error(
+                        'Wiki reboot recovery conflict: existing checkpoint is invalid',
+                        { cause: error }
+                    )
+                }
+                if (!await cleanupUnpublishedRecovery(workspace)) {
+                    throw new Error(
+                        'Wiki reboot recovery conflict: checkpoint manifest is missing'
+                    )
                 }
             }
-            await fileSystem.rm(snapshotDirectory, {
-                recursive: true,
-                force: true,
-            })
-            await fileSystem.mkdir(snapshotDirectory, { recursive: true })
-            for (const document of canonical) {
-                const target = join(
-                    snapshotDirectory,
-                    ...document.relativePath.split('/')
-                )
-                await fileSystem.mkdir(resolve(target, '..'), {
-                    recursive: true,
-                })
-                await writeAtomically(
-                    fileSystem,
-                    target,
-                    await fileSystem.readFile(join(
-                        workspace.directory,
+            await fileSystem.mkdir(creatingDirectory, { recursive: true })
+            try {
+                for (const document of canonical) {
+                    const target = join(
+                        creatingDirectory,
                         ...document.relativePath.split('/')
-                    ), 'utf8')
-                )
-            }
-            await writeAtomically(
-                fileSystem,
-                manifestFile,
-                `${JSON.stringify({
-                    snapshotId,
-                    created: now().toISOString(),
-                    sourceMessageIds,
-                    documents: documents.map((document) => ({
-                        id: document.id,
-                        type: document.type,
-                        relativePath: document.relativePath,
-                        updated: document.updated,
-                        contentHash: document.contentHash,
-                    })),
-                }, null, 2)}\n`
-            )
-            return { snapshotId, canonicalCount: canonical.length }
-        },
-
-        async recordTurnReceipt(input: {
-            characterId: string
-            chatId: string
-            snapshotId: string
-            sourceMessageIds: string[]
-            eventId?: string
-            changes: Array<{
-                documentId: string
-                type: CanonicalMarkdownWikiDocumentType
-                title: string
-                relativePath: string
-                afterHash: string
-            }>
-            warnings: string[]
-        }): Promise<CanonicalTurnReceipt> {
-            const sourceMessageIds = input.sourceMessageIds.map((id) =>
-                required(id, 'Source message ID')
-            )
-            const expectedSnapshotId = `turn-${stableId(sourceMessageIds)}`
-            if (required(input.snapshotId, 'Snapshot ID') !== expectedSnapshotId) {
-                throw new Error('Wiki turn receipt snapshot does not match sources')
-            }
-            const workspace = workspaceFor(input.characterId, input.chatId)
-            const manifestFile = join(
-                workspace.snapshotsDirectory,
-                input.snapshotId,
-                'manifest.json'
-            )
-            const manifest = JSON.parse(await fileSystem.readFile(
-                manifestFile,
-                'utf8'
-            )) as TurnSnapshotManifest
-            if (manifest.snapshotId !== input.snapshotId
-                || JSON.stringify(manifest.sourceMessageIds)
-                    !== JSON.stringify(sourceMessageIds)
-                || !Array.isArray(manifest.documents)) {
-                throw new Error('Wiki turn receipt snapshot is invalid')
-            }
-            const previous = manifest.receipt
-            const byId = new Map(
-                (previous?.changes ?? []).map((change) => [
-                    change.documentId,
-                    change,
-                ])
-            )
-            for (const change of input.changes) {
-                const documentId = required(change.documentId, 'Document ID')
-                const baseline = manifest.documents.find((document) =>
-                    document.id === documentId && document.type !== 'event'
-                )
-                const prior = byId.get(documentId)
-                byId.set(documentId, {
-                    documentId,
-                    type: change.type,
-                    title: required(change.title, 'Title').slice(0, 160),
-                    relativePath: required(
-                        change.relativePath,
-                        'Relative path'
-                    ),
-                    action: prior?.action ?? (baseline ? 'update' : 'create'),
-                    beforeHash: prior?.beforeHash
-                        ?? baseline?.contentHash
-                        ?? null,
-                    afterHash: required(change.afterHash, 'Content hash'),
-                })
-            }
-            const receipt: CanonicalTurnReceipt = {
-                snapshotId: input.snapshotId,
-                sourceMessageIds,
-                eventIds: [...new Set([
-                    ...(previous?.eventIds ?? []),
-                    ...(input.eventId ? [required(input.eventId, 'Event ID')] : []),
-                ])],
-                changes: [...byId.values()],
-                warnings: [...new Set([
-                    ...(previous?.warnings ?? []),
-                    ...input.warnings.map((warning) =>
-                        required(warning, 'Receipt warning').slice(0, 500)
-                    ),
-                ])],
-                recordedAt: previous?.recordedAt ?? now().toISOString(),
-            }
-            manifest.receipt = receipt
-            await writeAtomically(
-                fileSystem,
-                manifestFile,
-                `${JSON.stringify(manifest, null, 2)}\n`
-            )
-            return receipt
-        },
-
-        async undoTurnReceipt(input: {
-            characterId: string
-            chatId: string
-            snapshotId: string
-            documentId?: string
-        }): Promise<CanonicalTurnReceipt> {
-            const workspace = workspaceFor(input.characterId, input.chatId)
-            const snapshotDirectory = join(
-                workspace.snapshotsDirectory,
-                required(input.snapshotId, 'Snapshot ID')
-            )
-            const manifestFile = join(snapshotDirectory, 'manifest.json')
-            const manifest = JSON.parse(await fileSystem.readFile(
-                manifestFile,
-                'utf8'
-            )) as TurnSnapshotManifest
-            const receipt = manifest.receipt
-            if (!receipt || receipt.snapshotId !== input.snapshotId) {
-                throw new Error('Wiki turn receipt does not exist')
-            }
-            const selected = receipt.changes.filter((change) =>
-                !change.undoneAt
-                && (!input.documentId || change.documentId === input.documentId)
-            )
-            if (input.documentId && selected.length !== 1) {
-                throw new Error('Wiki turn receipt document is not undoable')
-            }
-            const current = await loadDocuments(input.characterId, input.chatId)
-            const undoable: Array<{
-                change: CanonicalTurnReceiptChange
-                document: MarkdownWikiDocument
-            }> = []
-            for (const change of selected) {
-                const document = current.find((item) =>
-                    item.id === change.documentId
-                )
-                if (!document || document.contentHash !== change.afterHash) {
-                    if (input.documentId) {
-                        throw new Error(
-                            'Wiki document changed after this turn; undo conflict'
-                        )
-                    }
-                    change.undoConflict = document
-                        ? 'changed-after-turn'
-                        : 'missing-after-turn'
-                    continue
-                }
-                delete change.undoConflict
-                undoable.push({ change, document })
-            }
-            const operationTime = now().toISOString()
-            for (const { change, document } of undoable) {
-                const file = join(
-                    workspace.directory,
-                    ...document.relativePath.split('/')
-                )
-                if (change.action === 'create') {
-                    const trash = join(workspace.trashDirectory, document.id)
-                    await fileSystem.mkdir(trash, { recursive: true })
+                    )
+                    await fileSystem.mkdir(resolve(target, '..'), {
+                        recursive: true,
+                    })
                     await writeAtomically(
                         fileSystem,
-                        join(
-                            trash,
-                            `${operationTime.replace(/[:.]/g, '-')}-${basename(file)}`
-                        ),
-                        await fileSystem.readFile(file, 'utf8')
-                    )
-                    await fileSystem.rm(file)
-                }
-                else {
-                    const baseline = manifest.documents.find((item) =>
-                        item.id === change.documentId
-                    )
-                    if (!baseline) {
-                        throw new Error('Wiki turn snapshot baseline is missing')
-                    }
-                    await writeAtomically(
-                        fileSystem,
-                        file,
+                        target,
                         await fileSystem.readFile(join(
-                            snapshotDirectory,
-                            ...baseline.relativePath.split('/')
+                            workspace.directory,
+                            ...document.relativePath.split('/')
                         ), 'utf8')
                     )
                 }
-                change.undoneAt = operationTime
+                await writeAtomically(
+                    fileSystem,
+                    join(creatingDirectory, 'manifest.json'),
+                    `${JSON.stringify({
+                        version: 1,
+                        created: now().toISOString(),
+                        sourceMessageIds,
+                        eventSourceGroups,
+                        documents: canonical.map((document) => ({
+                            id: document.id,
+                            type: document.type,
+                            relativePath: document.relativePath,
+                        })),
+                    }, null, 2)}\n`
+                )
+                await fileSystem.rename(creatingDirectory, recoveryDirectory)
             }
-            if (!input.documentId) {
-                for (const eventId of receipt.eventIds) {
-                    const event = current.find((document) =>
-                        document.id === eventId
-                    )
-                    if (!event || event.type !== 'event'
-                        || event.status !== 'active') continue
-                    await fileSystem.rm(
-                        join(
-                            workspace.directory,
-                            ...event.relativePath.split('/')
-                        ),
-                        { force: true }
-                    )
-                }
-                receipt.undoneAt = operationTime
+            catch (error) {
+                await removeRecoveryArtifact(creatingDirectory)
+                    .catch(() => undefined)
+                throw error
+            }
+            return { canonicalCount: canonical.length }
+        },
+
+        async recordRebootBatchReceipt(input: {
+            characterId: string
+            chatId: string
+            receipt: CanonicalTurnReceipt
+        }): Promise<CanonicalTurnReceipt> {
+            const receipt = parseCanonicalTurnReceipt(input.receipt)
+            const workspace = workspaceFor(input.characterId, input.chatId)
+            const manifestFile = join(
+                workspace.recoveryDirectory,
+                'reboot-batch',
+                'manifest.json'
+            )
+            const manifest = parseRebootRecoveryManifest(JSON.parse(
+                await fileSystem.readFile(manifestFile, 'utf8')
+            ))
+            if (manifest.version !== 1
+                || JSON.stringify(manifest.sourceMessageIds)
+                    !== JSON.stringify(receipt.sourceMessageIds)
+                || !Array.isArray(manifest.documents)
+                || !Array.isArray(manifest.eventSourceGroups)) {
+                throw new Error('Wiki reboot recovery checkpoint is invalid')
             }
             manifest.receipt = receipt
             await writeAtomically(
@@ -968,8 +962,46 @@ export function createMarkdownNarrativeWiki(
                 manifestFile,
                 `${JSON.stringify(manifest, null, 2)}\n`
             )
-            await rebuildIndex(input.characterId, input.chatId)
             return receipt
+        },
+
+        async completeRebootBatch(input: {
+            characterId: string
+            chatId: string
+            sourceMessageIds: string[]
+        }): Promise<{ removed: boolean }> {
+            const workspace = workspaceFor(input.characterId, input.chatId)
+            const recoveryDirectory = join(
+                workspace.recoveryDirectory,
+                'reboot-batch'
+            )
+            const sourceMessageIds = input.sourceMessageIds.map((id) =>
+                required(id, 'Source message ID')
+            )
+            let manifest: RebootRecoveryManifest
+            try {
+                manifest = parseRebootRecoveryManifest(JSON.parse(
+                    await fileSystem.readFile(
+                    join(recoveryDirectory, 'manifest.json'),
+                    'utf8'
+                )))
+            }
+            catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+                    return { removed: false }
+                }
+                throw error
+            }
+            if (manifest.version !== 1
+                || JSON.stringify(manifest.sourceMessageIds)
+                    !== JSON.stringify(sourceMessageIds)) {
+                throw new Error('Wiki reboot recovery checkpoint does not match')
+            }
+            await fileSystem.rm(recoveryDirectory, {
+                recursive: true,
+                force: true,
+            })
+            return { removed: true }
         },
 
         async resolveDocumentFile(input: {
@@ -1291,15 +1323,15 @@ export function createMarkdownNarrativeWiki(
             characterId: string
             chatId: string
             documentId?: string
-            type: CanonicalMarkdownWikiDocumentType
+            type: MarkdownWikiDocumentType
             title: string
             markdown: string
             expectedContentHash?: string
         }): Promise<MarkdownWikiDocument> {
             const title = required(input.title, 'Title').trim().slice(0, 160)
-            const allowed: CanonicalMarkdownWikiDocumentType[] = [
+            const allowed: MarkdownWikiDocumentType[] = [
                 'character', 'location', 'scene', 'faction', 'item',
-                'concept', 'other',
+                'concept', 'other', 'event',
             ]
             if (!allowed.includes(input.type)) {
                 throw new Error('Invalid manual wiki document type')
@@ -1312,8 +1344,11 @@ export function createMarkdownNarrativeWiki(
             if (input.documentId && !existing) {
                 throw new Error('Canonical wiki document does not exist')
             }
-            if (existing?.type === 'event') {
-                throw new Error('Event documents are read-only')
+            if (input.type === 'event' && existing?.type !== 'event') {
+                throw new Error('Manual event creation is not allowed')
+            }
+            if (existing?.type === 'event' && input.type !== 'event') {
+                throw new Error('Event documents must keep their type')
             }
             if (existing && input.expectedContentHash
                 && existing.contentHash !== input.expectedContentHash) {
@@ -1334,7 +1369,9 @@ export function createMarkdownNarrativeWiki(
                 concept: 'concepts',
                 other: 'notes',
             }
-            const relativePath = input.type === 'scene'
+            const relativePath = input.type === 'event'
+                ? existing!.relativePath
+                : input.type === 'scene'
                 ? 'current-scene.md'
                 : `${folder[input.type]}/${readableStem(title)}-${suffix}.md`
             const file = join(workspace.directory, ...relativePath.split('/'))
@@ -1374,7 +1411,9 @@ export function createMarkdownNarrativeWiki(
                 authoring: 'manual',
                 content,
                 links: linksFrom(content),
-                contextMode: input.type === 'scene'
+                contextMode: input.type === 'event'
+                    ? 'auto'
+                    : input.type === 'scene'
                     ? 'always'
                     : existing?.contextMode ?? 'auto',
             })

@@ -11,6 +11,10 @@ import { invokeBrowserFetch } from './browserFetch'
 import type {
     NarrativeGraphViewSnapshot,
 } from './memoryGraphView'
+export type {
+    CanonicalTurnReceipt,
+    CanonicalTurnReceiptChange,
+} from './canonicalTurnReceipt'
 
 export interface NarrativeMemoryWikiV1 {
     mode: 'v1'
@@ -63,28 +67,6 @@ export type CanonicalMarkdownWikiDocumentType = Exclude<
     MarkdownWikiDocumentType,
     'event'
 >
-
-export interface CanonicalTurnReceiptChange {
-    documentId: string
-    type: CanonicalMarkdownWikiDocumentType
-    title: string
-    relativePath: string
-    action: 'create' | 'update'
-    beforeHash: string | null
-    afterHash: string
-    undoneAt?: string
-    undoConflict?: 'changed-after-turn' | 'missing-after-turn'
-}
-
-export interface CanonicalTurnReceipt {
-    snapshotId: string
-    sourceMessageIds: string[]
-    eventIds: string[]
-    changes: CanonicalTurnReceiptChange[]
-    warnings: string[]
-    recordedAt: string
-    undoneAt?: string
-}
 
 export interface NarrativeMemoryObservability {
     requestGraphNodeInspections: number
@@ -557,7 +539,7 @@ export async function saveManualWikiDocument(input: {
     characterId: string
     chatId: string
     documentId?: string
-    type: CanonicalMarkdownWikiDocumentType
+    type: MarkdownWikiDocumentType
     title: string
     markdown: string
     expectedContentHash?: string
@@ -882,161 +864,4 @@ export async function revealWikiDocument(input: {
         throw new Error('Invalid wiki file reveal receipt')
     }
     return { ok: true }
-}
-
-export async function snapshotWikiBeforeTurn(input: {
-    characterId: string
-    chatId: string
-    sourceMessageIds: string[]
-    fetchImpl: typeof fetch
-    createAuth(): Promise<string>
-}): Promise<{ snapshotId: string; canonicalCount: number }> {
-    const body = {
-        characterId: requiredMutationString(input.characterId, 'Character ID', 1_024),
-        chatId: requiredMutationString(input.chatId, 'Chat ID', 1_024),
-        sourceMessageIds: input.sourceMessageIds.map((id) =>
-            requiredMutationString(id, 'Source message ID', 1_024)
-        ),
-    }
-    if (body.sourceMessageIds.length < 1) {
-        throw new Error('Wiki snapshot requires at least one source message')
-    }
-    const response = await invokeBrowserFetch(
-        input.fetchImpl,
-        '/api/risubard/memory/wiki/snapshot',
-        {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-                'content-type': 'application/json',
-                'risu-auth': await input.createAuth(),
-            },
-            body: JSON.stringify(body),
-        }
-    )
-    if (!response.ok) {
-        throw new Error(`Wiki snapshot failed with status ${response.status}`)
-    }
-    const value: unknown = await response.json()
-    if (!isRecord(value)
-        || !hasExactKeys(value, ['snapshotId', 'canonicalCount'])
-        || typeof value.snapshotId !== 'string'
-        || !Number.isSafeInteger(value.canonicalCount)
-        || Number(value.canonicalCount) < 0) {
-        throw new Error('Invalid wiki snapshot receipt')
-    }
-    return {
-        snapshotId: value.snapshotId,
-        canonicalCount: value.canonicalCount as number,
-    }
-}
-
-function parseCanonicalTurnReceipt(value: unknown): CanonicalTurnReceipt {
-    if (!isRecord(value)
-        || typeof value.snapshotId !== 'string'
-        || !Array.isArray(value.sourceMessageIds)
-        || !value.sourceMessageIds.every((id) => typeof id === 'string')
-        || !Array.isArray(value.eventIds)
-        || !value.eventIds.every((id) => typeof id === 'string')
-        || !Array.isArray(value.warnings)
-        || !value.warnings.every((warning) => typeof warning === 'string')
-        || typeof value.recordedAt !== 'string'
-        || (value.undoneAt !== undefined && typeof value.undoneAt !== 'string')
-        || !Array.isArray(value.changes)) {
-        throw new Error('Invalid wiki turn receipt')
-    }
-    const changes = value.changes.map((change) => {
-        if (!isRecord(change)
-            || typeof change.documentId !== 'string'
-            || !['character', 'location', 'scene', 'faction', 'item',
-                'concept', 'other'].includes(String(change.type))
-            || typeof change.title !== 'string'
-            || typeof change.relativePath !== 'string'
-            || (change.action !== 'create' && change.action !== 'update')
-            || (change.beforeHash !== null
-                && typeof change.beforeHash !== 'string')
-            || typeof change.afterHash !== 'string'
-            || (change.undoneAt !== undefined
-                && typeof change.undoneAt !== 'string')
-            || (change.undoConflict !== undefined
-                && change.undoConflict !== 'changed-after-turn'
-                && change.undoConflict !== 'missing-after-turn')) {
-            throw new Error('Invalid wiki turn receipt change')
-        }
-        return change as unknown as CanonicalTurnReceiptChange
-    })
-    return {
-        snapshotId: value.snapshotId,
-        sourceMessageIds: value.sourceMessageIds as string[],
-        eventIds: value.eventIds as string[],
-        changes,
-        warnings: value.warnings as string[],
-        recordedAt: value.recordedAt,
-        ...(typeof value.undoneAt === 'string'
-            ? { undoneAt: value.undoneAt }
-            : {}),
-    }
-}
-
-export async function recordWikiTurnReceipt(input: {
-    characterId: string
-    chatId: string
-    snapshotId: string
-    sourceMessageIds: string[]
-    eventId?: string
-    changes: Array<{
-        documentId: string
-        type: CanonicalMarkdownWikiDocumentType
-        title: string
-        relativePath: string
-        afterHash: string
-    }>
-    warnings: string[]
-    fetchImpl: typeof fetch
-    createAuth(): Promise<string>
-}): Promise<CanonicalTurnReceipt> {
-    const { fetchImpl, createAuth, ...body } = input
-    const response = await invokeBrowserFetch(
-        fetchImpl,
-        '/api/risubard/memory/wiki/receipt',
-        {
-            method: 'POST', credentials: 'same-origin',
-            headers: {
-                'content-type': 'application/json',
-                'risu-auth': await createAuth(),
-            },
-            body: JSON.stringify(body),
-        }
-    )
-    if (!response.ok) {
-        throw new Error(`Wiki turn receipt failed with status ${response.status}`)
-    }
-    return parseCanonicalTurnReceipt(await response.json())
-}
-
-export async function undoWikiTurnReceipt(input: {
-    characterId: string
-    chatId: string
-    snapshotId: string
-    documentId?: string
-    fetchImpl: typeof fetch
-    createAuth(): Promise<string>
-}): Promise<CanonicalTurnReceipt> {
-    const { fetchImpl, createAuth, ...body } = input
-    const response = await invokeBrowserFetch(
-        fetchImpl,
-        '/api/risubard/memory/wiki/receipt/undo',
-        {
-            method: 'POST', credentials: 'same-origin',
-            headers: {
-                'content-type': 'application/json',
-                'risu-auth': await createAuth(),
-            },
-            body: JSON.stringify(body),
-        }
-    )
-    if (!response.ok) {
-        throw new Error(`Wiki turn undo failed with status ${response.status}`)
-    }
-    return parseCanonicalTurnReceipt(await response.json())
 }

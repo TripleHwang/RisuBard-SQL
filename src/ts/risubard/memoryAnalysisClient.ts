@@ -24,9 +24,11 @@ import {
 } from './narrativeContext'
 import {
     loadNarrativeMemoryWiki,
-    recordWikiTurnReceipt,
-    snapshotWikiBeforeTurn,
 } from './memoryWiki'
+import {
+    beginWikiRebootBatch,
+    recordWikiRebootBatchReceipt,
+} from './wikiRebootTransport'
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
 import { saveCanonicalWikiDocument } from './markdownWikiWriter'
 import type { WikiWritingLanguage } from './wikiWritingLanguage'
@@ -687,13 +689,17 @@ export function createStoredResponseMemoryAnalysis(
     }
     const markdownWikiService = {
         inquire: graphService.inquire,
-        async snapshotBeforeTurn(input: {
+        async beginRebootBatch(input: {
             characterId: string
             chatId: string
             sourceMessageIds: string[]
+            eventSourceGroups: string[][]
         }) {
-            return snapshotWikiBeforeTurn({
-                ...input,
+            return beginWikiRebootBatch({
+                characterId: input.characterId,
+                stagingChatId: input.chatId,
+                sourceMessageIds: input.sourceMessageIds,
+                eventSourceGroups: input.eventSourceGroups,
                 fetchImpl: options.fetchImpl,
                 createAuth: options.createAuth,
             })
@@ -743,24 +749,15 @@ export function createStoredResponseMemoryAnalysis(
                 'documents'
             ][number]
         },
-        async recordTurnReceipt(input: {
+        async recordRebootBatchReceipt(input: {
             characterId: string
             chatId: string
-            snapshotId: string
-            sourceMessageIds: string[]
-            eventId?: string
-            changes: Array<{
-                documentId: string
-                type: 'character' | 'location' | 'scene' | 'faction'
-                    | 'item' | 'concept' | 'other'
-                title: string
-                relativePath: string
-                afterHash: string
-            }>
-            warnings: string[]
+            receipt: import('./canonicalTurnReceipt').CanonicalTurnReceipt
         }) {
-            return recordWikiTurnReceipt({
-                ...input,
+            return recordWikiRebootBatchReceipt({
+                characterId: input.characterId,
+                stagingChatId: input.chatId,
+                receipt: input.receipt,
                 fetchImpl: options.fetchImpl,
                 createAuth: options.createAuth,
             })

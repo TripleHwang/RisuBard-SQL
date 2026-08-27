@@ -41,7 +41,8 @@ describe('chat file save slot connections', () => {
         expect(chatScreenSource).toContain('bind:mode={saveSlotsMode}')
         expect(chatScreenSource).toContain('onSave={saveCurrentChat}')
         expect(chatScreenSource).toContain('saveId: saveId ?? v4()')
-        expect(chatScreenSource).toContain('overwrite: saveId !== undefined')
+        expect(chatScreenSource).toContain('overwrite = saveId !== undefined')
+        expect(chatScreenSource).toContain('overwrite,')
     })
 
     test('removes save and load actions from the character sidebar', () => {
@@ -52,46 +53,52 @@ describe('chat file save slot connections', () => {
         expect(source).not.toContain('<RisuBardSaveSlotsDialog')
     })
 
-    test('adds shared save and load entries to the composer menu and floating dock', () => {
+    test('adds save, load, quicksave and quickload to an inline composer toolbar', () => {
         expect(defaultChatSource).toContain('data-composer-save-chat')
         expect(defaultChatSource).toContain('data-composer-load-chat')
         expect(defaultChatSource).toContain('onSaveChat')
         expect(defaultChatSource).toContain('onOpenChatLoad')
         expect(defaultChatSource).toMatch(
-            /<main[^>]*data-chat-pane[\s\S]*<RisuBardSaveLoadShortcuts/
+            /data-composer-save-toolbar[\s\S]*plugin-compat-items-stretch/
         )
-        expect(defaultChatSource).toContain('data-save-load-shortcut-anchor')
-        expect(defaultChatSource).toContain('anchorElement={saveLoadShortcutAnchor}')
         expect(chatScreenSource).not.toContain('<RisuBardSaveLoadShortcuts')
-        expect(shortcutsSource).toContain('data-chat-file-shortcuts')
+        expect(shortcutsSource).toContain('data-composer-save-toolbar')
         expect(shortcutsSource).toContain('data-shortcut-save-chat')
         expect(shortcutsSource).toContain('data-shortcut-load-chat')
-        expect(shortcutsSource).toContain('>save</span>')
-        expect(shortcutsSource).toContain('>load</span>')
+        expect(shortcutsSource).toContain('data-shortcut-quicksave-chat')
+        expect(shortcutsSource).toContain('data-shortcut-quickload-chat')
+        expect(shortcutsSource).toContain('onQuickSave')
+        expect(shortcutsSource).toContain('onQuickLoad')
         expect(shortcutsSource).toContain('role="group"')
         expect(shortcutsSource).toContain('aria-label={language.risuBardShowSaveLoadShortcuts}')
-        expect(shortcutsSource).toContain('position: absolute')
+        expect(shortcutsSource).not.toMatch(/\.save-load-toolbar\s*\{[^}]*position:\s*absolute/)
+        expect(defaultChatSource).not.toContain('!$MobileGUI')
         expect(chatScreenSource).toContain('<RisuBardSaveSlotsDialog')
     })
 
-    test('keeps the labeled shortcut block draggable and persistently movable', () => {
-        expect(shortcutsSource).toContain('resolveSaveLoadShortcutPosition(')
-        expect(shortcutsSource).toContain('anchorSaveLoadShortcut(')
-        expect(shortcutsSource).toContain('onpointerdown={beginDrag}')
-        expect(shortcutsSource).toContain('onpointermove={moveDrag}')
-        expect(shortcutsSource).toContain('onpointerup={endDrag}')
-        expect(shortcutsSource).toContain('(event.target as HTMLElement).setPointerCapture')
-        expect(shortcutsSource).toContain('risuBardSaveLoadShortcutPlacement')
-        expect(shortcutsSource).toContain('requestImmediateSave()')
-        expect(shortcutsSource).toContain('touch-action: none')
+    test('centers the composer toolbar and matches the input pill styling', () => {
+        expect(shortcutsSource).not.toContain('onpointerdown={beginDrag}')
+        expect(shortcutsSource).not.toContain('risuBardSaveLoadShortcutPlacement')
+        expect(shortcutsSource).toContain('display: flex')
+        expect(shortcutsSource).toContain('margin: 0 auto .5rem')
+        expect(shortcutsSource).toContain('border: 1px solid var(--color-darkborderc)')
+        expect(shortcutsSource).toContain('border-radius: 1.5rem')
+        expect(shortcutsSource).toContain('background: var(--color-bgcolor)')
+        expect(shortcutsSource).toContain('width: 2.25rem')
+        expect(shortcutsSource).toContain('border-radius: 999px')
     })
 
-    test('uses the requested Solar icons inside the floating block', () => {
+    test('uses Solar save/load assets and lightning overlays for quick actions', () => {
         expect(shortcutsSource).toContain('<SolarAssetIcon src={feedIcon} name="feed-bold"')
         expect(shortcutsSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
+        expect(shortcutsSource).toContain('name="diskette-bold"')
+        expect(shortcutsSource).toContain('name="lightning-bold"')
+        expect(shortcutsSource).toContain('quick-icon__bolt')
         for (const asset of [
             'src/assets/solar-bold/feed-bold.svg',
             'src/assets/solar-bold/undo-left-square-bold.svg',
+            'src/assets/solar-bold/diskette-bold.svg',
+            'src/assets/solar-bold/lightning-bold.svg',
         ]) {
             expect(existsSync(resolve(process.cwd(), asset))).toBe(true)
         }
@@ -107,6 +114,31 @@ describe('chat file save slot connections', () => {
         expect(databaseSource).toContain('showRisuBardSaveLoadShortcuts?: boolean')
         expect(databaseSource).toContain('data.showRisuBardSaveLoadShortcuts ??= true')
         expect(defaultChatSource).toContain('DBState.db.showRisuBardSaveLoadShortcuts')
+    })
+
+    test('exposes bounded autosave interval and retention in common settings', () => {
+        expect(commonSettingsSource).toContain("id: 'risubard.common.autosaveInterval'")
+        expect(commonSettingsSource).toContain("bindKey: 'risuBardAutosaveInterval'")
+        expect(commonSettingsSource).toContain("id: 'risubard.common.autosaveRetention'")
+        expect(commonSettingsSource).toContain("bindKey: 'risuBardAutosaveRetention'")
+        expect(databaseSource).toContain('risuBardAutosaveInterval?: number')
+        expect(databaseSource).toContain('risuBardAutosaveRetention?: number')
+        expect(databaseSource).toContain('normalizeAutosaveInterval(')
+        expect(databaseSource).toContain('normalizeAutosaveRetention(')
+    })
+
+    test('orchestrates one quick slot and rotating autosaves per chat', () => {
+        expect(chatScreenSource).toContain('quickSaveId(chat.id)')
+        expect(chatScreenSource).toContain('listMemorySaveSlots({')
+        expect(chatScreenSource).toContain('quickSaveCurrentChat')
+        expect(chatScreenSource).toContain('quickLoadCurrentChat')
+        expect(chatScreenSource).toContain('shouldCreateAutosave(')
+        expect(chatScreenSource).toContain('autoSaveId(')
+        expect(chatScreenSource).toContain('obsoleteAutosaveIds(')
+        expect(chatScreenSource).toContain('risuBardLastAutosaveTurn')
+        expect(chatScreenSource).toContain('silent: true')
+        expect(defaultChatSource).toContain('onQuickSave')
+        expect(defaultChatSource).toContain('onQuickLoad')
     })
 
     test('shows the current chat as a plain title above a separate chat-list disclosure', () => {
@@ -149,37 +181,43 @@ describe('chat file save slot connections', () => {
 
     test('turns the load dialog into a selectable file workspace', () => {
         expect(dialogSource).not.toContain('{#snippet description()}')
-        expect(dialogSource).toContain('저장된 파일')
+        expect(dialogSource).not.toContain("{#snippet title()}")
+        expect(dialogSource).toContain('data-save-dialog-context')
+        expect(dialogSource).toContain('data-autosave-strip')
+        expect(dialogSource).toContain('data-save-slot-kind="quick"')
         expect(dialogSource).toContain('data-save-file-toolbar')
         expect(dialogSource).not.toContain('save-ledger__refresh')
         expect(dialogSource).toContain('data-save-file-rename')
         expect(dialogSource).toContain('data-save-file-delete')
         expect(dialogSource).toContain('data-save-file-sort')
         expect(dialogSource).toContain('data-save-file-grid')
-        expect(dialogSource).toContain('grid-template-columns: repeat(2, minmax(0, 1fr))')
+        expect(dialogSource).toContain('grid-template-columns: repeat(6, minmax(0, 1fr))')
+        expect(dialogSource).toContain('aspect-ratio: 1')
         expect(dialogSource).toContain('overflow-y: auto')
         expect(dialogSource).toContain('data-save-file-preview')
         expect(dialogSource).toContain('previewMemorySaveSlot')
-        expect(dialogSource).toContain('grid-template-columns: minmax(0, 1fr)')
-        expect(dialogSource).not.toContain('minmax(0, 1.35fr)')
+        expect(dialogSource).toContain('width: min(70.4rem, calc(100vw - 2rem))')
+        expect(dialogSource).toContain('height: 91vh')
+        expect(dialogSource).toContain('width: 100dvw')
+        expect(dialogSource).toContain('height: 100dvh')
         expect(dialogSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
         expect(dialogSource).toContain('@media (max-width: 767px)')
-        expect(dialogSource).toContain('height: 70vh')
+        expect(dialogSource).not.toContain('height: 70vh')
         expect(dialogSource).not.toContain('SAVE_SLOT_DIALOG_GEOMETRY_KEY')
         expect(dialogSource).not.toContain('bind:contentElement')
         expect(dialogSource).not.toContain('class="save-dialog__drag-handle"')
         expect(dialogSource).toContain('data-preview-resize-handle')
         expect(dialogSource).toContain('role="separator"')
-        expect(dialogSource).toContain('overflow-y: scroll')
-        expect(dialogSource).toContain('scrollbar-gutter: stable')
-        expect(dialogSource).toContain('size={48}')
-        expect(dialogSource).toContain('[턴 {slot.turnCount}]')
-        expect(dialogSource).toContain("'{selectedSlot.sourceChatName}'의 최근 대화")
+        expect(dialogSource).toContain('grid-auto-flow: column')
+        expect(dialogSource).toContain('TURN {slot.turnCount}')
+        expect(dialogSource).toContain("'{slotLabel(selectedSlot)}' 최근 대화")
         expect(dialogSource).toContain('currentChatId: string')
         expect(dialogSource).toContain('sourceChatId: currentChatId')
         expect(chatScreenSource).toContain(
             'currentChatId={currentCharacter.chats[currentCharacter.chatPage]?.id}'
         )
+        expect(chatScreenSource).toContain('characterName={currentCharacter.name}')
+        expect(chatScreenSource).toContain('currentChatName={currentCharacter.chats[currentCharacter.chatPage]?.name}')
     })
 
     test('replaces the current chat and finalizes its wiki only after persistence', () => {

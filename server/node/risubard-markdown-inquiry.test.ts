@@ -323,6 +323,33 @@ describe('progressive Markdown inquiry', () => {
         ])
     })
 
+    test('injects current character state even when long history appears first', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '체사레와 산책한다.',
+            documents: [document({
+                id: 'cesare', type: 'character', title: '체사레',
+                relativePath: 'characters/cesare.md',
+                content: [
+                    '## 체사레',
+                    '### 작중 행적',
+                    `- ${'오래된 사건 '.repeat(500)}`,
+                    '### 현재 상태',
+                    '- 쉽독이다.',
+                    '- 이탈리아에 남기로 했다.',
+                    '### 관계',
+                    '- 연인과 교제한 지 21개월이다.',
+                ].join('\n\n'),
+            })],
+        })
+
+        expect(result.sources).toHaveLength(1)
+        expect(result.sources[0].content).toContain('### 현재 상태')
+        expect(result.sources[0].content).toContain('쉽독이다')
+        expect(result.sources[0].content).toContain('### 관계')
+        expect(result.sources[0].content).not.toContain('오래된 사건 오래된 사건')
+        expect(result.sources[0].content.length).toBeLessThanOrEqual(2_000)
+    })
+
     test('keeps linked characters for explicit relationship questions', () => {
         const result = inquireMarkdownDocuments({
             currentInput: '리리아와 연결된 인물은 누구인가?',

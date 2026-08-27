@@ -69,11 +69,11 @@ describe('buildWikiFileTree', () => {
             node.kind === 'folder' && node.children.length === 0
         )).toBe(true)
         expect(tree.find((node) => node.name === 'events')).toEqual(
-            expect.objectContaining({ readOnly: true })
+            expect.objectContaining({ readOnly: false })
         )
     })
 
-    it('groups documents by path and marks the events folder read-only', () => {
+    it('groups editable event documents under the events folder', () => {
         const tree = buildWikiFileTree([
             { id: 'scene', title: '현재 장면', relativePath: 'current-scene.md', type: 'scene' },
             { id: 'character', title: '라비안', relativePath: 'characters/라비안.md', type: 'character' },
@@ -93,8 +93,11 @@ describe('buildWikiFileTree', () => {
         expect(tree.find((node) => node.name === 'events')).toEqual(
             expect.objectContaining({
                 kind: 'folder',
-                readOnly: true,
-                children: [expect.objectContaining({ documentId: 'event' })],
+                readOnly: false,
+                children: [expect.objectContaining({
+                    documentId: 'event',
+                    readOnly: false,
+                })],
             })
         )
     })
@@ -111,7 +114,7 @@ describe('buildWikiFileTree', () => {
         expect(tree.find((node) => node.name === 'events')).toEqual(
             expect.objectContaining({
                 kind: 'folder',
-                readOnly: true,
+                readOnly: false,
                 children: [],
             })
         )

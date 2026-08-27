@@ -3,6 +3,7 @@
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
+    import { canBranchFromMessage, deletionTouchesBardWikiEvidence } from "src/ts/risubard/chatHistoryPolicy"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { getModelInfo } from "src/ts/model/modellist"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
@@ -63,10 +64,6 @@
         onConfirmMemory?: (messageId: string) => Promise<boolean>;
         memoryConfirmed?: boolean;
         canonicalReceipt?: CanonicalTurnReceipt;
-        onUndoCanonical?: (
-            messageId: string,
-            documentId?: string
-        ) => Promise<boolean>;
         character?: simpleCharacterArgument|string|null;
         firstMessage?: boolean;
         altGreeting?: boolean;
@@ -97,7 +94,6 @@
         onConfirmMemory = async () => false,
         memoryConfirmed = false,
         canonicalReceipt,
-        onUndoCanonical = async () => false,
         character = null,
         firstMessage = false,
         altGreeting = false,
@@ -139,6 +135,10 @@
         }
         const sel = await alertConfirmMulti(language.removeChat, actions)
         if(sel < 0) return
+        if(deletionTouchesBardWikiEvidence(messages, idx, sel === 1)){
+            notifyInfo(language.bardWikiDeleteBlocked)
+            return
+        }
         const currentCharacter = DBState.db.characters[selIdState.selId]
         const currentChat = currentCharacter.chats[currentCharacter.chatPage]
         let msg = currentChat.message
@@ -422,12 +422,6 @@
         {#if role === 'char' && canonicalReceipt && idx >= 0}
             <RisuBardTurnReceipt
                 receipt={canonicalReceipt}
-                onUndo={(documentId) => onUndoCanonical(
-                    DBState.db.characters[selIdState.selId]
-                        .chats[DBState.db.characters[selIdState.selId].chatPage]
-                        .message[idx]?.chatId ?? '',
-                    documentId
-                )}
             />
         {/if}
         {#if messageGenerationInfo && (DBState.db.requestInfoInsideChat || aiLawApplies())}
@@ -1040,6 +1034,10 @@
         await sleep(1)
         const currentCharacter = DBState.db.characters[selIdState.selId]
         const currentChat = currentCharacter.chats[currentCharacter.chatPage]
+        if(!canBranchFromMessage(currentChat.message, idx)){
+            notifyInfo(language.bardWikiHistoricalBranchBlocked)
+            return
+        }
         const currentMessage = currentChat.message[idx]
         const newChat = $state.snapshot(currentChat)
         newChat.name = createChatCopyName(newChat.name, 'Branch')

@@ -26,7 +26,7 @@
         revealWikiDocument,
         retractWikiEvent,
         trashWikiDocument,
-        type CanonicalMarkdownWikiDocumentType,
+        type MarkdownWikiDocumentType,
         type NarrativeMemoryWikiMarkdown,
     } from 'src/ts/risubard/memoryWiki'
     import { buildWikiFileTree, getRecentlyUpdatedWikiDocumentIds } from 'src/ts/risubard/wikiFileTree'
@@ -62,7 +62,7 @@
         onOpenFindReplace,
     }: Props = $props()
     let creating = $state(false)
-    let type = $state<CanonicalMarkdownWikiDocumentType>('character')
+    let type = $state<MarkdownWikiDocumentType>('character')
     let title = $state('')
     let markdown = $state('')
     let saving = $state(false)
@@ -70,7 +70,7 @@
     let notice = $state('')
     let loadedDocumentId = $state('')
     let loadedContentHash = $state('')
-    let loadedType = $state<CanonicalMarkdownWikiDocumentType>('character')
+    let loadedType = $state<MarkdownWikiDocumentType>('character')
     let loadedTitle = $state('')
     let loadedMarkdown = $state('')
     let contextDocumentId = $state('')
@@ -97,8 +97,7 @@
     let selected = $derived(
         documents.find((document) => document.id === selectedId) ?? null
     )
-    let readOnly = $derived(locked
-        || (selected?.type === 'event' && !creating))
+    let readOnly = $derived(locked)
     let contextDocument = $derived(
         documents.find((document) => document.id === contextDocumentId) ?? null
     )
@@ -111,12 +110,12 @@
     function loadDocument(document: WikiDocument) {
         selectedId = document.id
         creating = false
-        type = document.type === 'event' ? 'other' : document.type
+        type = document.type
         title = document.title
         markdown = document.content
         loadedDocumentId = document.id
         loadedContentHash = document.contentHash
-        loadedType = document.type === 'event' ? 'other' : document.type
+        loadedType = document.type
         loadedTitle = document.title
         loadedMarkdown = document.content
         error = ''
@@ -449,7 +448,7 @@
         const current = documents.find((document) => document.id === selectedId)
             ?? documents[0]
         if (creating || !current) return
-        const incomingType = current.type === 'event' ? 'other' : current.type
+        const incomingType = current.type
         const matchesIncoming = title === current.title
             && type === incomingType
             && markdown === current.content
@@ -596,7 +595,8 @@
             <div class="editor-title-row" data-wiki-title-row>
                 <label>
                     <span>타입</span>
-                    <select aria-label="항목 유형" bind:value={type} disabled={readOnly}>
+                    <select aria-label="항목 유형" bind:value={type} disabled={readOnly || selected?.type === 'event'}>
+                        {#if selected?.type === 'event'}<option value="event">사건</option>{/if}
                         <option value="character">캐릭터</option>
                         <option value="location">장소</option>
                         <option value="faction">세력</option>
@@ -660,11 +660,12 @@
                 </label>
             </div>
         </header>
-        {#if selected?.status === 'retracted' || readOnly || dirty}
+        {#if selected?.status === 'retracted' || readOnly || dirty || selected?.type === 'event'}
             <div class="document-meta">
             {#if selected?.status === 'retracted'}<span class="readonly-badge">철회된 사건 기록</span>
-            {:else if readOnly}<span class="readonly-badge">읽기 전용 사건 기록</span>
-            {:else if dirty}<span class="dirty-badge">저장하지 않은 변경</span>{/if}
+            {:else if readOnly}<span class="readonly-badge">위키 작업 잠김</span>
+            {:else if dirty}<span class="dirty-badge">저장하지 않은 변경</span>
+            {:else if selected?.type === 'event'}<span>사용자 편집 사건</span>{/if}
             </div>
         {/if}
         {#if markdownPreview}
@@ -685,7 +686,8 @@
             {#if error}<span class="error">{error}</span>
             {:else if notice}<span class="success">{notice}</span>
             {:else if selected?.status === 'retracted'}<span>철회되어 활성 컨텍스트와 자동 처리에서 제외된 감사 기록입니다.</span>
-            {:else if readOnly}<span>이 파일은 확정된 채팅과 연결된 근거이므로 여기서 수정할 수 없습니다.</span>{/if}
+            {:else if readOnly}<span>현재 위키 작업이 끝난 뒤 수정할 수 있습니다.</span>
+            {:else if selected?.type === 'event'}<span>수정 내용은 지금까지의 이야기에 반영되며 연결된 채팅 출처는 유지됩니다.</span>{/if}
         </div>
     </div>
 </section>

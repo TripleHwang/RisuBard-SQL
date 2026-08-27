@@ -14,24 +14,18 @@ const chats = readFileSync(resolve(
     process.cwd(),
     'src/lib/ChatScreens/Chats.svelte'
 ), 'utf8')
-const processSource = readFileSync(resolve(
-    process.cwd(),
-    'src/ts/process/index.svelte.ts'
-), 'utf8')
-
 describe('per-assistant canonical turn receipt', () => {
-    test('renders whole-turn and per-document undo from persisted messages', () => {
+    test('renders compact provenance without per-turn undo controls', () => {
         expect(receipt).toContain('data-risubard-turn-receipt')
-        expect(receipt).toContain('risuBardUndoTurnCanon')
-        expect(receipt).toContain('undo(change.documentId)')
+        expect(receipt).not.toContain('onUndo')
+        expect(receipt).not.toContain('undo(change.documentId)')
+        expect(receipt).not.toContain('undoConflict')
         expect(chat).toContain('role === \'char\' && canonicalReceipt')
         expect(chats).toContain(
             'canonicalReceipt: message.risubardCanonicalReceipt'
         )
         expect(chats).toContain('JSON.stringify(message.risubardCanonicalReceipt')
-        expect(receipt).toContain('change.undoConflict')
-        expect(receipt).toContain('risuBardCanonUndoConflictChanged')
-        expect(processSource).toContain('if (!documentId && updated.undoneAt)')
-        expect(processSource).toContain('message.risubardMemoryConfirmed = false')
+        expect(chat).not.toContain('onUndoCanonical')
+        expect(chats).not.toContain('onUndoCanonical')
     })
 })

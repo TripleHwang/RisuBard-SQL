@@ -65,7 +65,6 @@ import {
     retractWikiEvent,
     saveManualWikiDocument,
     trashWikiDocument,
-    undoWikiTurnReceipt,
 } from '../risubard/memoryWiki';
 import { announceRisuBardMemoryUpdated } from '../risubard/memoryEvents';
 import {
@@ -88,6 +87,7 @@ import {
 } from '../risubard/wikiReboot';
 import {
     cleanupWikiRebootWorkspace,
+    completeWikiRebootBatch,
     prepareWikiRebootReplacement,
     recoverWikiRebootBatch,
 } from '../risubard/wikiRebootTransport';
@@ -95,6 +95,7 @@ import { completeMemoryWikiFork } from '../risubard/memoryWikiFork';
 import {
     beginWikiGeneration,
     endWikiGeneration,
+    isWikiGenerating,
 } from '../risubard/wikiGenerationState';
 
 function resolvedRisuBardSettings(chat?: Chat) {
@@ -265,7 +266,6 @@ export async function forceCurrentNarrativeWikiUpdate(): Promise<boolean> {
         additionalAnalysis: true,
         excludeCanonicalDocumentIds: target.risubardCanonicalReceipt
             ?.changes
-            .filter((change) => !change.undoneAt)
             .map((change) => change.documentId) ?? [],
         ...projected,
     })
@@ -444,6 +444,15 @@ async function runWikiReboot(
                 if (recovered) {
                     applyWikiRebootBatchReceipt(chat, batch, recovered)
                     await persistWikiReboot(character, chat, chatIndex)
+                    await completeWikiRebootBatch({
+                        characterId: character.chaId,
+                        stagingChatId: job.stagingChatId,
+                        sourceMessageIds: projected.sourceMessageIds,
+                        fetchImpl: fetch,
+                        createAuth: () => forageStorage.createAuth(),
+                    }).catch((error) => {
+                        console.warn('[RisuBard wiki reboot batch cleanup]', error)
+                    })
                     continue
                 }
             }
@@ -506,6 +515,15 @@ async function runWikiReboot(
             }
             applyWikiRebootBatchReceipt(chat, batch, receipt)
             await persistWikiReboot(character, chat, chatIndex)
+            await completeWikiRebootBatch({
+                characterId: character.chaId,
+                stagingChatId: job.stagingChatId,
+                sourceMessageIds: projected.sourceMessageIds,
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            }).catch((error) => {
+                console.warn('[RisuBard wiki reboot batch cleanup]', error)
+            })
         }
         return true
     }
@@ -730,34 +748,6 @@ export async function executeCurrentNarrativeWikiCommand(
     }
 }
 
-export async function undoCurrentNarrativeCanonicalReceipt(
-    messageId: string,
-    documentId?: string
-): Promise<boolean> {
-    const character = DBState.db.characters[get(selectedCharID)]
-    const chat = character?.chats[character.chatPage]
-    const message = chat?.message.find((item) => item.chatId === messageId)
-    const receipt = message?.risubardCanonicalReceipt
-    if (!character || !chat || !message || !receipt) return false
-    const updated = await undoWikiTurnReceipt({
-        characterId: character.chaId,
-        chatId: ensureNarrativeSessionChatId(chat, v4),
-        snapshotId: receipt.snapshotId,
-        ...(documentId ? { documentId } : {}),
-        fetchImpl: fetch,
-        createAuth: () => forageStorage.createAuth(),
-    })
-    message.risubardCanonicalReceipt = updated
-    if (!documentId && updated.undoneAt) {
-        message.risubardMemoryConfirmed = false
-    }
-    announceRisuBardMemoryUpdated({
-        characterId: character.chaId,
-        chatId: ensureNarrativeSessionChatId(chat, v4),
-    })
-    return true
-}
-
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
     content: string
@@ -834,6 +824,11 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     preview?:boolean
     previewPrompt?:boolean
 } = {}):Promise<boolean> {
+
+    if (!arg.preview && !arg.previewPrompt && get(isWikiGenerating)) {
+        alertError(language.risuBardWikiGenerationChatLocked)
+        return false
+    }
 
     const selected = DBState.db.characters[get(selectedCharID)]
     const selectedConversation = selected?.chats[selected.chatPage]

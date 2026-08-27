@@ -292,6 +292,77 @@ describe('direct wiki command', () => {
         expect(result.failed).toEqual([])
     })
 
+    test('updates an existing event without retracting or recreating it', async () => {
+        const saveDocument = vi.fn(async (input) => ({
+            id: input.documentId!,
+            title: input.title,
+            relativePath: 'events/turn.md',
+        }))
+        const retractEvent = vi.fn()
+
+        const result = await executeDirectWikiCommand({
+            instruction: '기존 사건의 승리를 패배로 고쳐.',
+            documents,
+            currentMessages: [],
+            maxTokens: 12_000,
+            requestModel: async () => ({
+                type: 'success',
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    operations: [{
+                        action: 'upsert',
+                        targetDocumentId: 'event.turn',
+                        type: 'event',
+                        title: '기존 사건',
+                        markdown: '## 기존 사건\n\n### 이야기 요약\n\n- 전투에서 패배했다.',
+                        reason: '사용자 사건 교정',
+                    }],
+                }),
+            }),
+            saveDocument,
+            trashDocument: vi.fn(),
+            retractEvent,
+        })
+
+        expect(saveDocument).toHaveBeenCalledWith(expect.objectContaining({
+            documentId: 'event.turn',
+            expectedContentHash: 'hash-event',
+            type: 'event',
+        }))
+        expect(retractEvent).not.toHaveBeenCalled()
+        expect(result.failed).toEqual([])
+    })
+
+    test('rejects an event edit without its exact existing document ID', async () => {
+        const saveDocument = vi.fn()
+        const result = await executeDirectWikiCommand({
+            instruction: '기존 사건을 고쳐.',
+            documents,
+            currentMessages: [],
+            maxTokens: 12_000,
+            requestModel: async () => ({
+                type: 'success',
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    operations: [{
+                        action: 'upsert',
+                        targetDocumentId: null,
+                        type: 'event',
+                        title: '기존 사건',
+                        markdown: '## 기존 사건\n\n### 이야기 요약\n\n- 수정했다.',
+                        reason: '사건 수정',
+                    }],
+                }),
+            }),
+            saveDocument,
+            trashDocument: vi.fn(),
+            retractEvent: vi.fn(),
+        })
+
+        expect(saveDocument).not.toHaveBeenCalled()
+        expect(result.failed[0]?.reason).toContain('정확한 문서 ID')
+    })
+
     test('continues safe operations and reports every failed target', async () => {
         const result = await executeDirectWikiCommand({
             instruction: '두 문서를 갱신해.', documents, currentMessages: [],

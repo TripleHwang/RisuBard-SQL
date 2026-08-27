@@ -252,6 +252,8 @@ export const helpKo = {
         "hideRealm": "홈 화면의 Recently Uploaded 섹션을 접힌 상태로 시작합니다. 접혀있는 동안은 RisuRealm을 불러오지 않아 초기 로딩이 빨라집니다. 홈 화면에서 언제든 펼칠 수 있습니다.",
         "showFolderNameInIcon": "캐릭터 그리드에서 폴더에 해당하는 캐릭터 이름 위에 폴더 이름을 함께 표시합니다. 폴더가 많을 때 분류가 한눈에 들어옵니다.",
         "showRequestStatus": "채팅 요청 중 우상단에 진행 상태와 실제 주입 항목별 토큰, 총 입력 토큰, 사고·응답 토큰 및 속도를 표시합니다. 내용은 저장하지 않으며, 끄면 알림이 완전히 표시되지 않습니다.",
+        "risuBardAutosaveInterval": "몇 턴마다 자동저장할지 정합니다. 5로 설정하면 1, 6, 11턴처럼 첫 턴부터 5턴 간격으로 저장합니다.",
+        "risuBardAutosaveRetention": "채팅마다 순환 보관할 자동저장 파일의 최대 개수입니다. 한도를 넘으면 가장 오래된 자동저장 슬롯을 덮어씁니다.",
         "risuBardRecentMessages": "응답이 끝난 뒤 위키를 갱신할 때 분석에 넘길 최근 사용자·어시스턴트 메시지의 최대 개수입니다.",
         "risuBardResponseRecentMessages": "새 답변을 만들 때 참조할 최근 메시지의 최대 개수입니다. 현재 사용자 요청도 이 개수에 포함됩니다.",
         "risuBardCanonicalWritingStyle": "사건 이야기 요약 및 정본 Markdown에 적용할 문체입니다. 위키 작성 언어와 독립적이며 간결이 기본값입니다.",

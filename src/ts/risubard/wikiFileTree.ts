@@ -61,7 +61,7 @@ export function buildWikiFileTree(
             kind: 'folder',
             name,
             path: name,
-            readOnly: name === 'events',
+            readOnly: false,
             children: [],
         })
     }
@@ -71,7 +71,7 @@ export function buildWikiFileTree(
         }
         const parts = document.relativePath.split('/').filter(Boolean)
         if (parts.length === 0) continue
-        const readOnly = document.type === 'event'
+        const readOnly = false
         if (parts.length === 1) {
             roots.set(document.relativePath, {
                 kind: 'file',
@@ -92,7 +92,7 @@ export function buildWikiFileTree(
                 kind: 'folder',
                 name: folderName,
                 path: folderPath,
-                readOnly: folderName === 'events',
+                readOnly: false,
                 children: [],
             }
             roots.set(folderPath, folder)

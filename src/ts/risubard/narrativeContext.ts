@@ -54,6 +54,8 @@ const NARRATIVE_EVIDENCE_RULES = [
     'Narrative evidence rules:',
     '- For past details, event documents are the detailed evidence; canonical summaries are compressed navigation and current-state context.',
     '- Do not invent an omitted action target or location. Do not turn temporal order into causation or cross a character knowledge boundary.',
+    '- Current-state sections in canonical character documents outrank older historical descriptions and unsupported continuation assumptions.',
+    '- Do not replace an established identity, status, relationship, duration, location, or goal with an unsupported detail. If the sources do not establish a replacement, keep the canonical fact unchanged.',
     '- If sources do not establish a detail, preserve uncertainty instead of completing it.',
 ].join('\n')
 
