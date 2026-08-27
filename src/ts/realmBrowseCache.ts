@@ -26,8 +26,17 @@ function boundedString(value: unknown, maxLength = MAX_STRING_LENGTH): string | 
     return typeof value === 'string' && value.length <= maxLength ? value : null
 }
 
+function boundedStringOrNumber(value: unknown): string | null {
+    if (typeof value === 'string') return boundedString(value)
+    if (typeof value === 'number' && Number.isFinite(value)) return boundedString(String(value))
+    return null
+}
+
 function boundedBoolean(value: unknown): boolean | null {
-    return typeof value === 'boolean' ? value : null
+    if (typeof value === 'boolean') return value
+    if (value === 1) return true
+    if (value === 0) return false
+    return null
 }
 
 function boundedNumber(value: unknown): number | null {
@@ -43,17 +52,17 @@ export function normalizeRealmBrowseCard(value: unknown): hubType | null {
         : null
     if (!tags || tags.some((tag) => tag === null)) return null
     const name = boundedString(card.name)
-    const desc = boundedString(card.desc)
-    const download = boundedString(card.download)
+    const desc = card.desc == null ? '' : boundedString(card.desc)
+    const download = card.download == null ? '' : boundedStringOrNumber(card.download)
     const id = boundedString(card.id)
     const img = boundedString(card.img)
-    const license = boundedString(card.license)
-    const type = boundedString(card.type)
-    const viewScreen = card.viewScreen
-    const hasLore = boundedBoolean(card.hasLore)
-    const hasEmotion = boundedBoolean(card.hasEmotion)
-    const hasAsset = boundedBoolean(card.hasAsset)
-    const hot = boundedNumber(card.hot)
+    const license = card.license == null ? '' : boundedString(card.license)
+    const type = card.type == null ? '' : boundedString(card.type)
+    const viewScreen = card.viewScreen == null || card.viewScreen === '' ? 'none' : card.viewScreen
+    const hasLore = boundedBoolean(card.hasLore ?? card.haslore)
+    const hasEmotion = boundedBoolean(card.hasEmotion ?? card.hasemotion)
+    const hasAsset = boundedBoolean(card.hasAsset ?? card.hasasset)
+    const hot = card.hot == null ? 0 : boundedNumber(card.hot)
     if (!name || desc === null || download === null || !id || img === null || license === null || type === null
         || (viewScreen !== 'none' && viewScreen !== 'emotion' && viewScreen !== 'imggen')
         || hasLore === null || hasEmotion === null || hasAsset === null || hot === null) return null
@@ -61,23 +70,19 @@ export function normalizeRealmBrowseCard(value: unknown): hubType | null {
 
     const optionalString = (key: 'creator' | 'creatorName' | 'authorname' | 'original') => {
         const field = card[key]
-        return field === undefined ? undefined : boundedString(field)
+        return field == null ? '' : boundedString(field)
     }
     const creator = optionalString('creator')
     const creatorName = optionalString('creatorName')
     const authorname = optionalString('authorname')
     const original = optionalString('original')
-    const hidden = card.hidden === undefined ? undefined : boundedBoolean(card.hidden)
+    const hidden = card.hidden == null ? false : boundedBoolean(card.hidden)
     if (creator === null || creatorName === null || authorname === null || original === null || hidden === null) return null
 
     return {
         name, desc, download, id, img, tags: tags as string[], viewScreen,
         hasLore, hasEmotion, hasAsset, hot, license, type,
-        ...(creator === undefined ? {} : { creator }),
-        ...(creatorName === undefined ? {} : { creatorName }),
-        ...(authorname === undefined ? {} : { authorname }),
-        ...(original === undefined ? {} : { original }),
-        ...(hidden === undefined ? {} : { hidden }),
+        creator, creatorName, authorname, original, hidden,
     }
 }
 

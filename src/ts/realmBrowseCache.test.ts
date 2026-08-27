@@ -11,6 +11,7 @@ vi.mock('./storage/persistentKv', () => persistent)
 import {
     DEFAULT_REALM_BROWSE_CACHE_KEY,
     isDefaultRealmBrowseQuery,
+    normalizeRealmBrowseCard,
     readDefaultRealmBrowseCache,
     writeDefaultRealmBrowseCache,
 } from './realmBrowseCache'
@@ -32,6 +33,11 @@ function card(overrides: Record<string, unknown> = {}): hubType {
         hot: 1,
         license: 'CC-BY',
         type: 'character',
+        creator: '',
+        creatorName: '',
+        authorname: '',
+        original: '',
+        hidden: false,
         ...overrides,
     } as hubType
 }
@@ -48,6 +54,66 @@ describe('RisuRealm default browse cache', () => {
         expect(isDefaultRealmBrowseQuery({ ...query, page: 1 })).toBe(false)
         expect(isDefaultRealmBrowseQuery({ ...query, nsfw: true })).toBe(false)
         expect(isDefaultRealmBrowseQuery({ ...query, sort: '' })).toBe(false)
+    })
+
+    test('normalizes the live RisuRealm card shape without retaining transport fields', () => {
+        const liveCard = {
+            name: 'Live character',
+            desc: null,
+            download: 12,
+            id: 'live-id',
+            img: 'resource/live-image',
+            tags: ['live'],
+            haslore: true,
+            hasemotion: 0,
+            hasasset: 1,
+            hidden: 0,
+            commentopen: null,
+            viewScreen: '',
+            creator: null,
+            creatorName: null,
+            authorname: null,
+            original: null,
+            license: null,
+            type: null,
+            unexpected: 'discard me',
+        }
+
+        expect(normalizeRealmBrowseCard(liveCard)).toEqual({
+            name: 'Live character',
+            desc: '',
+            download: '12',
+            id: 'live-id',
+            img: 'resource/live-image',
+            tags: ['live'],
+            viewScreen: 'none',
+            hasLore: true,
+            hasEmotion: false,
+            hasAsset: true,
+            hot: 0,
+            license: '',
+            type: '',
+            creator: '',
+            creatorName: '',
+            authorname: '',
+            original: '',
+            hidden: false,
+        })
+    })
+
+    test('rejects unapproved scalar coercions', () => {
+        for (const overrides of [
+            { name: false },
+            { id: 0 },
+            { img: true },
+            { tags: [1] },
+            { license: false },
+            { creator: false },
+            { hasLore: '1' },
+            { hidden: '0' },
+        ]) {
+            expect(normalizeRealmBrowseCard(card(overrides))).toBeNull()
+        }
     })
 
     test('reads fresh valid cards but rejects expired, malformed, and oversized entries', async () => {
