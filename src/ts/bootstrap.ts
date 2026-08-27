@@ -16,7 +16,7 @@ import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { applyEarlyLanguage, changeLanguage, language } from "src/lang";
 import { startObserveDom } from "./observer.svelte";
 import { updateGuisize } from "./gui/guisize";
-import { updateLorebooks } from "./characters";
+import { resumeDeferredCharacterSelection, updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
@@ -124,6 +124,7 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
         }
     }
     await loadDeferredModules()
+    await resumeDeferredCharacterSelection()
     await dispatchStartupURLImport(characterURLImport)
 }
 

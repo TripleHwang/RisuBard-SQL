@@ -22,6 +22,7 @@ import { withSaverScope } from './performance/saverMode'
 import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { isStartupMutationReady } from './startupReadiness'
+import { createStartupCharacterSelectionQueue } from './startupCharacterSelection'
 
 /** Assign identities before a chat becomes visible, then mark its parent before rows. */
 function markImportedChat(characterId: string, chat: Chat): void {
@@ -825,6 +826,21 @@ export async function addCharacter(arg:{
 }
 
 let characterSelectionIntent = 0
+const startupCharacterSelectionQueue = createStartupCharacterSelectionQueue()
+let deferredCharacterSelectionArg: {
+    reseter?: () => any
+    clearNewBadge?: boolean
+} | undefined
+
+function selectCharacterSafely(index: number, reseter: () => any): void {
+    // Selecting a summary is safe on the metadata shell. Invalidate an older
+    // activation, but do not touch character/chat data until it is complete.
+    characterSelectionIntent++
+    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+    reseter()
+    chatDeselected.set(false)
+    selectedCharID.set(index)
+}
 
 export async function changeChar(index: number, arg:{
     reseter?:()=>any,
@@ -832,7 +848,54 @@ export async function changeChar(index: number, arg:{
 } = {}) {
     const metric = runtimeMetrics.start('chat-selection')
     try {
-    if (!isStartupMutationReady()) return
+    const reseter = arg.reseter ?? (() => {})
+    const db = getDatabase()
+    const char = db.characters[index]
+    if (!char) return
+    const startupReady = isStartupMutationReady()
+    if (startupReady) deferredCharacterSelectionArg = undefined
+    let activationIndex = -1
+    const activateNow = startupCharacterSelectionQueue.select({
+        ready: startupReady,
+        characterId: char.chaId,
+        index,
+        safeSelect: (safeIndex) => selectCharacterSafely(safeIndex, reseter),
+        fullSelect: (fullIndex) => { activationIndex = fullIndex },
+    })
+    if (!activateNow) {
+        deferredCharacterSelectionArg = arg
+        return
+    }
+    await activateCharacter(activationIndex, arg)
+    } finally {
+        runtimeMetrics.end(metric)
+    }
+}
+
+/** Resumes the newest safe-shell selection after the full database is available. */
+export async function resumeDeferredCharacterSelection(): Promise<boolean> {
+    const metric = runtimeMetrics.start('chat-selection')
+    try {
+        let activationIndex = -1
+        const activateNow = startupCharacterSelectionQueue.resume({
+            ready: isStartupMutationReady(),
+            findIndex: (characterId) => getDatabase().characters.findIndex((value) => value?.chaId === characterId),
+            fullSelect: (fullIndex) => { activationIndex = fullIndex },
+        })
+        if (!activateNow) return false
+        const arg = deferredCharacterSelectionArg ?? {}
+        deferredCharacterSelectionArg = undefined
+        await activateCharacter(activationIndex, arg)
+        return true
+    } finally {
+        runtimeMetrics.end(metric)
+    }
+}
+
+async function activateCharacter(index: number, arg: {
+    reseter?:()=>any,
+    clearNewBadge?:boolean,
+}) {
     const reseter = arg.reseter ?? (() => {})
     if(get(doingChat)){
       return
@@ -904,8 +967,5 @@ export async function changeChar(index: number, arg:{
             void touchHydratedChat(selectedCharacter.chaId, selectedCharacter.chats, selectedCharacter.chatPage)
             loadTogglesFromChat(chat)
         }
-    }
-    } finally {
-        runtimeMetrics.end(metric)
     }
 }

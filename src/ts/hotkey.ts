@@ -99,7 +99,6 @@ export function initHotkey(){
                     break
                 }
                 case 'prevChar':{
-                    if (!isStartupMutationReady()) return false
                     const sorted = database.characters.map((v, i) => {
                         return {name: v.name, i}
                     }).sort((a, b) => a.name.localeCompare(b.name))
@@ -113,7 +112,6 @@ export function initHotkey(){
                     break
                 }
                 case 'nextChar':{
-                    if (!isStartupMutationReady()) return false
                     const sorted = database.characters.map((v, i) => {
                         return {name: v.name, i}
                     }).sort((a, b) => a.name.localeCompare(b.name))
