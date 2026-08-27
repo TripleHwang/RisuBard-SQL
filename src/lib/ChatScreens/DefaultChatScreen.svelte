@@ -9,7 +9,7 @@
     import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, MobileGUI } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
-    import { isCurrentChatWindowRequest, isNearReverseScrollTop } from 'src/ts/chatWindow';
+    import { createContinuousHistoryController, isCurrentChatWindowRequest, isNearReverseScrollTop } from 'src/ts/chatWindow';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -113,6 +113,7 @@ import { isMobile } from 'src/ts/platform'
     let loadingPreviousScrollWindow = false
     let previousScrollLoadArmed = true
     let historyLoadFailed = $state(false)
+    let oldestHistoryMessageMounted = $state(false)
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -305,6 +306,21 @@ import { isMobile } from 'src/ts/platform'
         return true
     }
 
+    const historyController = createContinuousHistoryController({
+        hasOlder: () => !!(currentChatSlot as any)?._sqlWindow?.hasOlder,
+        isScrollable: () => {
+            const container = document.querySelector('.default-chat-screen') as HTMLElement | null
+            return !!container && container.scrollHeight > container.clientHeight
+        },
+        loadOlder: loadOlderHistory,
+    })
+
+    async function loadOlderSerialized(): Promise<boolean> {
+        const loaded = await historyController.retry()
+        historyLoadFailed = historyController.failed
+        return loaded
+    }
+
     // Literal bottom of the scroll (end of the latest message).
     function scrollToLoadedBottom(behavior: ScrollBehavior = 'smooth') {
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
@@ -329,7 +345,7 @@ import { isMobile } from 'src/ts/platform'
         loadingPreviousScrollWindow = true
         void (async () => {
             const shiftedWithinWindow = await chatsInstance?.revealOlderMessages?.()
-            if (!shiftedWithinWindow) await loadOlderHistory()
+            if (!shiftedWithinWindow) await loadOlderSerialized()
         })().finally(() => {
             requestAnimationFrame(() => { loadingPreviousScrollWindow = false })
         })
@@ -344,12 +360,8 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function loadOlderUntilScrollable() {
-        const container = document.querySelector('.default-chat-screen') as HTMLElement | null
-        while (container && container.scrollHeight <= container.clientHeight && (currentChatSlot as any)?._sqlWindow?.hasOlder) {
-            const loaded = await loadOlderHistory()
-            if (!loaded) break
-            await tick()
-        }
+        await historyController.fillViewport()
+        historyLoadFailed = historyController.failed
     }
 
     $effect(() => {
@@ -1504,12 +1516,6 @@ import { isMobile } from 'src/ts/platform'
                 </button>
             {/if}
 
-            {#if historyLoadFailed}
-                <button data-chat-history-retry class="mx-auto my-3 rounded-full border border-darkborderc px-3 py-1 text-sm text-textcolor" onclick={() => void loadOlderHistory()}>
-                    Retry
-                </button>
-            {/if}
-
             <Chats
                 bind:this={chatsInstance}
                 messages={currentChat}
@@ -1526,10 +1532,17 @@ import { isMobile } from 'src/ts/platform'
                 currentUsername={currentUsername}
                 userIcon={userIcon}
                 userIconPortrait={userIconPortrait}
+                bind:isOldestMounted={oldestHistoryMessageMounted}
                 bind:hasNewUnreadMessage={showNewMessageButton}
             />
 
-            {#if (currentChatSlot as any)?._sqlWindow?.hasOlder !== true}
+            {#if historyLoadFailed}
+                <button data-chat-history-retry class="mx-auto my-3 rounded-full border border-darkborderc px-3 py-1 text-sm text-textcolor" onclick={() => void loadOlderSerialized()}>
+                    Retry
+                </button>
+            {/if}
+
+            {#if (currentChatSlot as any)?._sqlWindow?.hasOlder !== true && oldestHistoryMessageMounted}
                 <Chat
                     character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
                     name={DBState.db.characters[$selectedCharID].name}

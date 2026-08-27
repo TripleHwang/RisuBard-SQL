@@ -1,25 +1,48 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
-
-const source = (file: string) => readFileSync(file, 'utf8')
+import {
+    createContinuousHistoryController,
+    getChatWindow,
+    latestMessageScrollOptions,
+    restoreMessageAnchor,
+} from 'src/ts/chatWindow'
 
 describe('continuous bounded chat history', () => {
-    test('uses the full loaded range, serial reverse loading, and bottom-aligned Latest', () => {
-        const screen = source('src/lib/ChatScreens/DefaultChatScreen.svelte')
-        const chats = source('src/lib/ChatScreens/Chats.svelte')
+    test('serially fills a nonoverflowing viewport and retains retry after a reverse failure', async () => {
+        let remaining = 2
+        let scrollable = false
+        const controller = createContinuousHistoryController({
+            hasOlder: () => remaining > 0,
+            isScrollable: () => scrollable,
+            loadOlder: async () => {
+                remaining -= 1
+                if (remaining === 0) scrollable = true
+                return true
+            },
+        })
 
-        expect(screen).not.toContain('data-chat-pagination')
-        expect(screen).not.toContain('data-chat-page-previous')
-        expect(screen).not.toContain('getChatPageBounds')
-        expect(screen).toContain('pageStart={0}')
-        expect(screen).toContain('pageEnd={currentChat.length}')
-        expect(screen).toContain('loadOlderUntilScrollable')
-        expect(screen).toContain('loadOlderChatMessages')
-        expect(screen).toContain('revealNewerMessages')
-        expect(screen).toContain('historyLoadFailed')
-        expect(chats).toContain('export const revealOlderMessages')
-        expect(chats).toContain('export const revealNewerMessages')
-        expect(chats).toContain('export const showLatestMessage')
-        expect(chats).toContain("block: 'end'")
+        await controller.fillViewport()
+        expect(controller.failed).toBe(false)
+        expect(remaining).toBe(0)
+
+        const failing = createContinuousHistoryController({
+            hasOlder: () => true,
+            isScrollable: () => false,
+            loadOlder: async () => { throw new Error('offline') },
+        })
+        await failing.fillViewport()
+        expect(failing.failed).toBe(true)
+        await expect(failing.retry()).resolves.toBe(false)
+        expect(failing.failed).toBe(true)
+    })
+
+    test('keeps normal and saver DOM windows bounded, restores a prepend anchor, and bottoms Latest', () => {
+        expect(getChatWindow({ total: 81, anchorIndex: 80, limit: 60 })).toMatchObject({ start: 21, end: 81 })
+        expect(getChatWindow({ total: 81, anchorIndex: 80, limit: 40 })).toMatchObject({ start: 41, end: 81 })
+        const scroller = { scrollTop: 25 } as HTMLElement
+        expect(restoreMessageAnchor(scroller, { id: 'm41', top: 80 }, {
+            getBoundingClientRect: () => ({ top: 112 }),
+        } as unknown as HTMLElement)).toBe(true)
+        expect(scroller.scrollTop).toBe(57)
+        expect(latestMessageScrollOptions).toEqual({ block: 'end', behavior: 'instant' })
     })
 })

@@ -6,7 +6,7 @@
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
-    import { estimateSpacerHeight, getChatWindow, restoreMessageAnchor } from 'src/ts/chatWindow';
+    import { estimateSpacerHeight, getChatWindow, latestMessageScrollOptions, restoreMessageAnchor } from 'src/ts/chatWindow';
     import { updateRuntimeResources } from 'src/ts/performance/performanceReport';
     
     const getCurrentChatRoomId = () => {
@@ -34,6 +34,7 @@
         // this hook; no saver store exists yet, so normal mode is the default.
         saverMode = false,
         userIconPortrait,
+        isOldestMounted = $bindable(false),
         hasNewUnreadMessage = $bindable(false)
     }:{
         messages: Message[]
@@ -54,6 +55,7 @@
         pageEnd?: number
         saverMode?: boolean
         userIconPortrait?: boolean
+        isOldestMounted?: boolean
         hasNewUnreadMessage?: boolean
     } = $props();
 
@@ -163,6 +165,7 @@
             const start = Math.max(0, end - domLimit);
             domWindow = { start, end, beforeCount: start, afterCount: 0 };
         }
+        isOldestMounted = domWindow.start === 0;
         const loadStart = domWindow.end - 1
         const loadEnd = domWindow.start
         measuredRowHeights = Array.from(messageHost.querySelectorAll('[data-chat-row]'))
@@ -306,7 +309,7 @@
             : null;
         const chatScreen = chatBody.parentElement;
         if(!element || !chatScreen) return;
-        scrollWithinContainer(element, chatScreen, { block: 'end', behavior: 'instant' });
+        scrollWithinContainer(element, chatScreen, latestMessageScrollOptions);
     }
 
     export const scrollToLatestMessage = () => {

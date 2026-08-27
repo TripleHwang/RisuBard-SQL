@@ -33,6 +33,52 @@ export type ReverseScrollMetrics = {
     clientHeight: number
 }
 
+export const latestMessageScrollOptions = {
+    block: 'end',
+    behavior: 'instant',
+} as const
+
+export type ContinuousHistoryControllerOptions = {
+    hasOlder: () => boolean
+    isScrollable: () => boolean
+    loadOlder: () => Promise<boolean>
+}
+
+/** Serializes reverse loads so a short initial window fills without races. */
+export function createContinuousHistoryController(options: ContinuousHistoryControllerOptions) {
+    let failed = false
+    let inFlight: Promise<boolean> | null = null
+
+    const loadOne = (): Promise<boolean> => {
+        if (inFlight) return inFlight
+        inFlight = (async () => {
+            try {
+                const loaded = await options.loadOlder()
+                failed = !loaded
+                return loaded
+            } catch {
+                failed = true
+                return false
+            } finally {
+                inFlight = null
+            }
+        })()
+        return inFlight
+    }
+
+    return {
+        get failed() { return failed },
+        get loading() { return inFlight !== null },
+        async fillViewport(): Promise<boolean> {
+            while (!options.isScrollable() && options.hasOlder()) {
+                if (!await loadOne()) return false
+            }
+            return true
+        },
+        retry: loadOne,
+    }
+}
+
 /** Keeps virtual spacers inside the selected user-visible page. */
 export function getChatPageWindow({ total, pageStart, pageEnd, anchorIndex, limit }: {
     total: number
