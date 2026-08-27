@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { downloadRisuHub, getRisuHub, hubAdditionalHTML, type hubType } from 'src/ts/characterCards';
+    import { onMount } from 'svelte';
+    import { downloadRisuHub, getRisuHub, type hubType } from 'src/ts/characterCards';
     import { ArrowLeft, ArrowRight, HashIcon, MenuIcon, SearchIcon, SparklesIcon } from '@lucide/svelte';
     import { alertInput } from 'src/ts/alert';
     import { language } from 'src/lang';
@@ -10,6 +11,8 @@
     import RealmHubIcon from './RealmHubIcon.svelte';
     import RealmPopUp from './RealmPopUp.svelte';
     import { isStartupMutationReady } from 'src/ts/startupReadiness';
+    import { readDefaultRealmBrowseCache, writeDefaultRealmBrowseCache } from 'src/ts/realmBrowseCache';
+    import { createRealmBrowseRequestCoordinator } from 'src/ts/realmBrowseRequest';
 
     let openedData: null | hubType = $state(null);
     let charas: hubType[] = $state([]);
@@ -21,6 +24,11 @@
     let highlightedTagIndex = $state(0);
     let menuOpen = $state(false);
     let nsfw = $state(false);
+    let hubAdditionalHTML = $state('');
+    let isLoading = $state(false);
+    let isRefreshing = $state(false);
+    let browseError = $state('');
+    const requests = createRealmBrowseRequestCoordinator(getRisuHub, writeDefaultRealmBrowseCache);
     let isKorean = $derived(DBState.db.language === 'ko');
     let ui = $derived(isKorean ? {
         title: 'RisuRealm 둘러보기',
@@ -103,11 +111,32 @@
     }
 
     async function getHub() {
-        charas = await getRisuHub({
+        const query = {
             search: currentSearch(),
             page,
             nsfw,
             sort,
+        };
+        const isDefault = query.search === '' && query.page === 0 && !query.nsfw && query.sort === 'recommended';
+        browseError = '';
+        hubAdditionalHTML = '';
+        isLoading = !isDefault || charas.length === 0;
+        isRefreshing = isDefault && charas.length > 0;
+        await requests.run(query, {
+            success: (result) => {
+                charas = result.cards;
+                hubAdditionalHTML = result.additionalHTML;
+                isLoading = false;
+                isRefreshing = false;
+            },
+            failure: () => {
+                isLoading = false;
+                isRefreshing = false;
+                hubAdditionalHTML = '';
+                browseError = isDefault && charas.length > 0
+                    ? 'Showing saved RisuRealm results. Refresh failed.'
+                    : 'Unable to load RisuRealm results. Please try again.';
+            },
         });
     }
 
@@ -163,7 +192,18 @@
         }
     }
 
-    void getHub();
+    onMount(() => {
+        let active = true;
+        void (async () => {
+            const cached = await readDefaultRealmBrowseCache();
+            if (active && cached) charas = cached;
+            if (active) void getHub();
+        })();
+        return () => {
+            active = false;
+            requests.abort();
+        };
+    });
 
     $effect(() => {
         if ($RealmInitialOpenChar) {
@@ -299,13 +339,21 @@
 
 {@html hubAdditionalHTML}
 
+{#if isRefreshing}
+    <p class="px-4 pt-3 text-sm text-textcolor2" role="status">Refreshing RisuRealm…</p>
+{/if}
+
+{#if browseError}
+    <p class="px-4 pt-3 text-sm text-textcolor2" role="alert">{browseError}</p>
+{/if}
+
 <div class="grid w-full grid-cols-1 gap-3 py-4 lg:grid-cols-2">
     {#each charas as chara (chara.id)}
         <RealmHubIcon onClick={() => openedData = chara} {chara} />
     {/each}
 </div>
 
-{#if charas.length === 0}
+{#if charas.length === 0 && !isLoading}
     <div class="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-darkborderc text-sm text-textcolor2">
         {ui.noResults}
     </div>

@@ -39,7 +39,7 @@
         {#if DBState.db.hideAllImages}
             <div class="flex size-full items-center justify-center text-3xl text-textcolor2">?</div>
         {:else}
-            <img class="size-full object-cover object-top transition-transform duration-300 group-hover:scale-105" alt={chara.name} src={`${hubURL}/resource/` + chara.img} />
+            <img class="size-full object-cover object-top transition-transform duration-300 group-hover:scale-105" alt={chara.name} loading="lazy" decoding="async" src={`${hubURL}/resource/` + chara.img} />
         {/if}
     </div>
 
