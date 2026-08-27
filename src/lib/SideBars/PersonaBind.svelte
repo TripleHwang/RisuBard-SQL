@@ -10,6 +10,7 @@
     import type { Chat } from "src/ts/storage/database.svelte";
     import { getCharImage } from "src/ts/characters";
     import { getEffectivePersona, resolvePersonaById, type PersonaSelection } from "src/ts/personaScopes";
+    import { SvelteSet } from "svelte/reactivity";
 
     interface Props {
         bindingTarget?: Pick<Chat, 'bindedPersona'>;
@@ -37,7 +38,10 @@
     // Icons that already 404'd (already-deleted asset). Keyed by icon path
     // so a real load failure falls back to a placeholder instead of a
     // broken-image icon.
-    let brokenPersonaIcons = $state(new Set<string>());
+    // NOTE: must be a SvelteSet -- a plain Set inside $state() is NOT deep-proxied
+    // by Svelte 5 (proxy.js only proxies plain objects/arrays), so `.add()` would
+    // signal nothing and the {#if} guard would never re-evaluate.
+    let brokenPersonaIcons = $state<Set<string>>(new SvelteSet());
 
     function bindPersona(selection: PersonaSelection) {
         const chat = target ?? getCurrentChat()
