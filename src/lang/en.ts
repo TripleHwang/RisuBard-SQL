@@ -1701,6 +1701,8 @@ export const languageEnglish = {
     automaticCachePoint: "Automatic Cache Point",
     experimentalChatCompression: "Experimental Chat Data Handling",
     loadingChatData: "Loading Chat Data",
+    loadingSavedSettings: "Loading saved settings…",
+    savedSettingsLoadError: "Saved settings could not finish loading. This area stays locked; retry or recovery is available from the startup prompt.",
     selectChatToView: "Select a chat to view",
     outputImageModal: "Output Image Modal",
     playMessageOnTranslateEnd: "Play Audio on Translate Completion",

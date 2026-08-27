@@ -1822,6 +1822,8 @@ export const languageKorean = {
   automaticCachePoint: "자동 캐시 포인트",
   experimentalChatCompression: "실험적 채팅 데이터 처리",
   loadingChatData: "채팅 데이터 로딩 중",
+  loadingSavedSettings: "저장된 설정을 불러오는 중…",
+  savedSettingsLoadError: "저장된 설정을 불러오지 못했습니다. 이 영역은 잠긴 상태로 유지되며, 재시도 또는 복구는 시작 프롬프트에서 가능합니다.",
   selectChatToView: "채팅을 선택해주세요",
   outputImageModal: "출력 이미지 모달",
   playMessageOnTranslateEnd: "번역 완료 시 오디오 재생",
