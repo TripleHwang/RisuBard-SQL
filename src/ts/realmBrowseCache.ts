@@ -57,6 +57,7 @@ export function normalizeRealmBrowseCard(value: unknown): hubType | null {
     if (!name || desc === null || download === null || !id || img === null || license === null || type === null
         || (viewScreen !== 'none' && viewScreen !== 'emotion' && viewScreen !== 'imggen')
         || hasLore === null || hasEmotion === null || hasAsset === null || hot === null) return null
+    if (/^(?:data|blob):/i.test(img.trim())) return null
 
     const optionalString = (key: 'creator' | 'creatorName' | 'authorname' | 'original') => {
         const field = card[key]

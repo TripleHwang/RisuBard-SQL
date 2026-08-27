@@ -88,4 +88,15 @@ describe('RisuRealm default browse cache', () => {
         expect(written.cards[0]).not.toHaveProperty('imageData')
         expect(written.cards[0]).not.toHaveProperty('blob')
     })
+
+    test('rejects inline image payload URLs but accepts a normal resource id', async () => {
+        persistent.readPersistentJson.mockResolvedValue({ version: 1, fetchedAt: now, cards: [card({ img: '  DATA:image/png;base64,AAAA' })] })
+        await expect(readDefaultRealmBrowseCache(now)).resolves.toBeNull()
+
+        persistent.readPersistentJson.mockResolvedValue({ version: 1, fetchedAt: now, cards: [card({ img: 'Blob:https://risu.example/asset' })] })
+        await expect(readDefaultRealmBrowseCache(now)).resolves.toBeNull()
+
+        persistent.readPersistentJson.mockResolvedValue({ version: 1, fetchedAt: now, cards: [card({ img: 'resource/character-image' })] })
+        await expect(readDefaultRealmBrowseCache(now)).resolves.toEqual([card({ img: 'resource/character-image' })])
+    })
 })
