@@ -7,7 +7,7 @@
  * were misclassified as orphaned assets. On the client, the identical miss in
  * getUncleanables() meant cleanChunks() actually deleted those files —
  * server-side this only skews the dashboard's orphan count/size, but the two
- * are computed by the exact same shared walk (shared/assetOwnership.cjs), so
+ * are computed by the exact same shared walk (server/node/assetOwnership.cjs), so
  * this endpoint is the fastest way to prove the walk is correct against a
  * real running server.
  */

@@ -9,8 +9,8 @@ const source = () => readFileSync('src/ts/globalApi.svelte.ts', 'utf8')
 // shared no content hash with anything else) looked orphaned and was
 // permanently deleted. Both getUncleanables() here and the server's
 // buildUncleanableSet() now delegate the actual persona walk to
-// shared/assetOwnership.cjs so the two rule sets cannot drift apart again;
-// see shared/assetOwnership.test.ts for behavioral coverage of that walk.
+// server/node/assetOwnership.cjs so the two rule sets cannot drift apart again;
+// see server/node/assetOwnership.test.ts for behavioral coverage of that walk.
 //
 // globalApi.svelte.ts pulls in browser/Svelte runtime globals at import
 // time, so (matching this repo's existing convention -- see
@@ -19,7 +19,7 @@ const source = () => readFileSync('src/ts/globalApi.svelte.ts', 'utf8')
 describe('getUncleanables persona asset ownership', () => {
     test('uses the shared asset-ownership walk instead of a local persona loop', () => {
         const api = source()
-        expect(api).toContain("from \"../../shared/assetOwnership.cjs\"")
+        expect(api).toContain("from \"../../server/node/assetOwnership.cjs\"")
         expect(api).toContain('collectPersonaAssetRefs')
         expect(api).toContain('isAssetKeyValue')
     })

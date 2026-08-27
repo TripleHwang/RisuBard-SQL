@@ -19,8 +19,10 @@ import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
 import { supportsPatchSync } from "./platform"
 // @ts-ignore - plain CJS module shared verbatim with server/node/server.cjs; see that file's
-// buildUncleanableSet() for the other consumer of this exact logic.
-import { collectPersonaAssetRefs, isAssetKeyValue } from "../../shared/assetOwnership.cjs";
+// buildUncleanableSet() for the other consumer of this exact logic. Lives under
+// server/node/ (not a top-level shared/) so every packaging path that ships the
+// server also ships this file -- see server/node/assetOwnership.cjs's header.
+import { collectPersonaAssetRefs, isAssetKeyValue } from "../../server/node/assetOwnership.cjs";
 import { updateAnimationSpeed } from "./gui/animation";
 import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { language } from "src/lang";
@@ -1615,7 +1617,7 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
         // below) live entirely on the character record. Their icons are
         // real `assets/` references and must be collected here or they
         // look orphaned and get deleted by cleanChunks() -- see
-        // shared/assetOwnership.cjs for the shared walk.
+        // server/node/assetOwnership.cjs for the shared walk.
         collectPersonaAssetRefs(cha.personas, addUncleanable);
     }
 
