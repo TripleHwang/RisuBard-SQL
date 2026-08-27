@@ -9,8 +9,8 @@ export interface PersonaSelection {
 }
 
 export interface PersonaDatabaseView {
-    personas: RisuPersona[]
-    selectedPersona: number
+    personas?: RisuPersona[]
+    selectedPersona?: number
 }
 
 export function normalizeSelectedPersonaIndex(personaCount: number, selectedPersona: number): number {
@@ -43,9 +43,10 @@ export function resolvePersonaById(
         }
     }
 
-    const globalIndex = db.personas.findIndex((persona) => persona.id === id)
+    const globalPersonas = db.personas ?? []
+    const globalIndex = globalPersonas.findIndex((persona) => persona.id === id)
     if (globalIndex < 0) return null
-    return { persona: db.personas[globalIndex], scope: 'global', index: globalIndex }
+    return { persona: globalPersonas[globalIndex], scope: 'global', index: globalIndex }
 }
 
 export function getEffectivePersona(
@@ -56,8 +57,9 @@ export function getEffectivePersona(
     const bound = resolvePersonaById(db, character, chat?.bindedPersona)
     if (bound) return bound
 
-    const index = normalizeSelectedPersonaIndex(db.personas.length, db.selectedPersona)
-    const persona = db.personas[index]
+    const globalPersonas = db.personas ?? []
+    const index = normalizeSelectedPersonaIndex(globalPersonas.length, db.selectedPersona ?? 0)
+    const persona = globalPersonas[index]
     return persona ? { persona, scope: 'global', index } : null
 }
 
