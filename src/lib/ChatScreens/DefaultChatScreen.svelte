@@ -9,14 +9,6 @@
     import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, MobileGUI } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
-    import {
-        DEFAULT_CHAT_PAGE_SIZE,
-        getChatPageBounds,
-        getChatPageCount,
-        getChatPageForMessage,
-        getLatestChatPage,
-        normalizeChatPageSize,
-    } from 'src/ts/chatPagination';
     import { isCurrentChatWindowRequest, isNearReverseScrollTop } from 'src/ts/chatWindow';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
@@ -115,14 +107,12 @@ import { isMobile } from 'src/ts/platform'
     let messageInputTranslate:string = $state('')
     let openMenu = $state(false)
     let memoryWikiOpen = $state(false)
-    let chatPage = $state(0)
-    let paginationKey = $state('')
+    let historyKey = $state('')
     // Cancels DOM restoration when a different chat becomes active mid-fetch.
     let chatWindowVersion = $state(0)
-    let paginationMessageCount = $state(0)
-    let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
     let loadingPreviousScrollWindow = false
     let previousScrollLoadArmed = true
+    let historyLoadFailed = $state(false)
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -147,39 +137,12 @@ import { isMobile } from 'src/ts/platform'
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
-    let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
-    let chatBounds = $derived(getChatPageBounds(currentChat.length, chatPageSize, chatPage))
-
     $effect(() => {
         const nextKey = `${currentCharacter?.chaId ?? ''}/${currentChatSlot?.id ?? ''}`
-        const messageCount = currentChat.length
-        const nextPageCount = getChatPageCount(messageCount, chatPageSize)
-        const latestPage = nextPageCount - 1
-
-        if (nextKey !== paginationKey) {
-            paginationKey = nextKey
+        if (nextKey !== historyKey) {
+            historyKey = nextKey
             chatWindowVersion += 1
-            chatPage = latestPage
-        } else if (chatPageSize !== paginationPageSize) {
-            const anchorIndex = chatPage * paginationPageSize
-            chatPage = getChatPageForMessage(anchorIndex, messageCount, chatPageSize)
-        } else {
-            const previousLatestPage = getLatestChatPage(paginationMessageCount, paginationPageSize)
-            if (chatPage === previousLatestPage && messageCount > paginationMessageCount) {
-                chatPage = latestPage
-            } else if (chatPage > latestPage) {
-                chatPage = latestPage
-            }
-        }
-
-        paginationMessageCount = messageCount
-        paginationPageSize = chatPageSize
-    })
-
-    $effect(() => {
-        const foldedIndex = chatFoldedStateMessageIndex.index
-        if (foldedIndex >= 0) {
-            chatPage = getChatPageForMessage(foldedIndex, currentChat.length, chatPageSize)
+            historyLoadFailed = false
         }
     })
 
@@ -263,7 +226,7 @@ import { isMobile } from 'src/ts/platform'
     }
 
     function scrollToBottom() {
-        chatsInstance?.scrollToLatestMessage();
+        void chatsInstance?.showLatestMessage?.();
     }
 
     async function navigateStorySource(source: StorySourceRef) {
@@ -289,7 +252,7 @@ import { isMobile } from 'src/ts/platform'
             .sort((a, b) => a.idx - b.idx)
     }
 
-    // Top of currently loaded messages (no force-load of older pages).
+    // Top of the currently mounted bounded history window.
     function scrollToLoadedTop() {
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
         if (!container) return
@@ -298,21 +261,9 @@ import { isMobile } from 'src/ts/platform'
         scrollWithinContainer(messages[0].el, container, { block: 'start', behavior: 'smooth' })
     }
 
-    async function selectChatPage(page: number, scrollToLatest = false, scrollToPreviousBottom = false) {
-        // A manual page move wins over any in-flight reverse-page anchor.
-        chatWindowVersion += 1
-        chatPage = getChatPageBounds(currentChat.length, chatPageSize, page).page
-        chatFoldedState.data = null
-        await tick()
-        if (scrollToLatest) chatsInstance?.scrollToLatestMessage()
-        else if (scrollToPreviousBottom) scrollToLoadedBottom('instant')
-        else scrollToLoadedTop()
-    }
-
-    async function selectPreviousChatPage(fromScroll = false) {
-        if (chatPage > 0) return selectChatPage(chatPage - 1, false, fromScroll)
+    async function loadOlderHistory(): Promise<boolean> {
         const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
-        if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return
+        if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return false
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
         const firstVisible = container
             ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-id]'))
@@ -323,18 +274,27 @@ import { isMobile } from 'src/ts/platform'
         const anchor = firstVisible?.element.dataset.chatId
             ? { id: firstVisible.element.dataset.chatId, top: firstVisible.top }
             : null
-        const requestKey = paginationKey
+        const requestKey = historyKey
         const requestVersion = chatWindowVersion
-        const formerFirstId = currentChat[0]?.chatId
-        await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+        try {
+            await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+            historyLoadFailed = false
+        } catch {
+            historyLoadFailed = true
+            return false
+        }
         // The fetch may finish after selection changed. It may update its old
         // object, but must never mutate this screen's scroll position.
         if (!isCurrentChatWindowRequest(
             { key: requestKey, version: requestVersion },
-            { key: paginationKey, version: chatWindowVersion },
-        )) return
-        const anchorIndex = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
-        chatPage = getChatPageForMessage(Math.max(0, anchorIndex), currentChat.length, chatPageSize)
+            { key: historyKey, version: chatWindowVersion },
+        )) return false
+        // Prepending shifts array indices. Re-anchor the bounded child by its
+        // durable ID before the parent measures the restored visual position.
+        if (anchor?.id) {
+            const anchorIndex = currentChat.findIndex((message) => message.chatId === anchor.id)
+            if (anchorIndex >= 0) await chatsInstance?.revealMessage?.(anchorIndex)
+        }
         await tick()
         if (container && anchor) {
             const restored = container.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(anchor.id)}"]`)
@@ -342,6 +302,7 @@ import { isMobile } from 'src/ts/platform'
         } else {
             scrollToLoadedTop()
         }
+        return true
     }
 
     // Literal bottom of the scroll (end of the latest message).
@@ -360,17 +321,41 @@ import { isMobile } from 'src/ts/platform'
             return
         }
         if (!previousScrollLoadArmed || loadingPreviousScrollWindow) return
-        const canMoveBack = chatPage > 0 || !!(currentChatSlot as any)?._sqlWindow?.hasOlder
+        // Older rows may already be loaded but currently virtualized; SQL is
+        // only consulted after Chats reaches the local oldest boundary.
+        const canMoveBack = currentChat.length > 0
         if (!canMoveBack) return
         previousScrollLoadArmed = false
         loadingPreviousScrollWindow = true
         void (async () => {
-            const shiftedWithinPage = await chatsInstance?.revealOlderMessages?.()
-            if (!shiftedWithinPage) await selectPreviousChatPage(true)
+            const shiftedWithinWindow = await chatsInstance?.revealOlderMessages?.()
+            if (!shiftedWithinWindow) await loadOlderHistory()
         })().finally(() => {
             requestAnimationFrame(() => { loadingPreviousScrollWindow = false })
         })
     }
+
+    function loadNextWindowOnScroll(container: HTMLElement) {
+        const latest = container.querySelector<HTMLElement>('[data-chat-id]')
+        if (!latest) return
+        if (latest.getBoundingClientRect().top <= container.getBoundingClientRect().bottom + 160) {
+            void chatsInstance?.revealNewerMessages?.()
+        }
+    }
+
+    async function loadOlderUntilScrollable() {
+        const container = document.querySelector('.default-chat-screen') as HTMLElement | null
+        while (container && container.scrollHeight <= container.clientHeight && (currentChatSlot as any)?._sqlWindow?.hasOlder) {
+            const loaded = await loadOlderHistory()
+            if (!loaded) break
+            await tick()
+        }
+    }
+
+    $effect(() => {
+        if (!currentChatReady) return
+        void tick().then(loadOlderUntilScrollable)
+    })
 
     function navigateMessage(direction: 'prev' | 'next') {
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
@@ -432,7 +417,7 @@ import { isMobile } from 'src/ts/platform'
     async function scrollToMessage(index: number){
         isScrollingToMessage = true
         try {
-            chatPage = getChatPageForMessage(index, currentChat.length, chatPageSize)
+            await chatsInstance?.revealMessage?.(index)
             await tick()
 
             let element: Element | null = null;
@@ -568,8 +553,6 @@ import { isMobile } from 'src/ts/platform'
         messageInputTranslate = ''
         removeChatDraft(draftChaId, draftChatId)
         DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].message = cha
-        chatPage = getLatestChatPage(cha.length, chatPageSize)
-
         await sleep(10)
         updateInputSizeAll()
         await sendChatMain(continueResponse)
@@ -1022,7 +1005,7 @@ import { isMobile } from 'src/ts/platform'
             }
 
             if(mergedCanvas){
-                await downloadFile(`chat-page-${chatBounds.page + 1}-${v4()}.png`, Buffer.from(mergedCanvas.toDataURL('png').split(',').at(-1), 'base64'))
+                await downloadFile(`chat-history-${v4()}.png`, Buffer.from(mergedCanvas.toDataURL('png').split(',').at(-1), 'base64'))
                 mergedCanvas.remove();
             }
             notifySuccess(language.screenshotSaved)
@@ -1489,10 +1472,11 @@ import { isMobile } from 'src/ts/platform'
             const chatsContainer = (DBState.db.fixedChatTextarea && chatTarget.children[1]) ? chatTarget.children[1] : chatTarget.children[0];
             const lastEl = chatsContainer?.firstElementChild;
             const isAtBottom = lastEl ? lastEl.getBoundingClientRect().top <= chatTarget.getBoundingClientRect().bottom + 100 : true;
-            if(isAtBottom){
+             if(isAtBottom){
                 showNewMessageButton = false;
             }
             loadPreviousWindowOnScroll(chatTarget)
+            loadNextWindowOnScroll(chatTarget)
         }}>
             {@render composerCluster()}
 
@@ -1514,49 +1498,23 @@ import { isMobile } from 'src/ts/platform'
 
             {#if chatFoldedStateMessageIndex.index !== -1}
                 <button class="w-full flex justify-center max-w-full p-4">
-                    <Button className="max-w-xl w-full" onclick={() => {
-                        void selectChatPage(getLatestChatPage(currentChat.length, chatPageSize), true)
-                    }}>
+                    <Button className="max-w-xl w-full" onclick={scrollToBottom}>
                         {language.loadMore}
                     </Button>
                 </button>
             {/if}
 
-            {#if chatBounds.pageCount > 1}
-                <nav
-                    data-chat-pagination
-                    class="mx-auto my-3 flex max-w-xl items-center justify-center gap-2 rounded-full border border-darkborderc bg-darkbg/90 px-3 py-2 text-sm text-textcolor shadow-sm"
-                    aria-label={language.chatPageNavigation}
-                >
-                    <button
-                        data-chat-page-previous
-                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page === 0 && !(currentChatSlot as any)?._sqlWindow?.hasOlder}
-                        onclick={() => void selectPreviousChatPage()}
-                    >{language.chatPagePrevious}</button>
-                    <span class="min-w-20 text-center tabular-nums">
-                        {chatBounds.page + 1} / {chatBounds.pageCount}
-                    </span>
-                    <button
-                        data-chat-page-next
-                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page >= chatBounds.pageCount - 1}
-                        onclick={() => void selectChatPage(chatBounds.page + 1)}
-                    >{language.chatPageNext}</button>
-                    <button
-                        data-chat-page-latest
-                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page >= chatBounds.pageCount - 1}
-                        onclick={() => void selectChatPage(chatBounds.pageCount - 1, true)}
-                    >{language.chatPageLatest}</button>
-                </nav>
+            {#if historyLoadFailed}
+                <button data-chat-history-retry class="mx-auto my-3 rounded-full border border-darkborderc px-3 py-1 text-sm text-textcolor" onclick={() => void loadOlderHistory()}>
+                    Retry
+                </button>
             {/if}
-            
+
             <Chats
                 bind:this={chatsInstance}
                 messages={currentChat}
-                pageStart={chatBounds.start}
-                pageEnd={chatBounds.end}
+                pageStart={0}
+                pageEnd={currentChat.length}
                 saverMode={$saverModeStore}
                 onReroll={reroll}
                 onNextSwipe={nextSwipe}
@@ -1571,7 +1529,7 @@ import { isMobile } from 'src/ts/platform'
                 bind:hasNewUnreadMessage={showNewMessageButton}
             />
 
-            {#if chatBounds.page === 0}
+            {#if (currentChatSlot as any)?._sqlWindow?.hasOlder !== true}
                 <Chat
                     character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
                     name={DBState.db.characters[$selectedCharID].name}

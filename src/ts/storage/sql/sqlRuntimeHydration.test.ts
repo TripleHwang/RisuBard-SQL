@@ -71,6 +71,28 @@ describe("Node SQL runtime hydration", () => {
     expect(Object.keys(character.chats[0])).not.toContain("_sqlWindow");
   });
 
+  it("keeps 81 sequential durable IDs complete through serialized reverse chunks", async () => {
+    const rows = (start: number, end: number) => Array.from({ length: end - start }, (_, index) => ({ chatId: `m${start + index}` }));
+    const positions = (start: number, end: number) => Array.from({ length: end - start }, (_, index) => start + index);
+    const reverse = vi.fn()
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: rows(41, 81), positions: positions(41, 81), nextPosition: 81, before: 81, nextBefore: 41, total: 81, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: rows(1, 41), positions: positions(1, 41), nextPosition: 81, before: 41, nextBefore: 1, total: 81, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: rows(0, 1), positions: positions(0, 1), nextPosition: 81, before: 1, nextBefore: null, total: 81, hasMore: false });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
+
+    await ensureChatMessageWindow(character, 0, 40);
+    expect(character.chats[0].message.map((message: any) => message.chatId)).toEqual(rows(41, 81).map((message) => message.chatId));
+    expect((character.chats[0] as any)._sqlWindow).toMatchObject({ total: 81, hasOlder: true });
+
+    await loadOlderChatMessages(character, 0, 40);
+    await loadOlderChatMessages(character, 0, 40);
+    const ids = character.chats[0].message.map((message: any) => message.chatId);
+    expect(ids).toEqual(rows(0, 81).map((message) => message.chatId));
+    expect(new Set(ids)).toHaveLength(81);
+    expect((character.chats[0] as any)._sqlWindow).toMatchObject({ total: 81, hasOlder: false });
+  });
+
   it("attaches canonical SQL positions to the tail and prepended older page", async () => {
     const reverse = vi.fn()
       .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m3" }, { chatId: "m4" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 5, hasMore: true })
