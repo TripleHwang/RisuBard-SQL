@@ -51,6 +51,13 @@ describe('persona scopes', () => {
         )).toEqual({ persona: selected, scope: 'global', index: 1 })
     })
 
+    test('treats the metadata-first persona store as empty until hydration', () => {
+        const shallow = { personas: undefined, selectedPersona: 0 }
+
+        expect(getEffectivePersona(shallow, owner(), null)).toBeNull()
+        expect(resolvePersonaById(shallow, owner(), 'not-hydrated')).toBeNull()
+    })
+
     test('reads an absent character repository without mutating reactive state', () => {
         const character = owner()
         const store = getCharacterPersonas(character)
