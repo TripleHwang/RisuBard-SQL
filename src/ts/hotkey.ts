@@ -168,6 +168,7 @@ export function initHotkey(){
                     break
                 }
                 case 'quickSettings':{
+                    if (!isStartupMutationReady()) return false
                     QuickSettings.open = !QuickSettings.open
                     QuickSettings.index = 0
                     break

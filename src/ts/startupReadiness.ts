@@ -6,6 +6,11 @@ export function isStartupMutationReady(): boolean {
     return !get(startupHydrationStore) && !get(startupHydrationErrorStore)
 }
 
+export function runStartupMutation<T>(mutation: () => T): T | undefined {
+    if (!isStartupMutationReady()) return undefined
+    return mutation()
+}
+
 export function scheduleAfterTwoAnimationFrames(
     task: () => void | Promise<void>,
     requestFrame: (callback: FrameRequestCallback) => number = typeof globalThis.requestAnimationFrame === 'function'

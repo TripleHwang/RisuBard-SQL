@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import { startupHydrationErrorStore, startupHydrationStore } from './stores.svelte'
-import { isStartupMutationReady, scheduleAfterTwoAnimationFrames } from './startupReadiness'
+import { isStartupMutationReady, runStartupMutation, scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 describe('startup readiness', () => {
     test('keeps mutation sources closed until deferred hydration succeeds', () => {
@@ -36,5 +36,23 @@ describe('startup readiness', () => {
         await Promise.resolve()
         expect(task).toHaveBeenCalledOnce()
         expect(requestFrame).toHaveBeenCalledTimes(2)
+    })
+
+    test('suppresses every guarded startup mutation until a successful deferred hydration', () => {
+        const mutations = ['quick settings', 'new character', 'vault', 'reorder', 'realm download']
+        const invoke = vi.fn()
+
+        startupHydrationStore.set(true)
+        startupHydrationErrorStore.set(false)
+        for (const mutation of mutations) runStartupMutation(() => invoke(mutation))
+        startupHydrationErrorStore.set(true)
+        for (const mutation of mutations) runStartupMutation(() => invoke(mutation))
+        expect(invoke).not.toHaveBeenCalled()
+
+        startupHydrationErrorStore.set(false)
+        startupHydrationStore.set(false)
+        for (const mutation of mutations) runStartupMutation(() => invoke(mutation))
+        expect(invoke).toHaveBeenCalledTimes(mutations.length)
+        expect(invoke.mock.calls.map(([name]) => name)).toEqual(mutations)
     })
 })

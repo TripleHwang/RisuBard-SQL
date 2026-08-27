@@ -792,6 +792,7 @@ export async function removeChar(identifier:string|number,name:string, type:'nor
 export async function addCharacter(arg:{
     reseter?:()=>any,
 } = {}){
+    if (!isStartupMutationReady()) return
     MobileGUIStack.set(100)
     const reseter = arg.reseter ?? (() => {})
     const r = await alertAddCharacter()

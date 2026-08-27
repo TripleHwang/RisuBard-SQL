@@ -17,7 +17,9 @@
     leftBarCollapsed,
     openPersonaManager,
     characterVaultOpen,
-    CharConfigSubMenu
+    CharConfigSubMenu,
+    startupHydrationStore,
+    startupHydrationErrorStore
 
 
   } from "../../ts/stores.svelte";
@@ -77,6 +79,7 @@
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
   import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
   import { isStartupMutationReady } from "src/ts/startupReadiness";
+  import DeferredStartupGate from '../Others/DeferredStartupGate.svelte';
 
   let sideBarMode = $state(0);
   let editMode = $state(false);
@@ -709,7 +712,8 @@
       aria-label="Character Vault 열기"
       title="캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."
       use:tooltip={"캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."}
-      onclick={() => characterVaultOpen.set(true)}
+      disabled={$startupHydrationStore || $startupHydrationErrorStore}
+      onclick={() => { if (isStartupMutationReady()) characterVaultOpen.set(true) }}
     >
       <img
         src={characterVaultIdle}
@@ -1032,6 +1036,7 @@
         aria-label="새 캐릭터"
         title="새 캐릭터"
         use:tooltip={"새 캐릭터"}
+        disabled={$startupHydrationStore || $startupHydrationErrorStore}
         onclick={async () => {
           addCharacter({reseter}) 
         }}
@@ -1274,7 +1279,7 @@
         </nav>
       {/if}
       {#if QuickSettings.open}
-        <QuickSettingsGui />
+        <DeferredStartupGate><QuickSettingsGui /></DeferredStartupGate>
       {:else if devTool}
         <DevTool />
       {:else if $botMakerMode}
@@ -1308,11 +1313,13 @@
 
 {/if}
 
-<CharacterVaultDialog
-  open={$characterVaultOpen}
-  onOpenChange={(open) => characterVaultOpen.set(open)}
-  onSelectCharacter={selectCharacter}
-/>
+<DeferredStartupGate>
+  <CharacterVaultDialog
+    open={$characterVaultOpen}
+    onOpenChange={(open) => { if (open && !isStartupMutationReady()) return; characterVaultOpen.set(open) }}
+    onSelectCharacter={selectCharacter}
+  />
+</DeferredStartupGate>
 
 <ShDialog
   bind:open={characterManageOpen}
