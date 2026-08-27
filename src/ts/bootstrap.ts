@@ -42,7 +42,7 @@ import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
-import { dispatchStartupURLImport, scheduleAfterTwoAnimationFrames } from './startupReadiness'
+import { applyDeferredStartupDefaults, dispatchStartupURLImport, scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
 let dataLoading = false
@@ -97,6 +97,7 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             // Full normalization must happen only after personas, lorebooks and
             // organizer targets are present; doing it on the shallow graph would
             // replace valid selections with empty-domain defaults.
+            applyDeferredStartupDefaults(getDatabase())
             setDatabase(getDatabase())
             setPatchSyncBaseline(safeStructuredClone(getDatabase()))
             startMetadataPersistence()
@@ -286,7 +287,7 @@ export async function loadData() {
             }
             updateErrorHandling()
             updateGuisize()
-            if (!db.didFirstSetup) {
+            if (!db.didFirstSetup && !deferredSqlStorage) {
                 // Node-only build skips the onboarding screen and lands on the main UI directly.
                 db.didFirstSetup = true
             }

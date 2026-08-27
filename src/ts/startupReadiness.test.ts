@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import { startupHydrationErrorStore, startupHydrationStore } from './stores.svelte'
-import { dispatchStartupURLImport, isStartupMutationReady, runStartupMutation, scheduleAfterTwoAnimationFrames } from './startupReadiness'
+import { applyDeferredStartupDefaults, dispatchStartupURLImport, isStartupMutationReady, runStartupMutation, scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 describe('startup readiness', () => {
     test('keeps mutation sources closed until deferred hydration succeeds', () => {
@@ -39,7 +39,7 @@ describe('startup readiness', () => {
     })
 
     test('suppresses every guarded startup mutation until a successful deferred hydration', () => {
-        const mutations = ['quick settings', 'new character', 'vault', 'reorder', 'realm download', 'url import']
+        const mutations = ['quick settings', 'new character', 'vault', 'reorder', 'realm download', 'url import', 'folder context menu']
         const invoke = vi.fn()
 
         startupHydrationStore.set(true)
@@ -70,5 +70,17 @@ describe('startup readiness', () => {
         startupHydrationStore.set(false)
         expect(await dispatchStartupURLImport(importer)).toBe(true)
         expect(importer).toHaveBeenCalledOnce()
+    })
+
+    test('applies first-setup defaults only when deferred startup completes', () => {
+        const database = { didFirstSetup: false }
+        startupHydrationStore.set(true)
+        startupHydrationErrorStore.set(false)
+        expect(runStartupMutation(() => applyDeferredStartupDefaults(database))).toBeUndefined()
+        expect(database.didFirstSetup).toBe(false)
+
+        startupHydrationStore.set(false)
+        applyDeferredStartupDefaults(database)
+        expect(database.didFirstSetup).toBe(true)
     })
 })

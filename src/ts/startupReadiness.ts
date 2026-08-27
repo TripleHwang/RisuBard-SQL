@@ -11,6 +11,10 @@ export function runStartupMutation<T>(mutation: () => T): T | undefined {
     return mutation()
 }
 
+export function applyDeferredStartupDefaults(database: { didFirstSetup?: boolean }): void {
+    if (!database.didFirstSetup) database.didFirstSetup = true
+}
+
 /** Dispatches URL-driven imports only when the complete database is writable. */
 export async function dispatchStartupURLImport<T>(
     importer: () => T | Promise<T>,

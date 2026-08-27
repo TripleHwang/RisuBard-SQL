@@ -78,7 +78,7 @@
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
   import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
-  import { isStartupMutationReady } from "src/ts/startupReadiness";
+  import { isStartupMutationReady, runStartupMutation } from "src/ts/startupReadiness";
   import DeferredStartupGate from '../Others/DeferredStartupGate.svelte';
 
   let sideBarMode = $state(0);
@@ -298,6 +298,15 @@
       void requestImmediateSave()
     }
     return changed
+  }
+
+  const getWritableFolder = (id:string) => {
+    return runStartupMutation(() => {
+      const folderIndex = getFolderIndex(id)
+      if (folderIndex === -1) return null
+      const folder = DBState.db.characterOrder[folderIndex]
+      return typeof folder === 'string' ? null : { folderIndex, folder }
+    }) ?? null
   }
 
   const avatarDragStart = (data:DragData, e:DragEv) => {
@@ -807,44 +816,34 @@
               <SidebarAvatar src="slot" size="56" rounded={IconRounded} bordered name={char.name} color={char.color} backgroundimg={char.img ? getCharImage(char.img, "plain") : ""}
               oncontextmenu={async (e) => {
                 e.preventDefault()
-                const folderIndex = getFolderIndex(char.id)
-                if(folderIndex === -1) return
+                if (!isStartupMutationReady()) return
                 const sel = parseInt(await alertSelect([language.renameFolder,language.changeFolderColor,language.changeFolderImage,language.cancel]))
                 if(sel === 0){
                   const v = await alertInput(language.changeFolderName, [], char.name)
-                  const db = DBState.db
-                  if(v){
-                    const oder = db.characterOrder[folderIndex]
-                    if(typeof(oder) === 'string'){
-                      return
-                    }
-                    oder.name = v
-                    db.characterOrder[folderIndex] = oder
+                  const target = getWritableFolder(char.id)
+                  if(v && target){
+                    target.folder.name = v
+                    DBState.db.characterOrder[target.folderIndex] = target.folder
                   }
                 }
                 else if(sel === 1){
                   const colors = ["red","green","blue","yellow","indigo","purple","pink","default"]
                   const sel = parseInt(await alertSelect(colors))
-                  const db = DBState.db
-                  const oder = db.characterOrder[folderIndex]
-                  if(typeof(oder) === 'string'){
-                    return
-                  }
-                  oder.color = colors[sel].toLocaleLowerCase()
-                  db.characterOrder[folderIndex] = oder
+                  const target = getWritableFolder(char.id)
+                  if (!target) return
+                  target.folder.color = colors[sel].toLocaleLowerCase()
+                  DBState.db.characterOrder[target.folderIndex] = target.folder
                 }
                 else if(sel === 2) {
                   const sel = parseInt(await alertSelect(['Reset to Default Image', 'Select Image File']))
-                  const db = DBState.db
-                  const oder = db.characterOrder[folderIndex]
-                  if(typeof(oder) === 'string'){
-                    return
-                  }
 
                   switch (sel) {
                     case 0:
-                      oder.imgFile = null
-                      oder.img = ''
+                      const resetTarget = getWritableFolder(char.id)
+                      if (!resetTarget) return
+                      resetTarget.folder.imgFile = null
+                      resetTarget.folder.img = ''
+                      DBState.db.characterOrder[resetTarget.folderIndex] = resetTarget.folder
                       break;
                   
                     case 1:
@@ -858,11 +857,15 @@
                         return
                       }
 
-                      const folderImageData = await saveAsset(folderImage.data)
+                      if (!isStartupMutationReady()) return
 
-                      oder.imgFile = folderImageData
-                      oder.img = await getFileSrc(folderImageData)
-                      db.characterOrder[folderIndex] = oder
+                      const folderImageData = await saveAsset(folderImage.data)
+                      const folderImageSrc = await getFileSrc(folderImageData)
+                      const imageTarget = getWritableFolder(char.id)
+                      if (!imageTarget) return
+                      imageTarget.folder.imgFile = folderImageData
+                      imageTarget.folder.img = folderImageSrc
+                      DBState.db.characterOrder[imageTarget.folderIndex] = imageTarget.folder
                       break;
                   }
                 }
