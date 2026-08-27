@@ -41,8 +41,8 @@ export const latestMessageScrollOptions = {
 export type ContinuousHistoryControllerOptions = {
     hasOlder: () => boolean
     isScrollable: () => boolean
+    progress: () => number
     loadOlder: () => Promise<boolean>
-    maxLoads?: number
 }
 
 /** Serializes reverse loads so a short initial window fills without races. */
@@ -71,20 +71,30 @@ export function createContinuousHistoryController(options: ContinuousHistoryCont
         get failed() { return failed },
         get loading() { return inFlight !== null },
         async fillViewport(): Promise<boolean> {
-            const maxLoads = Math.max(1, options.maxLoads ?? 100)
-            let loads = 0
             while (!options.isScrollable() && options.hasOlder()) {
-                if (loads >= maxLoads) {
+                const progress = options.progress()
+                if (!await loadOne()) return false
+                if (!options.isScrollable() && options.hasOlder() && options.progress() <= progress) {
                     failed = true
                     return false
                 }
-                if (!await loadOne()) return false
-                loads += 1
             }
             return true
         },
         retry: loadOne,
         reset() { failed = false },
+    }
+}
+
+/** Swaps controller state when history ownership changes, isolating in-flight loads. */
+export function createContinuousHistoryControllerSlot(create: () => ReturnType<typeof createContinuousHistoryController>) {
+    let current = create()
+    return {
+        get current() { return current },
+        replace() {
+            current = create()
+            return current
+        },
     }
 }
 

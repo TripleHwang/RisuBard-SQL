@@ -9,7 +9,7 @@
     import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, MobileGUI } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
-    import { createContinuousHistoryController, isCurrentChatWindowRequest, isNearReverseScrollTop } from 'src/ts/chatWindow';
+    import { createContinuousHistoryController, createContinuousHistoryControllerSlot, isCurrentChatWindowRequest, isNearReverseScrollTop } from 'src/ts/chatWindow';
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -114,7 +114,16 @@ import { isMobile } from 'src/ts/platform'
     let previousScrollLoadArmed = true
     let historyLoadFailed = $state(false)
     let oldestHistoryMessageMounted = $state(false)
-    let historyController: ReturnType<typeof createContinuousHistoryController>
+    const createHistoryController = () => createContinuousHistoryController({
+        hasOlder: () => !!(currentChatSlot as any)?._sqlWindow?.hasOlder,
+        isScrollable: () => {
+            const container = document.querySelector('.default-chat-screen') as HTMLElement | null
+            return !!container && container.scrollHeight > container.clientHeight
+        },
+        progress: () => currentChat.length,
+        loadOlder: loadOlderHistory,
+    })
+    const historyControllers = createContinuousHistoryControllerSlot(createHistoryController)
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -144,7 +153,7 @@ import { isMobile } from 'src/ts/platform'
         if (nextKey !== historyKey) {
             historyKey = nextKey
             chatWindowVersion += 1
-            historyController?.reset()
+            historyControllers.replace()
             historyLoadFailed = false
         }
     })
@@ -281,9 +290,11 @@ import { isMobile } from 'src/ts/platform'
         const requestVersion = chatWindowVersion
         try {
             await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
-            historyLoadFailed = false
         } catch {
-            historyLoadFailed = true
+            if (isCurrentChatWindowRequest(
+                { key: requestKey, version: requestVersion },
+                { key: historyKey, version: chatWindowVersion },
+            )) historyLoadFailed = true
             return false
         }
         // The fetch may finish after selection changed. It may update its old
@@ -292,6 +303,7 @@ import { isMobile } from 'src/ts/platform'
             { key: requestKey, version: requestVersion },
             { key: historyKey, version: chatWindowVersion },
         )) return false
+        historyLoadFailed = false
         // Prepending shifts array indices. Re-anchor the bounded child by its
         // durable ID before the parent measures the restored visual position.
         if (anchor?.id) {
@@ -308,18 +320,11 @@ import { isMobile } from 'src/ts/platform'
         return true
     }
 
-    historyController = createContinuousHistoryController({
-        hasOlder: () => !!(currentChatSlot as any)?._sqlWindow?.hasOlder,
-        isScrollable: () => {
-            const container = document.querySelector('.default-chat-screen') as HTMLElement | null
-            return !!container && container.scrollHeight > container.clientHeight
-        },
-        loadOlder: loadOlderHistory,
-    })
-
     async function loadOlderSerialized(): Promise<boolean> {
-        const loaded = await historyController.retry()
-        historyLoadFailed = historyController.failed
+        const controller = historyControllers.current
+        const loaded = await controller.retry()
+        if (controller !== historyControllers.current) return false
+        historyLoadFailed = controller.failed
         return loaded
     }
 
@@ -362,8 +367,9 @@ import { isMobile } from 'src/ts/platform'
     }
 
     async function loadOlderUntilScrollable() {
-        await historyController.fillViewport()
-        historyLoadFailed = historyController.failed
+        const controller = historyControllers.current
+        await controller.fillViewport()
+        if (controller === historyControllers.current) historyLoadFailed = controller.failed
     }
 
     $effect(() => {

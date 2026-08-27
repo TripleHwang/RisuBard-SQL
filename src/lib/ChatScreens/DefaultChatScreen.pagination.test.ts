@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import {
     createContinuousHistoryController,
+    createContinuousHistoryControllerSlot,
     getChatWindow,
     latestMessageScrollOptions,
     restoreMessageAnchor,
@@ -13,6 +14,7 @@ describe('continuous bounded chat history', () => {
         const controller = createContinuousHistoryController({
             hasOlder: () => remaining > 0,
             isScrollable: () => scrollable,
+            progress: () => 2 - remaining,
             loadOlder: async () => {
                 remaining -= 1
                 if (remaining === 0) scrollable = true
@@ -27,6 +29,7 @@ describe('continuous bounded chat history', () => {
         const failing = createContinuousHistoryController({
             hasOlder: () => true,
             isScrollable: () => false,
+            progress: () => 0,
             loadOlder: async () => { throw new Error('offline') },
         })
         await failing.fillViewport()
@@ -37,12 +40,12 @@ describe('continuous bounded chat history', () => {
         expect(failing.failed).toBe(false)
     })
 
-    test('stops automatic fill when a backend reports older history without making viewport progress', async () => {
+    test('stops automatic fill when a backend reports older history without making forward progress', async () => {
         let attempts = 0
         const controller = createContinuousHistoryController({
             hasOlder: () => true,
             isScrollable: () => false,
-            maxLoads: 2,
+            progress: () => 40,
             loadOlder: async () => {
                 attempts += 1
                 return true
@@ -50,8 +53,29 @@ describe('continuous bounded chat history', () => {
         })
 
         await expect(controller.fillViewport()).resolves.toBe(false)
-        expect(attempts).toBe(2)
+        expect(attempts).toBe(1)
         expect(controller.failed).toBe(true)
+    })
+
+    test('replaces an in-flight controller on chat selection instead of joining its request', async () => {
+        let resolveOld!: (value: boolean) => void
+        const oldRequest = new Promise<boolean>((resolve) => { resolveOld = resolve })
+        let calls = 0
+        const slot = createContinuousHistoryControllerSlot(() => createContinuousHistoryController({
+            hasOlder: () => false,
+            isScrollable: () => true,
+            progress: () => calls,
+            loadOlder: () => ++calls === 1 ? oldRequest : Promise.resolve(true),
+        }))
+
+        const old = slot.current
+        const pending = old.retry()
+        const fresh = slot.replace()
+        await expect(fresh.retry()).resolves.toBe(true)
+        expect(calls).toBe(2)
+        resolveOld(false)
+        await expect(pending).resolves.toBe(false)
+        expect(fresh.failed).toBe(false)
     })
 
     test('keeps normal and saver DOM windows bounded, restores a prepend anchor, and bottoms Latest', () => {
