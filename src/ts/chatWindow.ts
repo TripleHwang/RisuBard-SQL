@@ -86,6 +86,9 @@ export function createContinuousHistoryController(options: ContinuousHistoryCont
                 failed = false
                 return false
             }
+            // A retry originates from an explicit failed reverse request. It
+            // must make one request even if the old viewport already overflows.
+            if (!await loadOne()) return false
             return await this.fillViewport()
         },
         reset() { failed = false },

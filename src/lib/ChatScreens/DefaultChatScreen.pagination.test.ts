@@ -115,6 +115,26 @@ describe('continuous bounded chat history', () => {
         expect(controller.failed).toBe(false)
     })
 
+    test('retry issues a reverse request even when the existing viewport already scrolls', async () => {
+        let attempts = 0
+        const controller = createContinuousHistoryController({
+            hasOlder: () => true,
+            isScrollable: () => true,
+            progress: () => attempts,
+            loadOlder: async () => {
+                attempts += 1
+                if (attempts === 1) throw new Error('offline')
+                return true
+            },
+        })
+
+        await expect(controller.retry()).resolves.toBe(false)
+        expect(controller.failed).toBe(true)
+        await expect(controller.retry()).resolves.toBe(true)
+        expect(attempts).toBe(2)
+        expect(controller.failed).toBe(false)
+    })
+
     test('uses the global Latest action for the down-chevron', () => {
         const screen = readFileSync('src/lib/ChatScreens/DefaultChatScreen.svelte', 'utf8')
         const icon = screen.indexOf('<ChevronsDownIcon')
