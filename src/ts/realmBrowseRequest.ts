@@ -1,7 +1,7 @@
 import type { RealmBrowseQuery } from './characterCards'
 import { isDefaultRealmBrowseQuery } from './realmBrowseCache'
 
-type BrowseResult<TCard> = { cards: TCard[]; additionalHTML: string }
+type BrowseResult<TCard> = { cards: TCard[]; additionalHTML: string; droppedCards?: number }
 type BrowseFetcher<TCard> = (query: RealmBrowseQuery, options?: { signal?: AbortSignal }) => Promise<BrowseResult<TCard>>
 
 export function createRealmBrowseRequestCoordinator<TCard>(

@@ -11,7 +11,7 @@
     import RealmHubIcon from './RealmHubIcon.svelte';
     import RealmPopUp from './RealmPopUp.svelte';
     import { isStartupMutationReady } from 'src/ts/startupReadiness';
-    import { isDefaultRealmBrowseQuery, readDefaultRealmBrowseCache, writeDefaultRealmBrowseCache } from 'src/ts/realmBrowseCache';
+    import { isDefaultRealmBrowseQuery, isRealmBrowseUnreadableError, readDefaultRealmBrowseCache, writeDefaultRealmBrowseCache } from 'src/ts/realmBrowseCache';
     import { createRealmBrowseRequestCoordinator } from 'src/ts/realmBrowseRequest';
     import { applyInitialDefaultCache, defaultRefreshFailedMessage } from 'src/ts/realmBrowseInitialState';
 
@@ -29,6 +29,7 @@
     let isLoading = $state(false);
     let isRefreshing = $state(false);
     let browseError = $state('');
+    let droppedCards = $state(0);
     let hasDefaultFeed = $state(false);
     let initialRefreshPending = $state(false);
     const requests = createRealmBrowseRequestCoordinator(getRisuHub, writeDefaultRealmBrowseCache);
@@ -122,6 +123,7 @@
         };
         const isDefault = isDefaultRealmBrowseQuery(query);
         browseError = '';
+        droppedCards = 0;
         hubAdditionalHTML = '';
         if (!isDefault) {
             charas = [];
@@ -134,6 +136,7 @@
             success: (result) => {
                 if (isInitialDefaultRefresh) initialRefreshPending = false;
                 charas = result.cards;
+                droppedCards = result.droppedCards ?? 0;
                 hubAdditionalHTML = result.additionalHTML;
                 hasDefaultFeed = isDefault;
                 isLoading = false;
@@ -145,9 +148,15 @@
                 isLoading = false;
                 isRefreshing = false;
                 hubAdditionalHTML = '';
+                droppedCards = 0;
+                // Cards are still on screen when a cached feed survives, so that stays the honest
+                // message; otherwise say when retrying cannot help because this client could not
+                // read anything the server sent.
                 browseError = isDefault && hasDefaultFeed
                     ? defaultRefreshFailedMessage
-                    : 'Unable to load RisuRealm results. Please try again.';
+                    : isRealmBrowseUnreadableError(error)
+                        ? language.realmResultsUnreadable
+                        : 'Unable to load RisuRealm results. Please try again.';
             },
         });
     }
@@ -360,6 +369,10 @@
 
 {#if browseError}
     <p class="px-4 pt-3 text-sm text-textcolor2" role="alert">{browseError}</p>
+{/if}
+
+{#if droppedCards > 0}
+    <p class="px-4 pt-3 text-sm text-textcolor2" role="status">{language.realmResultsPartiallySkipped.replace("{}", String(droppedCards))}</p>
 {/if}
 
 <div class="grid w-full grid-cols-1 gap-3 py-4 lg:grid-cols-2">
