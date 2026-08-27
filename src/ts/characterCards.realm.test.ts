@@ -35,10 +35,10 @@ describe('RisuRealm browse transport', () => {
         expect(fetchMock.mock.calls[0][1]).toMatchObject({ signal: controller.signal })
     })
 
-    test('projects helper image fields and caps a valid live response at 100 cards', async () => {
+    test('projects a live response and caps it at 100 cards', async () => {
         const card = (id: string) => ({
-            name: 'Character', desc: '', download: '0', id, img: 'image-id', tags: [], viewScreen: 'none',
-            hasLore: false, hasEmotion: false, hasAsset: false, hot: 0, license: '', type: 'character',
+            name: 'Character', desc: null, download: 0, id, img: 'image-id', tags: [], viewScreen: '',
+            haslore: 0, hasemotion: 0, hasasset: 0, license: null, type: null,
             imageData: 'not persisted', blob: 'not persisted', additionalHTML: 'not card html',
         })
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ cards: Array.from({ length: 101 }, (_, index) => card(String(index))) }), { status: 200 })))
@@ -48,5 +48,6 @@ describe('RisuRealm browse transport', () => {
         expect(result.cards[0]).not.toHaveProperty('imageData')
         expect(result.cards[0]).not.toHaveProperty('blob')
         expect(result.cards[0]).not.toHaveProperty('additionalHTML')
+        expect(result.cards[0]).toMatchObject({ desc: '', download: '0', viewScreen: 'none', hot: 0, license: '', type: '' })
     })
 })

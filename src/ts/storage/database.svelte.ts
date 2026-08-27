@@ -963,6 +963,8 @@ export function setCharacterByIndex(index:number,char:character){
     if(!DBState.db.characters){
         DBState.db.characters = []
     }
+    markTrustedFullReplacement(char)
+    for(const chat of char.chats ?? []) markTrustedFullReplacement(chat)
     DBState.db.characters[index] = char
 }
 
@@ -973,7 +975,7 @@ export function getCurrentChat(){
 
 export function setCurrentChat(chat:Chat){
     const char = getCurrentCharacter()
-    char.chats[char.chatPage] = normalizeChat(chat)
+    char.chats[char.chatPage] = markTrustedFullReplacement(normalizeChat(chat))
     setCurrentCharacter(char)
 }
 
@@ -2418,6 +2420,12 @@ export function normalizeChat(chat: Partial<Chat>): Chat {
     }
     c.risuBardWikiReboot = normalizeWikiRebootJob(c.risuBardWikiReboot)
     return c
+}
+
+/** Marks a documented full-object replacement as safe for SQL body persistence. */
+export function markTrustedFullReplacement<T extends object>(value: T): T {
+    ;(value as T & { detailsLoaded?: boolean }).detailsLoaded = true
+    return value
 }
 
 export interface Chat{

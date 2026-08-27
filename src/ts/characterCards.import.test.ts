@@ -50,6 +50,8 @@ vi.mock('./characterVault', () => ({ pinCharacterVaultQuickAccess: (...args: any
 vi.mock('src/lang', () => ({ language: { errors: { noData: 'invalid-data' }, importedCharacter: 'imported' } }))
 
 import { importCharacter, importCharacterProcess } from './characterCards'
+import { buildSqlDirtyCommit } from './storage/sql/sqlDirtyCommit'
+import { applySqliteCommit } from './storage/sql/sqliteCommit'
 
 describe('CharX import completion', () => {
     beforeEach(() => {
@@ -65,6 +67,33 @@ describe('CharX import completion', () => {
         expect(state.events).toEqual(['assets-5/5'])
         expect(state.alerts).toContain('invalid-data')
         expect(state.waitAlerts).toEqual(['Loading... (Reading)'])
+    })
+})
+
+describe('Off-spec character import persistence', () => {
+    beforeEach(() => {
+        state.db.characters = []
+    })
+
+    test('writes the complete imported character and initial chat bodies', async () => {
+        await importCharacterProcess({
+            name: 'legacy.json',
+            data: new TextEncoder().encode(JSON.stringify({
+                char_name: 'Legacy', char_persona: 'complete body', char_greeting: 'Hello', description: 'complete body',
+            })),
+        })
+        const character = state.db.characters[0]
+        const commit = buildSqlDirtyCommit(state.db as any, {
+            rootKeys: [], characterIds: [character.chaId],
+            chats: [{ characterId: character.chaId, chatId: character.chats[0].id, manifest: false }],
+            messages: [], messageManifestChatIds: [], messageDeletes: [], pluginStorageKeys: [], presetIds: [],
+        }, 1)
+        const statements: string[] = []
+        await applySqliteCommit(commit, (sql) => { statements.push(sql) })
+
+        expect(commit.characters[0]).toMatchObject({ replaceBody: true })
+        expect(commit.chats[0]).toMatchObject({ replaceBody: true })
+        expect(statements.some((sql) => /character_extension_nodes|chat_extension_nodes/.test(sql))).toBe(true)
     })
 })
 

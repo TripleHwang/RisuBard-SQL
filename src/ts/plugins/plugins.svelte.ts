@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
 import { language } from "../../lang";
-import { getCurrentCharacter, getDatabase, setDatabase, setDatabaseLite } from "../storage/database.svelte";
+import { getCurrentCharacter, getDatabase, markTrustedFullReplacement, setDatabase, setDatabaseLite } from "../storage/database.svelte";
 import { alertConfirm, alertError, alertPluginConfirm } from "../alert";
 import { selectSingleFile, sleep } from "../util";
 import type { OpenAIChat } from "../process/index.svelte";
@@ -624,6 +624,8 @@ export const getV2PluginAPIs = () => {
             if (!isPluginCharacterComplete(db.characters[charid])) {
                 throw new Error('Character details are still loading')
             }
+            markTrustedFullReplacement(char)
+            for (const chat of char.chats ?? []) markTrustedFullReplacement(chat)
             db.characters[charid] = char
             setDatabaseLite(db)
         },
@@ -851,6 +853,11 @@ export const getV2PluginAPIs = () => {
             const db = getDatabase();
             if ('characters' in newDb && hasMetadataOnlyCharacters(db)) throw new Error('Character details are still loading')
             db.pluginCustomStorage ??= {}
+            if (Array.isArray(newDb.characters)) for (const character of newDb.characters) {
+                if (!character) continue
+                markTrustedFullReplacement(character)
+                for (const chat of character.chats ?? []) markTrustedFullReplacement(chat)
+            }
             for (const key of Object.keys(newDb)) {
                 if (allowedDbKeys.includes(key)) {
                     (db as any)[key] = newDb[key];
@@ -865,6 +872,11 @@ export const getV2PluginAPIs = () => {
             const db = getDatabase();
             if ('characters' in newDb && hasMetadataOnlyCharacters(db)) throw new Error('Character details are still loading')
             db.pluginCustomStorage ??= {}
+            if (Array.isArray(newDb.characters)) for (const character of newDb.characters) {
+                if (!character) continue
+                markTrustedFullReplacement(character)
+                for (const chat of character.chats ?? []) markTrustedFullReplacement(chat)
+            }
             for (const key of Object.keys(newDb)) {
                 if (key === 'plugins') {
                     console.warn('[WARN] Plugin attempted to access plugin directly. this would be blocked in future versions. Instead, use the provided APIs to manage plugins. Attempting to handle plugin installation via plugin for new plugins in the provided database object.')

@@ -3,10 +3,16 @@
 </script>
 
 {#if $startupHydrationStore}
-    <div class="m-4 rounded-md border border-darkborderc bg-darkbg px-4 py-3 text-sm text-textcolor2" role="status">
-        {$startupHydrationErrorStore
-            ? 'Saved settings could not finish loading. This area stays locked; retry or recovery is available from the startup prompt.'
-            : 'Loading saved settings…'}
+    <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/40 text-textcolor" role="status">
+        <div class="flex flex-col items-center gap-3">
+            <svg class="h-8 w-8 animate-spin" style="will-change: transform;" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span class="text-sm">{$startupHydrationErrorStore
+                ? 'Saved settings could not finish loading. This area stays locked; retry or recovery is available from the startup prompt.'
+                : 'Loading saved settings…'}</span>
+        </div>
     </div>
 {:else}
     <slot />

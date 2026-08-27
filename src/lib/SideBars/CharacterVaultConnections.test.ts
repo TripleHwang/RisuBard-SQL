@@ -148,7 +148,7 @@ describe('Character Vault sidebar integration', () => {
         )
         expect(characters).toContain('void changeChar(db.characters.length-1, { clearNewBadge: false })')
         expect(changeCharacter).toContain('if(arg.clearNewBadge !== false)')
-        expect(changeCharacter).toContain('clearCharacterVaultNew(db, selectedCharacter.chaId)')
+        expect(changeCharacter).toContain('clearCharacterVaultNew(db, stableCharacter.chaId)')
         expect(source('src/lib/SideBars/Sidebar.svelte')).toContain('void changeChar(index, { reseter })')
         expect(source('src/lib/Mobile/MobileCharacters.svelte')).toContain('void changeChar(char.i)')
     })

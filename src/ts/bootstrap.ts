@@ -16,7 +16,7 @@ import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { applyEarlyLanguage, changeLanguage, language } from "src/lang";
 import { startObserveDom } from "./observer.svelte";
 import { updateGuisize } from "./gui/guisize";
-import { resumeDeferredCharacterSelection, updateLorebooks } from "./characters";
+import { clearDeferredCharacterSelection, resumeDeferredCharacterSelection, updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
@@ -110,6 +110,7 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             console.error('Deferred SQL startup failed', error)
             pluginStateStore.set('failed')
             startupHydrationErrorStore.set(true)
+            clearDeferredCharacterSelection()
             let retry = false
             try {
                 retry = await alertConfirm('Deferred SQL startup could not complete. Retry loading it now?')

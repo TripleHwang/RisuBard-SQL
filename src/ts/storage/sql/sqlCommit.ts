@@ -17,6 +17,8 @@ export interface SqlEntityUpsert {
   id: string;
   position: number;
   data: unknown;
+  /** Omitted keeps legacy replacement behavior; false preserves stored body rows. */
+  replaceBody?: boolean;
 }
 
 export interface SqlChatUpsert extends SqlEntityUpsert {
@@ -136,6 +138,7 @@ export function sqlChatData(value: Chat): unknown {
   delete data.messageTotal;
   delete data._sqlWindow;
   delete data.detailsLoaded;
+  delete data.characterId;
   return data;
 }
 
@@ -215,6 +218,7 @@ export function buildSqlReplaceCommit(
       id: currentCharacter.chaId,
       position: characterPosition,
       data: sqlCharacterData(currentCharacter),
+      replaceBody: true,
     });
 
     const chats = currentCharacter.chats ?? [];
@@ -231,6 +235,7 @@ export function buildSqlReplaceCommit(
         characterId: currentCharacter.chaId,
         position: chatPosition,
         data: sqlChatData(chat),
+        replaceBody: true,
       });
       const messages = chat.message ?? [];
       const messageIds = messages.map(ensureMessageId);

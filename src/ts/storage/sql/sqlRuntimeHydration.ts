@@ -3,6 +3,7 @@ import type { SqlBootstrapStorage } from "./ISqlStorage";
 import { getActiveSqlStorage } from "./sqlBootstrap";
 import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
+import { chatHydrationKey } from "../chatHydrationKey";
 import { validateOlderMessagePage } from "../../chatWindow";
 
 export type SqlHydrationWindow = {
@@ -13,6 +14,7 @@ export type SqlHydrationWindow = {
   nextPosition: number;
 };
 type HydratableCharacter = character & { detailsLoaded?: boolean };
+type CollapsedCharacter = character & { _sqlCharacterBodyCollapsed?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
 
 /**
@@ -31,8 +33,21 @@ export function normalizeHydratedCharacter(value: character): character {
 }
 
 const DEFAULT_MESSAGE_LIMIT = 40;
+const MAX_CHAT_HYDRATION_ATTEMPTS = 2;
 const characterHydrations = new Map<string, Promise<character | null>>();
 const chatHydrations = new Map<string, Promise<Chat | null>>();
+const chatBodyHydrations = new Map<string, Promise<Chat | null>>();
+type RevisionedChat = Chat & {
+  _sqlHydrationRevision?: number;
+  _sqlMetadataOverrides?: Record<string, unknown>;
+};
+const CHAT_METADATA_KEYS = ["name", "note", "folderId", "lastDate"] as const;
+function metadataSnapshot(chat: Chat): Record<string, unknown> {
+  return Object.fromEntries(CHAT_METADATA_KEYS.flatMap((key) => Object.prototype.hasOwnProperty.call(chat, key) ? [[key, (chat as unknown as Record<string, unknown>)[key]]] : []));
+}
+function metadataChanges(chat: Chat, baseline: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(CHAT_METADATA_KEYS.flatMap((key) => Object.prototype.hasOwnProperty.call(chat, key) && !Object.is((chat as unknown as Record<string, unknown>)[key], baseline[key]) ? [[key, (chat as unknown as Record<string, unknown>)[key]]] : []));
+}
 
 function getNodeBootstrapStorage(): SqlBootstrapStorage | null {
   const storage = getActiveSqlStorage();
@@ -124,11 +139,15 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
     try {
       const full = await storage.loadCharacterHydration(characterId);
       if (!full) return null;
-      const currentIndex = db.characters.findIndex((value) => value?.chaId === characterId);
-      if (currentIndex === -1 || (db.characters[currentIndex] as HydratableCharacter | undefined)?.detailsLoaded !== false) return null;
-      const normalized = normalizeHydratedCharacter(full);
-      db.characters[currentIndex] = normalized;
-      return normalized;
+      if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
+        if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
+        const repaired = await storage.repairCollapsedCharacter(characterId);
+        if (repaired.status === "unavailable") throw new Error("SQL character repair could not recover this character");
+        const reloaded = await storage.loadCharacterHydration(characterId);
+        if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
+        return applyHydratedCharacter(db, characterId, reloaded);
+      }
+      return applyHydratedCharacter(db, characterId, full);
     } finally {
       characterHydrations.delete(characterId);
     }
@@ -137,8 +156,70 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
   return hydration;
 }
 
+function applyHydratedCharacter(db: Database, characterId: string, full: character): character | null {
+      const currentIndex = db.characters.findIndex((value) => value?.chaId === characterId);
+      if (currentIndex === -1 || (db.characters[currentIndex] as HydratableCharacter | undefined)?.detailsLoaded !== false) return null;
+      const normalized = normalizeHydratedCharacter(full);
+      db.characters[currentIndex] = normalized;
+      return normalized;
+}
+
+async function ensureChatBodyHydrated(
+  character: character,
+  chatIndex: number,
+  carriedMetadata: Record<string, unknown> = {},
+): Promise<Chat | null> {
+  const summary = character.chats[chatIndex];
+  if (!summary) return null;
+  if ((summary as HydratableChat & { detailsLoaded?: boolean }).detailsLoaded !== false) return summary;
+  const storage = getNodeBootstrapStorage();
+  if (!storage || typeof (storage as Partial<SqlBootstrapStorage>).loadChatHydration !== "function") return summary;
+  const chatId = summary.id;
+  if (!chatId) return null;
+  const key = chatHydrationKey(character.chaId, chatId);
+  const existing = chatBodyHydrations.get(key);
+  if (existing) return existing;
+  const initialMetadata = metadataSnapshot(summary);
+
+  const hydration = (async () => {
+    try {
+      const response = await storage.loadChatHydration(chatId);
+      if (!response) return null;
+      const full = response.chat;
+      if ((full as Chat & { characterId?: unknown }).characterId !== character.chaId) throw new Error("SQL chat hydration owner mismatch");
+      const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
+      const current = currentIndex === -1 ? null : character.chats[currentIndex];
+      if (!current || (current as HydratableChat & { detailsLoaded?: boolean }).detailsLoaded !== false) return null;
+      const summaryMetadata = Object.fromEntries(
+        CHAT_METADATA_KEYS.flatMap((key) =>
+          Object.prototype.hasOwnProperty.call(carriedMetadata, key)
+            ? [[key, carriedMetadata[key]]]
+            : Object.prototype.hasOwnProperty.call(current, key) && !Object.is((current as unknown as Record<string, unknown>)[key], initialMetadata[key])
+            ? [[key, (current as unknown as Record<string, unknown>)[key]]]
+            : [],
+        ),
+      );
+      const merged = { ...full, ...summaryMetadata, message: current.message ?? full.message ?? [] } as Chat;
+      Object.defineProperty(merged, "_sqlHydrationRevision", { configurable: true, enumerable: false, value: response.revision });
+      Object.defineProperty(merged, "_sqlMetadataOverrides", { configurable: true, enumerable: false, value: { ...carriedMetadata, ...summaryMetadata } });
+      (merged as HydratableChat & { detailsLoaded?: boolean }).detailsLoaded = true;
+      character.chats[currentIndex] = merged;
+      return merged;
+    } finally {
+      chatBodyHydrations.delete(key);
+    }
+  })();
+  chatBodyHydrations.set(key, hydration);
+  return hydration;
+}
+
+/** Hydrate a chat body before attaching its newest bounded message page. */
+export async function ensureChatHydrated(character: character, chatIndex: number, limit?: number): Promise<Chat | null> {
+  return await ensureChatMessageWindow(character, chatIndex, limit);
+}
+
 export async function ensureChatMessageWindow(character: character, chatIndex: number, limit?: number): Promise<Chat | null> {
-  const initial = character.chats[chatIndex];
+  let initial = await ensureChatBodyHydrated(character, chatIndex);
   if (!initial) return null;
   const storage = getNodeBootstrapStorage();
   if (!storage) return initial;
@@ -146,14 +227,27 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
   if (!chatId) return null;
   const existingWindow = getWindow(initial);
   if (existingWindow) return initial;
-  const key = `${character.chaId}/${chatId}`;
+  const key = chatHydrationKey(character.chaId, chatId);
   const existing = chatHydrations.get(key);
   if (existing) return existing;
 
   const hydration = (async () => {
     beginHydration(key);
     try {
-      const page = await storage.loadChatMessageReversePage(chatId, undefined, normalizeLimit(limit));
+      let page;
+      for (let attempt = 0; attempt < MAX_CHAT_HYDRATION_ATTEMPTS; attempt += 1) {
+        const pageMetadata = metadataSnapshot(initial);
+        page = await storage.loadChatMessageReversePage(chatId, undefined, normalizeLimit(limit));
+        if (page.revision === (initial as RevisionedChat)._sqlHydrationRevision) break;
+        if (attempt + 1 === MAX_CHAT_HYDRATION_ATTEMPTS) throw new Error("SQL chat hydration revision changed");
+        const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
+        const current = currentIndex === -1 ? null : character.chats[currentIndex];
+        if (!current) return null;
+        (current as HydratableChat & { detailsLoaded?: boolean }).detailsLoaded = false;
+        initial = await ensureChatBodyHydrated(character, currentIndex, { ...(current as RevisionedChat)._sqlMetadataOverrides, ...metadataChanges(current, pageMetadata) });
+        if (!initial) return null;
+      }
+      if (!page) return null;
       const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
@@ -189,7 +283,7 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
   const storage = getNodeBootstrapStorage();
   if (!storage) return chat;
   const chatId = chat.id;
-  const key = `${character.chaId}/${chatId}`;
+  const key = chatHydrationKey(character.chaId, chatId);
   const existing = chatHydrations.get(key);
   if (existing) return existing;
 

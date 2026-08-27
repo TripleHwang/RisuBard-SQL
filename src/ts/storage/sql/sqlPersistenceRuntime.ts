@@ -1,5 +1,6 @@
 import type { Chat, Database, character } from '../database.svelte'
 import { isChatHydrationActive, isHydrationActive } from '../hydrationState'
+import { chatHydrationKey } from '../chatHydrationKey'
 import type { ISqlStorage } from './ISqlStorage'
 import { DirtyRegistry, type DirtySnapshot } from './dirtyRegistry'
 import { buildSqlDirtyCommit } from './sqlDirtyCommit'
@@ -57,7 +58,7 @@ export function markSqlMessageManifestDirty(chatId: string): void {
 }
 
 export function markSqlChatDirty(characterId: string, chatId: string, manifest = false): void {
-    if (!characterId || !chatId || isHydrationActive(`${characterId}/${chatId}`)) return
+    if (!characterId || !chatId || isHydrationActive(chatHydrationKey(characterId, chatId))) return
     registry.markChat(characterId, chatId, manifest)
     scheduleDirtyFlush(false)
 }

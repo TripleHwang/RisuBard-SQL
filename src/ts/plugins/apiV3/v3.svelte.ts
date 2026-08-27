@@ -1,6 +1,6 @@
 import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, hasMetadataOnlyCharacters, isPluginCharacterComplete, isPluginChatComplete, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
 import { SandboxHost } from "./factory";
-import { getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
+import { getDatabase, markTrustedFullReplacement, normalizeChat } from "src/ts/storage/database.svelte";
 import { SafeLocalPluginStorage, tagWhitelist } from "../pluginSafeClass";
 import { bindPluginRequestStatusStorage } from "../providerRequestStatus";
 import { recordOwner, removeOwner, clearOwners } from "../pluginStorageMeta";
@@ -1066,6 +1066,8 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             const charId = charIds[index];
             if(charId){
                 if (!isPluginCharacterComplete(db.characters[charId])) throw new Error('Character details are still loading')
+                markTrustedFullReplacement(char)
+                for(const chat of char.chats ?? []) markTrustedFullReplacement(chat)
                 DBState.db.characters[charId] = char
             }
         },
@@ -1090,7 +1092,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 const chats = db.characters[charId].chats;
                 if(chats && chats[chatIndex]){
                     if (!isPluginChatComplete(chats[chatIndex])) throw new Error('Chat history is still loading')
-                    DBState.db.characters[charId].chats[chatIndex] = normalizeChat(chat)
+                    DBState.db.characters[charId].chats[chatIndex] = markTrustedFullReplacement(normalizeChat(chat))
                 }
             }
         },

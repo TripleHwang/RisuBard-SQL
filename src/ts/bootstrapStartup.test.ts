@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(resolve(process.cwd(), 'src/ts/bootstrap.ts'), 'utf8')
 const appSource = readFileSync(resolve(process.cwd(), 'src/App.svelte'), 'utf8')
+const chatScreenSource = readFileSync(resolve(process.cwd(), 'src/lib/ChatScreens/ChatScreen.svelte'), 'utf8')
+const gateSource = readFileSync(resolve(process.cwd(), 'src/lib/Others/DeferredStartupGate.svelte'), 'utf8')
+const mobileBodySource = readFileSync(resolve(process.cwd(), 'src/lib/Mobile/MobileBody.svelte'), 'utf8')
+const sidebarSource = readFileSync(resolve(process.cwd(), 'src/lib/SideBars/Sidebar.svelte'), 'utf8')
 
 describe('startup scheduling and degraded recovery', () => {
     it('marks the visible shell before deferred startup work and true interaction after hydration', () => {
@@ -92,5 +96,18 @@ describe('startup scheduling and degraded recovery', () => {
     it('does not run character-only format mutation for metadata summaries', () => {
         expect(source).toContain("if (startupMode !== 'metadata-first')")
         expect(source).toContain('await checkNewFormat()')
+    })
+
+    it('keeps the chat surface mounted and makes settings loaders full-inset overlays', () => {
+        expect(chatScreenSource).not.toContain('DeferredStartupGate')
+        expect(gateSource).toContain('absolute inset-0')
+        expect(gateSource).toContain('animate-spin')
+        expect(gateSource).not.toContain('m-4 rounded-md')
+        expect(mobileBodySource).not.toContain('$startupHydrationStore && ($MobileSideBar > 0 || $selectedCharID !== -1 || $MobileGUIStack === 2)')
+        expect(mobileBodySource).toContain('{:else if $selectedCharID !== -1}')
+        const vaultGate = sidebarSource.slice(sidebarSource.indexOf('{#if $characterVaultOpen}'), sidebarSource.indexOf('<ShDialog'))
+        expect(vaultGate).toContain('<DeferredStartupGate>')
+        const deferredFailure = source.slice(source.indexOf("startupHydrationErrorStore.set(true)"), source.indexOf('if (!retry)'))
+        expect(deferredFailure).toMatch(/clearDeferredCharacterSelection\(\)[\s\S]*await alertConfirm/)
     })
 })

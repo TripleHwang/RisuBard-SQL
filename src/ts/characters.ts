@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
-import { saveImage, setDatabase, type character, type Chat, defaultSdDataFunc, type loreBook, getDatabase, getCharacterByIndex, setCharacterByIndex, getCurrentChat, loadTogglesFromChat, normalizeChat, newChatModelDefaults } from "./storage/database.svelte";
-import { ensureChatHydrated, touchHydratedChat } from "./storage/chatStorage";
+import { saveImage, setDatabase, type character, type Chat, defaultSdDataFunc, type loreBook, getDatabase, getCharacterByIndex, setCharacterByIndex, loadTogglesFromChat, normalizeChat, newChatModelDefaults } from "./storage/database.svelte";
+import { ensureChatHydrated } from "./storage/chatStorage";
 import { ensureCharacterHydrated } from "./storage/sql/sqlRuntimeHydration";
 import { alertAddCharacter, alertConfirm, alertError, alertSelect, alertStore, alertWait, notifySuccess, notifyInfo } from "./alert";
 import { loadingOverlayStore, chatDeselected } from "./stores.svelte";
@@ -26,6 +26,7 @@ import { createStartupCharacterSelectionQueue } from './startupCharacterSelectio
 
 /** Assign identities before a chat becomes visible, then mark its parent before rows. */
 function markImportedChat(characterId: string, chat: Chat): void {
+    ;(chat as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
     chat.id ||= uuidv4()
     for (const message of chat.message ?? []) message.chatId ||= uuidv4()
     markSqlChatDirty(characterId, chat.id, true)
@@ -586,6 +587,7 @@ export function characterFormatUpdate(indexOrCharacter:number|character, arg:{
             localLore: [],
             ...newChatModelDefaults()
         }]
+        ;(cha.chats[0] as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
     }
     if(!cha.chats[cha.chatPage]){
         cha.chatPage = 0
@@ -697,7 +699,7 @@ export function updateLorebooks(book:loreBook[]){
 
 // SYNC: server/node/server.cjs promoteFailedColdStorageStub() mirrors these defaults.
 export function createBlankChar():character{
-    return {
+    const character = {
         name: '',
         firstMessage: '',
         desc: '',
@@ -748,7 +750,10 @@ export function createBlankChar():character{
             effect: []
         }],
         additionalText: ''
-    }
+    } as character & { detailsLoaded?: boolean }
+    character.detailsLoaded = true
+    ;(character.chats[0] as Chat & { detailsLoaded?: boolean }).detailsLoaded = true
+    return character
 }
 
 
@@ -832,15 +837,6 @@ let deferredCharacterSelectionArg: {
     clearNewBadge?: boolean
 } | undefined
 
-function selectCharacterSafely(index: number, reseter: () => any): void {
-    // This runs only after targeted record hydration. It deliberately leaves
-    // character/chat mutations for the post-deferred activation.
-    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
-    reseter()
-    chatDeselected.set(false)
-    selectedCharID.set(index)
-}
-
 async function hydrateCharacterForSafeSelection(index: number): Promise<boolean> {
     const db = getDatabase()
     const char = db.characters[index]
@@ -864,6 +860,7 @@ export async function changeChar(index: number, arg:{
     const startupReady = isStartupMutationReady()
     if (startupReady) deferredCharacterSelectionArg = undefined
     else deferredCharacterSelectionArg = arg
+    loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
     let activationIndex = -1
     const activateNow = await startupCharacterSelectionQueue.select({
         ready: startupReady,
@@ -871,10 +868,13 @@ export async function changeChar(index: number, arg:{
         index,
         hydrate: hydrateCharacterForSafeSelection,
         findIndex: (characterId) => getDatabase().characters.findIndex((value) => value?.chaId === characterId),
-        safeSelect: (safeIndex) => {
-            if (intent === characterSelectionIntent) selectCharacterSafely(safeIndex, reseter)
-        },
+        safeSelect: () => {},
         fullSelect: (fullIndex) => { activationIndex = fullIndex },
+        onFailure: () => {
+            if (intent !== characterSelectionIntent) return
+            loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+            alertError(new Error('Unable to load the selected character. Please try again.'))
+        },
     })
     if (!activateNow) return
     await activateCharacter(activationIndex, arg, intent)
@@ -903,79 +903,58 @@ export async function resumeDeferredCharacterSelection(): Promise<boolean> {
     }
 }
 
+/** Releases a deferred selection before startup presents its retry prompt. */
+export function clearDeferredCharacterSelection(): void {
+    characterSelectionIntent++
+    deferredCharacterSelectionArg = undefined
+    startupCharacterSelectionQueue.cancel()
+    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
+}
+
 async function activateCharacter(index: number, arg: {
     reseter?:()=>any,
     clearNewBadge?:boolean,
 }, intent: number) {
     const reseter = arg.reseter ?? (() => {})
-    if(get(doingChat)){
-      return
-    }
-    const db = getDatabase()
-    const char = db.characters[index]
-    if (!char) return
-    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
-    if ((char as character & { detailsLoaded?: boolean }).detailsLoaded === false) {
+    try {
         loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: null })
-        try {
-            let hydrated: character | null
-            try {
-                hydrated = await ensureCharacterHydrated(db, index)
-            } catch (error) {
-                if (intent === characterSelectionIntent) alertError(error)
-                return
-            }
-            if (!hydrated || intent !== characterSelectionIntent) return
-        } finally {
-            if (intent === characterSelectionIntent) {
-                loadingOverlayStore.set({ active: false, text: '', onCancel: null })
-            }
+        if(get(doingChat)) return
+        const db = getDatabase()
+        const expectedId = db.characters[index]?.chaId
+        if (!expectedId) return
+
+        // Always re-find after awaits. Hydration may replace summary slots or
+        // a newer click may make this entire transaction stale.
+        const hydratedCharacter = await ensureCharacterHydrated(db, index)
+        if (!hydratedCharacter || intent !== characterSelectionIntent) return
+        const currentIndex = db.characters.findIndex((value) => value?.chaId === expectedId)
+        if (currentIndex === -1) return
+        const selectedCharacter = db.characters[currentIndex]
+        const activeChatIndex = selectedCharacter.chatPage
+        const activeChatId = selectedCharacter.chats[activeChatIndex]?.id
+        if (!activeChatId) throw new Error('The selected character has no active chat to load.')
+
+        // This loads the chat body and only its newest bounded message page;
+        // it intentionally never requests the complete history.
+        const hydratedChat = await ensureChatHydrated(selectedCharacter.chats, activeChatIndex, selectedCharacter.chaId)
+        if (!hydratedChat) {
+            if (intent !== characterSelectionIntent) return
+            throw new Error('Unable to load the selected chat. Please try again.')
         }
-    }
-    if (intent !== characterSelectionIntent) return
-    const currentIndex = db.characters.findIndex((value) => value?.chaId === char.chaId)
-    if (currentIndex === -1) return
-    index = currentIndex
-    const selectedCharacter = db.characters[index]
-    if(arg.clearNewBadge !== false){
-      clearCharacterVaultNew(db, selectedCharacter.chaId)
-    }
-    reseter();
-    chatDeselected.set(false)
-    characterFormatUpdate(index, {
-      updateInteraction: true,
-    });
-    selectedCharID.set(index);
-    const chat = getCurrentChat()
-    if(chat){
-        if(chat._placeholder || (chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false){
-            const db = getDatabase()
-            const char = db.characters[index]
-            const capturedIndex = index
-            const capturedChatId = chat.id
-            if(char){
-                let cancelled = false
-                loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: () => {
-                    cancelled = true
-                    chatDeselected.set(true)
-                    loadingOverlayStore.set({ active: false, text: '', onCancel: null })
-                }})
-                void ensureChatHydrated(char.chats, char.chatPage, char.chaId).then((hydrated) => {
-                    if(cancelled) return
-                    const currentChar = getDatabase().characters[capturedIndex]
-                    const activeChatId = currentChar?.chats?.[currentChar.chatPage]?.id
-                    if(hydrated && get(selectedCharID) === capturedIndex && activeChatId === capturedChatId) {
-                        loadTogglesFromChat(hydrated)
-                    }
-                }).catch((e) => {
-                    console.error('[selectCharacter] hydration failed:', e)
-                }).finally(() => {
-                    if(!cancelled) loadingOverlayStore.set({ active: false, text: '', onCancel: null })
-                })
-            }
-        } else {
-            void touchHydratedChat(selectedCharacter.chaId, selectedCharacter.chats, selectedCharacter.chatPage)
-            loadTogglesFromChat(chat)
-        }
+        if (intent !== characterSelectionIntent) return
+        const stableIndex = db.characters.findIndex((value) => value?.chaId === expectedId)
+        const stableCharacter = stableIndex === -1 ? undefined : db.characters[stableIndex]
+        if (!stableCharacter || stableCharacter.chats[stableCharacter.chatPage]?.id !== activeChatId) return
+
+        if(arg.clearNewBadge !== false) clearCharacterVaultNew(db, stableCharacter.chaId)
+        reseter()
+        chatDeselected.set(false)
+        characterFormatUpdate(stableIndex, { updateInteraction: true })
+        selectedCharID.set(stableIndex)
+        loadTogglesFromChat(hydratedChat)
+    } catch (error) {
+        if (intent === characterSelectionIntent) alertError(error)
+    } finally {
+        if (intent === characterSelectionIntent) loadingOverlayStore.set({ active: false, text: '', onCancel: null })
     }
 }
