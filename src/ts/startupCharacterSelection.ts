@@ -62,6 +62,16 @@ export function createStartupCharacterSelectionQueue() {
             return true
         },
 
+        /**
+         * True while a selection is still parked waiting for `resume`. Both
+         * `select` and `resume` answer `false` for "parked", "failed" and
+         * "nothing to do" alike, so callers that own user-visible state need
+         * this to tell whether a `false` was theirs to clean up.
+         */
+        hasPending(): boolean {
+            return pending !== null
+        },
+
         resume({ ready, findIndex, fullSelect }: ResumeSelectionArgs): boolean {
             if (!ready || !pending) return false
             const selection = pending

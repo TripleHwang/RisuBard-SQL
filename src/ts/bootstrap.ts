@@ -43,6 +43,7 @@ import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
 import { dispatchStartupURLImport, persistDeferredStartupDefaults, scheduleAfterTwoAnimationFrames } from './startupReadiness'
+import { registerDeferredStartupRetry } from './deferredStartupRetry'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
 let dataLoading = false
@@ -89,6 +90,37 @@ async function loadDeferredModules(): Promise<void> {
     moduleUpdate()
 }
 
+/**
+ * Deferred hydration is the only writer of `startupHydrationErrorStore`, and it
+ * gives up as soon as the user declines its retry prompt. Without a way back in
+ * the error state is terminal for the session: every `DeferredStartupGate` stays
+ * closed and no gated surface (settings, popups, vault) can ever open again.
+ * Keep the storage handle so the gate can offer that way back.
+ */
+let deferredSqlStartupStorage: SqlBootstrapStorage | null = null
+let deferredSqlStartupRunning = false
+
+/** Re-runs deferred SQL hydration after a declined retry. */
+export async function runDeferredSqlStartupRetry(): Promise<boolean> {
+    const storage = deferredSqlStartupStorage
+    if (!storage || deferredSqlStartupRunning) return false
+    deferredSqlStartupRunning = true
+    try {
+        // Reopen the gates before the attempt so the spinner (not the dead-end
+        // error state) is what the user sees while it runs, and so selections
+        // are queued again rather than refused.
+        startupHydrationErrorStore.set(false)
+        await hydrateDeferredSqlStartup(storage)
+        return !get(startupHydrationErrorStore)
+    } catch (error) {
+        console.error('Deferred SQL startup retry failed', error)
+        startupHydrationErrorStore.set(true)
+        return false
+    } finally {
+        deferredSqlStartupRunning = false
+    }
+}
+
 async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<void> {
     markPerformance('deferred-hydration:start')
     while (true) {
@@ -118,7 +150,12 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
                 console.error('Could not show deferred SQL retry prompt', promptError)
             }
             if (!retry) {
-                alertError('Deferred SQL startup remains locked. Reload to try again, or use recovery from a backup if the problem persists.')
+                // This is the last code that will run for deferred startup, and
+                // nothing else calls resumeDeferredCharacterSelection(). Anything
+                // still parked here would wait forever, so release it again after
+                // the prompt as well as before it.
+                clearDeferredCharacterSelection()
+                alertError('Deferred SQL startup remains locked. Open a settings panel to retry loading it, reload the app, or use recovery from a backup if the problem persists.')
                 return
             }
             continue
@@ -314,6 +351,8 @@ export async function loadData() {
             if (startupMode === 'metadata-first') {
                 if (!deferredSqlStorage) startMetadataPersistence()
             } else saveDb()
+            deferredSqlStartupStorage = deferredSqlStorage
+            registerDeferredStartupRetry(deferredSqlStorage ? runDeferredSqlStartupRetry : null)
             if (deferredSqlStorage) scheduleDeferredSqlHydration(() => hydrateDeferredSqlStartup(deferredSqlStorage!))
             else scheduleAfterFirstPaint(() => loadDeferredModules())
             // Asset URLs use the cookie session, but SQL bootstrap only needs
