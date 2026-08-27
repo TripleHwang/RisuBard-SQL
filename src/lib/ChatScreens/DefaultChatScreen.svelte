@@ -269,8 +269,6 @@ import { isMobile } from 'src/ts/platform'
             source.messageIds.includes(message.chatId)
         )
         if (index < 0) return
-        memoryWikiOpen = false
-        await tick()
         await scrollToMessage(index)
     }
 

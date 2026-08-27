@@ -15,3 +15,15 @@ describe('confirmed message deletion', () => {
             .toBeLessThan(source.indexOf('msg.splice(idx, 1)'))
     })
 })
+
+describe('confirmed message editing', () => {
+    test('keeps the edit control available after BardWiki confirmation', () => {
+        const editStart = source.indexOf('{#snippet translationButton')
+        const editEnd = source.indexOf('{#snippet rerolls', editStart)
+        const editControls = source.slice(editStart, editEnd)
+
+        expect(editControls).toContain('button-icon-edit')
+        expect(editControls).not.toContain('!memoryConfirmed')
+        expect(editControls).toContain('&& !memoryConfirming')
+    })
+})

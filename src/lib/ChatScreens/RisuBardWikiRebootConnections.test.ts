@@ -81,6 +81,18 @@ describe('BardWiki reboot connections', () => {
         expect(wikiSource).toContain('onCancelWikiReboot')
     })
 
+    test('accepts a visible chat index and starts reboot from that boundary', () => {
+        expect(wikiSource).toContain('data-risubard-wiki-reboot-start-index')
+        expect(wikiSource).toContain('risuBardWikiRebootStartChatIndex')
+        expect(wikiSource).toContain('onStartWikiReboot?.(batchSize, rebootStartChatIndex)')
+        expect(processSource).toContain('startChatIndex: number = 0')
+        expect(processSource).toContain(
+            'projectWikiRebootTurns(current.chat.message, startChatIndex)'
+        )
+        expect(koSource).toContain('시작 챗 인덱스')
+        expect(enSource).toContain('Starting chat index')
+    })
+
     test('loads and refreshes the visible staging wiki during reboot', () => {
         expect(wikiSource).toContain('resolveWikiRebootViewChatId')
         expect(wikiSource).toContain('let wikiChatId = $derived(')

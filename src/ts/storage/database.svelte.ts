@@ -49,6 +49,13 @@ import {
     type WikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
 import { normalizeSelectedPersonaIndex } from '../personaScopes';
+import {
+    normalizeArcaChatFontSizePx,
+    normalizeArcaChatImageWidthPercent,
+    normalizeArcaChatParagraphSpacingPercent,
+    normalizeArcaChatShowTitleImage,
+    normalizeArcaChatTitleImageStyle,
+} from '../arcaChatSaverSettings';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
 export let appVer = "2026.2.291" //<APP_VERSION_POINT>
@@ -849,6 +856,21 @@ export function setDatabase(data:Database){
     data.risuBardAutosaveRetention = normalizeAutosaveRetention(
         data.risuBardAutosaveRetention
     )
+    data.risuBardArcaChatImageWidthPercent = normalizeArcaChatImageWidthPercent(
+        data.risuBardArcaChatImageWidthPercent
+    )
+    data.risuBardArcaChatFontSizePx = normalizeArcaChatFontSizePx(
+        data.risuBardArcaChatFontSizePx
+    )
+    data.risuBardArcaChatParagraphSpacingPercent = normalizeArcaChatParagraphSpacingPercent(
+        data.risuBardArcaChatParagraphSpacingPercent
+    )
+    data.risuBardArcaChatShowTitleImage = normalizeArcaChatShowTitleImage(
+        data.risuBardArcaChatShowTitleImage
+    )
+    data.risuBardArcaChatTitleImageStyle = normalizeArcaChatTitleImageStyle(
+        data.risuBardArcaChatTitleImageStyle
+    )
     data.risuBardRecentMessageCount = Number.isSafeInteger(data.risuBardRecentMessageCount)
         && data.risuBardRecentMessageCount! >= 1
         ? data.risuBardRecentMessageCount
@@ -1538,6 +1560,11 @@ export interface Database{
     showRisuBardSaveLoadShortcuts?: boolean
     risuBardAutosaveInterval?: number
     risuBardAutosaveRetention?: number
+    risuBardArcaChatImageWidthPercent?: number
+    risuBardArcaChatFontSizePx?: number
+    risuBardArcaChatParagraphSpacingPercent?: number
+    risuBardArcaChatShowTitleImage?: boolean
+    risuBardArcaChatTitleImageStyle?: import('../arcaChatSaverSettings').ArcaChatTitleImageStyle
     risuBardSaveLoadShortcutPlacement?:
         | import('../risubard/saveLoadShortcutLayout').SaveLoadShortcutPlacement
         | { xRatio: number, yRatio: number }

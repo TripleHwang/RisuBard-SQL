@@ -62,7 +62,10 @@
         chatId: string
         onForceWikiUpdate?: () => Promise<boolean>
         rebootJob?: WikiRebootJob
-        onStartWikiReboot?: (batchSize: WikiRebootBatchSize) => Promise<boolean>
+        onStartWikiReboot?: (
+            batchSize: WikiRebootBatchSize,
+            startChatIndex: number
+        ) => Promise<boolean>
         onStopWikiReboot?: () => Promise<boolean>
         onResumeWikiReboot?: () => Promise<boolean>
         onCancelWikiReboot?: () => Promise<boolean>
@@ -109,6 +112,7 @@
     let selectedMarkdownId = $state('')
     let rebootChooserOpen = $state(false)
     let rebootActionBusy = $state(false)
+    let rebootStartChatIndex = $state(0)
     let wikiChatId = $derived(resolveWikiRebootViewChatId(chatId, rebootJob))
 
     let v1State = $derived(wiki?.mode === 'v1' ? wiki.state : null)
@@ -131,6 +135,12 @@
         DBState.db.characters?.find((character) =>
             character.chaId === characterId
         )?.chats.find((chat) => chat.id === chatId)
+    )
+    let rebootLastChatIndex = $derived((currentChat?.message.length ?? 0) - 1)
+    let rebootStartChatIndexValid = $derived(
+        Number.isInteger(rebootStartChatIndex)
+        && rebootStartChatIndex >= 0
+        && rebootStartChatIndex <= rebootLastChatIndex
     )
     let rebootAnalysisTokenLimit = $derived(
         resolveRisuBardChatSettings(
@@ -187,9 +197,10 @@
     }
 
     function startReboot(batchSize: WikiRebootBatchSize) {
+        if (!rebootStartChatIndexValid) return
         rebootChooserOpen = false
         rebootActionBusy = true
-        const operation = onStartWikiReboot?.(batchSize)
+        const operation = onStartWikiReboot?.(batchSize, rebootStartChatIndex)
         rebootActionBusy = false
         void operation?.catch((cause) => {
             alertError(cause)
@@ -277,6 +288,11 @@
             item.relativePath === path
         )
         if (document) selectedMarkdownId = document.id
+    }
+
+    function editStoryEntry(documentId: string) {
+        selectedMarkdownId = documentId
+        activeView = 'workspace'
     }
 
     async function executeWikiCommand(
@@ -716,6 +732,7 @@
                             onChanged={loadWiki}
                             onFocusModeChange={(focused) => editorFocus = focused}
                             onOpenFindReplace={() => findReplaceOpen = true}
+                            onNavigateSource={onNavigateStorySource}
                         />
                     </div>
                     {#if onExecuteWikiCommand && !rebootJob}
@@ -761,6 +778,7 @@
                     <RisuBardStorySoFar
                         documents={wiki.documents}
                         onNavigate={onNavigateStorySource}
+                        onEdit={editStoryEntry}
                     />
                 {:else}
                     <div class="activity-log-scroll" data-memory-activity-scroll>
@@ -893,6 +911,29 @@
         <p class="reboot-choice-intro">
             {language.risuBardWikiRebootChooseDescription}
         </p>
+        <div
+            class="reboot-start-index"
+            data-risubard-wiki-reboot-start-index
+        >
+            <label for="risubard-wiki-reboot-start-index">
+                {language.risuBardWikiRebootStartChatIndex}
+            </label>
+            <input
+                id="risubard-wiki-reboot-start-index"
+                type="number"
+                min="0"
+                max={rebootLastChatIndex}
+                step="1"
+                bind:value={rebootStartChatIndex}
+                aria-invalid={!rebootStartChatIndexValid}
+                aria-describedby="risubard-wiki-reboot-start-index-hint"
+            />
+            <small id="risubard-wiki-reboot-start-index-hint">
+                {language.risuBardWikiRebootStartChatIndexHint(
+                    rebootLastChatIndex
+                )}
+            </small>
+        </div>
         <p
             class="reboot-token-budget"
             data-risubard-wiki-reboot-token-budget
@@ -905,6 +946,7 @@
                 class="reboot-choice"
                 title={language.risuBardWikiRebootOneTurnTooltip}
                 onclick={() => startReboot(1)}
+                disabled={!rebootStartChatIndexValid}
             >
                 <strong>{language.risuBardWikiRebootOneTurn}</strong>
                 <span>{language.risuBardWikiRebootOneTurnSummary}</span>
@@ -914,6 +956,7 @@
                 class="reboot-choice"
                 title={language.risuBardWikiRebootTwoTurnTooltip}
                 onclick={() => startReboot(2)}
+                disabled={!rebootStartChatIndexValid}
             >
                 <strong>{language.risuBardWikiRebootTwoTurn}</strong>
                 <span>{language.risuBardWikiRebootTwoTurnSummary}</span>
@@ -1136,6 +1179,50 @@
         line-height: 1.55;
         text-align: center;
     }
+    .reboot-start-index {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 7rem;
+        align-items: center;
+        gap: .4rem .85rem;
+        margin: 0 0 .8rem;
+        padding: .8rem .9rem;
+        border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 52%, var(--risu-theme-darkborderc));
+        border-radius: .6rem;
+        background: color-mix(in srgb, var(--risu-theme-primary) 11%, var(--risu-theme-darkbg));
+    }
+    .reboot-start-index label {
+        color: var(--risu-theme-textcolor);
+        font-size: 1rem;
+        font-weight: 750;
+        line-height: 1.35;
+    }
+    .reboot-start-index input {
+        width: 100%;
+        min-width: 0;
+        padding: .5rem .65rem;
+        border: 1px solid var(--risu-theme-darkborderc);
+        border-radius: .42rem;
+        color: var(--risu-theme-textcolor);
+        background: var(--risu-theme-bgcolor);
+        font-size: 1.1rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+    }
+    .reboot-start-index input:focus-visible {
+        border-color: var(--risu-theme-primary);
+        outline: 2px solid color-mix(in srgb, var(--risu-theme-primary) 42%, transparent);
+        outline-offset: 2px;
+    }
+    .reboot-start-index input[aria-invalid="true"] {
+        border-color: var(--risu-theme-draculared);
+    }
+    .reboot-start-index small {
+        grid-column: 1 / -1;
+        color: var(--risu-theme-textcolor2);
+        font-size: .72rem;
+        line-height: 1.4;
+    }
     .reboot-token-budget {
         margin: 0 0 1rem;
         padding: .65rem .75rem;
@@ -1170,6 +1257,10 @@
     .reboot-choice:hover {
         border-color: var(--risu-theme-primary);
         background: color-mix(in srgb, var(--risu-theme-primary) 17%, var(--risu-theme-darkbg));
+    }
+    .reboot-choice:disabled {
+        opacity: .45;
+        cursor: not-allowed;
     }
     .reboot-choice strong { font-size: 1rem; }
     .reboot-choice span {

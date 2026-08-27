@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { LocateFixedIcon } from '@lucide/svelte'
+    import { LocateFixedIcon, PencilIcon } from '@lucide/svelte'
     import type { NarrativeMemoryWikiMarkdown } from 'src/ts/risubard/memoryWiki'
     import {
         buildStorySoFar,
@@ -9,9 +9,10 @@
     interface Props {
         documents: NarrativeMemoryWikiMarkdown['documents']
         onNavigate?: (source: StorySourceRef) => void
+        onEdit?: (documentId: string) => void
     }
 
-    let { documents, onNavigate }: Props = $props()
+    let { documents, onNavigate, onEdit }: Props = $props()
     let entries = $derived(buildStorySoFar(documents))
 </script>
 
@@ -29,22 +30,36 @@
     {:else}
         <ol>
             {#each entries as entry, index (entry.id)}
-                <li>
+                <li data-story-entry={entry.id}>
                     <span class="chapter-mark">{String(index + 1).padStart(2, '0')}</span>
-                    <button
-                        type="button"
-                        data-story-entry={entry.id}
-                        onclick={() => onNavigate?.(entry.source)}
-                        title="원문으로 이동"
-                    >
-                        <span class="entry-heading">
-                            <strong>{entry.title}</strong>
-                            <LocateFixedIcon size={15} />
-                        </span>
-                        {#each entry.summary as item}
-                            <span class="story-line">{item}</span>
-                        {/each}
-                    </button>
+                    <article class="story-card">
+                        <button
+                            type="button"
+                            class="entry-edit"
+                            data-story-edit
+                            onclick={() => onEdit?.(entry.id)}
+                            aria-label={`“${entry.title}” 편집`}
+                            title="편집기에서 열기"
+                        >
+                            <span class="entry-heading">
+                                <strong>{entry.title}</strong>
+                                <PencilIcon size={15} />
+                            </span>
+                            {#each entry.summary as item}
+                                <span class="story-line">{item}</span>
+                            {/each}
+                        </button>
+                        <button
+                            type="button"
+                            class="source-button"
+                            data-story-source
+                            onclick={() => onNavigate?.(entry.source)}
+                            title="원문으로 이동"
+                        >
+                            <LocateFixedIcon size={14} />
+                            <span>원문으로 이동</span>
+                        </button>
+                    </article>
                 </li>
             {/each}
         </ol>
@@ -68,8 +83,13 @@
     ol { max-width: 46rem; margin: 0 auto; padding: 0; list-style: none; }
     li { position: relative; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: .6rem; padding-bottom: 1rem; }
     .chapter-mark { padding-top: .9rem; color: color-mix(in srgb, var(--risu-theme-primary) 75%, var(--risu-theme-textcolor)); font: 700 .67rem/1 ui-monospace, monospace; letter-spacing: .08em; }
-    button { width: 100%; padding: .85rem 1rem 1rem; border: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 24%, transparent); border-radius: .28rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-darkbg) 80%, transparent); box-shadow: 0 .25rem 1.2rem color-mix(in srgb, var(--color-shadow) 8%, transparent); text-align: left; cursor: pointer; transition: border-color .16s ease, transform .16s ease, background .16s ease; }
-    button:hover, button:focus-visible { border-color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 7%, var(--risu-theme-darkbg)); transform: translateX(.2rem); outline: none; }
+    .story-card { overflow: hidden; border: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 24%, transparent); border-radius: .28rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 80%, transparent); box-shadow: 0 .25rem 1.2rem color-mix(in srgb, var(--color-shadow) 8%, transparent); transition: border-color .16s ease, transform .16s ease, background .16s ease; }
+    .story-card:hover, .story-card:focus-within { border-color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 7%, var(--risu-theme-darkbg)); transform: translateX(.2rem); }
+    button { color: var(--risu-theme-textcolor); cursor: pointer; }
+    button:focus-visible { outline: 2px solid var(--risu-theme-primary); outline-offset: -2px; }
+    .entry-edit { width: 100%; padding: .85rem 1rem 1rem; border: 0; background: transparent; text-align: left; }
+    .source-button { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; width: 100%; padding: .45rem 1rem; border: 0; border-top: 1px solid color-mix(in srgb, var(--risu-theme-borderc) 18%, transparent); color: var(--risu-theme-textcolor2); background: color-mix(in srgb, var(--risu-theme-darkbg) 45%, transparent); font-size: .72rem; }
+    .source-button:hover { color: var(--risu-theme-primary); }
     .entry-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .45rem; color: var(--risu-theme-textcolor2); }
     .entry-heading strong { color: var(--risu-theme-textcolor); font-family: Georgia, 'Noto Serif KR', serif; font-size: .95rem; }
     .story-line { display: block; font-family: Georgia, 'Noto Serif KR', serif; font-size: .9rem; line-height: 1.72; }

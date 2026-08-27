@@ -13,8 +13,9 @@ afterEach(async () => {
 })
 
 describe('RisuBardStorySoFar', () => {
-    it('shows the chronological narrative and navigates to its source', async () => {
+    it('opens an event for editing while keeping source navigation separate', async () => {
         const onNavigate = vi.fn()
+        const onEdit = vi.fn()
         mounted = mount(RisuBardStorySoFar, {
             target: document.body,
             props: {
@@ -28,14 +29,19 @@ describe('RisuBardStorySoFar', () => {
                     links: [], contextMode: 'auto', contentHash: 'hash',
                 }],
                 onNavigate,
+                onEdit,
             },
         })
 
-        const entry = document.querySelector<HTMLButtonElement>(
+        const entry = document.querySelector<HTMLElement>(
             '[data-story-entry="event.station"]'
         )
         expect(entry?.textContent).toContain('일행이 폐쇄된 역에 도착했다.')
-        entry?.click()
+        entry?.querySelector<HTMLButtonElement>('[data-story-edit]')?.click()
+        expect(onEdit).toHaveBeenCalledWith('event.station')
+        expect(onNavigate).not.toHaveBeenCalled()
+
+        entry?.querySelector<HTMLButtonElement>('[data-story-source]')?.click()
         expect(onNavigate).toHaveBeenCalledWith({
             kind: 'chat', messageIds: ['message-7'],
         })

@@ -124,6 +124,28 @@ afterEach(async () => {
 })
 
 describe('RisuBardMemoryWiki', () => {
+    test('keeps the BardWiki dock open while navigating to a source message', () => {
+        const chatSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/ChatScreens/DefaultChatScreen.svelte'
+        ), 'utf8')
+        const dockSource = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+        ), 'utf8')
+        const navigateStart = chatSource.indexOf(
+            'async function navigateStorySource'
+        )
+        const navigateEnd = chatSource.indexOf(
+            'function bumpScrollNav', navigateStart
+        )
+        const navigateSource = chatSource.slice(navigateStart, navigateEnd)
+
+        expect(navigateSource).toContain('await scrollToMessage(index)')
+        expect(navigateSource).not.toContain('memoryWikiOpen = false')
+        expect(dockSource).toContain(
+            'onNavigateSource={onNavigateStorySource}'
+        )
+    })
+
     test('renders above plugin FABs and uses the BARDWIKI title', () => {
         const dockSource = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
@@ -928,7 +950,7 @@ describe('RisuBardMemoryWiki', () => {
         })
     })
 
-    test('opens the shared story view and delegates source navigation', async () => {
+    test('opens story entries in the shared editor and keeps source navigation', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown', wikiPath: 'C:\\wiki',
             health: { danglingLinks: [], unlinkedDocumentIds: [] },
@@ -959,11 +981,20 @@ describe('RisuBardMemoryWiki', () => {
         await vi.waitFor(() => expect(document.querySelector(
             '[data-story-entry="event.station"]'
         )).not.toBeNull())
-        document.querySelector<HTMLButtonElement>(
-            '[data-story-entry="event.station"]'
-        )?.click()
+        document.querySelector<HTMLButtonElement>('[data-story-source]')?.click()
         expect(onNavigateStorySource).toHaveBeenCalledWith({
             kind: 'chat', messageIds: ['message-7'],
         })
+
+        document.querySelector<HTMLButtonElement>('[data-story-edit]')?.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-wiki-editor]'
+        )).not.toBeNull())
+        expect(document.querySelector<HTMLInputElement>(
+            '[aria-label="항목 이름"]'
+        )?.value).toBe('폐쇄된 역')
+        expect(document.querySelector<HTMLTextAreaElement>(
+            '[aria-label="Markdown"]'
+        )?.value).toContain('폐쇄된 역에 도착했다.')
     })
 })

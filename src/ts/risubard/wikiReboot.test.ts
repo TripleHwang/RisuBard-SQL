@@ -44,6 +44,22 @@ describe('BardWiki reboot domain', () => {
         ])
     })
 
+    test('starts projection at a chat index and keeps the paired user message', () => {
+        expect(projectWikiRebootTurns(messages, 5)).toEqual([
+            { assistantMessageId: 'a2', messageIds: ['u2', 'a2'], messages: [
+                { messageId: 'u2', role: 'user', content: 'u2' },
+                { messageId: 'a2', role: 'assistant', content: 'a2' },
+            ] },
+            { assistantMessageId: 'a3', messageIds: ['u2', 'a3'], messages: [
+                { messageId: 'u2', role: 'user', content: 'u2' },
+                { messageId: 'a3', role: 'assistant', content: 'a3' },
+            ] },
+        ])
+        expect(projectWikiRebootTurns(messages, 6).map((turn) =>
+            turn.assistantMessageId
+        )).toEqual(['a3'])
+    })
+
     test('selects one or two remaining turns and keeps an odd final turn', () => {
         const turns = projectWikiRebootTurns(messages)
         const two = createWikiRebootJob({

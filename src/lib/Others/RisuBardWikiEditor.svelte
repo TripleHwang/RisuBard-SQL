@@ -13,6 +13,7 @@
         ChevronDownIcon,
         Maximize2Icon,
         Minimize2,
+        LocateFixedIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
     import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
@@ -33,6 +34,7 @@
     import { publishRisuBardMemoryActivity } from 'src/ts/risubard/memoryActivity'
     import { copyWikiDocumentToLorebook } from 'src/ts/risubard/wikiLorebookCopy'
     import { normalizeMemoryWikiTreeHeight } from 'src/ts/risubard/memoryWikiLayout'
+    import type { StorySourceRef } from 'src/ts/risubard/storySoFar'
 
     type WikiDocument = NarrativeMemoryWikiMarkdown['documents'][number]
 
@@ -47,6 +49,7 @@
         onSelected?: (documentId: string) => void
         onFocusModeChange?: (focused: boolean) => void
         onOpenFindReplace?: () => void
+        onNavigateSource?: (source: StorySourceRef) => void
     }
 
     let {
@@ -60,6 +63,7 @@
         onSelected,
         onFocusModeChange,
         onOpenFindReplace,
+        onNavigateSource,
     }: Props = $props()
     let creating = $state(false)
     let type = $state<MarkdownWikiDocumentType>('character')
@@ -612,6 +616,24 @@
                 </label>
             </div>
             <div class="editor-actions" data-wiki-action-toolbar>
+                {#if selected && selected.sourceMessageIds.length > 0 && onNavigateSource}
+                    <span class="editor-source-action" data-wiki-source-action>
+                        <ShButton
+                            size="sm"
+                            variant="ghost"
+                            aria-label="원문으로 이동"
+                            title="원문으로 이동"
+                            data-wiki-source
+                            onclick={() => onNavigateSource({
+                                kind: 'chat',
+                                messageIds: selected.sourceMessageIds,
+                            })}
+                        >
+                            <LocateFixedIcon size={14} />
+                            <span data-wiki-source-label>원문으로 이동</span>
+                        </ShButton>
+                    </span>
+                {/if}
                 <ShButton size="sm" variant="success" aria-label="저장" title="저장" onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
                     <SaveIcon size={14} /> <span data-wiki-action-label>저장</span>
                 </ShButton>
@@ -743,6 +765,7 @@
     .editor-title-row select, .editor-title-row input { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
     .title-field { flex: 1 1 12rem; }
     .editor-actions { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: .25rem; overflow-x: auto; padding: .45rem .75rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
+    .editor-source-action { display: inline-flex; flex: 0 0 auto; margin-right: auto; }
     .markdown-preview-toggle { display: inline-flex; flex: 0 0 auto; min-height: 2rem; align-items: center; gap: .32rem; padding: 0 .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .34rem; color: var(--risu-theme-textcolor2); font: 700 .67rem/1 ui-monospace, monospace; cursor: pointer; user-select: none; }
     .markdown-preview-toggle:hover { border-color: color-mix(in srgb, var(--risu-theme-primary) 55%, var(--risu-theme-darkborderc)); color: var(--risu-theme-textcolor); }
     .markdown-preview-toggle:has(input:checked) { border-color: color-mix(in srgb, var(--risu-theme-primary) 65%, var(--risu-theme-darkborderc)); color: var(--risu-theme-primary); background: color-mix(in srgb, var(--risu-theme-primary) 12%, transparent); }
@@ -805,6 +828,7 @@
     }
     @container wiki-editor-pane (max-width: 32rem) {
         .editor-actions :global(button) { width: 2rem; padding-inline: .35rem; }
+        .editor-actions .editor-source-action :global(button) { width: auto; padding-inline: .55rem; }
         .editor-actions [data-wiki-action-label] { display: none; }
     }
     @media (orientation: portrait) {
