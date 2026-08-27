@@ -14,8 +14,8 @@ describe('dynamic asset post-processing', () => {
         expect(blockStart).toBeGreaterThanOrEqual(0)
         expect(blockEnd).toBeGreaterThan(blockStart)
         const block = source.slice(blockStart, blockEnd)
-        const matchCheck = block.indexOf('const matches = [...data.matchAll(assetRegex)]')
-        const nonEmptyGuard = block.indexOf('if(matches.length > 0)')
+        const matchCheck = block.indexOf('prepareDynamicAssetSearch(')
+        const nonEmptyGuard = block.indexOf('if(prepared.unresolved.length > 0)')
         const embeddingInit = block.indexOf('const processer = new HypaProcesser()')
 
         expect(matchCheck).toBeGreaterThanOrEqual(0)
