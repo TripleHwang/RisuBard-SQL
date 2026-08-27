@@ -48,7 +48,15 @@ describe('bounded SQL read routes', () => {
         expect(replacementDelete).toBeGreaterThan(replacementStart)
         expect(replacementDelete).toBeLessThan(replacementReset)
         expect(source).toContain("if (!kvGet('database/pre-sql-migration-v1.bin')) kvSet('database/pre-sql-migration-v1.bin', raw)")
-        expect(source).toContain("kvGet('database/pre-sql-migration-v1.bin') || kvGet('database/database.bin')")
+        // Character repair no longer picks a single backup source with `||` —
+        // it walks a prioritized, bounded candidate list (pre-migration
+        // backup, then legacy database.bin, then recent dbbackup-* snapshots)
+        // so one missing/empty candidate can't hide a usable one behind it.
+        expect(source).toContain("const preMigrationRaw = kvGet('database/pre-sql-migration-v1.bin')")
+        expect(source).toContain("const legacyRaw = kvGet('database/database.bin')")
+        expect(source).toContain('readBackupCandidates:')
+        expect(source).toContain('MAX_REPAIR_DBBACKUP_CANDIDATES')
+        expect(source).toContain('MAX_REPAIR_DBBACKUP_TOTAL_BYTES')
         expect(source).toContain("require('./sql-repair-decode.cjs')")
     })
 })

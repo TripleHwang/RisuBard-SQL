@@ -127,7 +127,30 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
       if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
         if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
         const repaired = await storage.repairCollapsedCharacter(characterId);
-        if (repaired.status === "unavailable") throw new Error("SQL character repair could not recover this character");
+        // `unavailable` means the server walked its whole bounded backup
+        // candidate list and found nothing applicable — never re-read here,
+        // since the row on disk is guaranteed unchanged (the server only
+        // ever commits on a match). Distinguish the two reason codes so the
+        // failure at least reads differently for whoever sees the alert.
+        //
+        // TODO(i18n): src/lang is owned by another concurrent change right
+        // now, so these stay as raw (unlocalized) Error messages, matching
+        // the existing convention on this exact throw before this patch.
+        // Once src/lang is free, prefer keys like (en.ts + counterparts):
+        //   sqlCharacterRepairUnavailableNoCandidate:
+        //     "This character's data could not be found in any backup, so it could not be recovered."
+        //   sqlCharacterRepairUnavailableDecodeFailed:
+        //     "This character's backups could not be read, so it could not be recovered."
+        // and route through `language.<key>` here instead of the literals below.
+        if (repaired.status === "unavailable") {
+          const reason = repaired.reason;
+          const detail = reason === "decode-failed"
+            ? "no backup could be read"
+            : reason === "no-candidate"
+            ? "no backup contained this character"
+            : "reason unknown";
+          throw new Error(`SQL character repair could not recover this character (${detail})`);
+        }
         const reloaded = await storage.loadCharacterHydration(characterId);
         if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
         return applyHydratedCharacter(db, characterId, reloaded);

@@ -82,6 +82,14 @@ export interface SqlChatHydration {
 export interface SqlCharacterRepairResult {
   status: "repaired" | "not-needed" | "unavailable";
   revision: number;
+  /**
+   * Present only when `status === "unavailable"`. Distinguishes "no backup
+   * candidate contained a usable copy of this character" (`no-candidate`)
+   * from "at least one candidate existed but none of them could be decoded
+   * at all" (`decode-failed`). See server/node/sql-character-repair.cjs
+   * `REPAIR_UNAVAILABLE_REASON` for the authoritative set of values.
+   */
+  reason?: "no-candidate" | "decode-failed" | string;
 }
 
 export interface BotPresetSummary {
