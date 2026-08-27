@@ -22,8 +22,14 @@ export async function persistDeferredStartupDefaults(
 ): Promise<boolean> {
     if (database.didFirstSetup) return false
     applyDeferredStartupDefaults(database)
-    markRootDirty('didFirstSetup')
-    await flush()
+    try {
+        markRootDirty('didFirstSetup')
+        await flush()
+    }
+    catch (error) {
+        database.didFirstSetup = false
+        throw error
+    }
     return true
 }
 

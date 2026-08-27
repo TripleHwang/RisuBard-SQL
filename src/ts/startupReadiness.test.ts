@@ -98,4 +98,20 @@ describe('startup readiness', () => {
         expect(order).toEqual(['mark:didFirstSetup', 'flush'])
         expect(flush).toHaveBeenCalledOnce()
     })
+
+    test('rolls back a failed deferred-default flush so hydration retry marks and flushes again', async () => {
+        const database = { didFirstSetup: false }
+        const mark = vi.fn()
+        const flush = vi.fn()
+            .mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValueOnce(undefined)
+
+        await expect(persistDeferredStartupDefaults(database, mark, flush)).rejects.toThrow('offline')
+        expect(database.didFirstSetup).toBe(false)
+
+        expect(await persistDeferredStartupDefaults(database, mark, flush)).toBe(true)
+        expect(database.didFirstSetup).toBe(true)
+        expect(mark).toHaveBeenCalledTimes(2)
+        expect(flush).toHaveBeenCalledTimes(2)
+    })
 })
