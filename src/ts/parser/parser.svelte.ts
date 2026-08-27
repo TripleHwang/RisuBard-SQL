@@ -925,7 +925,13 @@ export async function ParseMarkdown(
     const additionalAssetMode = (mode === 'back') ? 'back' : 'normal'
     let char = (typeof(charArg) === 'string') ? (findCharacterbyId(charArg)) : (charArg)
 
-    if(char){
+    // Most messages do not contain an asset token until an edit-display regex
+    // creates one.  Avoid a no-op asynchronous pass in that common case; the
+    // existing post-script pass below still resolves any token the regex adds.
+    assetRegex.lastIndex = 0
+    const hasInitialAsset = assetRegex.test(data)
+    assetRegex.lastIndex = 0
+    if(char && hasInitialAsset){
         data = await parseAdditionalAssets(data, char, additionalAssetMode, {
             ch: chatID
         })
