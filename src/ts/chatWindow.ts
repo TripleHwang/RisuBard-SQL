@@ -81,7 +81,13 @@ export function createContinuousHistoryController(options: ContinuousHistoryCont
             }
             return true
         },
-        retry: loadOne,
+        async retry(): Promise<boolean> {
+            if (!options.hasOlder()) {
+                failed = false
+                return false
+            }
+            return await this.fillViewport()
+        },
         reset() { failed = false },
     }
 }

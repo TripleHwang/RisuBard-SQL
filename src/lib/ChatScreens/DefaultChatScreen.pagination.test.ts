@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
 import {
     createContinuousHistoryController,
     createContinuousHistoryControllerSlot,
@@ -62,8 +63,8 @@ describe('continuous bounded chat history', () => {
         const oldRequest = new Promise<boolean>((resolve) => { resolveOld = resolve })
         let calls = 0
         const slot = createContinuousHistoryControllerSlot(() => createContinuousHistoryController({
-            hasOlder: () => false,
-            isScrollable: () => true,
+            hasOlder: () => calls < 2,
+            isScrollable: () => calls >= 2,
             progress: () => calls,
             loadOlder: () => ++calls === 1 ? oldRequest : Promise.resolve(true),
         }))
@@ -76,6 +77,50 @@ describe('continuous bounded chat history', () => {
         resolveOld(false)
         await expect(pending).resolves.toBe(false)
         expect(fresh.failed).toBe(false)
+    })
+
+    test('does not request or fail at the true oldest boundary', async () => {
+        let requests = 0
+        const controller = createContinuousHistoryController({
+            hasOlder: () => false,
+            isScrollable: () => false,
+            progress: () => 81,
+            loadOlder: async () => {
+                requests += 1
+                throw new Error('must not run')
+            },
+        })
+
+        await expect(controller.retry()).resolves.toBe(false)
+        expect(requests).toBe(0)
+        expect(controller.failed).toBe(false)
+    })
+
+    test('retry resumes filling until the viewport overflows or history is exhausted', async () => {
+        let remaining = 2
+        let scrollable = false
+        const controller = createContinuousHistoryController({
+            hasOlder: () => remaining > 0,
+            isScrollable: () => scrollable,
+            progress: () => 2 - remaining,
+            loadOlder: async () => {
+                remaining -= 1
+                if (remaining === 0) scrollable = true
+                return true
+            },
+        })
+
+        await expect(controller.retry()).resolves.toBe(true)
+        expect(remaining).toBe(0)
+        expect(controller.failed).toBe(false)
+    })
+
+    test('uses the global Latest action for the down-chevron', () => {
+        const screen = readFileSync('src/lib/ChatScreens/DefaultChatScreen.svelte', 'utf8')
+        const icon = screen.indexOf('<ChevronsDownIcon')
+        const downChevron = screen.slice(screen.lastIndexOf('<button', icon), screen.indexOf('</button>', icon))
+        expect(downChevron).toContain('scrollToBottom()')
+        expect(downChevron).not.toContain('scrollToLoadedBottom()')
     })
 
     test('keeps normal and saver DOM windows bounded, restores a prepend anchor, and bottoms Latest', () => {

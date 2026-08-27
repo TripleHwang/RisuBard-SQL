@@ -1075,7 +1075,7 @@ import { isMobile } from 'src/ts/platform'
                 <div class="border-t border-darkborderc border-opacity-30"></div>
                 <button
                     class="w-9 h-9 text-textcolor2 hover:text-textcolor hover:bg-darkbg/50 flex items-center justify-center transition-colors"
-                    onclick={() => { bumpScrollNav(); scrollToLoadedBottom() }}
+                    onclick={() => { bumpScrollNav(); scrollToBottom() }}
                 >
                     <ChevronsDownIcon size={18} />
                 </button>
