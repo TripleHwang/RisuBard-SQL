@@ -340,16 +340,27 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}`);
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`SQL character load failed (${response.status})`);
-    const payload = await response.json() as { revision: number; character: character };
+    const payload = await response.json() as { revision: number; character: character; characterBodyCollapsed?: unknown };
     if (!Number.isSafeInteger(payload.revision) || payload.revision < 0 ||
       !payload.character || typeof payload.character !== "object") {
       throw new Error("Invalid SQL character payload");
     }
     this.acceptReadRevision(payload.revision);
+    if (payload.characterBodyCollapsed === true) Object.defineProperty(payload.character, "_sqlCharacterBodyCollapsed", { configurable: true, enumerable: false, value: true });
     return payload.character;
     } finally {
       runtimeMetrics.end(metric);
     }
+  }
+
+  async repairCollapsedCharacter(characterId: string): Promise<{ status: "repaired" | "not-needed" | "unavailable"; revision: number }> {
+    const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}/repair`, { method: "POST" });
+    if (!response.ok) throw new Error(`SQL character repair failed (${response.status})`);
+    const payload = await response.json() as { status?: unknown; revision?: unknown };
+    const revision = Number(payload.revision);
+    if ((payload.status !== "repaired" && payload.status !== "not-needed" && payload.status !== "unavailable") || !Number.isSafeInteger(revision) || revision < 0) throw new Error("Invalid SQL character repair response");
+    this.acceptReadRevision(revision);
+    return { status: payload.status, revision };
   }
 
   async loadChatHydration(chatId: string): Promise<SqlChatHydration | null> {

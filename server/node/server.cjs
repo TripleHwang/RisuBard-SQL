@@ -41,6 +41,7 @@ const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
 const { createSqlLegacyMigration } = require('./sql-legacy-migration.cjs');
+const { createSqlCharacterRepair, isCollapsedCharacter } = require('./sql-character-repair.cjs');
 const {
     normalizeSqlMessagePageQuery,
     normalizeSqlAncillaryLimitQuery,
@@ -64,6 +65,7 @@ const {
 } = require('./risubard-memory-routes.cjs');
 const { applyPatch } = require('fast-json-patch');
 const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON, normalizeForwardHeaders, hasRemoteBlocks } = require('./utils.cjs');
+const { readBoundedRisuSave } = require('./sql-repair-decode.cjs');
 const { spawn, execSync } = require('child_process');
 const os = require('os');
 const { Readable, Transform } = require('stream');
@@ -858,7 +860,16 @@ const sqlLegacyMigration = createSqlLegacyMigration({
     readLegacy: async () => {
         const raw = kvGet('database/database.bin');
         if (!raw) return { characters: [], botPresets: [] };
+        if (!kvGet('database/pre-sql-migration-v1.bin')) kvSet('database/pre-sql-migration-v1.bin', raw);
         return normalizeJSON(await decodeRisuSave(raw));
+    },
+})
+const sqlCharacterRepair = createSqlCharacterRepair({
+    relationalSql,
+    readBackup: async () => {
+        const raw = kvGet('database/pre-sql-migration-v1.bin');
+        if (!raw) return null;
+        return readBoundedRisuSave(raw);
     },
 })
 let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
@@ -2622,6 +2633,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     // The imported compatibility snapshot becomes the migration source on the
     // next boot. Preserve the previous SQL file, then expose an empty canonical
     // store so it cannot shadow freshly restored data.
+    kvDel('database/pre-sql-migration-v1.bin');
     relationalSql.reset();
 
     console.log(`[Backup Import] Complete: ${assetsRestored} assets restored, ${(bytesReceived / 1024 / 1024).toFixed(1)}MB processed`);
@@ -3809,7 +3821,10 @@ app.get('/api/sql/characters/:characterId', sqlReadLimiter, async (req, res, nex
     try {
         const result = relationalSql.loadCharacter(id);
         if (!result) return res.status(404).json({ error: 'Character not found' });
-        res.set('Cache-Control', 'no-store').json(result);
+        res.set('Cache-Control', 'no-store').json({
+            ...result,
+            characterBodyCollapsed: isCollapsedCharacter(result.character),
+        });
     } catch (error) {
         next(error);
     }
@@ -3828,6 +3843,18 @@ app.get('/api/sql/chats/:chatId', sqlReadLimiter, async (req, res, next) => {
     } catch (error) {
         next(error);
     }
+});
+
+app.post('/api/sql/characters/:characterId/repair', sqlMigrationLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    if (!checkActiveSession(req, res)) return;
+    const id = String(req.params.characterId || '');
+    if (!id || id.length > 256) return res.status(400).json({ error: 'Invalid character id' });
+    try {
+        // Decoding the one pre-SQL backup is intentionally deferred until the
+        // targeted SQL body is classified as collapsed by the repair service.
+        res.set('Cache-Control', 'no-store').json(await queueStorageOperation(() => sqlCharacterRepair.repair(id)));
+    } catch (error) { next(error); }
 });
 
 app.get('/api/sql/chats/:chatId/messages', sqlReadLimiter, async (req, res, next) => {
@@ -5424,6 +5451,7 @@ async function applyLegacySaveReplacement(apply, imported) {
     maybeCollectUnreferencedObjects();
     invalidateDbCache();
     await apply();
+    kvDel('database/pre-sql-migration-v1.bin');
     relationalSql.reset();
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
     return { imported };

@@ -315,6 +315,9 @@ function createRelationalSqlite(options) {
                 detailsLoaded: true,
                 chats: loadChatSummaryRows(characterId).map((chat) => summaryChat(chat, false)),
             });
+            character.tags = database.prepare(
+                'SELECT tag FROM character_tags WHERE character_id = ? ORDER BY position',
+            ).all(characterId).map((tag) => tag.tag);
             return { revision: revision(), character };
         });
     }

@@ -79,6 +79,11 @@ export interface SqlChatHydration {
   chat: Chat;
 }
 
+export interface SqlCharacterRepairResult {
+  status: "repaired" | "not-needed" | "unavailable";
+  revision: number;
+}
+
 export interface BotPresetSummary {
   id: string;
   position: number;
@@ -204,6 +209,7 @@ export interface SqlBootstrapStorage extends ISqlStorage {
   migrateLegacy(retry?: boolean): Promise<{ status: "ready" | "failed"; revision: number }>;
   loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null>;
   loadCharacterHydration(characterId: string): Promise<character | null>;
+  repairCollapsedCharacter(characterId: string): Promise<SqlCharacterRepairResult>;
   loadChatHydration(chatId: string): Promise<SqlChatHydration | null>;
   loadChatMessageReversePage(
     chatId: string,

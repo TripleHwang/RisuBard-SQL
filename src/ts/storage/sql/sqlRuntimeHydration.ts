@@ -14,6 +14,7 @@ export type SqlHydrationWindow = {
   nextPosition: number;
 };
 type HydratableCharacter = character & { detailsLoaded?: boolean };
+type CollapsedCharacter = character & { _sqlCharacterBodyCollapsed?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
 
 /**
@@ -138,17 +139,29 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
     try {
       const full = await storage.loadCharacterHydration(characterId);
       if (!full) return null;
-      const currentIndex = db.characters.findIndex((value) => value?.chaId === characterId);
-      if (currentIndex === -1 || (db.characters[currentIndex] as HydratableCharacter | undefined)?.detailsLoaded !== false) return null;
-      const normalized = normalizeHydratedCharacter(full);
-      db.characters[currentIndex] = normalized;
-      return normalized;
+      if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
+        if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
+        const repaired = await storage.repairCollapsedCharacter(characterId);
+        if (repaired.status === "unavailable") throw new Error("SQL character repair could not recover this character");
+        const reloaded = await storage.loadCharacterHydration(characterId);
+        if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
+        return applyHydratedCharacter(db, characterId, reloaded);
+      }
+      return applyHydratedCharacter(db, characterId, full);
     } finally {
       characterHydrations.delete(characterId);
     }
   })();
   characterHydrations.set(characterId, hydration);
   return hydration;
+}
+
+function applyHydratedCharacter(db: Database, characterId: string, full: character): character | null {
+      const currentIndex = db.characters.findIndex((value) => value?.chaId === characterId);
+      if (currentIndex === -1 || (db.characters[currentIndex] as HydratableCharacter | undefined)?.detailsLoaded !== false) return null;
+      const normalized = normalizeHydratedCharacter(full);
+      db.characters[currentIndex] = normalized;
+      return normalized;
 }
 
 async function ensureChatBodyHydrated(

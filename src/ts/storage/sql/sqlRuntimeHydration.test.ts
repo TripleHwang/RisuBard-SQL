@@ -205,6 +205,30 @@ describe("Node SQL runtime hydration", () => {
     expect(character.chats[0]).toMatchObject({ name: "Locally renamed", note: "local note", folderId: "folder-2", custom: { preserved: true } });
   });
 
+  it("repairs a collapsed character body once, reloads it once, and rejects an unavailable repair", async () => {
+    const loadCharacterHydration = vi.fn()
+      .mockResolvedValueOnce({ chaId: "character-1", _sqlCharacterBodyCollapsed: true, chats: [] })
+      .mockResolvedValueOnce({ chaId: "character-1", description: "Recovered", chats: [] });
+    const repairCollapsedCharacter = vi.fn(async () => ({ status: "repaired", revision: 2 }));
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration, repairCollapsedCharacter, loadChatMessageReversePage: vi.fn() };
+    const db = { characters: [{ chaId: "character-1", detailsLoaded: false, chats: [] }] } as any;
+    await expect(ensureCharacterHydrated(db, 0)).resolves.toMatchObject({ description: "Recovered", detailsLoaded: true });
+    expect(repairCollapsedCharacter).toHaveBeenCalledTimes(1);
+    expect(loadCharacterHydration).toHaveBeenCalledTimes(2);
+
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(async () => ({ chaId: "character-1", _sqlCharacterBodyCollapsed: true, chats: [] })), repairCollapsedCharacter: vi.fn(async () => ({ status: "unavailable", revision: 1 })), loadChatMessageReversePage: vi.fn() };
+    await expect(ensureCharacterHydrated({ characters: [{ chaId: "character-1", detailsLoaded: false, chats: [] }] } as any, 0)).rejects.toThrow(/repair/i);
+
+    const concurrentLoad = vi.fn()
+      .mockResolvedValueOnce({ chaId: "character-1", _sqlCharacterBodyCollapsed: true, chats: [] })
+      .mockResolvedValueOnce({ chaId: "character-1", desc: "Concurrent recovery", chats: [] });
+    const concurrentRepair = vi.fn(async () => ({ status: "not-needed", revision: 3 }));
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: concurrentLoad, repairCollapsedCharacter: concurrentRepair, loadChatMessageReversePage: vi.fn() };
+    await expect(ensureCharacterHydrated({ characters: [{ chaId: "character-1", detailsLoaded: false, chats: [] }] } as any, 0)).resolves.toMatchObject({ desc: "Concurrent recovery" });
+    expect(concurrentRepair).toHaveBeenCalledOnce();
+    expect(concurrentLoad).toHaveBeenCalledTimes(2);
+  });
+
   it("uses newer server summary metadata unless that field changed during body loading", async () => {
     const pending = deferred<any>();
     activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatHydration: vi.fn(() => pending.promise), loadChatMessageReversePage: vi.fn(async () => ({ revision: 1, chatId: "chat", messages: [], positions: [], nextPosition: 0, before: null, nextBefore: null, total: 0, hasMore: false })) };
