@@ -2,11 +2,11 @@ import { changeFullscreen, checkNullish } from "./util"
 import { installDynamicViewportHeight } from "./viewportHeight"
 import { v4 as uuidv4 } from 'uuid';
 import { get } from "svelte/store";
-import { setDatabase, defaultSdDataFunc, getDatabase, changeToThemePreset, type Database } from "./storage/database.svelte";
+import { setDatabase, setDatabaseLite, defaultSdDataFunc, getDatabase, changeToThemePreset, type Database } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState } from "./stores.svelte";
-import { loadPlugins } from "./plugins/plugins.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, startupHydrationStore, DBState, LoadingStatusState } from "./stores.svelte";
+import { loadPlugins, pluginStateStore } from "./plugins/plugins.svelte";
 import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
 import { characterURLImport } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
@@ -33,7 +33,8 @@ import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
-import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
+import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql, retryFailedStandaloneSql } from './storage/sql/sqlBootstrap'
+import type { SqlBootstrapStorage } from './storage/sql/ISqlStorage'
 import { markPerformance, measurePerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
@@ -82,6 +83,38 @@ async function loadDeferredModules(): Promise<void> {
     moduleUpdate()
 }
 
+async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<void> {
+    while (true) {
+        try {
+            await storage.hydrateDeferredDatabase(getDatabase())
+            // Full normalization must happen only after personas, lorebooks and
+            // organizer targets are present; doing it on the shallow graph would
+            // replace valid selections with empty-domain defaults.
+            setDatabase(getDatabase())
+            setPatchSyncBaseline(safeStructuredClone(getDatabase()))
+            startMetadataPersistence()
+            startupHydrationStore.set(false)
+            markPerformance('first-interactive')
+            break
+        } catch (error) {
+            console.error('Deferred SQL startup failed', error)
+            pluginStateStore.set('failed')
+            let retry = false
+            try {
+                retry = await alertConfirm('Deferred SQL startup could not complete. Retry loading it now?')
+            } catch (promptError) {
+                console.error('Could not show deferred SQL retry prompt', promptError)
+            }
+            if (!retry) {
+                alertError('Deferred SQL startup remains locked. Reload to try again, or use recovery from a backup if the problem persists.')
+                return
+            }
+            continue
+        }
+    }
+    await loadDeferredModules()
+}
+
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
     LoadingStatusState.text = "Migrating Local Save to SQL Database..."
     const canonical = await openStandaloneSql(decoded, {
@@ -106,7 +139,8 @@ export async function loadData() {
     try {
             applyEarlyLanguage()
             let createdFreshDatabase = false
-            let startupMode: 'metadata-first' | 'degraded' | 'unsupported' | undefined
+            let startupMode: 'metadata-first' | 'degraded' | 'unsupported' | 'failed' | undefined
+            let deferredSqlStorage: SqlBootstrapStorage | null = null
             {
                 await forageStorage.Init()
 
@@ -115,8 +149,9 @@ export async function loadData() {
                 const existingSql = await openExistingStandaloneSql()
                 startupMode = existingSql?.mode
                 if (existingSql?.usingSql) {
-                    setPatchSyncBaseline(safeStructuredClone(existingSql.database))
-                    setDatabase(existingSql.database)
+                    if ('hydrateDeferredDatabase' in existingSql.storage) deferredSqlStorage = existingSql.storage as SqlBootstrapStorage
+                    if (deferredSqlStorage) setDatabaseLite(existingSql.database)
+                    else setDatabase(existingSql.database)
                 } else if (startupMode === 'degraded') {
                     LoadingStatusState.text = 'Server metadata load failed. Recovering in degraded mode...'
                     const recovery = await existingSql?.recoveryStorage?.loadRecoverySnapshot()
@@ -129,6 +164,14 @@ export async function loadData() {
                     alertError('Started in degraded compatibility mode. Update the server to restore fast startup.')
                 } else if (startupMode === 'unsupported') {
                     throw new Error('This server does not support fast startup. Update the server to use this version.')
+                } else if (startupMode === 'failed') {
+                    const retryStorage = existingSql?.recoveryStorage
+                    const shouldRetry = await alertConfirm(`SQL migration failed: ${existingSql?.error instanceof Error ? existingSql.error.message : 'unknown error'}. Retry migration now?`)
+                    if (!shouldRetry || !retryStorage) throw existingSql?.error ?? new Error('SQL migration failed')
+                    const retried = await retryFailedStandaloneSql(retryStorage)
+                    setDatabaseLite(retried.database)
+                    deferredSqlStorage = retryStorage
+                    startupMode = 'metadata-first'
                 } else {
                     LoadingStatusState.text = "Loading Local Save File..."
                     let gotStorage: Uint8Array = await forageStorage.getItem('database/database.bin') as unknown as Uint8Array
@@ -243,17 +286,21 @@ export async function loadData() {
                 initMobileGesture()
                 MobileGUI.set(true)
             }
+            startupHydrationStore.set(Boolean(deferredSqlStorage))
             loadedStore.set(true)
             configureSaverModeActions({ flush: flushSqlDirtyChanges, evictChats: evictHydratedChats })
             registerRuntimeCacheOwners(clearParserRuntimeCaches, clearInlayRuntimeCache)
             installSaverModeLifecycle()
-            markPerformance('first-interactive')
+            if (deferredSqlStorage) markPerformance('first-visible-shell')
+            else markPerformance('first-interactive')
             selectedCharID.set(-1)
             startObserveDom()
             if (startupMode !== 'metadata-first') assignIds()
-            if (startupMode === 'metadata-first') startMetadataPersistence()
-            else saveDb()
-            scheduleAfterFirstPaint(() => loadDeferredModules())
+            if (startupMode === 'metadata-first') {
+                if (!deferredSqlStorage) startMetadataPersistence()
+            } else saveDb()
+            if (deferredSqlStorage) scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))
+            else scheduleAfterFirstPaint(() => loadDeferredModules())
             // Asset URLs use the cookie session, but SQL bootstrap only needs
             // its JWT header. Establish the cookie after a paint so it cannot
             // add a serial network round trip to the opening screen.
@@ -272,6 +319,7 @@ export async function loadData() {
                 })
             }
     } catch (error) {
+        startupHydrationStore.set(false)
         alertError(error)
     } finally {
         dataLoading = false

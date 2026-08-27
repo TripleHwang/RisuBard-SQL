@@ -28,11 +28,13 @@ describe('server relational SQLite', () => {
       messagesLoaded: false,
       messageTotal: 3,
     })
-    expect(result.botPresets).toEqual([
+    expect(result).not.toHaveProperty('botPresets')
+    expect(result).not.toHaveProperty('pluginCustomStorage')
+    expect(storage.deferredBootstrap().botPresets).toEqual([
       { name: 'First', id: 'preset-1' },
       { name: 'Second', id: 'preset-2' },
     ])
-    expect(JSON.parse(JSON.stringify(result.pluginCustomStorage))).toEqual({
+    expect(JSON.parse(JSON.stringify(storage.deferredBootstrap().pluginCustomStorage))).toEqual({
       'pagefold.config.v1': { provider: 'google' },
       ['__proto__']: { safelyStored: true },
     })
@@ -271,10 +273,8 @@ describe('server relational SQLite', () => {
     storage.close()
 
     const reopened = createRelationalSqlite({ dataRoot: root })
-    expect(reopened.bootstrap()).toMatchObject({
-      status: 'ready', revision: 1,
-      pluginCustomStorage: { migration: 'complete' },
-    })
+    expect(reopened.bootstrap()).toMatchObject({ status: 'ready', revision: 1 })
+    expect(reopened.deferredBootstrap()).toMatchObject({ pluginCustomStorage: { migration: 'complete' } })
     reopened.close()
   })
 
@@ -297,6 +297,32 @@ describe('server relational SQLite', () => {
     expect(commitSource).toContain('preparedStatements.set(sql, prepared)')
     expect(commitSource).toContain('preparedForCommit(entry.sql).run(...bind)')
     expect(commitSource).not.toContain('database.prepare(entry.sql).run(...bind)')
+  })
+
+  it('keeps the public commit cap below the trusted legacy migration ceiling', () => {
+    const root = mkdtempSync(join(tmpdir(), 'risu-relational-statement-cap-'))
+    roots.push(root)
+    const storage = createRelationalSqlite({ dataRoot: root })
+    const overPublicCap = Array.from({ length: 250_001 }, () => ({ sql: 'DELETE FROM system_settings', bind: [] }))
+
+    expect(() => storage.commit({ baseRevision: 0, statements: overPublicCap })).toThrow('SQL commit is too large')
+    expect(() => storage.commitLegacyMigration(0, overPublicCap)).not.toThrow()
+    expect(storage.bootstrap()).toMatchObject({ status: 'ready', revision: 1 })
+    storage.close()
+  })
+
+  it('rolls back an invalid trusted migration without initializing the database', () => {
+    const root = mkdtempSync(join(tmpdir(), 'risu-relational-invalid-migration-'))
+    roots.push(root)
+    const storage = createRelationalSqlite({ dataRoot: root })
+
+    expect(() => storage.commitLegacyMigration(0, [
+      { sql: 'INSERT INTO plugin_custom_storage (key, value) VALUES (?, ?)', bind: ['kept-out', 'true'] },
+      { sql: 'UPDATE system_storage_meta SET revision = 99', bind: [] },
+    ])).toThrow()
+    expect(storage.bootstrap()).toMatchObject({ status: 'empty', revision: 0 })
+    expect(storage.deferredBootstrap()).toMatchObject({ pluginCustomStorage: {} })
+    storage.close()
   })
 
   it('rejects DDL, metadata writes, comments and stacked statements', () => {

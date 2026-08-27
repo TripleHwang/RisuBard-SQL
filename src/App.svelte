@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, openPersonaManager, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore } from './ts/stores.svelte';
+    import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, openPersonaManager, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, startupHydrationStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore } from './ts/stores.svelte';
     import Sidebar from './lib/SideBars/Sidebar.svelte';
     import { DBState } from './ts/stores.svelte';
     import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
@@ -67,10 +67,19 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <main class="flex bg-bg w-full h-full max-w-100vw text-textcolor" ondragover={(e) => {
+    if ($startupHydrationStore) {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'none'
+        return
+    }
     const dropEffect = getMainDropEffect(e)
     e.preventDefault()
     e.dataTransfer.dropEffect = dropEffect
 }} ondragstart={markAppInternalDrag} ondrop={async (e) => {
+    if ($startupHydrationStore) {
+        e.preventDefault()
+        return
+    }
     const types = Array.from(e.dataTransfer.types ?? [])
     if (types.includes(RISU_APP_INTERNAL_DRAG_TYPE) || types.includes(RISU_SIDEBAR_DRAG_TYPE)) {
         e.preventDefault()
@@ -205,33 +214,34 @@
 
             <span class="text-sm mt-2 text-textcolor2">{LoadingStatusState.text}</span>
         </div>
-    {:else if $settingsOpen}
-        <Settings />
-    {:else if $MobileGUI}
-        <div class="w-full h-full flex flex-col">
-            <MobileHeader />
-            <MobileBody />
-            <MobileFooter />
-        </div>
     {:else}
-        {#if gridOpen}
-            <GridChars endGrid={() => {gridOpen = false}} />
-        {:else}
-            {#if (!$DynamicGUI)}
-                <Sidebar openGrid={() => {gridOpen = true}} hidden={!$sideBarStore} />
-            {:else}
-                <div class="top-0 w-full h-full left-0 z-30 flex flex-row items-center" class:fixed={$sideBarStore} class:hidden={!$sideBarStore} >
-                    <!-- svelte-ignore a11y_click_events_have_key_events -->
-                    <Sidebar openGrid={() => {gridOpen = true}}  hidden={false} />
-
-
-
+        <div class="contents" inert={$startupHydrationStore}>
+            {#if $settingsOpen}
+                <Settings />
+            {:else if $MobileGUI}
+                <div class="w-full h-full flex flex-col">
+                    <MobileHeader />
+                    <MobileBody />
+                    <MobileFooter />
                 </div>
+            {:else}
+                {#if gridOpen}
+                    <GridChars endGrid={() => {gridOpen = false}} />
+                {:else}
+                    {#if (!$DynamicGUI)}
+                        <Sidebar openGrid={() => {gridOpen = true}} hidden={!$sideBarStore} />
+                    {:else}
+                        <div class="top-0 w-full h-full left-0 z-30 flex flex-row items-center" class:fixed={$sideBarStore} class:hidden={!$sideBarStore} >
+                            <!-- svelte-ignore a11y_click_events_have_key_events -->
+                            <Sidebar openGrid={() => {gridOpen = true}}  hidden={false} />
+                        </div>
+                    {/if}
+                    <div class="flex h-full min-h-0 min-w-0 grow flex-col overflow-hidden">
+                        <ChatScreen />
+                    </div>
+                {/if}
             {/if}
-            <div class="flex h-full min-h-0 min-w-0 grow flex-col overflow-hidden">
-                <ChatScreen />
-            </div>
-        {/if}
+        </div>
     {/if}
     <AlertComp />
     {#if $showRealmInfoStore}

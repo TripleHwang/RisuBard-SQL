@@ -197,25 +197,39 @@ describe('importCharXStream', () => {
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
-  test('enforces compressed and metadata limits', async () => {
+  test('enforces bounded card metadata limits', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
     const archive = zipSync({ 'card.json': strToU8(JSON.stringify({ spec: 'chara_card_v3', text: 'long-value' })) });
     try {
       await expect(importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {}, limits: { cardBytes: 3 } }))
         .rejects.toMatchObject({ code: 'CHARX_LIMIT_EXCEEDED' });
-      await expect(importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {}, limits: { compressedBytes: 1 } }))
-        .rejects.toMatchObject({ code: 'CHARX_LIMIT_EXCEEDED' });
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
-  test('excludes an oversized asset but imports the card', async () => {
+  test('streams archives and assets beyond the former caps to disk without changing their bytes', async () => {
     const stagingRoot = await mkdtemp(join(tmpdir(), 'charx-test-'));
-    const archive = zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'big.png': strToU8('12345') });
+    const formerArchiveCap = 32 * 1024;
+    const formerAssetCap = 16 * 1024;
+    const asset = new Uint8Array(48 * 1024);
+    for (let index = 0; index < asset.length; index++) asset[index] = index & 0xff;
+    const archive = zipSync({
+      'card.json': [strToU8('{"spec":"chara_card_v3"}'), { level: 0 }],
+      'big.png': [asset, { level: 0 }],
+    });
+    expect(archive.length).toBeGreaterThan(formerArchiveCap);
+    let published = Buffer.alloc(0);
     try {
-      const result = await importCharXStream(chunks(archive), { stagingRoot, publishAssets: async () => {}, limits: { assetBytes: 3 } });
-      expect(result.assets).toEqual({});
-      expect(result.excludedFiles).toEqual(['big.png']);
-      expect(result.warnings).toHaveLength(1);
+      const result = await importCharXStream(chunks(archive), {
+        stagingRoot,
+        // These legacy knobs model the former route policy. Direct Node imports
+        // must no longer admit/reject by either compressed archive or asset size.
+        limits: { compressedBytes: formerArchiveCap, assetBytes: formerAssetCap },
+        publishAssets: async (entries: any[]) => { published = await readFile(entries[0].sourcePath); },
+      });
+      expect(result.excludedFiles).toEqual([]);
+      expect(result.warnings).toEqual([]);
+      expect(result.assets['big.png']).toMatch(/^assets\/[a-f0-9]{64}\.png$/);
+      expect(published).toEqual(Buffer.from(asset));
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 
@@ -405,7 +419,8 @@ describe('importCharXStream', () => {
     try {
       await expect(importCharXStream(chunks(zipSync(base)), { stagingRoot, publishAssets: async () => {}, limits: { entries: 2 } })).rejects.toMatchObject({ code: 'CHARX_LIMIT_EXCEEDED' });
       await expect(importCharXStream(chunks(zipSync(base)), { stagingRoot, publishAssets: async () => {}, limits: { moduleBytes: 2 } })).rejects.toMatchObject({ code: 'CHARX_LIMIT_EXCEEDED' });
-      await expect(importCharXStream(chunks(zipSync(base)), { stagingRoot, publishAssets: async () => {}, limits: { decompressedBytes: 3 } })).rejects.toMatchObject({ code: 'CHARX_LIMIT_EXCEEDED' });
+      await expect(importCharXStream(chunks(zipSync(base)), { stagingRoot, publishAssets: async () => {}, limits: { decompressedBytes: 3 } })).rejects.toMatchObject({ code: 'DECOMPRESSION_SAFETY' });
+      await expect(importCharXStream(chunks(zipSync({ 'card.json': strToU8('{"spec":"chara_card_v3"}'), 'compressed.png': new Uint8Array(4096).fill(1) })), { stagingRoot, publishAssets: async () => {}, limits: { expansionRatio: 1 } })).rejects.toMatchObject({ code: 'DECOMPRESSION_SAFETY' });
     } finally { await rm(stagingRoot, { recursive: true, force: true }); }
   });
 

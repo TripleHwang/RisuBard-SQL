@@ -13,12 +13,11 @@ const CRC32_TABLE = (() => {
 })();
 
 const DEFAULT_CHARX_LIMITS = Object.freeze({
-  compressedBytes: 256 * 1024 * 1024,
   decompressedBytes: 2 * 1024 * 1024 * 1024,
+  expansionRatio: 1000,
   entries: 10000,
   cardBytes: 4 * 1024 * 1024,
   moduleBytes: 16 * 1024 * 1024,
-  assetBytes: 50 * 1024 * 1024,
   queuedWriteBytes: 8 * 1024 * 1024,
   diskHeadroomBytes: 256 * 1024 * 1024,
 });
@@ -34,6 +33,7 @@ class CharXImportError extends Error {
 
 function invalid(message) { return new CharXImportError('INVALID_CHARX', message); }
 function limit(message) { return new CharXImportError('CHARX_LIMIT_EXCEEDED', message, 413); }
+function decompressionSafety(message) { return new CharXImportError('DECOMPRESSION_SAFETY', message, 413); }
 function noSpace(message = 'Insufficient disk space for CharX import') { return new CharXImportError('INSUFFICIENT_STORAGE', message, 507); }
 function aborted() { return new CharXImportError('IMPORT_ABORTED', 'CharX import aborted', 499); }
 function normalizeError(error, fallback) {
@@ -116,7 +116,6 @@ async function importCharXStream(source, options) {
   const limits = { ...DEFAULT_CHARX_LIMITS, ...(options && options.limits) };
   if (!stagingRoot || typeof publishAssets !== 'function') throw new TypeError('stagingRoot and publishAssets are required');
   if (signal && signal.aborted) throw aborted();
-  if (expectedCompressedBytes > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
   /** getAvailableBytes must synchronously return a finite byte count immediately before each write (for example fs.statfsSync). */
   const checkSpace = (phase, needed) => {
     if (!getAvailableBytes) return;
@@ -146,7 +145,6 @@ async function importCharXStream(source, options) {
   const checkAbort = () => { if (signal && signal.aborted) throw aborted(); if (currentError) throw currentError; };
   const closeAsset = (state) => {
     if (state.fd !== undefined) { fs.fsyncSync(state.fd); fs.closeSync(state.fd); state.fd = undefined; }
-    if (state.excluded) { try { fs.unlinkSync(state.sourcePath); } catch {} return; }
     const key = state.hash.digest('hex');
     const target = `assets/${key}.png`;
     if (!assetFiles.has(target)) assetFiles.set(target, state.sourcePath);
@@ -160,8 +158,8 @@ async function importCharXStream(source, options) {
       if (!extractingEntry || extractingEntry.name !== name) throw invalid('ZIP extraction metadata mismatch');
       const advertised = Number(file.originalSize) || 0;
       advertisedTotal += advertised;
-      if (advertisedTotal > limits.decompressedBytes) throw limit('Archive exceeds decompressed limit');
-      if (file.size && file.size > limits.decompressedBytes) throw limit('Archive entry exceeds decompressed limit');
+      if (advertisedTotal > limits.decompressedBytes) throw decompressionSafety('Archive exceeds decompressed limit');
+      if (file.size && file.size > limits.decompressedBytes) throw decompressionSafety('Archive entry exceeds decompressed limit');
       entryCount++;
       if (entryCount > limits.entries) throw limit('Archive has too many entries');
       if (file.name.endsWith('/')) {
@@ -181,22 +179,10 @@ async function importCharXStream(source, options) {
       const rootModule = name === 'module.risum';
       if (rootCard && advertised > limits.cardBytes) throw limit('card.json exceeds limit');
       if (rootModule && advertised > limits.moduleBytes) throw limit('module.risum exceeds limit');
-      if (!rootCard && !rootModule && !name.endsWith('.json') && advertised > limits.assetBytes) {
-        excludedFiles.push(name); warnings.push(`Excluded oversized asset: ${name}`);
-        let crc = 0xffffffff;
-        file.ondata = (err, data, final) => {
-          if (err) { currentError = invalid('Unsupported or corrupt ZIP entry'); return; }
-          crc = crc32Update(crc, data);
-          decompressed += data.length;
-          if (decompressed > limits.decompressedBytes) currentError = limit('Archive exceeds decompressed limit');
-          if (final && ((crc ^ 0xffffffff) >>> 0) !== extractingEntry.crc) currentError = invalid('ZIP entry CRC mismatch');
-        };
-        file.start(); return;
-      }
       if (rootCard && ++cardCount > 1) throw invalid('Archive must contain exactly one card.json');
       if (rootModule && ++moduleCount > 1) throw invalid('Archive may contain only one module.risum');
       const ignored = (!rootCard && !rootModule && name.endsWith('.json'));
-      const state = { name, kind: rootCard ? 'card' : rootModule ? 'module' : ignored ? 'ignored' : 'asset', size: 0, chunks: [], excluded: false, fd: undefined, sourcePath: undefined, hash: undefined, crc: 0xffffffff, expectedCrc: extractingEntry.crc };
+      const state = { name, kind: rootCard ? 'card' : rootModule ? 'module' : ignored ? 'ignored' : 'asset', size: 0, chunks: [], fd: undefined, sourcePath: undefined, hash: undefined, crc: 0xffffffff, expectedCrc: extractingEntry.crc };
       if (state.kind === 'asset') {
         state.sourcePath = path.join(ownedDir, `asset-${randomBytes(16).toString('hex')}`);
         state.fd = fs.openSync(state.sourcePath, 'wx');
@@ -208,7 +194,7 @@ async function importCharXStream(source, options) {
           if (err) throw invalid('Unsupported or corrupt ZIP entry');
           checkAbort();
           decompressed += data.length;
-          if (decompressed > limits.decompressedBytes) throw limit('Archive exceeds decompressed limit');
+          if (decompressed > limits.decompressedBytes) throw decompressionSafety('Archive exceeds decompressed limit');
           state.crc = crc32Update(state.crc, data);
           state.size += data.length;
           if (state.kind === 'card') {
@@ -217,18 +203,11 @@ async function importCharXStream(source, options) {
           } else if (state.kind === 'module') {
             if (state.size > limits.moduleBytes) throw limit('module.risum exceeds limit');
             state.chunks.push(Buffer.from(data));
-          } else if (state.kind === 'asset' && !state.excluded) {
-            if (state.size > limits.assetBytes) {
-              state.excluded = true;
-              fs.closeSync(state.fd); state.fd = undefined;
-              try { fs.unlinkSync(state.sourcePath); } catch {}
-              excludedFiles.push(state.name); warnings.push(`Excluded oversized asset: ${state.name}`);
-            } else {
-              // UnzipInflate and writeSync are synchronous: queued decompressed write bytes are always zero.
-              checkSpace('asset-write', data.length);
-              fs.writeSync(state.fd, data);
-              state.hash.update(data);
-            }
+          } else if (state.kind === 'asset') {
+            // UnzipInflate and writeSync are synchronous: queued decompressed write bytes are always zero.
+            checkSpace('asset-write', data.length);
+            fs.writeSync(state.fd, data);
+            state.hash.update(data);
           }
           if (final) { if (((state.crc ^ 0xffffffff) >>> 0) !== state.expectedCrc) throw invalid('ZIP entry CRC mismatch'); active.delete(state); if (state.kind === 'asset') closeAsset(state); else if (state.kind === 'card') cards.push(state.chunks); else if (state.kind === 'module') modules.push(state.chunks); }
         } catch (e) { currentError = normalizeError(e, invalid('Unable to extract archive entry')); }
@@ -248,7 +227,6 @@ async function importCharXStream(source, options) {
         zipTail.set(chunk, keep); zipTailLength = keep + chunk.length;
       }
       compressed += chunk.length;
-      if (compressed > limits.compressedBytes) throw limit('Compressed archive exceeds limit');
       checkSpace('archive-write', chunk.length);
       fs.writeSync(archiveFd, chunk);
       checkAbort();
@@ -266,6 +244,12 @@ async function importCharXStream(source, options) {
     let entries;
     try { entries = validateCentralDirectory(readFd, compressed, eocdAbsolute, limits.entries); } finally { fs.closeSync(readFd); }
     const extractionTotal = entries.reduce((total, entry) => total + entry.originalSize, 0);
+    if (extractionTotal > limits.decompressedBytes) throw decompressionSafety('Archive exceeds decompressed limit');
+    for (const entry of entries) {
+      if (entry.originalSize > limits.decompressedBytes || entry.originalSize > Math.max(1, entry.compressedSize) * limits.expansionRatio) {
+        throw decompressionSafety('Archive expansion ratio exceeds limit');
+      }
+    }
     let extractionCompleted = 0;
     // Source upload is finished and ZIP metadata is valid; now report bounded
     // per-entry work that the browser can render as server-side processing.

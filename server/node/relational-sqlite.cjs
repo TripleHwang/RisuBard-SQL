@@ -35,6 +35,7 @@ const MAX_SQL_READ_LIMIT = 100;
 // SQLite primary-key traversal, so this candidate cap cannot trigger a full
 // table sort before the limit; final relevance ordering happens afterward.
 const MAX_MESSAGE_SEARCH_SCAN_ROWS = 50_000;
+const DEFERRED_BOOTSTRAP_KEYS = new Set(['plugins', 'pluginV2', 'personas', 'loreBook', 'modules', 'globalscript', 'customScripts', 'scripts', 'promptCollections', 'prompts', 'loadouts', 'translatorPresets']);
 
 function statementTable(sql) {
     const normalized = String(sql || '').trim();
@@ -66,10 +67,24 @@ function createRelationalSqlite(options) {
     );
     const schema = fs.readFileSync(schemaPath, 'utf8');
     let database;
+    let bootstrapCache = null;
+    let deferredBootstrapCache = null;
 
     function openDatabase() {
         database = new DatabaseSync(databasePath);
         database.exec(schema);
+        // Existing v3 databases predate explicit migration state. SQLite does
+        // not support ADD COLUMN IF NOT EXISTS, so tolerate the one-time
+        // duplicate-column error while upgrading them in place.
+        for (const sql of [
+            "ALTER TABLE system_storage_meta ADD COLUMN migration_state TEXT NOT NULL DEFAULT 'empty'",
+            'ALTER TABLE system_storage_meta ADD COLUMN migration_error TEXT',
+        ]) {
+            try { database.exec(sql); } catch (error) {
+                if (!/duplicate column name/i.test(String(error?.message || error))) throw error;
+            }
+        }
+        database.prepare("UPDATE system_storage_meta SET migration_state = CASE WHEN initialized = 1 THEN 'ready' ELSE migration_state END WHERE singleton = 1").run();
         // Databases created before chat_message_counts need a one-time
         // backfill. Normal opens touch no messages: only chats missing their
         // durable counter are joined to messages.
@@ -99,6 +114,7 @@ function createRelationalSqlite(options) {
         const meta = tables.system_storage_meta[0] || {};
         return {
             status: Number(meta.initialized) === 1 ? 'ready' : 'empty',
+            migrationState: meta.migration_state || (Number(meta.initialized) === 1 ? 'ready' : 'empty'),
             revision: Number(meta.revision) || 0,
             tables,
         };
@@ -243,31 +259,13 @@ function createRelationalSqlite(options) {
     }
 
     function bootstrap() {
+        const currentRevision = revision();
+        if (bootstrapCache && bootstrapCache.revision === currentRevision) return bootstrapCache;
         return inReadTransaction(() => {
-            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
+            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all().filter((row) => !DEFERRED_BOOTSTRAP_KEYS.has(row.key));
             const settings = Object.fromEntries(settingRows.map((row) => [
                 row.key, readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]),
             ]));
-            const botPresets = database.prepare(
-                'SELECT preset_id, data FROM bot_presets ORDER BY position',
-            ).all().map((row) => {
-                const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
-                if (!preset || typeof preset !== 'object' || Array.isArray(preset)) {
-                    throw new Error(`Invalid canonical bot preset data for ${row.preset_id}`);
-                }
-                return { ...preset, id: row.preset_id };
-            });
-            const pluginCustomStorage = Object.create(null);
-            for (const row of database.prepare(
-                'SELECT key, value FROM plugin_custom_storage ORDER BY key',
-            ).all()) {
-                Object.defineProperty(pluginCustomStorage, row.key, {
-                    value: parseCanonicalJson(row.value, `plugin custom storage ${row.key}`),
-                    enumerable: true,
-                    configurable: true,
-                    writable: true,
-                });
-            }
             const chatsByCharacter = new Map();
             for (const row of loadChatSummaryRows()) {
                 const chats = chatsByCharacter.get(row.character_id) || [];
@@ -287,12 +285,15 @@ function createRelationalSqlite(options) {
                 chats: chatsByCharacter.get(row.id) || [],
                 chatPage: 0,
             }));
-            const initialized = database.prepare('SELECT initialized FROM system_storage_meta WHERE singleton = 1').get();
-            return {
+            const initialized = database.prepare('SELECT initialized, migration_state, migration_error FROM system_storage_meta WHERE singleton = 1').get();
+            bootstrapCache = {
                 status: Number(initialized?.initialized) === 1 ? 'ready' : 'empty',
-                revision: revision(), settings, pluginCustomStorage, botPresets, characters,
+                migrationState: initialized?.migration_state || (Number(initialized?.initialized) === 1 ? 'ready' : 'empty'),
+                migrationError: initialized?.migration_error || null,
+                revision: currentRevision, settings, characters,
                 selectedCharacterId: null, selectedChatId: null,
             };
+            return bootstrapCache;
         });
     }
 
@@ -470,8 +471,32 @@ function createRelationalSqlite(options) {
     }
 
     function commit(payload) {
+        return commitWithOptions(payload);
+    }
+
+    function deferredBootstrap() {
+        const currentRevision = revision();
+        if (deferredBootstrapCache && deferredBootstrapCache.revision === currentRevision) return deferredBootstrapCache;
+        return inReadTransaction(() => {
+            const settings = Object.fromEntries(database.prepare('SELECT key FROM system_settings ORDER BY key').all()
+                .filter((row) => DEFERRED_BOOTSTRAP_KEYS.has(row.key))
+                .map((row) => [row.key, readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key])]));
+            const botPresets = database.prepare('SELECT preset_id, data FROM bot_presets ORDER BY position').all().map((row) => {
+                const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
+                if (!preset || typeof preset !== 'object' || Array.isArray(preset)) throw new Error(`Invalid canonical bot preset data for ${row.preset_id}`);
+                return { ...preset, id: row.preset_id };
+            });
+            const pluginCustomStorage = Object.create(null);
+            for (const row of database.prepare('SELECT key, value FROM plugin_custom_storage ORDER BY key').all()) Object.defineProperty(pluginCustomStorage, row.key, { value: parseCanonicalJson(row.value, `plugin custom storage ${row.key}`), enumerable: true, configurable: true, writable: true });
+            deferredBootstrapCache = { revision: currentRevision, settings, pluginCustomStorage, botPresets };
+            return deferredBootstrapCache;
+        });
+    }
+
+    function commitWithOptions(payload, options = {}) {
         const statements = Array.isArray(payload?.statements) ? payload.statements : [];
-        if (statements.length > 250_000) throw new Error('SQL commit is too large');
+        const statementLimit = options.trustedLegacyMigration ? 2_000_000 : 250_000;
+        if (statements.length > statementLimit) throw new Error('SQL commit is too large');
         const baseRevision = Number(payload?.baseRevision);
         // Migration commits contain many identically-shaped row inserts. Keep
         // the cache transaction-local so statements never outlive a rollback
@@ -502,7 +527,7 @@ function createRelationalSqlite(options) {
             const nextRevision = currentRevision + 1;
             database.prepare(
                 `UPDATE system_storage_meta
-                 SET revision = ?, initialized = 1, updated_at = datetime('now')
+                 SET revision = ?, initialized = 1, migration_state = 'ready', migration_error = NULL, updated_at = datetime('now')
                  WHERE singleton = 1`,
             ).run(nextRevision);
             database.prepare(
@@ -511,6 +536,8 @@ function createRelationalSqlite(options) {
                  VALUES (?, 1, 'database', ?, datetime('now'))`,
             ).run(nextRevision, String(payload?.action || 'sync').slice(0, 128));
             database.exec('COMMIT');
+            bootstrapCache = null;
+            deferredBootstrapCache = null;
             // The initial compatibility import can be large. Checkpoint its
             // successful replacement before acknowledging it so a mobile
             // runtime restart is not dependent on retaining a large WAL file.
@@ -525,6 +552,38 @@ function createRelationalSqlite(options) {
     function checkpoint() {
         database.exec('PRAGMA wal_checkpoint(TRUNCATE)');
         return { databasePath, revision: revision() };
+    }
+
+    function commitLegacyMigration(baseRevision, statements) {
+        return commitWithOptions({ baseRevision, action: 'legacy-to-sql', statements }, { trustedLegacyMigration: true });
+    }
+
+    function listBotPresets() {
+        return inReadTransaction(() => database.prepare(
+            'SELECT preset_id, position, name, image, api_type, ai_model, content_hash FROM bot_presets ORDER BY position',
+        ).all().map((row) => ({
+            id: row.preset_id, position: Number(row.position), name: row.name, image: row.image,
+            apiType: row.api_type, aiModel: row.ai_model, hash: row.content_hash,
+        })));
+    }
+
+    function loadBotPreset(id) {
+        return inReadTransaction(() => {
+            const row = database.prepare('SELECT preset_id, data FROM bot_presets WHERE preset_id = ?').get(id);
+            if (!row) return null;
+            const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
+            return preset && typeof preset === 'object' && !Array.isArray(preset) ? { ...preset, id: row.preset_id } : null;
+        });
+    }
+
+    function setMigrationState(state, errorMessage = null) {
+        if (!['empty', 'migrating', 'ready', 'failed'].includes(state)) throw new Error('Invalid migration state');
+        database.prepare(
+            'UPDATE system_storage_meta SET migration_state = ?, migration_error = ?, updated_at = datetime(\'now\') WHERE singleton = 1',
+        ).run(state, errorMessage == null ? null : String(errorMessage).slice(0, 256));
+        bootstrapCache = null;
+        deferredBootstrapCache = null;
+        return bootstrap();
     }
 
     function close() {
@@ -556,14 +615,16 @@ function createRelationalSqlite(options) {
             }
         }
         openDatabase();
+        bootstrapCache = null;
+        deferredBootstrapCache = null;
         return { archivedPath, previousRevision };
     }
 
     return {
-        databasePath, revision, dump, bootstrap, loadCharacter, loadChat, loadChatMessages,
+        databasePath, revision, dump, bootstrap, deferredBootstrap, setMigrationState, loadCharacter, loadChat, loadChatMessages, listBotPresets, loadBotPreset,
         getChatDraft, listChatDraftKeys, getColdStorageItem, listColdStorageItems, listRevisions,
         searchMessages, searchCharactersByName, searchCharactersByTag,
-        commit, checkpoint, reset, close,
+        commit, commitLegacyMigration, checkpoint, reset, close,
     };
 }
 

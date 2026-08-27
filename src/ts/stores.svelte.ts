@@ -24,6 +24,10 @@ export const SizeStore = writable({
 })
 
 export const loadedStore = writable(false)
+// Server-SQL metadata-first startup renders its shallow shell before deferred
+// settings/plugins/personas arrive. Keep that shell visible but noninteractive
+// so local edits cannot be overwritten by the deferred merge.
+export const startupHydrationStore = writable(false)
 export const isTouchDevice = writable(typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches)
 export const DynamicGUI = writable(false)
 export const sideBarClosing = writable(false)

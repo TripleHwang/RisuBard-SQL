@@ -40,6 +40,7 @@ function suspendRequestTimeout(req) {
 function safeMessage(error) {
   switch (error && error.code) {
     case 'CHARX_LIMIT_EXCEEDED': return 'CharX archive exceeds the allowed limit';
+    case 'DECOMPRESSION_SAFETY': return 'CharX archive failed decompression safety checks';
     case 'INSUFFICIENT_STORAGE': return 'Insufficient disk space for CharX import';
     case 'IMPORT_ABORTED': return 'CharX import aborted';
     case 'INVALID_CHARX': return 'Invalid CharX archive';
@@ -94,10 +95,6 @@ function createCharXImportHandler(deps) {
       const contentType = String(req.headers['content-type'] ?? '').split(';', 1)[0].trim().toLowerCase();
       if (contentType !== 'application/x-risu-charx') {
         writeJsonError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Unsupported CharX content-type');
-        return;
-      }
-      if (Number.isFinite(contentLength) && contentLength > limits.compressedBytes) {
-        writeJsonError(413, 'CHARX_LIMIT_EXCEEDED', 'CharX archive exceeds the allowed limit');
         return;
       }
       if (getAvailableBytes) {

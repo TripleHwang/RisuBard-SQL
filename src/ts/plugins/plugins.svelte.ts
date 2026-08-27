@@ -56,6 +56,28 @@ export type RisuPlugin = ProviderPlugin
 export const isBuiltInPluginName = (name: string | undefined) =>
     name?.trim().toLowerCase() === PAGEFOLD_PLUGIN_NAME
 
+function isCompatiblePluginArgumentValue(
+    declaration: ProviderPlugin['arguments'][string],
+    value: unknown,
+): value is number | string {
+    if (declaration === 'int') return typeof value === 'number' && Number.isFinite(value)
+    if (declaration === 'string') return typeof value === 'string'
+    return Array.isArray(declaration) && typeof value === 'string' && declaration.includes(value)
+}
+
+function mergePluginUpdateUserState(previous: RisuPlugin, next: RisuPlugin): RisuPlugin {
+    const realArg = { ...next.realArg }
+    for (const [name, declaration] of Object.entries(next.arguments)) {
+        const previousValue = previous.realArg?.[name]
+        if (isCompatiblePluginArgumentValue(declaration, previousValue)) realArg[name] = previousValue
+    }
+    return {
+        ...next,
+        enabled: previous.enabled ?? next.enabled,
+        realArg,
+    }
+}
+
 export async function createBlankPlugin(){
     await importPlugin(
 `
@@ -438,7 +460,9 @@ export async function importPlugin(code:string|null = null, argu:{
         }
 
         if(oldPluginIndex !== -1){
-            db.plugins[oldPluginIndex] = pluginData;
+            db.plugins[oldPluginIndex] = isUpdate
+                ? mergePluginUpdateUserState(db.plugins[oldPluginIndex], pluginData)
+                : pluginData;
         }
         else if(!isUpdate || argu.isHotReload){
             db.plugins.push(pluginData)

@@ -47,6 +47,7 @@ function createClientWithBootstrap() {
     const path = String(input);
     requests.push(path);
     if (path === "/api/sql/bootstrap") return Response.json(server.bootstrap());
+    if (path === "/api/sql/deferred-bootstrap") return Response.json(server.deferredBootstrap());
     if (path === "/api/sql/snapshot") return Response.json(server.dump());
     if (path === "/api/sql/commit") return Response.json(server.commit(JSON.parse(String(init?.body))));
     if (path.startsWith("/api/sql/characters/")) {
@@ -206,7 +207,7 @@ describe("Node server SQLite client", () => {
     const presets = await client.listBotPresets();
 
     expect(presets).toEqual([expect.objectContaining({ id: "preset-1", name: "Default" })]);
-    expect(requests).toEqual(["/api/sql/bootstrap"]);
+    expect(requests).toEqual(["/api/sql/bootstrap", "/api/sql/deferred-bootstrap"]);
     server.close();
   });
 
@@ -238,6 +239,47 @@ describe("Node server SQLite client", () => {
     expect(client.getRevision()).toBe(0);
     expect(requests).toEqual(["/api/sql/bootstrap"]);
     server.close();
+  });
+
+  it("reuses a revision-matched bootstrap after a conditional 304 response", async () => {
+    const payload = { status: "ready", revision: 7, settings: {}, pluginCustomStorage: {}, botPresets: [], characters: [], selectedCharacterId: null, selectedChatId: null } as const;
+    const headers: HeadersInit[] = [];
+    const client = new NodeSqliteStorage(async (_input, init) => {
+      headers.push(init?.headers ?? {});
+      return headers.length === 1 ? Response.json(payload) : new Response(null, { status: 304 });
+    });
+
+    await client.loadBootstrap();
+    await expect(client.loadBootstrap()).resolves.toEqual(payload);
+    expect(new Headers(headers[1]).get("if-none-match")).toBe('"sql-bootstrap-7-ready"');
+  });
+
+  it("does not conditionally cache an empty migration-state bootstrap", async () => {
+    const payload = { status: "empty", migrationState: "failed", revision: 0, settings: {}, pluginCustomStorage: {}, botPresets: [], characters: [], selectedCharacterId: null, selectedChatId: null } as const;
+    const calls: Array<RequestInit | undefined> = [];
+    const client = new NodeSqliteStorage(async (_input, init) => {
+      calls.push(init);
+      return Response.json(payload);
+    });
+    await client.loadBootstrap();
+    await client.loadBootstrap();
+    expect(calls[1]?.headers).toBeUndefined();
+  });
+
+  it("keeps deferred domains off the first-interactive shallow open", async () => {
+    const requests: string[] = [];
+    const shallow = { status: "ready", revision: 1, settings: { activeBotPresetId: "preset-2" }, characters: [], selectedCharacterId: null, selectedChatId: null } as const;
+    const deferred = { revision: 1, settings: { plugins: [{ name: "deferred" }] }, pluginCustomStorage: { plugin: { value: 1 } }, botPresets: [{ id: "preset-1", name: "One" }, { id: "preset-2", name: "Two" }] } as any;
+    const client = new NodeSqliteStorage(async (input) => {
+      const path = String(input); requests.push(path);
+      return Response.json(path === "/api/sql/bootstrap" ? shallow : deferred);
+    });
+    await client.init();
+    const opened = await client.loadDatabase({ shallow: true });
+    expect(requests).toEqual(["/api/sql/bootstrap"]);
+    await client.hydrateDeferredDatabase(opened!.database!);
+    expect(requests).toEqual(["/api/sql/bootstrap", "/api/sql/deferred-bootstrap"]);
+    expect(opened!.database).toMatchObject({ plugins: [{ name: "deferred" }], pluginCustomStorage: { plugin: { value: 1 } }, botPresetsId: 1 });
   });
 
   it("keeps full snapshot behind an explicit recovery method", async () => {
