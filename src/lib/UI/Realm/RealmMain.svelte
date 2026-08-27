@@ -139,7 +139,8 @@
                 isLoading = false;
                 isRefreshing = false;
             },
-            failure: () => {
+            failure: (error) => {
+                console.error('[RisuRealm] browse failed', error);
                 if (isInitialDefaultRefresh) initialRefreshPending = false;
                 isLoading = false;
                 isRefreshing = false;

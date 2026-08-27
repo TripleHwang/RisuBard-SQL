@@ -48,6 +48,7 @@ describe('bounded SQL read routes', () => {
         expect(replacementDelete).toBeGreaterThan(replacementStart)
         expect(replacementDelete).toBeLessThan(replacementReset)
         expect(source).toContain("if (!kvGet('database/pre-sql-migration-v1.bin')) kvSet('database/pre-sql-migration-v1.bin', raw)")
+        expect(source).toContain("kvGet('database/pre-sql-migration-v1.bin') || kvGet('database/database.bin')")
         expect(source).toContain("require('./sql-repair-decode.cjs')")
     })
 })

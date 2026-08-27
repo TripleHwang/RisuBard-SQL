@@ -33,6 +33,42 @@ describe('RisuRealm browse transport', () => {
 
         await expect(getRisuHub({ search: '', page: 0, nsfw: false, sort: 'recommended' }, { signal: controller.signal })).rejects.toThrow('503')
         expect(fetchMock.mock.calls[0][1]).toMatchObject({ signal: controller.signal })
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    test('retries one transient network failure and returns the recovered feed', async () => {
+        const fetchMock = vi.fn()
+            .mockRejectedValueOnce(new TypeError('temporary network failure'))
+            .mockResolvedValueOnce(new Response(JSON.stringify({ cards: [] }), { status: 200 }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        await expect(getRisuHub({ search: '', page: 0, nsfw: false, sort: 'recommended' }))
+            .resolves.toEqual({ cards: [], additionalHTML: '' })
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    test('does not retry non-network exceptions', async () => {
+        const fetchMock = vi.fn().mockRejectedValue(new Error('programming failure'))
+        vi.stubGlobal('fetch', fetchMock)
+
+        await expect(getRisuHub({ search: '', page: 0, nsfw: false, sort: 'recommended' }))
+            .rejects.toThrow('programming failure')
+        expect(fetchMock).toHaveBeenCalledOnce()
+    })
+
+    test('does not issue the retry when cancellation happens during backoff', async () => {
+        const controller = new AbortController()
+        const fetchMock = vi.fn().mockResolvedValue(new Response('offline', { status: 503 }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const request = getRisuHub(
+            { search: '', page: 0, nsfw: false, sort: 'recommended' },
+            { signal: controller.signal },
+        )
+        setTimeout(() => controller.abort(new Error('cancelled')), 10)
+
+        await expect(request).rejects.toThrow('cancelled')
+        expect(fetchMock).toHaveBeenCalledOnce()
     })
 
     test('projects a live response and caps it at 100 cards', async () => {

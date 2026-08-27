@@ -867,7 +867,11 @@ const sqlLegacyMigration = createSqlLegacyMigration({
 const sqlCharacterRepair = createSqlCharacterRepair({
     relationalSql,
     readBackup: async () => {
-        const raw = kvGet('database/pre-sql-migration-v1.bin');
+        // v0.3.2.6 introduced the dedicated backup after some installations
+        // had already completed SQL migration. Their legacy database.bin is
+        // intentionally frozen after a successful relational open, so it is
+        // the compatible recovery source when the newer backup key is absent.
+        const raw = kvGet('database/pre-sql-migration-v1.bin') || kvGet('database/database.bin');
         if (!raw) return null;
         return readBoundedRisuSave(raw);
     },
