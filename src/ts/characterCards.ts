@@ -1758,18 +1758,41 @@ export type RealmBrowseResult = {
     additionalHTML: string
 }
 
+function isRealmNetworkError(error: unknown): boolean {
+    return error instanceof TypeError
+        || (error instanceof DOMException && error.name === 'NetworkError')
+}
+
+async function waitForRealmRetry(signal?: AbortSignal, cause?: unknown): Promise<void> {
+    if (signal?.aborted) throw signal.reason ?? cause
+    await sleep(250)
+    if (signal?.aborted) throw signal.reason ?? cause
+}
+
 export async function getRisuHub(
     query: RealmBrowseQuery,
     options: { signal?: AbortSignal } = {},
 ): Promise<RealmBrowseResult> {
     const sharedSearch = `${query.search} __shared`.trim()
     const stringArg = `search==${sharedSearch}&&page==${query.page}&&nsfw==${query.nsfw}&&sort==${query.sort}&&web==other`
-    const response = await fetch(hubURL + '/realm/' + encodeURIComponent(stringArg), {
-        headers: {
-            "x-risuai-info": appVer + ';node'
-        },
+    const request = () => fetch(hubURL + '/realm/' + encodeURIComponent(stringArg), {
+        headers: { "x-risuai-info": appVer + ';node' },
         signal: options.signal,
     })
+    let response: Response
+    let retried = false
+    try {
+        response = await request()
+    } catch (error) {
+        if (options.signal?.aborted || !isRealmNetworkError(error)) throw error
+        retried = true
+        await waitForRealmRetry(options.signal, error)
+        response = await request()
+    }
+    if (!retried && [502, 503, 504].includes(response.status) && !options.signal?.aborted) {
+        await waitForRealmRetry(options.signal, new Error(`RisuRealm request failed (${response.status})`))
+        response = await request()
+    }
     if (response.status !== 200) throw new Error(`RisuRealm request failed (${response.status})`)
     const body: unknown = await response.json()
     const rawCards = Array.isArray(body)

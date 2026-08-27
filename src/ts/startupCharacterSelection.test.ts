@@ -95,19 +95,20 @@ describe('startup character selection queue', () => {
         const queue = createStartupCharacterSelectionQueue()
         const fullSelect = vi.fn()
         const onFailure = vi.fn()
+        const hydrationError = new Error('SQL character repair failed (500)')
 
         await expect(queue.select({
             ready: false,
             characterId: 'failed',
             index: 2,
-            hydrate: async () => false,
+            hydrate: async () => { throw hydrationError },
             findIndex: () => 2,
             safeSelect: vi.fn(),
             fullSelect,
             onFailure,
         })).resolves.toBe(false)
 
-        expect(onFailure).toHaveBeenCalledOnce()
+        expect(onFailure).toHaveBeenCalledWith(hydrationError)
         expect(queue.resume({ ready: true, findIndex: () => 2, fullSelect })).toBe(false)
         expect(fullSelect).not.toHaveBeenCalled()
     })

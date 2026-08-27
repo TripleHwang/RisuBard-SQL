@@ -870,10 +870,10 @@ export async function changeChar(index: number, arg:{
         findIndex: (characterId) => getDatabase().characters.findIndex((value) => value?.chaId === characterId),
         safeSelect: () => {},
         fullSelect: (fullIndex) => { activationIndex = fullIndex },
-        onFailure: () => {
+        onFailure: (error) => {
             if (intent !== characterSelectionIntent) return
             loadingOverlayStore.set({ active: false, text: '', onCancel: null })
-            alertError(new Error('Unable to load the selected character. Please try again.'))
+            alertError(error ?? new Error('Unable to load the selected character. Please try again.'))
         },
     })
     if (!activateNow) return

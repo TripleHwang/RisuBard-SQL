@@ -11,7 +11,7 @@ type QueueSelectionArgs = {
     findIndex: (characterId: string) => number
     safeSelect: (index: number) => void
     fullSelect: (index: number) => void
-    onFailure?: () => void
+    onFailure?: (error?: unknown) => void
 }
 
 type ResumeSelectionArgs = {
@@ -34,16 +34,16 @@ export function createStartupCharacterSelectionQueue() {
             const intent = ++selectionIntent
             if (ready) pending = null
             else pending = { characterId, index }
-            const failLatest = () => {
+            const failLatest = (error?: unknown) => {
                 if (intent !== selectionIntent) return
                 if (pending?.characterId === characterId) pending = null
-                onFailure?.()
+                onFailure?.(error)
             }
             let hydrated = false
             try {
                 hydrated = await hydrate(index)
-            } catch {
-                failLatest()
+            } catch (error) {
+                failLatest(error)
                 return false
             }
             if (!hydrated) {
