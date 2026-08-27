@@ -320,6 +320,19 @@ describe('buildArcaClipboardHtml', () => {
         expect(html).not.toMatch(/class=|<style|display:\s*(?:flex|grid)|position:|overflow:|opacity:|url\(/i);
     });
 
+    it('adds an empty paragraph after the chat frame for pasting the next turn', () => {
+        const html = buildArcaClipboardHtml({
+            bodyHtml: '<p>본문</p>',
+            displayName: 'Test',
+        });
+        const output = document.createElement('div');
+        output.innerHTML = html;
+
+        expect(output.children).toHaveLength(2);
+        expect(output.lastElementChild?.tagName).toBe('P');
+        expect(output.lastElementChild?.innerHTML).toBe('<br>');
+    });
+
     it('applies a custom base font size to the full-width frame', () => {
         const html = buildArcaClipboardHtml({
             bodyHtml: '<p>본문</p>',

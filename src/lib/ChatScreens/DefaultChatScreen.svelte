@@ -17,6 +17,7 @@
         getLatestChatPage,
         normalizeChatPageSize,
     } from 'src/ts/chatPagination';
+    import { loadChatViewSession, saveChatViewSession, type ChatViewSession } from 'src/ts/chatViewSession'
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import { getCharImage } from "../../ts/characters";
@@ -123,6 +124,7 @@ import { isMobile } from 'src/ts/platform'
     let showScrollNav = $state(false)
     let scrollNavTimer: ReturnType<typeof setTimeout> | null = null
     let chatsInstance: any = $state()
+    let chatScrollContainer: HTMLElement | undefined = $state()
     let isScrollingToMessage = $state(false)
     let {
         openModuleList = $bindable(false),
@@ -148,6 +150,12 @@ import { isMobile } from 'src/ts/platform'
     let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
     let chatBounds = $derived(getChatPageBounds(currentChat.length, chatPageSize, chatPage))
 
+    async function restoreChatViewScroll(key: string, savedView: ChatViewSession) {
+        await tick()
+        if (paginationKey !== key || !chatScrollContainer) return
+        chatScrollContainer.scrollTop = savedView.scrollTop
+    }
+
     $effect(() => {
         const nextKey = `${currentCharacter?.chaId ?? ''}/${currentChatSlot?.id ?? ''}`
         const messageCount = currentChat.length
@@ -156,7 +164,13 @@ import { isMobile } from 'src/ts/platform'
 
         if (nextKey !== paginationKey) {
             paginationKey = nextKey
-            chatPage = latestPage
+            const savedView = loadChatViewSession(nextKey)
+            if (savedView) {
+                chatPage = getChatPageBounds(messageCount, chatPageSize, savedView.page).page
+                void restoreChatViewScroll(nextKey, savedView)
+            } else {
+                chatPage = latestPage
+            }
         } else if (chatPageSize !== paginationPageSize) {
             const anchorIndex = chatPage * paginationPageSize
             chatPage = getChatPageForMessage(anchorIndex, messageCount, chatPageSize)
@@ -1428,6 +1442,7 @@ import { isMobile } from 'src/ts/platform'
              resizes, and the sticky composer inside this col-reverse scroller gets misanchored
              (bar floats up with a gap below). PWA/standalone has no URL bar, hence unaffected. -->
         <div class="h-full w-full flex flex-col-reverse overflow-y-auto overscroll-y-contain relative default-chat-screen"
+            bind:this={chatScrollContainer}
             class:nodeonly-standard={DBState.db.theme === ''}
             class:no-chat-width-wide={DBState.db.theme === '' && DBState.db.nodeOnlyStandardChatWidth === 'wide'}
             class:no-chat-width-full={DBState.db.theme === '' && DBState.db.nodeOnlyStandardChatWidth === 'full'}
@@ -1436,6 +1451,12 @@ import { isMobile } from 'src/ts/platform'
                 bumpScrollNav()
             }
             const chatTarget = e.target as HTMLElement;
+            if (paginationKey) {
+                saveChatViewSession(paginationKey, {
+                    page: chatBounds.page,
+                    scrollTop: chatTarget.scrollTop,
+                })
+            }
             const chatsContainer = (DBState.db.fixedChatTextarea && chatTarget.children[1]) ? chatTarget.children[1] : chatTarget.children[0];
             const lastEl = chatsContainer?.firstElementChild;
             const isAtBottom = lastEl ? lastEl.getBoundingClientRect().top <= chatTarget.getBoundingClientRect().bottom + 100 : true;

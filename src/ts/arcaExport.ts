@@ -420,7 +420,8 @@ ${titleBlock}
 <span style="color: ${colors.mutedText}; font-size: 0.75rem;">From RisuBard</span>
 </div>
 </div>
-</div>`;
+</div>
+<p><br></p>`;
 }
 
 async function cloneNodeForArca(
