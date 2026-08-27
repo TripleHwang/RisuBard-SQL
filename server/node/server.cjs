@@ -1682,6 +1682,17 @@ const sqlReadLimiter = rateLimit({
     validate: { xForwardedForHeader: false }
 });
 
+// Legacy-to-SQL migration decodes and atomically replaces the canonical store.
+// Keep its admission budget separate from frequent bounded SQL reads.
+const sqlMigrationLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many SQL migration requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
 function isHex(str) {
     return hexRegex.test(str.toUpperCase().trim()) || str === '__password';
 }
@@ -3762,7 +3773,7 @@ app.get('/api/sql/deferred-bootstrap', sqlReadLimiter, async (req, res, next) =>
     catch (error) { next(error); }
 });
 
-app.post('/api/sql/migrate-legacy', async (req, res, next) => {
+app.post('/api/sql/migrate-legacy', sqlMigrationLimiter, async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
     try {

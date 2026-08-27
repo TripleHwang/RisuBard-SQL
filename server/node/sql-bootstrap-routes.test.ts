@@ -24,6 +24,6 @@ describe('bounded SQL read routes', () => {
         expect(source).toContain('normalizeSqlAncillaryPageQuery(req.query)')
         expect(source).toContain("'Cache-Control', 'private, no-cache'")
         expect(source).toContain('sql-bootstrap-${payload.revision}-${payload.migrationState}')
-        expect(source).toContain("app.post('/api/sql/migrate-legacy'")
+        expect(source).toContain("app.post('/api/sql/migrate-legacy', sqlMigrationLimiter")
     })
 })
