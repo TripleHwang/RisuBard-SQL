@@ -33,6 +33,25 @@ describe('continuous bounded chat history', () => {
         expect(failing.failed).toBe(true)
         await expect(failing.retry()).resolves.toBe(false)
         expect(failing.failed).toBe(true)
+        failing.reset()
+        expect(failing.failed).toBe(false)
+    })
+
+    test('stops automatic fill when a backend reports older history without making viewport progress', async () => {
+        let attempts = 0
+        const controller = createContinuousHistoryController({
+            hasOlder: () => true,
+            isScrollable: () => false,
+            maxLoads: 2,
+            loadOlder: async () => {
+                attempts += 1
+                return true
+            },
+        })
+
+        await expect(controller.fillViewport()).resolves.toBe(false)
+        expect(attempts).toBe(2)
+        expect(controller.failed).toBe(true)
     })
 
     test('keeps normal and saver DOM windows bounded, restores a prepend anchor, and bottoms Latest', () => {

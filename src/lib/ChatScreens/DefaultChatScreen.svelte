@@ -114,6 +114,7 @@ import { isMobile } from 'src/ts/platform'
     let previousScrollLoadArmed = true
     let historyLoadFailed = $state(false)
     let oldestHistoryMessageMounted = $state(false)
+    let historyController: ReturnType<typeof createContinuousHistoryController>
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -143,6 +144,7 @@ import { isMobile } from 'src/ts/platform'
         if (nextKey !== historyKey) {
             historyKey = nextKey
             chatWindowVersion += 1
+            historyController?.reset()
             historyLoadFailed = false
         }
     })
@@ -306,7 +308,7 @@ import { isMobile } from 'src/ts/platform'
         return true
     }
 
-    const historyController = createContinuousHistoryController({
+    historyController = createContinuousHistoryController({
         hasOlder: () => !!(currentChatSlot as any)?._sqlWindow?.hasOlder,
         isScrollable: () => {
             const container = document.querySelector('.default-chat-screen') as HTMLElement | null

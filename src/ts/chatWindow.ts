@@ -42,6 +42,7 @@ export type ContinuousHistoryControllerOptions = {
     hasOlder: () => boolean
     isScrollable: () => boolean
     loadOlder: () => Promise<boolean>
+    maxLoads?: number
 }
 
 /** Serializes reverse loads so a short initial window fills without races. */
@@ -70,12 +71,20 @@ export function createContinuousHistoryController(options: ContinuousHistoryCont
         get failed() { return failed },
         get loading() { return inFlight !== null },
         async fillViewport(): Promise<boolean> {
+            const maxLoads = Math.max(1, options.maxLoads ?? 100)
+            let loads = 0
             while (!options.isScrollable() && options.hasOlder()) {
+                if (loads >= maxLoads) {
+                    failed = true
+                    return false
+                }
                 if (!await loadOne()) return false
+                loads += 1
             }
             return true
         },
         retry: loadOne,
+        reset() { failed = false },
     }
 }
 
