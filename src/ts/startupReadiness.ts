@@ -15,6 +15,16 @@ export function applyDeferredStartupDefaults(database: { didFirstSetup?: boolean
     if (!database.didFirstSetup) database.didFirstSetup = true
 }
 
+export async function persistDeferredStartupDefaults(
+    database: { didFirstSetup?: boolean },
+    persist: () => void | Promise<void>,
+): Promise<boolean> {
+    if (database.didFirstSetup) return false
+    applyDeferredStartupDefaults(database)
+    await persist()
+    return true
+}
+
 /** Dispatches URL-driven imports only when the complete database is writable. */
 export async function dispatchStartupURLImport<T>(
     importer: () => T | Promise<T>,

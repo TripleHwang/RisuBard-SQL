@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import { startupHydrationErrorStore, startupHydrationStore } from './stores.svelte'
-import { applyDeferredStartupDefaults, dispatchStartupURLImport, isStartupMutationReady, runStartupMutation, scheduleAfterTwoAnimationFrames } from './startupReadiness'
+import { applyDeferredStartupDefaults, dispatchStartupURLImport, isStartupMutationReady, persistDeferredStartupDefaults, runStartupMutation, scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 describe('startup readiness', () => {
     test('keeps mutation sources closed until deferred hydration succeeds', () => {
@@ -82,5 +82,16 @@ describe('startup readiness', () => {
         startupHydrationStore.set(false)
         applyDeferredStartupDefaults(database)
         expect(database.didFirstSetup).toBe(true)
+    })
+
+    test('persists the deferred first-setup false-to-true transition exactly once', async () => {
+        const database = { didFirstSetup: false }
+        const observed: boolean[] = [database.didFirstSetup]
+        const persist = vi.fn(async () => { observed.push(database.didFirstSetup) })
+
+        expect(await persistDeferredStartupDefaults(database, persist)).toBe(true)
+        expect(await persistDeferredStartupDefaults(database, persist)).toBe(false)
+        expect(observed).toEqual([false, true])
+        expect(persist).toHaveBeenCalledOnce()
     })
 })
