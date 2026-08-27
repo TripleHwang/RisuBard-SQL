@@ -87,11 +87,15 @@ describe('startup readiness', () => {
     test('persists the deferred first-setup false-to-true transition exactly once', async () => {
         const database = { didFirstSetup: false }
         const observed: boolean[] = [database.didFirstSetup]
-        const persist = vi.fn(async () => { observed.push(database.didFirstSetup) })
+        const order: string[] = []
+        const mark = vi.fn((key: string) => { order.push(`mark:${key}`) })
+        const flush = vi.fn(async () => { observed.push(database.didFirstSetup); order.push('flush') })
 
-        expect(await persistDeferredStartupDefaults(database, persist)).toBe(true)
-        expect(await persistDeferredStartupDefaults(database, persist)).toBe(false)
+        expect(await persistDeferredStartupDefaults(database, mark, flush)).toBe(true)
+        expect(await persistDeferredStartupDefaults(database, mark, flush)).toBe(false)
         expect(observed).toEqual([false, true])
-        expect(persist).toHaveBeenCalledOnce()
+        expect(mark).toHaveBeenCalledOnce()
+        expect(order).toEqual(['mark:didFirstSetup', 'flush'])
+        expect(flush).toHaveBeenCalledOnce()
     })
 })

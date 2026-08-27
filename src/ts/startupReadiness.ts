@@ -17,11 +17,13 @@ export function applyDeferredStartupDefaults(database: { didFirstSetup?: boolean
 
 export async function persistDeferredStartupDefaults(
     database: { didFirstSetup?: boolean },
-    persist: () => void | Promise<void>,
+    markRootDirty: (key: string) => void,
+    flush: () => void | Promise<void>,
 ): Promise<boolean> {
     if (database.didFirstSetup) return false
     applyDeferredStartupDefaults(database)
-    await persist()
+    markRootDirty('didFirstSetup')
+    await flush()
     return true
 }
 

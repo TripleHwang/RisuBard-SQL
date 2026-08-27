@@ -20,7 +20,7 @@ import { updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
-    forageStorage, requestImmediateSave,
+    forageStorage,
     saveDb, startMetadataPersistence,
     setPatchSyncBaseline,
     getDbBackups,
@@ -38,7 +38,7 @@ import type { SqlBootstrapStorage } from './storage/sql/ISqlStorage'
 import { markPerformance, measurePerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
-import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
+import { flushSqlDirtyChanges, markSqlRootDirty } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
@@ -100,9 +100,7 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             setDatabase(getDatabase())
             setPatchSyncBaseline(safeStructuredClone(getDatabase()))
             await startMetadataPersistence()
-            await persistDeferredStartupDefaults(getDatabase(), () => requestImmediateSave({
-                rejectOnFailure: true,
-            }))
+            await persistDeferredStartupDefaults(getDatabase(), markSqlRootDirty, flushSqlDirtyChanges)
             startupHydrationStore.set(false)
             startupHydrationErrorStore.set(false)
             markPerformance('deferred-hydration:end')
