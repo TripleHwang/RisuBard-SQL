@@ -6,7 +6,7 @@ import { setDatabase, setDatabaseLite, defaultSdDataFunc, getDatabase, changeToT
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, startupHydrationErrorStore, startupHydrationStore, DBState, LoadingStatusState } from "./stores.svelte";
-import { loadPlugins, pluginStateStore } from "./plugins/plugins.svelte";
+import { loadPlugins, pluginStateStore, hasMetadataOnlyCharacters } from "./plugins/plugins.svelte";
 import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
 import { characterURLImport } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
@@ -612,6 +612,20 @@ async function checkNewFormat(): Promise<void> {
  */
 async function cleanChunks() {
     const db = getDatabase()
+    // The Node/SQL lazy-loading backend can leave characters as
+    // metadata-only summaries (`detailsLoaded === false`) whose body --
+    // including character.personas -- has not been fetched yet. getUncleanables()
+    // can only see what is actually on `db`, so an unloaded character's
+    // persona icons would look orphaned and get permanently deleted here.
+    // Refuse to run the sweep at all while any character is still a stub;
+    // it will get another chance on a later run once the app finishes
+    // hydrating (or the user visits) every character. This mirrors the same
+    // guard plugins.svelte.ts already applies to plugin DB access for the
+    // identical reason (see hasMetadataOnlyCharacters).
+    if (hasMetadataOnlyCharacters(db)) {
+        console.debug('cleanChunks: skipped, one or more characters are metadata-only (not yet hydrated)')
+        return
+    }
     const uncleanable = new Set(getUncleanables(db))
     const indexes = await forageStorage.keys()
     const allKeys = new Set(indexes)

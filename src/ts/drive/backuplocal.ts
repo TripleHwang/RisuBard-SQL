@@ -3,6 +3,7 @@ import { downloadFile, LocalWriter, forageStorage } from "../globalApi.svelte";
 import { encodeRisuSaveLegacy } from "../storage/risuSave";
 import { getDatabase, type Chat } from "../storage/database.svelte";
 import { fetchChatFromServer } from "../storage/chatStorage";
+import { getSqlWindow } from "../storage/sql/sqlRuntimeMeta";
 import { language } from "src/lang";
 import { withSaverScope } from '../performance/saverMode';
 
@@ -274,8 +275,8 @@ export async function SavePartialLocalBackup(){
                     throw new Error(`Chat data missing for "${char.name}" / "${chat.name}" (${chat.id}). Backup aborted to prevent data loss.`)
                 }
             }
-            const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }
-            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || hydrated._sqlWindow?.hasOlder) {
+            const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean }
+            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || getSqlWindow(hydrated)?.hasOlder) {
                 throw new Error(`Load earlier messages before backup: "${hydrated.name}".`)
             }
         }

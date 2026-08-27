@@ -54,6 +54,11 @@
     let personaBuilderOpen = $state(false)
     let personaBuilderTarget = $state<RisuPersona | null>(null)
 
+    // Icons that already 404'd (already-deleted asset). Keyed by icon path
+    // so a real load failure falls back to a placeholder instead of a
+    // broken-image icon.
+    let brokenPersonaIcons = $state(new Set<string>())
+
     const currentCharacter = $derived(DBState.db.characters[$selectedCharID])
 
     function activeStore(scope: PersonaScope = activeScope): RisuPersona[] {
@@ -394,11 +399,15 @@
             <div data-persona-grid class="persona-grid" style:height={`${personaGridHeight}px`} bind:this={gridElement}>
                 {#each activeStore() as persona, i (persona.id ?? i)}
                     <button data-risu-idx={i} class="persona-tile" class:selected={i === selectedIndex()} aria-label={persona.name} title={persona.name} use:tooltip={persona.name} onclick={() => selectPersona(i)}>
-                        {#if persona.icon}
+                        {#if persona.icon && !brokenPersonaIcons.has(persona.icon)}
                             {#await getCharImage(persona.icon, 'plain')}
                                 <span class="persona-placeholder"></span>
                             {:then image}
-                                <img src={image} alt="" />
+                                {#if image}
+                                    <img src={image} alt="" onerror={() => brokenPersonaIcons.add(persona.icon)} />
+                                {:else}
+                                    <span class="persona-placeholder"></span>
+                                {/if}
                             {/await}
                         {:else}
                             <span class="persona-placeholder"></span>

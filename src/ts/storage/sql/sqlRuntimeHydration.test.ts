@@ -12,6 +12,7 @@ import {
   ensureChatMessageWindow,
   loadOlderChatMessages,
 } from "./sqlRuntimeHydration";
+import { getSqlPosition, getSqlWindow, hasSqlRuntimeMeta } from "./sqlRuntimeMeta";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -68,8 +69,9 @@ describe("Node SQL runtime hydration", () => {
     expect(reverse).toHaveBeenNthCalledWith(1, "chat-1", undefined, 40);
     expect(reverse).toHaveBeenNthCalledWith(2, "chat-1", 2, 40);
     expect(character.chats[0].message.map((message: any) => message.chatId)).toEqual(["m0", "m1", "m2"]);
-    expect((character.chats[0] as any)._sqlWindow).toMatchObject({ hasOlder: false, total: 3 });
+    expect(getSqlWindow(character.chats[0])).toMatchObject({ hasOlder: false, total: 3 });
     expect(Object.keys(character.chats[0])).not.toContain("_sqlWindow");
+    expect(hasSqlRuntimeMeta(character.chats[0])).toBe(true);
   });
 
   it("keeps 81 sequential durable IDs complete through serialized reverse chunks", async () => {
@@ -84,14 +86,14 @@ describe("Node SQL runtime hydration", () => {
 
     await ensureChatMessageWindow(character, 0, 40);
     expect(character.chats[0].message.map((message: any) => message.chatId)).toEqual(rows(41, 81).map((message) => message.chatId));
-    expect((character.chats[0] as any)._sqlWindow).toMatchObject({ total: 81, hasOlder: true });
+    expect(getSqlWindow(character.chats[0])).toMatchObject({ total: 81, hasOlder: true });
 
     await loadOlderChatMessages(character, 0, 40);
     await loadOlderChatMessages(character, 0, 40);
     const ids = character.chats[0].message.map((message: any) => message.chatId);
     expect(ids).toEqual(rows(0, 81).map((message) => message.chatId));
     expect(new Set(ids)).toHaveLength(81);
-    expect((character.chats[0] as any)._sqlWindow).toMatchObject({ total: 81, hasOlder: false });
+    expect(getSqlWindow(character.chats[0])).toMatchObject({ total: 81, hasOlder: false });
   });
 
   it("attaches canonical SQL positions to the tail and prepended older page", async () => {
@@ -102,11 +104,12 @@ describe("Node SQL runtime hydration", () => {
     const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
 
     await ensureChatMessageWindow(character, 0, 2);
-    expect(character.chats[0].message.map((message: any) => message._sqlPosition)).toEqual([8, 12]);
+    expect(character.chats[0].message.map((message: any) => getSqlPosition(message))).toEqual([8, 12]);
     await loadOlderChatMessages(character, 0, 2);
-    expect(character.chats[0].message.map((message: any) => message._sqlPosition)).toEqual([1, 4, 8, 12]);
-    expect((character.chats[0] as any)._sqlWindow.nextPosition).toBe(13);
+    expect(character.chats[0].message.map((message: any) => getSqlPosition(message))).toEqual([1, 4, 8, 12]);
+    expect(getSqlWindow(character.chats[0]).nextPosition).toBe(13);
     expect(Object.keys(character.chats[0].message[0])).not.toContain("_sqlPosition");
+    expect(hasSqlRuntimeMeta(character.chats[0].message[0])).toBe(true);
   });
 
   it("keeps page message positions paired when an older page precedes the window", async () => {
@@ -119,7 +122,7 @@ describe("Node SQL runtime hydration", () => {
     await ensureChatMessageWindow(character, 0, 2);
     await loadOlderChatMessages(character, 0, 3);
 
-    expect(character.chats[0].message.map((message: any) => [message.chatId, message._sqlPosition])).toEqual([
+    expect(character.chats[0].message.map((message: any) => [message.chatId, getSqlPosition(message)])).toEqual([
       ["m0", 0], ["m1", 4], ["m2", 8], ["m3", 12],
     ]);
   });
@@ -138,11 +141,11 @@ describe("Node SQL runtime hydration", () => {
 
     await ensureChatMessageWindow(character, 0, 2);
     const previousMessages = character.chats[0].message;
-    const previousWindow = (character.chats[0] as any)._sqlWindow;
+    const previousWindow = getSqlWindow(character.chats[0]);
     await expect(loadOlderChatMessages(character, 0, 2)).rejects.toThrow(/reverse page/i);
 
     expect(character.chats[0].message).toBe(previousMessages);
-    expect((character.chats[0] as any)._sqlWindow).toBe(previousWindow);
+    expect(getSqlWindow(character.chats[0])).toBe(previousWindow);
   });
 
   it("rejects a terminal reverse page that leaves known message coverage below total", async () => {
@@ -154,10 +157,10 @@ describe("Node SQL runtime hydration", () => {
 
     await ensureChatMessageWindow(character, 0, 2);
     const previousMessages = character.chats[0].message;
-    const previousWindow = (character.chats[0] as any)._sqlWindow;
+    const previousWindow = getSqlWindow(character.chats[0]);
     await expect(loadOlderChatMessages(character, 0, 2)).rejects.toThrow(/reverse page/i);
     expect(character.chats[0].message).toBe(previousMessages);
-    expect((character.chats[0] as any)._sqlWindow).toBe(previousWindow);
+    expect(getSqlWindow(character.chats[0])).toBe(previousWindow);
   });
 
   it("deduplicates concurrent initial chat window hydration", async () => {

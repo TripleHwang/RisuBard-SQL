@@ -17,6 +17,7 @@
     import SolarBoldIcon from '../UI/Icons/SolarBoldIcon.svelte'
     import { DBState, selectedCharID } from 'src/ts/stores.svelte'
     import type { folder } from 'src/ts/storage/database.svelte'
+    import { getSqlWindow } from 'src/ts/storage/sql/sqlRuntimeMeta'
     import {
         createCharacterVaultFolder,
         createCharacterVaultClones,
@@ -345,7 +346,7 @@
                             await ensureChatHydrated(source.chats, index, source.chaId)
                         }
                         const hydrated = source.chats[index] as any
-                        if (hydrated?._placeholder || hydrated?.messagesFullyLoaded === false || hydrated?._sqlWindow?.hasOlder) {
+                        if (hydrated?._placeholder || hydrated?.messagesFullyLoaded === false || getSqlWindow(hydrated)?.hasOlder) {
                             throw new Error(`${source.name}: Load earlier messages before cloning.`)
                         }
                     }

@@ -34,6 +34,11 @@
     let displayPersona = $derived(displaySelection?.persona)
     let isPersonaBound = $derived(!!boundPersona)
 
+    // Icons that already 404'd (already-deleted asset). Keyed by icon path
+    // so a real load failure falls back to a placeholder instead of a
+    // broken-image icon.
+    let brokenPersonaIcons = $state(new Set<string>());
+
     function bindPersona(selection: PersonaSelection) {
         const chat = target ?? getCurrentChat()
         if (!chat) return
@@ -93,11 +98,20 @@
         onclick={handlePersonaBindClick}
     >
         <span class="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-darkbg">
-            {#if displayPersona?.icon}
+            {#if displayPersona?.icon && !brokenPersonaIcons.has(displayPersona.icon)}
                 {#await getCharImage(displayPersona.icon, 'plain')}
                     <PinIcon size={15} />
                 {:then personaImage}
-                    <img src={personaImage} alt="" class="h-full w-full object-cover object-top" />
+                    {#if personaImage}
+                        <img
+                            src={personaImage}
+                            alt=""
+                            class="h-full w-full object-cover object-top"
+                            onerror={() => brokenPersonaIcons.add(displayPersona.icon)}
+                        />
+                    {:else}
+                        <PinIcon size={15} />
+                    {/if}
                 {/await}
             {:else}
                 <PinIcon size={15} />

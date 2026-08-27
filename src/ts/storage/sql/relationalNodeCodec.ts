@@ -95,6 +95,18 @@ function decodedText(text: unknown, encoded: unknown): string {
   return String(text ?? "");
 }
 
+// SAFE: `target` is always the `result` object literal freshly created in
+// `rebuildRelationalValue`'s `build()` (one per decoded object node) — it is
+// local decode scratch space, never a value read out of `DBState.db`, so it
+// can never be a Svelte `$state` proxy. It is doubly safe even disregarding
+// that: this descriptor is `enumerable`/`configurable`/`writable` all `true`
+// plus a plain `value`, which is exactly the "basic" descriptor shape
+// Svelte's proxy `defineProperty` trap allows through untouched — only a
+// descriptor missing `value` or setting any of those three flags to `false`
+// triggers `state_descriptors_fixed` (see node_modules/svelte's client
+// proxy `defineProperty` trap). Using `defineProperty` instead of plain
+// assignment here is solely to keep `__proto__` and other special key names
+// from being interpreted as anything but a plain data property.
 function defineEntry(
   target: Record<string, unknown>,
   key: string,

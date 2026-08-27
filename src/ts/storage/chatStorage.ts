@@ -6,6 +6,7 @@ import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
 import { chatHydrationKey } from './chatHydrationKey'
 import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRuntime"
+import { getSqlWindow } from "./sql/sqlRuntimeMeta"
 import { isChatGenerating } from "../process/generationState"
 import { selectedCharID } from "../stores.svelte"
 import { get } from "svelte/store"
@@ -239,7 +240,6 @@ function parseChatKey(key: string): { characterId: string; chatId: string } | nu
 type RuntimeChat = Chat & {
     messagesLoaded?: boolean
     messagesFullyLoaded?: boolean
-    _sqlWindow?: { fullHistoryOperation?: boolean; loading?: boolean }
     isLoadingFullHistory?: boolean
     loadingFullHistory?: boolean
     fullHistoryOperation?: boolean
@@ -264,10 +264,11 @@ function hasLiveChatWork(key: string): boolean {
     const found = findRuntimeChat(key)
     if (!ids || !found) return true
     const { chat } = found
+    const sqlWindow = getSqlWindow(chat)
     return chat._placeholder === true || isHydrationActive(key) || isChatGenerating(ids.chatId) ||
         Boolean(chat.isStreaming || chat.activeStreamingDisplayOptimizationMode ||
-            chat.isLoadingFullHistory || chat.loadingFullHistory || chat._sqlWindow?.fullHistoryOperation ||
-            chat._sqlWindow?.loading || chat.fullHistoryOperation || chat._fullHistoryOperation ||
+            chat.isLoadingFullHistory || chat.loadingFullHistory || sqlWindow?.fullHistoryOperation ||
+            sqlWindow?.loading || chat.fullHistoryOperation || chat._fullHistoryOperation ||
             chat.loadingMessages || chat.isLoading || chat.risuBardWikiReboot)
 }
 
@@ -275,9 +276,11 @@ function evictRuntimeChat(key: string): boolean {
     const found = findRuntimeChat(key)
     if (!found || key === getActiveRuntimeChatKey() || hasLiveChatWork(key)) return false
     // Keep every enumerable metadata field. The sole heavy body is `message`;
-    // `_sqlWindow` is a non-enumerable runtime cache but is excluded even if a
-    // caller made it enumerable. No message or derived-cache reference moves
-    // into the replacement slot.
+    // the SQL runtime window/position caches live under Symbol keys (see
+    // ./sql/sqlRuntimeMeta) so Object.entries never sees them here — this
+    // filter is a defensive backstop in case a caller ever leaks them under a
+    // plain `_`-prefixed string key instead. No message or derived-cache
+    // reference moves into the replacement slot.
     const metadata = Object.fromEntries(Object.entries(found.chat).filter(([key]) =>
         key !== 'message' && !key.startsWith('_'),
     ))
@@ -403,9 +406,8 @@ export function isChatHistoryIncomplete(chat: Chat | null | undefined): boolean 
     const runtime = chat as Chat & {
         messagesLoaded?: boolean
         messagesFullyLoaded?: boolean
-        _sqlWindow?: { hasOlder?: boolean }
     }
-    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || runtime._sqlWindow?.hasOlder === true
+    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || getSqlWindow(chat)?.hasOlder === true
 }
 
 /**

@@ -7,6 +7,7 @@ import { language } from 'src/lang'
 import { type character, getDatabase, setDatabase, saveImage, normalizeChat } from './storage/database.svelte'
 import type { Chat } from './storage/database.svelte'
 import { fetchChatFromServer } from './storage/chatStorage'
+import { getSqlWindow } from './storage/sql/sqlRuntimeMeta'
 import { selectSingleFile } from './util'
 import { createBlankChar } from './characters'
 import { CharXWriter } from './process/processzip'
@@ -430,8 +431,8 @@ async function exportCharacterPackageInner(
                     return
                 }
             }
-            const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }
-            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || hydrated._sqlWindow?.hasOlder) {
+            const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean }
+            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || getSqlWindow(hydrated)?.hasOlder) {
                 alertError(`Load earlier messages before package export: "${hydrated.name}".`)
                 return
             }

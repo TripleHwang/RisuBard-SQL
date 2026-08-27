@@ -63,9 +63,12 @@ const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
 } = require('./risubard-memory-routes.cjs');
+// Shared verbatim with the client's src/ts/globalApi.svelte.ts:getUncleanables() so
+// the two orphan-asset rule sets cannot drift apart. See that file for history.
+const { isAssetKeyValue, collectPersonaAssetRefs } = require('../../shared/assetOwnership.cjs');
 const { applyPatch } = require('fast-json-patch');
 const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON, normalizeForwardHeaders, hasRemoteBlocks } = require('./utils.cjs');
-const { readBoundedRisuSave } = require('./sql-repair-decode.cjs');
+const { readBoundedRisuSave, MAX_REPAIR_BACKUP_BYTES } = require('./sql-repair-decode.cjs');
 const { spawn, execSync } = require('child_process');
 const os = require('os');
 const { Readable, Transform } = require('stream');
@@ -864,16 +867,56 @@ const sqlLegacyMigration = createSqlLegacyMigration({
         return normalizeJSON(await decodeRisuSave(raw));
     },
 })
+// The dbbackup-* tier is a last-resort recovery source (see below): capped
+// both by how many recent snapshots we're willing to try and by how many raw
+// bytes we're willing to read across all of them, so a user sitting on
+// hundreds of old snapshots can't turn one repair request into an unbounded
+// decode sweep. Each individual read is already bounded by
+// MAX_REPAIR_BACKUP_BYTES (raw) / MAX_REPAIR_DECOMPRESSED_BYTES (decoded)
+// inside readBoundedRisuSave — this budget bounds the SUM across candidates.
+const MAX_REPAIR_DBBACKUP_CANDIDATES = 3;
+const MAX_REPAIR_DBBACKUP_TOTAL_BYTES = 3 * MAX_REPAIR_BACKUP_BYTES; // ~192MB raw, mirrors the per-file cap x3
 const sqlCharacterRepair = createSqlCharacterRepair({
     relationalSql,
-    readBackup: async () => {
-        // v0.3.2.6 introduced the dedicated backup after some installations
-        // had already completed SQL migration. Their legacy database.bin is
-        // intentionally frozen after a successful relational open, so it is
-        // the compatible recovery source when the newer backup key is absent.
-        const raw = kvGet('database/pre-sql-migration-v1.bin') || kvGet('database/database.bin');
-        if (!raw) return null;
-        return readBoundedRisuSave(raw);
+    // Prioritized, bounded recovery-source list — tried in this exact order
+    // and stopped at the first candidate with an exact chaId match and a
+    // meaningful (non-collapsed) body:
+    //   1. database/pre-sql-migration-v1.bin — the frozen pre-migration save.
+    //   2. database/database.bin — v0.3.2.6 introduced the dedicated backup
+    //      above after some installations had already completed SQL
+    //      migration; their legacy database.bin is intentionally frozen
+    //      after a successful relational open, so it remains a compatible
+    //      recovery source when the newer backup key is absent OR doesn't
+    //      contain this character.
+    //   3. The most recent database/dbbackup-* compatibility snapshots,
+    //      newest first, bounded by MAX_REPAIR_DBBACKUP_CANDIDATES and
+    //      MAX_REPAIR_DBBACKUP_TOTAL_BYTES above.
+    // A single missing/corrupt/empty-bodied candidate must never abort the
+    // whole repair — that was the original bug — so each candidate is its
+    // own thunk and the repair module tries them one at a time.
+    readBackupCandidates: async () => {
+        const candidates = [];
+        const preMigrationRaw = kvGet('database/pre-sql-migration-v1.bin');
+        if (preMigrationRaw) candidates.push(() => readBoundedRisuSave(preMigrationRaw));
+        const legacyRaw = kvGet('database/database.bin');
+        if (legacyRaw) candidates.push(() => readBoundedRisuSave(legacyRaw));
+
+        const dbbackupEntries = kvListWithSizes(DB_BACKUP_PREFIX)
+            .map(({ key, size }) => {
+                const tsRaw = parseInt(key.slice(DB_BACKUP_PREFIX.length, -4), 10);
+                return { key, size, ts: Number.isFinite(tsRaw) ? tsRaw : 0 };
+            })
+            .sort((a, b) => b.ts - a.ts);
+        let usedBytes = 0;
+        let usedDbbackupCount = 0;
+        for (const entry of dbbackupEntries) {
+            if (usedDbbackupCount >= MAX_REPAIR_DBBACKUP_CANDIDATES) break;
+            if (usedBytes + entry.size > MAX_REPAIR_DBBACKUP_TOTAL_BYTES) break;
+            usedBytes += entry.size;
+            usedDbbackupCount += 1;
+            candidates.push(() => readBoundedRisuSave(kvGet(entry.key)));
+        }
+        return candidates;
     },
 })
 let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
@@ -3855,8 +3898,10 @@ app.post('/api/sql/characters/:characterId/repair', sqlMigrationLimiter, async (
     const id = String(req.params.characterId || '');
     if (!id || id.length > 256) return res.status(400).json({ error: 'Invalid character id' });
     try {
-        // Decoding the one pre-SQL backup is intentionally deferred until the
+        // Decoding any backup candidate is intentionally deferred until the
         // targeted SQL body is classified as collapsed by the repair service.
+        // The service itself walks a bounded, prioritized candidate list (see
+        // sqlCharacterRepair above) rather than a single backup source.
         res.set('Cache-Control', 'no-store').json(await queueStorageOperation(() => sqlCharacterRepair.repair(id)));
     } catch (error) { next(error); }
 });
@@ -5685,6 +5730,11 @@ function statsBasename(s) {
 function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
     const set = new Set();
     const add = (v) => {
+        // Empty values, external http(s) URLs, and inline data: URLs are
+        // never `assets/` KV keys -- skip them rather than adding a
+        // basename that can never match (and could never protect) a real
+        // stored file.
+        if (!isAssetKeyValue(v)) return;
         const bn = statsBasename(v);
         if (bn) set.add(bn);
     };
@@ -5708,6 +5758,11 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
             if (Array.isArray(cha.additionalAssets)) for (const em of cha.additionalAssets) add(em?.[1]);
             if (cha.vits?.files) for (const k of Object.keys(cha.vits.files)) add(cha.vits.files[k]);
             if (Array.isArray(cha.ccAssets)) for (const a of cha.ccAssets) add(a?.uri);
+            // Character-scoped personas (as opposed to the global
+            // dbObj.personas below) live entirely on the character record.
+            // Their icons must be collected here or they look orphaned and
+            // get mislabeled as deletable -- see shared/assetOwnership.cjs.
+            collectPersonaAssetRefs(cha.personas, add, { includeModuleAssets });
         }
     }
     if (Array.isArray(dbObj.modules)) {
@@ -5716,14 +5771,7 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
             add(m?.icon);
         }
     }
-    if (Array.isArray(dbObj.personas)) {
-        for (const p of dbObj.personas) {
-            add(p?.icon);
-            const embedded = p?.embeddedModule;
-            if (includeModuleAssets && Array.isArray(embedded?.assets)) for (const a of embedded.assets) add(a?.[1]);
-            add(embedded?.icon);
-        }
-    }
+    collectPersonaAssetRefs(dbObj.personas, add, { includeModuleAssets });
     if (Array.isArray(dbObj.characterOrder)) {
         for (const item of dbObj.characterOrder) {
             if (item && typeof item === 'object' && 'imgFile' in item) add(item.imgFile);

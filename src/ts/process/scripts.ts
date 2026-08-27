@@ -11,6 +11,7 @@ import { HypaProcesser } from "./memory/hypamemory";
 import { runLuaEditTrigger } from "./scriptings";
 import { pluginV2 } from "../plugins/plugins.svelte";
 import { runTrigger } from "./triggers";
+import { prepareDynamicAssetSearch } from './dynamicAssetSearch'
 
 const dreg = /{{data}}/g
 const randomness = /\|\|\|/g
@@ -374,27 +375,32 @@ export async function processScriptFull(char:character|simpleCharacterArgument, 
             }
         }
 
-        const matches = [...data.matchAll(assetRegex)]
-        if(matches.length > 0){
+        const prepared = prepareDynamicAssetSearch(
+            data,
+            char.chaId,
+            assetNames,
+            Array.from(data.matchAll(assetRegex), ([full, type, assetName]) => ({ full, type, assetName })),
+            bestMatchCache,
+        )
+        data = prepared.data
+        if(prepared.unresolved.length > 0){
             const processer = new HypaProcesser()
             await processer.addText(assetNames)
 
-            for(const match of matches){
-                const type = match[1]
-                const assetName = match[2]
-                const cacheKey = char.chaId + '::' + assetName
-                if(type !== 'emotion' && type !== 'source'){
-                    if(bestMatchCache.has(cacheKey)){
-                        data = data.replaceAll(match[0], `{{${type}::${bestMatchCache.get(cacheKey)}}}`)
-                    }
-                    else if(!assetNames.includes(assetName)){
-                        const searched = await processer.similaritySearch(assetName)
-                        const bestMatch = searched[0]
-                        if(bestMatch){
-                            data = data.replaceAll(match[0], `{{${type}::${bestMatch}}}`)
-                            bestMatchCache.set(cacheKey, bestMatch)
-                        }
-                    }
+            for(const match of prepared.unresolved){
+                // A repeated unresolved token may have been resolved by an
+                // earlier occurrence in this same message.
+                const cached = bestMatchCache.get(match.cacheKey)
+                if(cached !== undefined){
+                    data = data.replaceAll(match.full, `{{${match.type}::${cached}}}`)
+                    continue
+                }
+
+                const searched = await processer.similaritySearch(match.assetName)
+                const bestMatch = searched[0]
+                if(bestMatch){
+                    data = data.replaceAll(match.full, `{{${match.type}::${bestMatch}}}`)
+                    bestMatchCache.set(match.cacheKey, bestMatch)
                 }
             }
         }

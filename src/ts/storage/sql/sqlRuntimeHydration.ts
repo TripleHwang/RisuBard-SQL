@@ -5,14 +5,10 @@ import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
 import { chatHydrationKey } from "../chatHydrationKey";
 import { validateOlderMessagePage } from "../../chatWindow";
+import { getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } from "./sqlRuntimeMeta";
+import { language } from "src/lang";
 
-export type SqlHydrationWindow = {
-  before: number | null;
-  nextBefore: number | null;
-  total: number;
-  hasOlder: boolean;
-  nextPosition: number;
-};
+export type { SqlHydrationWindow };
 type HydratableCharacter = character & { detailsLoaded?: boolean };
 type CollapsedCharacter = character & { _sqlCharacterBodyCollapsed?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
@@ -64,27 +60,17 @@ function normalizeLimit(limit?: number): number {
 }
 
 function setWindow(chat: Chat, window: SqlHydrationWindow): void {
-  Object.defineProperty(chat, "_sqlWindow", {
-    configurable: true,
-    enumerable: false,
-    writable: true,
-    value: window,
-  });
+  setSqlWindow(chat, window);
 }
 
 function getWindow(chat: Chat): SqlHydrationWindow | undefined {
-  return (chat as Chat & { _sqlWindow?: SqlHydrationWindow })._sqlWindow;
+  return getSqlWindow(chat);
 }
 
 function attachCanonicalPositions(messages: Chat["message"], positions: number[] | undefined): void {
   if (!positions || positions.length !== messages.length) return;
   for (const [index, message] of messages.entries()) {
-    Object.defineProperty(message, "_sqlPosition", {
-      configurable: true,
-      enumerable: false,
-      writable: true,
-      value: positions[index],
-    });
+    setSqlPosition(message, positions[index]);
   }
 }
 
@@ -142,7 +128,20 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
       if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
         if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
         const repaired = await storage.repairCollapsedCharacter(characterId);
-        if (repaired.status === "unavailable") throw new Error("SQL character repair could not recover this character");
+        // `unavailable` means the server walked its whole bounded backup
+        // candidate list and found nothing applicable — never re-read here,
+        // since the row on disk is guaranteed unchanged (the server only
+        // ever commits on a match). Distinguish the two reason codes so the
+        // failure at least reads differently for whoever sees the alert.
+        if (repaired.status === "unavailable") {
+          const reason = repaired.reason;
+          const message = reason === "decode-failed"
+            ? language.sqlCharacterRepairUnavailableDecodeFailed
+            : reason === "no-candidate"
+            ? language.sqlCharacterRepairUnavailableNoCandidate
+            : "SQL character repair could not recover this character (reason unknown)";
+          throw new Error(message);
+        }
         const reloaded = await storage.loadCharacterHydration(characterId);
         if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
         return applyHydratedCharacter(db, characterId, reloaded);
@@ -199,6 +198,20 @@ async function ensureChatBodyHydrated(
             : [],
         ),
       );
+      // SAFE: `merged` is a brand-new plain object literal produced by object
+      // spread. Object spread always constructs a fresh ordinary object via
+      // CreateDataPropertyOrThrow — it can never itself be (or become) a
+      // Svelte `$state` proxy, regardless of whether `full`/`current` are
+      // proxies. `defineProperty` below therefore always runs against a
+      // plain target and never hits Svelte's proxy `defineProperty` trap
+      // (`state_descriptors_fixed`). `merged` only enters the reactive tree
+      // afterwards, via the plain assignment `character.chats[currentIndex]
+      // = merged` a few lines down — and Svelte's proxy preserves a
+      // non-enumerable descriptor that was already present on the target
+      // object it wraps (see `getOwnPropertyDescriptor` in
+      // node_modules/svelte's client proxy), so these fields stay hidden
+      // from `Object.keys`/`JSON.stringify`/`for...in` even once `merged`
+      // becomes reactive.
       const merged = { ...full, ...summaryMetadata, message: current.message ?? full.message ?? [] } as Chat;
       Object.defineProperty(merged, "_sqlHydrationRevision", { configurable: true, enumerable: false, value: response.revision });
       Object.defineProperty(merged, "_sqlMetadataOverrides", { configurable: true, enumerable: false, value: { ...carriedMetadata, ...summaryMetadata } });

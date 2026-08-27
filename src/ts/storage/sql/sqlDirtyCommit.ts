@@ -7,6 +7,7 @@ import {
   sqlMessageData,
   type SqlCommit,
 } from "./sqlCommit";
+import { getSqlPosition, getSqlWindow, setSqlPosition } from "./sqlRuntimeMeta";
 
 const ROOT_EXCLUSIONS = new Set([
   "characters",
@@ -18,9 +19,8 @@ const ROOT_EXCLUSIONS = new Set([
 type RuntimeChat = Chat & {
   messagesLoaded?: boolean;
   messagesFullyLoaded?: boolean;
-  _sqlWindow?: { hasOlder?: boolean; nextPosition?: number };
 };
-type PositionedMessage = Message & { _sqlPosition?: number };
+type PositionedMessage = Message;
 type MessageLookup = { message: PositionedMessage; localPosition: number };
 
 function findCharacter(database: Database, characterId: string): [character, number] | undefined {
@@ -39,7 +39,7 @@ function findChat(database: Database, chatId: string): [character, Chat, number,
 function messageWindowIsIncomplete(chat: RuntimeChat): boolean {
   return chat.messagesLoaded === false ||
     chat.messagesFullyLoaded === false ||
-    chat._sqlWindow?.hasOlder === true;
+    getSqlWindow(chat)?.hasOlder === true;
 }
 
 function canonicalMessagePosition(
@@ -48,8 +48,9 @@ function canonicalMessagePosition(
   localPosition: number,
 ): number {
   if (!messageWindowIsIncomplete(chat)) return localPosition;
-  if (Number.isSafeInteger(message._sqlPosition) && message._sqlPosition! >= 0)
-    return message._sqlPosition!;
+  const position = getSqlPosition(message);
+  if (Number.isSafeInteger(position) && position! >= 0)
+    return position!;
   throw new Error(`Dirty message ${message.chatId ?? "(missing id)"} is missing its canonical SQL position`);
 }
 
@@ -66,24 +67,23 @@ function allocateAppendedPositions(chat: RuntimeChat): void {
   const messages = chat.message ?? [];
   let firstUnpositioned = -1;
   for (let index = 0; index < messages.length; index += 1) {
-    if (!Number.isSafeInteger((messages[index] as PositionedMessage)._sqlPosition)) {
+    if (!Number.isSafeInteger(getSqlPosition(messages[index] as PositionedMessage))) {
       firstUnpositioned = index;
       break;
     }
   }
   if (firstUnpositioned < 0) return;
   for (let index = firstUnpositioned; index < messages.length; index += 1) {
-    if (Number.isSafeInteger((messages[index] as PositionedMessage)._sqlPosition)) return;
+    if (Number.isSafeInteger(getSqlPosition(messages[index] as PositionedMessage))) return;
   }
-  const nextPosition = chat._sqlWindow?.nextPosition;
+  const window = getSqlWindow(chat);
+  const nextPosition = window?.nextPosition;
   if (!Number.isSafeInteger(nextPosition) || nextPosition! < 0) return;
   for (let index = firstUnpositioned; index < messages.length; index += 1) {
     const message = messages[index] as PositionedMessage;
-    Object.defineProperty(message, "_sqlPosition", {
-      configurable: true, enumerable: false, writable: true, value: nextPosition! + index - firstUnpositioned,
-    });
+    setSqlPosition(message, nextPosition! + index - firstUnpositioned);
   }
-  if (chat._sqlWindow) chat._sqlWindow.nextPosition = nextPosition! + messages.length - firstUnpositioned;
+  if (window) window.nextPosition = nextPosition! + messages.length - firstUnpositioned;
 }
 
 /**

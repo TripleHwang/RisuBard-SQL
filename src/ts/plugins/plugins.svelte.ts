@@ -11,8 +11,9 @@ import { checkCodeSafety } from "./pluginSafety";
 import { SafeDocument, SafeIdbFactory, SafeLocalStorage } from "./pluginSafeClass";
 import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
-import { runPluginUpdate } from "./pluginUpdate";
+import { PluginUpdateRejection, runPluginUpdate, type PluginUpdateResult } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
+import { getSqlWindow } from "../storage/sql/sqlRuntimeMeta";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -24,7 +25,7 @@ export function hasMetadataOnlyCharacters(db: { characters?: any[] }): boolean {
 }
 
 export function isPluginChatComplete(chat: any): boolean {
-    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
+    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && getSqlWindow(chat)?.hasOlder !== true
 }
 
 export function isPluginCharacterComplete(character: any): boolean {
@@ -106,6 +107,20 @@ const compareVersions = (v1: string, v2: string): 0|1|-1 => {
 
 const updateCache = new Map<string, { version: string, updateURL: string } | undefined>();
 
+// Shared transport for both the update CHECK and the actual DOWNLOAD, so the
+// two never diverge in proxy-awareness again. Goes through fetchNative
+// (direct fetch, falling back to the CORS/network proxy) instead of a raw
+// `fetch`. `range: true` asks for just the metadata header; some servers
+// reject or ignore Range requests, so callers that get a non-2xx back should
+// retry with `range: false` for a plain full GET.
+async function fetchPluginUpdateSource(url: string, opts: { range: boolean }): Promise<Response> {
+    const headers: { [key: string]: string } = { 'Cache-Control': 'no-cache' }
+    if (opts.range) {
+        headers['Range'] = 'bytes=0-512'
+    }
+    return fetchNative(url, { method: 'GET', headers })
+}
+
 export const checkPluginUpdate = async (plugin: RisuPlugin) => {
     try {
         if(!plugin.updateURL){
@@ -121,13 +136,13 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
             }
         }
 
-        const response = (await fetch(plugin.updateURL, {
-            method: 'GET',
-            cache: 'no-store',
-            headers: {
-                'Range': 'bytes=0-512'
-            }
-        }))
+        let response = await fetchPluginUpdateSource(plugin.updateURL, { range: true })
+        if(!(response.status >= 200 && response.status < 300)){
+            // The server rejected or ignored the Range request (some hosts
+            // respond 4xx to a Range header instead of just serving the full
+            // body). Retry once with a plain GET before giving up.
+            response = await fetchPluginUpdateSource(plugin.updateURL, { range: false })
+        }
 
         if(response.status >= 200 && response.status < 300){
             const text = await response.text()
@@ -152,21 +167,30 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
     }
 }
 
-export async function updatePlugin(plugin: RisuPlugin) {
-    const updated = await runPluginUpdate(plugin, {
-        fetcher: fetch,
+export async function updatePlugin(plugin: RisuPlugin): Promise<PluginUpdateResult> {
+    const result = await runPluginUpdate(plugin, {
+        fetcher: (url) => fetchPluginUpdateSource(url, { range: false }),
         importer: async (source) => {
             await importPlugin(source, {
                 isUpdate: true,
                 originalPluginName: plugin.name
             })
         },
-        readInstalled: (name) => getDatabase().plugins?.find((candidate) => candidate.name === name),
+        readInstalled: (name) => {
+            const found = getDatabase().plugins?.find((candidate) => candidate.name === name)
+            if (!found) return undefined
+            return {
+                name: found.name,
+                script: found.script,
+                versionOfPlugin: found.versionOfPlugin,
+                updateURL: found.updateURL,
+            }
+        },
     })
-    if (updated) {
+    if (result.ok) {
         updateCache.delete(plugin.name)
     }
-    return updated
+    return result
 }
 
 export async function importPlugin(code:string|null = null, argu:{
@@ -210,8 +234,27 @@ export async function importPlugin(code:string|null = null, argu:{
             if(argu.isHotReload){
                 console.error(`Hot-reload plugin "${name}" error: ${msg}`)
             }
+            else if(isUpdate){
+                // Updates are diagnosed via the staged PluginUpdateResult (see
+                // rejectImport below), not a raw modal dialog. The safe,
+                // localized message is shown by the caller; this text is for
+                // the console only and must never include plugin source.
+                console.error(`Plugin update "${originalPluginName || name}" rejected: ${msg}`)
+            }
             else{
                 alertError(msg)
+            }
+        }
+
+        // Turns a validation failure into a typed PluginUpdateRejection when this
+        // import is an update, so the reason reaches runPluginUpdate() instead of
+        // dying in a warn-and-return. For a manual (non-update) import this only
+        // shows the existing error UI; the caller still relies on the `return`
+        // right after each call site.
+        const rejectImport = (stage: 'download' | 'parse' | 'policy' | 'save' | 'verify', reasonCode: string, msg: string) => {
+            showError(msg)
+            if (isUpdate) {
+                throw new PluginUpdateRejection(stage, reasonCode, msg)
             }
         }
 
@@ -228,7 +271,7 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@name')) {
                 const provied = line.slice(7)
                 if (provied === '') {
-                    showError('plugin name must be longer than 0, did you put it correctly?')
+                    rejectImport('parse', 'name-missing', 'plugin name must be longer than 0, did you put it correctly?')
                     return
                 }
                 name = provied.trim()
@@ -249,7 +292,7 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@display-name')) {
                 const provied = line.slice('//@display-name'.length + 1)
                 if (provied === '') {
-                    showError('plugin display name must be longer than 0, did you put it correctly?')
+                    rejectImport('parse', 'display-name-missing', 'plugin display name must be longer than 0, did you put it correctly?')
                     return
                 }
                 displayName = provied.trim()
@@ -258,11 +301,11 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@link')) {
                 const link = line.split(" ")[1]
                 if (!link || link === '') {
-                    showError('plugin link is empty, did you put it correctly?')
+                    rejectImport('parse', 'link-missing', 'plugin link is empty, did you put it correctly?')
                     return
                 }
                 if (!link.startsWith('https')) {
-                    showError('plugin link must start with https, did you check it?')
+                    rejectImport('parse', 'link-not-https', 'plugin link must start with https, did you check it?')
                     return
                 }
                 const hoverText = line.split(' ').slice(2).join(' ').trim()
@@ -282,13 +325,13 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@risu-arg') || line.startsWith('//@arg')) {
                 const provied = line.trim().split(' ')
                 if (provied.length < 3) {
-                    showError('plugin argument is incorrect, did you put space in argument name?')
+                    rejectImport('parse', 'arg-declaration-invalid', 'plugin argument is incorrect, did you put space in argument name?')
                     return
                 }
                 const provKey = provied[1]
 
                 if (provied[2] !== 'int' && provied[2] !== 'string') {
-                    showError(`plugin argument type is "${provied[2]}", which is an unknown type.`)
+                    rejectImport('parse', 'arg-type-unknown', `plugin argument type is "${provied[2]}", which is an unknown type.`)
                     return
                 }
                 if (provied[2] === 'int') {
@@ -323,14 +366,18 @@ export async function importPlugin(code:string|null = null, argu:{
             if(line.startsWith('//@update-url')){
                 updateURL = line.split(' ')[1]
 
+                // Note: the protocol check below must run OUTSIDE the try so a
+                // PluginUpdateRejection thrown by rejectImport() (isUpdate case)
+                // propagates directly instead of being re-labeled by the catch.
+                let parsedUpdateURL: URL | undefined
                 try {
-                    const url = new URL(updateURL)
-                    if(url.protocol !== 'https:'){
-                        showError('plugin update URL must start with https, did you put it correctly?')
-                        return
-                    }
+                    parsedUpdateURL = new URL(updateURL)
                 } catch (error) {
-                    showError('plugin update URL is not a valid URL, did you put it correctly?')
+                    rejectImport('parse', 'update-url-invalid', 'plugin update URL is not a valid URL, did you put it correctly?')
+                    return
+                }
+                if(parsedUpdateURL.protocol !== 'https:'){
+                    rejectImport('parse', 'update-url-not-https', 'plugin update URL must start with https, did you put it correctly?')
                     return
                 }
             }
@@ -341,7 +388,7 @@ export async function importPlugin(code:string|null = null, argu:{
                 const versionLocation = jsFile.indexOf('//@version')
                 const numberOfBytesBefore = new TextEncoder().encode(jsFile.slice(0, versionLocation) + line).length
                 if(numberOfBytesBefore > 500){
-                    showError('plugin version declaration must be within the first 512 Bytes of the file for proper parsing. move //@version line to the top of the file.')
+                    rejectImport('parse', 'version-declaration-too-late', 'plugin version declaration must be within the first 512 Bytes of the file for proper parsing. move //@version line to the top of the file.')
                     return
                 }
             }
@@ -349,7 +396,7 @@ export async function importPlugin(code:string|null = null, argu:{
             if(line.startsWith('//@allowed-ipc')){
                 const provied = line.trim().split(' ')
                 if(provied.length < 2){
-                    showError('plugin allowed IPC declaration is incorrect, did you put space after //@allowed-ipc?')
+                    rejectImport('parse', 'allowed-ipc-invalid', 'plugin allowed IPC declaration is incorrect, did you put space after //@allowed-ipc?')
                     return
                 }
 
@@ -360,7 +407,12 @@ export async function importPlugin(code:string|null = null, argu:{
         }
 
         if (name.length === 0) {
-            showError('plugin name not found, did you put it correctly?')
+            rejectImport('parse', 'name-missing', 'plugin name not found, did you put it correctly?')
+            return
+        }
+
+        if(originalPluginName && originalPluginName !== name){
+            rejectImport('policy', 'name-changed', `When updating plugin "${originalPluginName}", the plugin name cannot be changed to "${name}". Please keep the original name to update.`)
             return
         }
 
@@ -369,26 +421,27 @@ export async function importPlugin(code:string|null = null, argu:{
         // legacy copies in the database untouched for reversibility, but do
         // not install any new duplicate over the built-in provider.
         if (isBuiltInPluginName(name)) {
-            showError('PageFold is built in and cannot be installed as a separate plugin.')
+            rejectImport('policy', 'pagefold-blocked', 'PageFold is built in and cannot be installed as a separate plugin.')
             return
         }
 
         if(updateURL && versionOfPlugin.length === 0){
-            showError('plugin version not found, did you put it correctly? It is required when update URL is provided.')
+            rejectImport('parse', 'version-missing', 'plugin version not found, did you put it correctly? It is required when update URL is provided.')
             return
         }
 
         if(versionOfPlugin && compareVersions(versionOfPlugin, '0.0.1') === -1){
-            showError('plugin version must be at least 0.0.1')
+            rejectImport('parse', 'version-too-low', 'plugin version must be at least 0.0.1')
             return
         }
 
-        
+
         if(isTypescript){
             try {
-                jsFile = await pluginCodeTranspiler(jsFile)                
+                jsFile = await pluginCodeTranspiler(jsFile)
             } catch (error) {
-                showError('Failed to transpile TypeScript code: ' + error.message)
+                rejectImport('parse', 'typescript-transpile-failed', 'Failed to transpile TypeScript code: ' + error.message)
+                return
             }
         }
 
@@ -397,9 +450,17 @@ export async function importPlugin(code:string|null = null, argu:{
         if(apiVersion === '2.1'){
             const safety = await checkCodeSafety(jsFile)
             if(!safety.isSafe){
+                // An update runs unattended (invoked from the `+` button, not a
+                // file picker), so it must not block on the interactive review
+                // modal. Reject it immediately as a policy failure instead.
+                if(isUpdate){
+                    rejectImport('policy', 'unsafe-code-rejected', 'Plugin code failed the safety check and was not installed.')
+                    return
+                }
+
                 pluginAlertModalStore.errors = safety.errors
                 pluginAlertModalStore.open = true
-                
+
                 //I can use event but lazy
                 while(pluginAlertModalStore.open){
                     await sleep(100)
@@ -413,7 +474,7 @@ export async function importPlugin(code:string|null = null, argu:{
         }
         else if(apiVersion === '2.0'){
             if(!DBState.db.allowV2Plugin){
-                showError('Your code does not include //@api or specifies API version 2.0, which is outdated. Please update your plugin to use at least API version 2.1.')
+                rejectImport('policy', 'api-v2-disallowed', 'Your code does not include //@api or specifies API version 2.0, which is outdated. Please update your plugin to use at least API version 2.1.')
                 return
             }
             apiInternalVersion = 2
@@ -446,11 +507,9 @@ export async function importPlugin(code:string|null = null, argu:{
 
         const oldPluginIndex = db.plugins.findIndex((p: RisuPlugin) => p.name === pluginData.name);
 
-        if(originalPluginName && originalPluginName !== pluginData.name){
-            showError(`When updating plugin "${originalPluginName}", the plugin name cannot be changed to "${pluginData.name}". Please keep the original name to update.`)
-            return
-        }
-
+        // The originalPluginName !== name rename guard runs earlier now (see
+        // rejectImport('policy', 'name-changed', ...) above), so pluginData.name
+        // is guaranteed to equal originalPluginName here whenever isUpdate.
 
         if(!isUpdate && oldPluginIndex !== -1){
             const c = await alertConfirm(language.duplicatePluginFoundUpdateIt)
@@ -475,13 +534,21 @@ export async function importPlugin(code:string|null = null, argu:{
         console.log(`Imported plugin: ${pluginData.name} (API v${apiVersion})`)
         setDatabaseLite(db)
         if (isUpdate) {
-            await requestImmediateSave({ rejectOnFailure: true })
+            try {
+                await requestImmediateSave({ rejectOnFailure: true })
+            } catch (error) {
+                // Distinguish "installed but not durably saved" from every
+                // other rejection stage so the caller doesn't report success
+                // for an update that could still be lost.
+                rejectImport('save', 'durable-save-failed', error instanceof Error ? error.message : String(error))
+                return
+            }
         } else {
             void requestImmediateSave()
         }
 
         await loadPlugins()
-        
+
     } catch (error) {
         console.error(error)
         if (argu.isUpdate) throw error

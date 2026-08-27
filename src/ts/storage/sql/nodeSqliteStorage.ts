@@ -5,6 +5,7 @@ import type {
   SqlDeferredBootstrapPayload,
   SqlBootstrapStorage,
   SqlChatHydration,
+  SqlCharacterRepairResult,
   SqlCharacterSearchResult,
   SqlLoadDatabaseOptions,
   SqlLoadDatabaseResult,
@@ -346,6 +347,14 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       throw new Error("Invalid SQL character payload");
     }
     this.acceptReadRevision(payload.revision);
+    // SAFE: `payload` (and therefore `payload.character`) was just produced
+    // by `await response.json()` a few lines above — a freshly parsed JSON
+    // tree that has never been touched by Svelte reactivity. `defineProperty`
+    // here can never hit a `$state` proxy's `defineProperty` trap
+    // (`state_descriptors_fixed`); the object only enters `DBState.db` later,
+    // via `applyHydratedCharacter`'s plain assignment
+    // `db.characters[currentIndex] = normalized` in sqlRuntimeHydration.ts,
+    // by which point this property is already attached.
     if (payload.characterBodyCollapsed === true) Object.defineProperty(payload.character, "_sqlCharacterBodyCollapsed", { configurable: true, enumerable: false, value: true });
     return payload.character;
     } finally {
@@ -353,14 +362,15 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     }
   }
 
-  async repairCollapsedCharacter(characterId: string): Promise<{ status: "repaired" | "not-needed" | "unavailable"; revision: number }> {
+  async repairCollapsedCharacter(characterId: string): Promise<SqlCharacterRepairResult> {
     const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}/repair`, { method: "POST" });
     if (!response.ok) throw new Error(`SQL character repair failed (${response.status})`);
-    const payload = await response.json() as { status?: unknown; revision?: unknown };
+    const payload = await response.json() as { status?: unknown; revision?: unknown; reason?: unknown };
     const revision = Number(payload.revision);
     if ((payload.status !== "repaired" && payload.status !== "not-needed" && payload.status !== "unavailable") || !Number.isSafeInteger(revision) || revision < 0) throw new Error("Invalid SQL character repair response");
     this.acceptReadRevision(revision);
-    return { status: payload.status, revision };
+    const reason = typeof payload.reason === "string" ? payload.reason : undefined;
+    return reason !== undefined ? { status: payload.status, revision, reason } : { status: payload.status, revision };
   }
 
   async loadChatHydration(chatId: string): Promise<SqlChatHydration | null> {

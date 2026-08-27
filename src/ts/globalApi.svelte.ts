@@ -14,9 +14,13 @@ import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
 import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, touchHydratedChat, chatToStub, classifyChat } from "./storage/chatStorage";
 import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
+import { getSqlWindow } from "./storage/sql/sqlRuntimeMeta";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
-import { supportsPatchSync } from "./platform";
+import { supportsPatchSync } from "./platform"
+// @ts-ignore - plain CJS module shared verbatim with server/node/server.cjs; see that file's
+// buildUncleanableSet() for the other consumer of this exact logic.
+import { collectPersonaAssetRefs, isAssetKeyValue } from "../../shared/assetOwnership.cjs";
 import { updateAnimationSpeed } from "./gui/animation";
 import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { language } from "src/lang";
@@ -908,9 +912,9 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             // Skip placeholders — they have no real data to save
             if (!chat || chat._placeholder) continue
             const partialSqlWindow = getActiveSqlStorage()?.backendKind === 'server-sql' &&
-                ((chat as Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }).messagesLoaded === false ||
+                ((chat as Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean }).messagesLoaded === false ||
                 (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false ||
-                (chat as Chat & { _sqlWindow?: { hasOlder?: boolean } })._sqlWindow?.hasOlder === true)
+                getSqlWindow(chat)?.hasOlder === true)
             if (partialSqlWindow) continue
             try {
                 await saveChatToServer(chaId, chatIndex, chatId, chat)
@@ -1558,10 +1562,11 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
      * @param {string} data - The resource to add.
      */
     function addUncleanable(data: string) {
-        if (!data) {
-            return;
-        }
-        if (data === '') {
+        // Empty values, external http(s) URLs, and inline data: URLs are
+        // never `assets/` KV keys -- skip them rather than adding a
+        // basename that can never match (and could never protect) a real
+        // stored file.
+        if (!isAssetKeyValue(data)) {
             return;
         }
         const bn = uptype === 'basename' ? getBasename(data) : data;
@@ -1606,6 +1611,12 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
                 addUncleanable(asset.uri);
             }
         }
+        // Character-scoped personas (as opposed to the global db.personas
+        // below) live entirely on the character record. Their icons are
+        // real `assets/` references and must be collected here or they
+        // look orphaned and get deleted by cleanChunks() -- see
+        // shared/assetOwnership.cjs for the shared walk.
+        collectPersonaAssetRefs(cha.personas, addUncleanable);
     }
 
     if (db.modules) {
@@ -1622,23 +1633,7 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
         }
     }
 
-    if (db.personas) {
-        db.personas.map((v) => {
-            addUncleanable(v.icon);
-
-            if(v.embeddedModule){
-                const assets = v.embeddedModule.assets
-                if (assets) {
-                    for (const asset of assets) {
-                        addUncleanable(asset[1])
-                    }
-                }
-                if(v.embeddedModule.icon){
-                    addUncleanable(v.embeddedModule.icon)
-                }
-            }
-        });
-    }
+    collectPersonaAssetRefs(db.personas, addUncleanable);
 
     if (db.characterOrder) {
         db.characterOrder.forEach((item) => {
