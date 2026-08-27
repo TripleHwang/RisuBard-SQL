@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { MediaQuery } from 'svelte/reactivity'
     import { language } from 'src/lang'
+    import { resizeHandle } from 'src/ts/gui/resizeHandle'
+    import { tooltip } from 'src/ts/gui/tooltip'
     import type { loreBook } from 'src/ts/storage/database.svelte'
     import ShDialog from 'src/lib/UI/GUI/ShDialog.svelte'
     import LoreBookWorkspace from './LoreBookWorkspace.svelte'
@@ -36,48 +37,25 @@
         resolveChildLabel,
     }: Props = $props()
 
-    const desktopMedia = new MediaQuery('(min-width: 900px)')
     let contentElement: HTMLElement | null = $state(null)
+    const edges = ['n', 'e', 's', 'w', 'ne', 'se', 'sw', 'nw'] as const
 
-    $effect(() => {
-        if (!open || !contentElement || !desktopMedia.current) return
-        const shell = contentElement.querySelector<HTMLElement>('.lore-workspace')
-        const splitter = contentElement.querySelector<HTMLElement>('[data-lorebook-splitter]')
-        if (!shell || !splitter) return
-
-        let resizing = false
-        function onPointerDown(event: PointerEvent) {
-            resizing = true
-            splitter!.setPointerCapture(event.pointerId)
+    function startWindowResize(edge: string) {
+        const element = contentElement
+        if (!element) return
+        const { width, height } = element.getBoundingClientRect()
+        const x = edge.includes('e') ? 1 : edge.includes('w') ? -1 : 0
+        const y = edge.includes('s') ? 1 : edge.includes('n') ? -1 : 0
+        return (dx: number, dy: number) => {
+            // ShDialog stays at 50%/50%: both opposite edges move by the pointer delta.
+            if (x) element.style.setProperty('--lore-dialog-width', `${Math.min(window.innerWidth - 16, Math.max(480, width + dx * x * 2))}px`)
+            if (y) element.style.setProperty('--lore-dialog-height', `${Math.min(window.innerHeight - 16, Math.max(320, height + dy * y * 2))}px`)
         }
-        function onPointerMove(event: PointerEvent) {
-            if (!resizing) return
-            const rect = shell!.getBoundingClientRect()
-            if (rect.width <= 0) return
-            const percent = Math.min(52, Math.max(26, ((event.clientX - rect.left) / rect.width) * 100))
-            shell!.style.setProperty('--lore-list-ratio', `${percent}%`)
-        }
-        function onPointerUp(event: PointerEvent) {
-            resizing = false
-            if (splitter!.hasPointerCapture(event.pointerId)) splitter!.releasePointerCapture(event.pointerId)
-        }
-        function resetSplitter() {
-            shell!.style.setProperty('--lore-list-ratio', '38%')
-        }
-
-        splitter.addEventListener('pointerdown', onPointerDown)
-        splitter.addEventListener('pointermove', onPointerMove)
-        splitter.addEventListener('pointerup', onPointerUp)
-        splitter.addEventListener('pointercancel', onPointerUp)
-        splitter.addEventListener('dblclick', resetSplitter)
-        return () => {
-            splitter.removeEventListener('pointerdown', onPointerDown)
-            splitter.removeEventListener('pointermove', onPointerMove)
-            splitter.removeEventListener('pointerup', onPointerUp)
-            splitter.removeEventListener('pointercancel', onPointerUp)
-            splitter.removeEventListener('dblclick', resetSplitter)
-        }
-    })
+    }
+    function resetWindowSize() {
+        contentElement?.style.removeProperty('--lore-dialog-width')
+        contentElement?.style.removeProperty('--lore-dialog-height')
+    }
 </script>
 
 <ShDialog
@@ -107,14 +85,22 @@
         {onExport}
         {resolveChildLabel}
     />
+    {#each edges as edge}
+        <button type="button" class="window-resize" data-lorebook-window-resize={edge}
+            aria-label={`${language.lorebookWorkspace.resizeWindow} · ${edge.toUpperCase()}`}
+            use:tooltip={language.lorebookWorkspace.resizeHint}
+            use:resizeHandle={{ start: () => startWindowResize(edge), reset: resetWindowSize }}></button>
+    {/each}
 </ShDialog>
 
 <style>
     :global(.lore-dialog) {
-        width: min(96vw, 1700px);
-        max-width: none;
-        height: min(92vh, 1000px);
-        max-height: 92vh;
+        width: var(--lore-dialog-width, min(96vw, 1700px));
+        min-width: min(480px, calc(100vw - 1rem));
+        max-width: calc(100vw - 1rem);
+        height: var(--lore-dialog-height, min(92vh, 1000px));
+        min-height: min(320px, calc(100dvh - 1rem));
+        max-height: calc(100dvh - 1rem);
         padding: 0;
         overflow: hidden;
         gap: 0;
@@ -142,13 +128,28 @@
     :global(.lore-dialog-close:hover) { background: var(--color-selected); }
     :global(.lore-dialog-close svg) { width: 1.35rem; height: 1.35rem; }
     :global(.lore-dialog-body) { min-height: 0; flex: 1; padding: .7rem; }
+    .window-resize { position: absolute; z-index: 10; padding: 0; border: 0; border-radius: 0; background: transparent; touch-action: none; }
+    .window-resize:hover, .window-resize:focus-visible, .window-resize:global([data-resizing]) { background: color-mix(in srgb, var(--color-borderc) 45%, transparent); outline: none; }
+    [data-lorebook-window-resize='n'], [data-lorebook-window-resize='s'] { left: 1rem; right: 1rem; height: .45rem; cursor: ns-resize; }
+    [data-lorebook-window-resize='e'], [data-lorebook-window-resize='w'] { top: 1rem; bottom: 1rem; width: .45rem; cursor: ew-resize; }
+    [data-lorebook-window-resize='n'] { top: 0; }
+    [data-lorebook-window-resize='s'] { bottom: 0; }
+    [data-lorebook-window-resize='e'] { right: 0; }
+    [data-lorebook-window-resize='w'] { left: 0; }
+    [data-lorebook-window-resize='ne'], [data-lorebook-window-resize='se'], [data-lorebook-window-resize='sw'], [data-lorebook-window-resize='nw'] { width: 1rem; height: 1rem; }
+    [data-lorebook-window-resize='ne'] { top: 0; right: 0; cursor: nesw-resize; }
+    [data-lorebook-window-resize='se'] { bottom: 0; right: 0; cursor: nwse-resize; border-right: 2px solid var(--color-borderc); border-bottom: 2px solid var(--color-borderc); }
+    [data-lorebook-window-resize='sw'] { bottom: 0; left: 0; cursor: nesw-resize; }
+    [data-lorebook-window-resize='nw'] { top: 0; left: 0; cursor: nwse-resize; }
     @media (max-width: 899px) {
         :global(.lore-dialog) {
             width: 100vw;
+            max-width: 100vw;
             height: 100dvh;
             max-height: none;
             border-radius: 0;
         }
+        .window-resize { display: none; }
         :global(.lore-dialog-body) { padding: 0; }
         :global(.lore-dialog > :first-child) { min-height: 4rem; padding-right: 4.8rem; }
         :global(.lore-dialog-close) { right: .65rem; width: 3rem; height: 3rem; border-radius: .9rem; }

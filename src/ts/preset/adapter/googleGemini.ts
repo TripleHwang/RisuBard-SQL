@@ -660,11 +660,15 @@ function parseGeminiUsage(raw: unknown): AdapterUsage | undefined {
     if (typeof raw['cachedContentTokenCount'] === 'number') {
         usage.cachedTokens = raw['cachedContentTokenCount'] as number
     }
+    if (typeof raw['thoughtsTokenCount'] === 'number') {
+        usage.reasoningTokens = raw['thoughtsTokenCount'] as number
+    }
     if (
         usage.promptTokens === undefined
         && usage.completionTokens === undefined
         && usage.totalTokens === undefined
         && usage.cachedTokens === undefined
+        && usage.reasoningTokens === undefined
     ) {
         return undefined
     }

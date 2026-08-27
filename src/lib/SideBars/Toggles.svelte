@@ -5,10 +5,10 @@
     import { language } from "src/lang";
     import type { PromptItem } from "src/ts/process/prompt";
     import type { character } from "src/ts/storage/database.svelte";
-    import { getCurrentChat, snapshotToggleValues, saveTogglesToChat } from "src/ts/storage/database.svelte";
+    import { fillMissingPinnedToggleValues, getCurrentChat, saveTogglesToChat, unpinToggleValuesFromChat } from "src/ts/storage/database.svelte";
     import { alertConfirm, alertTogglePresets, notifySuccess } from "src/ts/alert";
     import { tooltip } from "src/ts/gui/tooltip";
-    import { PinIcon, SaveIcon, FolderHeartIcon } from "@lucide/svelte";
+    import { PinIcon, FolderHeartIcon } from "@lucide/svelte";
     import ShAccordion from '../UI/GUI/ShAccordion.svelte'
     import ShButton from "../UI/GUI/ShButton.svelte";
     import ShSwitch from "../UI/GUI/ShSwitch.svelte";
@@ -27,40 +27,25 @@
     let { chara = $bindable(), noContainer }: Props = $props();
 
     let currentChat = $derived(DBState.db.characters[$selectedCharID]?.chats?.[DBState.db.characters[$selectedCharID]?.chatPage])
-    let isPinned = $derived(!DBState.db.disableToggleBinding && !!currentChat?.savedToggleValues)
-    let dirtyCount = $derived.by(() => {
-        if (DBState.db.disableToggleBinding) return 0
-        const saved = currentChat?.savedToggleValues
-        if (!saved) return 0
-        const current = snapshotToggleValues()
-        const allKeys = new Set([...Object.keys(saved), ...Object.keys(current)])
-        const norm = (v: string | undefined) => v ?? ''
-        let count = 0
-        for (const key of allKeys) {
-            if (norm(saved[key]) !== norm(current[key])) count++
-        }
-        return count
-    })
-    let isDirty = $derived(dirtyCount > 0)
+    let isPinned = $derived(!DBState.db.disableToggleBinding && !!currentChat?.useLocallySetGlobalVariables)
+    const getGlobalChatVarValue = (key: string) => {
+        const value = getGlobalChatVar(key)
+        return value === 'null' ? '' : value
+    }
 
     async function pinToChat() {
         const chat = getCurrentChat()
         if (!chat) return
-        if (chat.savedToggleValues) {
+        if (chat.useLocallySetGlobalVariables) {
             const confirmed = await alertConfirm(language.togglePinRemove)
             if (confirmed) {
-                chat.savedToggleValues = undefined
+                unpinToggleValuesFromChat(chat)
                 notifySuccess(language.togglePinUnbound)
             }
         } else {
             saveTogglesToChat()
             notifySuccess(language.togglePinSaved)
         }
-    }
-
-    function updatePin() {
-        saveTogglesToChat()
-        notifySuccess(language.togglePinSaved)
     }
 
     async function openPresetList() {
@@ -98,19 +83,6 @@
         return templateUsesJailbreakToggle(template)
     })
 
-    function isToggleDirty(key: string): boolean {
-        if (DBState.db.disableToggleBinding) return false
-        const saved = currentChat?.savedToggleValues
-        if (!saved) return false
-        const fullKey = `toggle_${key}`
-        const current = getGlobalChatVar(fullKey)
-        const savedVal = saved[fullKey] ?? undefined
-        if (current === savedVal) return false
-        const norm = (v: string | undefined) => v ?? ''
-        return norm(current) !== norm(savedVal)
-    }
-
-
     let groupedToggles = $derived.by(() => {
         // Track chat/module changes so the toggle list re-derives on chat switch
         const _char = DBState.db.characters[$selectedCharID]
@@ -142,10 +114,21 @@
         }, [])
     })
 
-    const getGlobalChatVarValue = (key: string) => {
-        const value = getGlobalChatVar(key)
-        return value === 'null' ? '' : value
+    function collectToggleKeys(items: sidebarToggle[]): string[] {
+        return items.flatMap((toggle) => {
+            if(toggle.type === 'group'){
+                return collectToggleKeys(toggle.children)
+            }
+            return toggle.key ? [`toggle_${toggle.key}`] : []
+        })
     }
+
+    $effect(() => {
+        const chat = currentChat
+        const keys = collectToggleKeys(groupedToggles)
+        if(DBState.db.disableToggleBinding || !chat?.useLocallySetGlobalVariables) return
+        fillMissingPinnedToggleValues(chat, keys)
+    })
 
 </script>
 
@@ -166,18 +149,6 @@
     {/if}
 {/snippet}
 
-{#snippet localToggleMode()}
-    {#if currentChat}
-        <div class="w-full flex gap-2 mt-3 items-center justify-between min-h-10 rounded-md px-1 border-t border-darkborderc/30 pt-2">
-            <span class="min-w-0 break-words">{language.localToggles}</span>
-            <ShSwitch
-                checked={!!currentChat.useLocallySetGlobalVariables}
-                onCheckedChange={(checked) => { currentChat.useLocallySetGlobalVariables = checked }}
-            />
-        </div>
-    {/if}
-{/snippet}
-
 {#snippet toggles(items: sidebarToggle[], reverse: boolean = false)}
     {#each items as toggle, index}
         {#if index > 0
@@ -191,7 +162,7 @@
                 {@render toggles((toggle as sidebarToggleGroup).children, reverse)}
             </ShAccordion>
         {:else if toggle.type === 'select'}
-            <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
+            <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors">
                 <span class="min-w-0 break-words">{@render toggleName(toggle)}</span>
                 <SelectInput className="w-32 shrink-0" value={getGlobalChatVarValue(`toggle_${toggle.key}`)} onchange={(e) => setGlobalChatVar(`toggle_${toggle.key}`, e.currentTarget.value)}>
                     {#each toggle.options as option, i}
@@ -200,12 +171,12 @@
                 </SelectInput>
             </div>
         {:else if toggle.type === 'text'}
-            <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
+            <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors">
                 <span class="min-w-0 break-words">{@render toggleName(toggle)}</span>
                 <TextInput className="w-32 shrink-0" value={getGlobalChatVarValue(`toggle_${toggle.key}`)} onchange={(e) => setGlobalChatVar(`toggle_${toggle.key}`, e.currentTarget.value)} />
             </div>
         {:else if toggle.type === 'textarea'}
-            <div class="w-full flex gap-2 mt-2 items-start justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
+            <div class="w-full flex gap-2 mt-2 items-start justify-between min-h-10 rounded-md px-1 transition-colors">
                 <span class="min-w-0 break-words mt-1.5">{@render toggleName(toggle)}</span>
                 <TextAreaInput className="w-32 shrink-0" height='20' value={getGlobalChatVarValue(`toggle_${toggle.key}`)} onchange={(e) => {
                     if(!e) return
@@ -227,7 +198,7 @@
                 </div>
             {/if}
         {:else}
-            <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors" class:bg-red-900={isToggleDirty(toggle.key)} class:bg-opacity-15={isToggleDirty(toggle.key)}>
+            <div class="w-full flex gap-2 mt-2 items-center justify-between min-h-10 rounded-md px-1 transition-colors">
                 <span class="min-w-0 break-words">{toggle.value}</span>
                 <ShSwitch
                     className="shrink-0"
@@ -245,20 +216,10 @@
 <div class="text-[11px] text-textcolor2 mt-4 px-1">{language.toggleBindingLabel}</div>
 <div class="flex gap-1 mt-1 items-stretch">
     {#if isPinned}
-        <span use:tooltip={language.togglePinRemove}>
-            <ShButton variant="primary" size="icon" onclick={pinToChat}>
+        <span class="flex-1 min-w-0 flex" use:tooltip={language.togglePinRemove}>
+            <ShButton variant="binding" className="w-full" onclick={pinToChat}>
                 <PinIcon size={16} />
-            </ShButton>
-        </span>
-        <span class="flex-1 min-w-0 flex" use:tooltip={language.togglePinUpdate}>
-            <ShButton
-                variant={isDirty ? 'destructive' : 'default'}
-                disabled={!isDirty}
-                className="w-full"
-                onclick={isDirty ? updatePin : undefined}
-            >
-                <SaveIcon size={16} class="shrink-0" />
-                <span class="truncate">{isDirty ? dirtyCount : language.togglePinUpdateLabel}</span>
+                <span class="truncate">{language.togglePinLabel}</span>
             </ShButton>
         </span>
     {:else}
@@ -287,7 +248,6 @@
             {@render sep()}
         {/if}
         {@render toggles(groupedToggles, true)}
-        {@render localToggleMode()}
         {#if chara && DBState.db.hypaV3}
             <div class="w-full flex mt-2 items-center justify-between gap-2 min-h-10 rounded-md px-1">
                 <span class="flex items-center gap-1">
@@ -317,7 +277,6 @@
         {/if}
     {/if}
     {@render toggles(groupedToggles)}
-    {@render localToggleMode()}
     {#if DBState.db.hypaV3}
         <div class="w-full flex mt-2 items-center justify-between gap-2 min-h-10 rounded-md px-1">
             <span class="flex items-center gap-1">

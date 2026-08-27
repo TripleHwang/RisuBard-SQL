@@ -18,16 +18,20 @@ import {
     normalizeNarrativeBaseline,
     parseSingleJsonObject,
 } from '../../../packages/risubard-core/src/modelOutput'
+import { modelOutputRepairInstruction, readModelResponseText, runValidatedModelRequest, type ModelOutputError, type ModelResponse } from '../../../packages/risubard-core/src/modelResponse'
 import {
     loadNarrativeInquiry,
 } from './narrativeContext'
 import {
     loadNarrativeMemoryWiki,
-    recordWikiTurnReceipt,
-    snapshotWikiBeforeTurn,
 } from './memoryWiki'
+import {
+    beginWikiRebootBatch,
+    recordWikiRebootBatchReceipt,
+} from './wikiRebootTransport'
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
 import { saveCanonicalWikiDocument } from './markdownWikiWriter'
+import type { WikiWritingLanguage } from './wikiWritingLanguage'
 import {
     announceRisuBardMemoryUpdated,
 } from './memoryEvents'
@@ -46,9 +50,7 @@ interface StoredMessage {
     risubardMemoryConfirmed?: unknown
 }
 
-export interface MemoryAnalysisModelResponse {
-    type: string
-    result: unknown
+export interface MemoryAnalysisModelResponse extends ModelResponse {
     bindingFailure?: 'main-unset' | 'sub-unset'
 }
 
@@ -63,6 +65,7 @@ export interface MemoryAnalysisModelCall {
     maxTokens: number
     temperature: number
     bias: Record<string, never>
+    extractJson: ''
     schema?: string
     realChatId?: string
     logSource?: 'memory'
@@ -466,7 +469,7 @@ export function projectRecentMemoryMessages(
     throughMessageId?: string
 ): MemoryAnalysisMessage[] {
     const boundedLimit = Number.isSafeInteger(limit)
-        ? Math.min(100, Math.max(1, limit))
+        ? Math.max(1, limit)
         : 12
     const throughIndex = throughMessageId === undefined
         ? storedMessages.length - 1
@@ -686,13 +689,17 @@ export function createStoredResponseMemoryAnalysis(
     }
     const markdownWikiService = {
         inquire: graphService.inquire,
-        async snapshotBeforeTurn(input: {
+        async beginRebootBatch(input: {
             characterId: string
             chatId: string
             sourceMessageIds: string[]
+            eventSourceGroups: string[][]
         }) {
-            return snapshotWikiBeforeTurn({
-                ...input,
+            return beginWikiRebootBatch({
+                characterId: input.characterId,
+                stagingChatId: input.chatId,
+                sourceMessageIds: input.sourceMessageIds,
+                eventSourceGroups: input.eventSourceGroups,
                 fetchImpl: options.fetchImpl,
                 createAuth: options.createAuth,
             })
@@ -717,6 +724,7 @@ export function createStoredResponseMemoryAnalysis(
             markdown: string
             expectedContentHash?: string
             reviewStatus?: 'unreviewed' | 'reviewed'
+            writingLanguage?: WikiWritingLanguage
         }) {
             return saveCanonicalWikiDocument({
                 ...input,
@@ -730,6 +738,7 @@ export function createStoredResponseMemoryAnalysis(
             sourceMessageIds: string[]
             markdown: string
             append?: boolean
+            writingLanguage?: WikiWritingLanguage
         }) {
             return await readJson(await postJson(
                 options.fetchImpl,
@@ -740,24 +749,15 @@ export function createStoredResponseMemoryAnalysis(
                 'documents'
             ][number]
         },
-        async recordTurnReceipt(input: {
+        async recordRebootBatchReceipt(input: {
             characterId: string
             chatId: string
-            snapshotId: string
-            sourceMessageIds: string[]
-            eventId?: string
-            changes: Array<{
-                documentId: string
-                type: 'character' | 'location' | 'scene' | 'faction'
-                    | 'item' | 'concept' | 'other'
-                title: string
-                relativePath: string
-                afterHash: string
-            }>
-            warnings: string[]
+            receipt: import('./canonicalTurnReceipt').CanonicalTurnReceipt
         }) {
-            return recordWikiTurnReceipt({
-                ...input,
+            return recordWikiRebootBatchReceipt({
+                characterId: input.characterId,
+                stagingChatId: input.chatId,
+                receipt: input.receipt,
                 fetchImpl: options.fetchImpl,
                 createAuth: options.createAuth,
             })
@@ -784,10 +784,12 @@ export function createStoredResponseMemoryAnalysis(
                 noMultiGen: true,
                 tools: [],
                 maxTokens: request.format === 'canonical-batch'
-                    ? Math.min(request.inputTokenLimit ?? 12_000, 32_768)
+                    ? request.inputTokenLimit ?? 12_000
                     : 4_096,
                 temperature: 0,
                 bias: {},
+                extractJson: '',
+                logSource: 'memory',
                 ...(request.sessionChatId ? {
                     realChatId: request.sessionChatId,
                     logSource: 'memory' as const,
@@ -809,31 +811,29 @@ export function createStoredResponseMemoryAnalysis(
                                     : memoryDeltaSchema,
                     }),
             }
-            let response = await requestMemoryModel(modelCall)
-            if (modelCall.schema
-                && response.type === 'success'
-                && typeof response.result === 'string') {
-                try {
-                    parseSingleJsonObject(response.result)
-                }
-                catch {
-                    response = await requestMemoryModel({
+            const nativeDraft = ['memory-draft', 'reboot-batch', 'canonical-batch'].includes(request.format ?? '')
+            const requestResponse = async (feedback?: ModelOutputError) => {
+                    const response = await requestMemoryModel({
                         ...modelCall,
-                        formated: [{
-                            role: 'system',
-                            content: `${request.system}\n\nThe previous response could not be parsed. Return exactly one JSON object and no other text.`,
-                        }, modelCall.formated[1]],
+                        formated: [{ role: 'system', content: request.system
+                            + (feedback ? `\n\n${modelOutputRepairInstruction(feedback)}` : '') },
+                        modelCall.formated[1]],
                     })
-                }
+                    if (response.type !== 'success') {
+                        throw new Error(modelFailureMessage('Memory analysis model request failed', response))
+                    }
+                    return response
             }
-            if (response.type !== 'success'
-                || typeof response.result !== 'string') {
-                throw new Error(modelFailureMessage(
-                    'Memory analysis model request failed',
-                    response
-                ))
-            }
-            return response.result
+            // Preserve replay restrictions and completion metadata until the
+            // runner's semantic validation, not merely until JSON parsing.
+            if (nativeDraft) return requestResponse()
+            return runValidatedModelRequest({
+                request: requestResponse,
+                parse: (text) => {
+                    if (modelCall.schema) parseSingleJsonObject(text)
+                    return text
+                },
+            })
         },
     })
     type PreparedNarrativeContext = {
@@ -932,6 +932,7 @@ export function createStoredResponseMemoryAnalysis(
                             maxTokens: 4_096,
                             temperature: 0,
                             bias: {},
+                            extractJson: '',
                             realChatId: chatId,
                             logSource: 'memory',
                             logPurpose: 'bardwiki-analysis',
@@ -953,7 +954,7 @@ export function createStoredResponseMemoryAnalysis(
                                 characterId,
                                 chatId,
                                 summary: normalizeNarrativeBaseline(
-                                    response.result
+                                    readModelResponseText(response)
                                 ),
                             },
                             operationController.signal

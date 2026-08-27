@@ -2,11 +2,23 @@ import { describe, expect, test } from 'vitest'
 import { createBlankStudioProject } from 'src/ts/firstMessageStudio'
 import {
     readFirstMessageStudioVariables,
+    resetFirstMessageStudioScriptstate,
     shouldRenderFirstMessageStudio,
     writeFirstMessageStudioVariables,
 } from 'src/ts/firstMessageStudio'
+import { clearGenericChatImageStyles, isFirstMessageStudioManagedImage } from './chatImageHandling'
 
 describe('first message studio chat integration', () => {
+    test('keeps Studio presentation assets out of generic chat image styling', () => {
+        document.body.innerHTML = `<div data-first-message-studio-compatible><div><img id="studio-image" class="root-loaded-image root-loaded-image-dynamic keep-me"></div></div><img id="ordinary-image">`
+
+        const studioImage = document.querySelector('#studio-image')!
+        expect(isFirstMessageStudioManagedImage(studioImage)).toBe(true)
+        expect(isFirstMessageStudioManagedImage(document.querySelector('#ordinary-image')!)).toBe(false)
+        clearGenericChatImageStyles(studioImage)
+        expect(studioImage.className).toBe('keep-me')
+    })
+
     test('renders only for an enabled incomplete first message', () => {
         const project = createBlankStudioProject()
         expect(shouldRenderFirstMessageStudio(true, project, {}, 'first_message_studio_done=0')).toBe(true)
@@ -28,5 +40,22 @@ describe('first message studio chat integration', () => {
 
         expect(written).toEqual({ $keep: 'yes', $language: 'ja', $first_message_studio_done: '1' })
         expect(original).toEqual({ $keep: 'yes' })
+    })
+
+    test('resets stale Studio progress to the configured first screen', () => {
+        const project = createBlankStudioProject()
+        project.completionVariable = 'setup_done'
+        project.stageVariable = 'setup_page'
+        project.variables = [{ name: 'route', label: 'Route', defaultValue: 'default', choices: [] }]
+        const original = { $setup_done: '1', $setup_page: 'stage-2', $route: 'old', $keep: 'yes' }
+
+        expect(resetFirstMessageStudioScriptstate(project, original)).toEqual({
+            $setup_done: '0',
+            $setup_page: 'welcome',
+            $route: 'default',
+            $cv_lang: '1',
+            $keep: 'yes',
+        })
+        expect(original.$setup_page).toBe('stage-2')
     })
 })

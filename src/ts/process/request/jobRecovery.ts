@@ -289,7 +289,10 @@ function insertRecoveredMessage(loc: LocatedChat, job: ModelJobRecord, text: str
         data: text,
         time: Date.now(),
         chatId: job.generationId ?? uuidv4(),
-        generationInfo: { generationId: job.generationId ?? undefined },
+        generationInfo: {
+            generationId: job.generationId ?? undefined,
+            model: job.model ?? undefined,
+        },
     }
     if (loc.char.chaId) message.saying = loc.char.chaId
     loc.chat.message.push(message)
@@ -318,7 +321,12 @@ function insertJobError(loc: LocatedChat, job: ModelJobRecord, error: string): b
         time: Date.now(),
     }
     if (loc.char.chaId) message.saying = loc.char.chaId
-    if (job.generationId) message.generationInfo = { generationId: job.generationId }
+    if (job.generationId || job.model) {
+        message.generationInfo = {
+            generationId: job.generationId ?? undefined,
+            model: job.model ?? undefined,
+        }
+    }
     loc.chat.message.push(message)
     bumpReload(loc)
     return true
@@ -412,10 +420,15 @@ async function readJobResult(job: ModelJobRecord): Promise<{ ok: true, text: str
 //
 // Returns whether the message was actually filled (false on the leave-alone
 // path, which needs no save).
-function fillPartialMessage(loc: LocatedChat, index: number, text: string): boolean {
+function fillPartialMessage(loc: LocatedChat, index: number, text: string, job: ModelJobRecord): boolean {
     const message = loc.chat.message[index]
     if (!message || (message.data?.length ?? 0) >= text.length) return false
     message.data = text
+    message.generationInfo = {
+        ...message.generationInfo,
+        generationId: job.generationId ?? message.generationInfo?.generationId,
+        model: job.model ?? message.generationInfo?.model,
+    }
     bumpReload(loc)
     return true
 }
@@ -465,7 +478,7 @@ export async function recoverTerminalJob(job: ModelJobRecord): Promise<void> {
             diag(`recover ${job.id.slice(0, 8)}: inserted len=${result.text.length}`)
         } else {
             const before = loc.chat.message[existingIdx]?.data?.length ?? 0
-            mutated = fillPartialMessage(loc, existingIdx, result.text)
+            mutated = fillPartialMessage(loc, existingIdx, result.text, job)
             const after = loc.chat.message[existingIdx]?.data?.length ?? 0
             // Independent read-back through a FRESH proxied lookup: proves the
             // write is visible to the reactive graph, not only to our local

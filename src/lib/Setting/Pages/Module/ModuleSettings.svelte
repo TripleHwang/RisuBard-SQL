@@ -133,7 +133,7 @@
     })
 </script>
 {#if mode === 0}
-    <SettingPage title={language.modules}>
+    <SettingPage resizable title={language.modules}>
 
     <CollectionOrganizerList
         kind="modules"
@@ -156,17 +156,19 @@
             {@const moduleIndex = DBState.db.modules.findIndex((module) => module.id === moduleId)}
             {#if moduleIndex >= 0}
                 {@const rmodule = DBState.db.modules[moduleIndex]}
-                <div class="pl-3 pt-3 text-left flex items-center">
-                    {#if rmodule.mcp}
-                        <Waypoints size={18} class="mr-2" />
-                    {/if}
-                    <span class="font-bold">{rmodule.name}</span>
-                    <div class="grow flex justify-end">
+                <div class="module-item-header pl-3 pt-3 text-left">
+                    <div class="module-item-title font-bold">
+                        {#if rmodule.mcp}
+                            <Waypoints size={18} class="shrink-0" />
+                        {/if}
+                        <span class="min-w-0">{rmodule.name}</span>
+                    </div>
+                    <div class="module-item-actions">
                         <button class={(DBState.db.enabledModules.includes(rmodule.id)) ?
-                                "mr-2 cursor-pointer text-blue-500" :
+                                "mr-2 cursor-pointer text-info" :
                                 rmodule.namespace && 
                                 DBState.db.moduleIntergration?.split(',').map((s) => s.trim()).includes(rmodule.namespace) ?
-                                "text-amber-500 hover:text-primary mr-2 cursor-pointer" :
+                                "text-warning hover:text-primary mr-2 cursor-pointer" :
                                 "text-textcolor2 hover:text-primary mr-2 cursor-pointer"
                             } use:tooltip={language.enableGlobal} onclick={async (e) => {
                             e.stopPropagation()
@@ -218,7 +220,7 @@
                                 <SquarePen size={18}/>
                             </button>
                         {/if}
-                        <button class="text-textcolor2 hover:text-red-400 mr-2 cursor-pointer" use:tooltip={language.remove} onclick={async (e) => {
+                        <button class="text-textcolor2 hover:text-danger/80 mr-2 cursor-pointer" use:tooltip={language.remove} onclick={async (e) => {
                             e.stopPropagation()
                             const d = await alertConfirm(`${language.removeConfirm}` + rmodule.name)
                             if(d){
@@ -237,7 +239,7 @@
                         </button>
                     </div>
                 </div>
-                <div class="mt-1 mb-3 pl-3">
+                <div class="module-item-description mt-1 mb-3 pl-3">
                     <span class="text-sm text-textcolor2">{rmodule.description || 'No description provided'}</span>
                 </div>
             {/if}
@@ -315,3 +317,41 @@
         {/if}
     </div>
 </ShDialog>
+
+<style>
+    .module-item-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 0;
+    }
+
+    .module-item-title {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex: 1 1 10rem;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .module-item-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        row-gap: 0.5rem;
+        min-width: 0;
+        max-width: 100%;
+        margin-left: auto;
+    }
+
+    .module-item-actions > button {
+        flex-shrink: 0;
+    }
+
+    .module-item-description {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+</style>

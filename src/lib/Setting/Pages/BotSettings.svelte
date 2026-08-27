@@ -453,7 +453,7 @@
                             <TextInput marginBottom bind:value={DBState.db.localStopStrings[i]} fullwidth fullh/>
                         </div>
                         <div>
-                            <button class="font-medium flex justify-center items-center h-full cursor-pointer hover:text-red-400 w-full" onclick={() => {
+                            <button class="font-medium flex justify-center items-center h-full cursor-pointer hover:text-danger/80 w-full" onclick={() => {
                                 let localStopStrings = DBState.db.localStopStrings
                                 localStopStrings.splice(i, 1)
                                 DBState.db.localStopStrings = localStopStrings

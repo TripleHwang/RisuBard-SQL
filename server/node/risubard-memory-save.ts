@@ -35,6 +35,7 @@ interface StoredMemorySaveManifest extends MemorySaveSlotSummary {
 type SaveFileSystem = Pick<
     typeof nodeFs,
     'lstat' | 'mkdir' | 'readdir' | 'readFile' | 'rm' | 'writeFile'
+    | 'copyFile' | 'rename' | 'realpath'
 >
 
 function required(value: unknown, label: string, maximum = 1_024): string {
@@ -169,6 +170,7 @@ export async function createMemorySaveSlot(input: {
     characterId: string
     sourceChatId: string
     saveId: string
+    overwrite?: boolean
     sourceChatName: string
     turnCount: number
     latestMessageId?: string
@@ -179,7 +181,14 @@ export async function createMemorySaveSlot(input: {
     const fileSystem = options.fileSystem ?? nodeFs
     const saveId = required(input.saveId, 'saveId')
     const sourceChatId = required(input.sourceChatId, 'sourceChatId')
-    const sourceChatName = required(input.sourceChatName, 'sourceChatName', 512)
+    let sourceChatName = required(input.sourceChatName, 'sourceChatName', 512)
+    if (input.overwrite) {
+        const saved = await validatedSave(fileSystem, input)
+        if (saved.manifest.sourceChatId !== sourceChatId) {
+            throw new Error('Cannot overwrite a save from a different chat')
+        }
+        sourceChatName = saved.manifest.sourceChatName
+    }
     if (!Number.isSafeInteger(input.turnCount) || input.turnCount < 0) {
         throw new Error('turnCount must be a non-negative safe integer')
     }
@@ -211,23 +220,28 @@ export async function createMemorySaveSlot(input: {
     const destinationChatId = memorySaveWorkspaceId(saveId)
     let receipt: MemoryForkReceipt | undefined
     try {
-        receipt = await forkMemoryWorkspace({
+        const forkInput = {
             userDataDirectory: input.userDataDirectory,
             characterId: required(input.characterId, 'characterId'),
             sourceChatId,
             destinationChatId,
-            mode: 'copy',
-        })
-        const workspace = workspaceFor(
-            input.userDataDirectory, input.characterId, saveId
-        )
+        }
+        receipt = input.overwrite
+            ? await replaceMemoryWorkspace(forkInput, { fileSystem })
+            : await forkMemoryWorkspace({ ...forkInput, mode: 'copy' }, { fileSystem })
+        const directory = input.overwrite
+            ? resolveMemoryReplacementStaging(
+                input.userDataDirectory, input.characterId,
+                destinationChatId, receipt.forkToken
+            )
+            : workspaceFor(input.userDataDirectory, input.characterId, saveId).directory
         await fileSystem.writeFile(
-            join(workspace.directory, SAVE_CHAT),
+            join(directory, SAVE_CHAT),
             input.chatBytes,
             { flag: 'wx', mode: 0o600 }
         )
         await fileSystem.writeFile(
-            join(workspace.directory, SAVE_MANIFEST),
+            join(directory, SAVE_MANIFEST),
             JSON.stringify(manifest),
             { encoding: 'utf8', flag: 'wx', mode: 0o600 }
         )
@@ -237,7 +251,7 @@ export async function createMemorySaveSlot(input: {
             destinationChatId,
             forkToken: receipt.forkToken,
             action: 'finalize',
-        })
+        }, { fileSystem })
         return summaryOf(manifest)
     }
     catch (error) {
@@ -248,7 +262,7 @@ export async function createMemorySaveSlot(input: {
                 destinationChatId,
                 forkToken: receipt.forkToken,
                 action: 'discard',
-            }).catch(() => undefined)
+            }, { fileSystem }).catch(() => undefined)
         }
         throw error
     }

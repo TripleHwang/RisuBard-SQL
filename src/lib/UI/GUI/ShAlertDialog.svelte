@@ -62,7 +62,7 @@
     // viewport (size class supplies max-width upper bound on desktop).
     const contentBase =
         'fixed left-1/2 top-1/2 w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 ' +
-        'bg-darkbg border border-darkborderc rounded-md shadow-lg ' +
+        'risu-modal-surface ' +
         'p-4 flex flex-col gap-4 max-h-[90vh] overflow-y-auto outline-none ' +
         'data-[state=open]:animate-in data-[state=closed]:animate-out ' +
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 ' +
@@ -72,7 +72,7 @@
 <AlertDialog.Root bind:open {onOpenChange}>
     <AlertDialog.Portal>
         <AlertDialog.Overlay
-            class={cn('fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier])}
+            class={cn('risu-modal-overlay fixed inset-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0', tierClasses[tier])}
         />
         <AlertDialog.Content
             class={cn(contentBase, tierClasses[tier], sizeClasses[size], contentClass)}
@@ -81,7 +81,7 @@
             interactOutsideBehavior={closeOnOutsideClick ? 'close' : 'ignore'}
         >
             {#if title || description}
-                <div class="flex flex-col gap-1">
+                <div class="risu-modal-header flex flex-col gap-1">
                     {#if title}
                         <AlertDialog.Title class="text-lg font-semibold text-textcolor leading-tight">
                             {@render title()}

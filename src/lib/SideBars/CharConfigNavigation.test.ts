@@ -123,5 +123,34 @@ describe('character configuration navigation', () => {
             '<section data-current-chat-section class="border-b border-darkborderc pb-2">'
         )
         expect(chatList).not.toContain('<section class="mt-1 border-b')
+        expect(chatList).not.toContain('data-current-chat-label')
+    })
+
+    test('keeps eight ordered toolbar actions and moves secondary actions into a menu', () => {
+        const chatList = source('src/lib/SideBars/SideChatList.svelte')
+        const toolbar = chatList.slice(chatList.indexOf('data-chat-list-toolbar'), chatList.indexOf('{#key sorted}'))
+        const actions = ['data-sidebar-new-chat', 'data-chat-rename', 'data-chat-copy', 'data-chat-merge',
+            'data-chat-branch', 'data-chat-delete', 'data-chat-new-folder', 'data-chat-more']
+        const positions = actions.map(action => toolbar.indexOf(action))
+        expect(positions.every(position => position >= 0)).toBe(true)
+        expect(positions).toEqual([...positions].sort((a, b) => a - b))
+        expect(toolbar).not.toContain('flex-wrap')
+        const menu = toolbar.slice(toolbar.indexOf('<ShDropdownMenuContent'), toolbar.indexOf('</ShDropdownMenuContent>'))
+        expect(menu).toContain('onSelect={exportAllChats}')
+        expect(menu).toContain('onSelect={importChat}')
+        expect(menu).toContain('$bookmarkListOpen = true')
+        expect(toolbar.match(/<ShButton\b/g)).toHaveLength(7)
+    })
+
+    test('gives the list its own scroll area and keeps the sidebar handle outside scrolling content', () => {
+        const chatList = source('src/lib/SideBars/SideChatList.svelte')
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        expect(chatList).toContain('data-chat-list-scroll')
+        expect(chatList).toContain('style:height={`${chatListHeight}px`}')
+        expect(chatList).toContain('scrollbar-gutter: stable')
+        expect(chatList).toContain('<SidebarResizeHandle axis="height" target={listEle}')
+        expect(sidebar).toContain('data-character-sidebar-scroll')
+        expect(sidebar).toContain('<SidebarResizeHandle axis="width" target={sidebarElement}')
+        expect(sidebar).toContain('style:--sidebar-size={sidebarWidth}')
     })
 })

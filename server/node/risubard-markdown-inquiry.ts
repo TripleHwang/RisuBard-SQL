@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
 import type { MarkdownWikiDocument } from './risubard-markdown-wiki'
 import { normalizeRisuBardInquiryTokenBudget } from '../../src/ts/risubard/risuBardSettings'
+import { selectMarkdownExcerpt } from './risubard-markdown-excerpt'
 
 const MAX_SELECTED_DOCUMENTS = 12
 const MAX_SOURCE_CHARACTERS = 2_000
@@ -245,88 +246,6 @@ function candidateScore(
     return score
 }
 
-function firstHeading(content: string): string {
-    return content.match(/^#\s+.+$/m)?.[0]?.trim() ?? ''
-}
-
-function matchingIndex(
-    content: string,
-    normalizedQuery: string,
-    terms: readonly string[]
-): number {
-    const searchable = normalized(content)
-    if (normalizedQuery.length > 1) {
-        const phrase = searchable.indexOf(normalizedQuery)
-        if (phrase >= 0) return phrase
-    }
-    for (const term of [...terms].sort((left, right) =>
-        right.length - left.length)) {
-        const index = searchable.indexOf(term)
-        if (index >= 0) return index
-    }
-    return -1
-}
-
-function centeredExcerpt(
-    section: string,
-    heading: string,
-    normalizedQuery: string,
-    terms: readonly string[]
-): string {
-    const prefix = heading.length > 0 && !section.trimStart().startsWith(heading)
-        ? `${heading}\n\n`
-        : ''
-    const budget = Math.max(1, MAX_SOURCE_CHARACTERS - prefix.length)
-    if (section.length <= budget) return `${prefix}${section}`.trim()
-    const match = matchingIndex(section, normalizedQuery, terms)
-    if (match < 0) return `${prefix}${section.slice(0, budget)}`.trim()
-    const leading = Math.floor(budget * 0.35)
-    let start = Math.max(0, match - leading)
-    let end = Math.min(section.length, start + budget)
-    if (end - start < budget) start = Math.max(0, end - budget)
-    const startMarker = start > 0 ? '…' : ''
-    const endMarker = end < section.length ? '…' : ''
-    const markerLength = startMarker.length + endMarker.length
-    const body = section.slice(start, Math.max(start, end - markerLength))
-    return `${prefix}${startMarker}${body}${endMarker}`
-        .slice(0, MAX_SOURCE_CHARACTERS)
-        .trim()
-}
-
-function relevantExcerpt(
-    content: string,
-    normalizedQuery: string,
-    terms: readonly string[],
-    characterAnchorTerms: ReadonlySet<string>
-): string {
-    if (content.length <= MAX_SOURCE_CHARACTERS) return content
-    const heading = firstHeading(content)
-    const matches = [...content.matchAll(/^#{1,6}\s+.+$/gm)]
-    if (matches.length === 0) {
-        return centeredExcerpt(content, heading, normalizedQuery, terms)
-    }
-    const sections = matches.map((match, index) => {
-        const start = match.index ?? 0
-        const end = matches[index + 1]?.index ?? content.length
-        const section = content.slice(start, end).trim()
-        const score = lexicalScore({
-            id: '', type: 'other', status: 'active', title: match[0],
-            relativePath: '', sourceMessageIds: [], updated: '',
-            content: section, links: [], contextMode: 'auto', contentHash: '',
-        }, normalizedQuery, terms, characterAnchorTerms)
-        return { section, score, start }
-    }).sort((left, right) =>
-        right.score - left.score || left.start - right.start)
-    const selected = sections[0]
-    if (!selected || selected.score <= 0) return content.slice(0, MAX_SOURCE_CHARACTERS)
-    return centeredExcerpt(
-        selected.section,
-        heading,
-        normalizedQuery,
-        terms
-    )
-}
-
 export function inquireMarkdownDocuments(
     input: MarkdownInquiryInput
 ): MarkdownInquiryResult {
@@ -436,7 +355,7 @@ export function inquireMarkdownDocuments(
     const pastIntent = hasPastIntent(input.currentInput)
     const currentIntent = /(?:현재|지금|최신|상태|current|now|latest|status|現在|今)/i
         .test(input.currentInput)
-    const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline)/i
+    const chronologyIntent = /(?:작중\s*행적|행적|모험|여정|연대기|시간\s*순|순서대로|지금까지|journey|adventures?|chronolog|timeline|story\s+history)/i
         .test(input.currentInput)
     const historicalEvidenceIntent = hasHistoricalEvidenceIntent(
         input.currentInput
@@ -446,7 +365,7 @@ export function inquireMarkdownDocuments(
         chronologyIntent
             ? eligibleDocuments.filter((document) =>
                 document.type === 'character'
-                && /^##\s+작중\s*행적\s*$/m.test(document.content)
+                && /^#{2,3}\s+(작중\s*행적|Story History)\s*$/mi.test(document.content)
                 && normalizedQuery.includes(normalized(document.title)))
                 .map((document) => document.id)
             : []
@@ -478,12 +397,13 @@ export function inquireMarkdownDocuments(
         })),
         ...automatic,
     ].map((candidate) => {
-        const content = relevantExcerpt(
-            candidate.document.content,
-            normalizedQuery,
-            terms,
-            characterAnchorTerms
-        )
+        const content = selectMarkdownExcerpt({
+            content: candidate.document.content,
+            documentType: candidate.document.type,
+            query: input.currentInput,
+            maximumCharacters: MAX_SOURCE_CHARACTERS,
+            chronologyIntent,
+        })
         return {
             ...candidate,
             content,

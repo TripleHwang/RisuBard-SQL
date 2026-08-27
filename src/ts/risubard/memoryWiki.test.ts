@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import {
     loadNarrativeMemoryWiki,
     revealWikiDocument,
-    snapshotWikiBeforeTurn,
-    undoWikiTurnReceipt,
     saveManualWikiDocument,
     setWikiDocumentContextMode,
     trashWikiDocument,
@@ -223,76 +221,6 @@ describe('loadNarrativeMemoryWiki', () => {
                 }),
             })
         )
-    })
-
-    it('creates a pre-turn wiki snapshot through the authenticated route', async () => {
-        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-            snapshotId: 'turn-stable',
-            canonicalCount: 2,
-        }))) as unknown as typeof fetch
-
-        await expect(snapshotWikiBeforeTurn({
-            characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['user-1', 'assistant-1'],
-            fetchImpl, createAuth: async () => 'token',
-        })).resolves.toEqual({ snapshotId: 'turn-stable', canonicalCount: 2 })
-        expect(fetchImpl).toHaveBeenCalledWith(
-            '/api/risubard/memory/wiki/snapshot',
-            expect.objectContaining({ method: 'POST' })
-        )
-    })
-
-    it('parses a whole-turn undo receipt with a preserved conflict', async () => {
-        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-            snapshotId: 'turn-stable',
-            sourceMessageIds: ['assistant-1'],
-            eventIds: ['event.stable'],
-            changes: [{
-                documentId: 'character.lavian',
-                type: 'character',
-                title: '라비안',
-                relativePath: 'characters/라비안.md',
-                action: 'update',
-                beforeHash: 'before',
-                afterHash: 'after',
-                undoConflict: 'changed-after-turn',
-            }],
-            warnings: [],
-            recordedAt: '2026-08-13T00:00:00.000Z',
-            undoneAt: '2026-08-13T00:01:00.000Z',
-        }))) as unknown as typeof fetch
-
-        await expect(undoWikiTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: 'turn-stable', fetchImpl,
-            createAuth: async () => 'token',
-        })).resolves.toEqual(expect.objectContaining({
-            undoneAt: '2026-08-13T00:01:00.000Z',
-            changes: [expect.objectContaining({
-                undoConflict: 'changed-after-turn',
-            })],
-        }))
-    })
-
-    it('rejects an unknown whole-turn undo conflict reason', async () => {
-        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
-            snapshotId: 'turn-stable',
-            sourceMessageIds: ['assistant-1'], eventIds: [],
-            changes: [{
-                documentId: 'character.lavian', type: 'character',
-                title: '라비안', relativePath: 'characters/라비안.md',
-                action: 'update', beforeHash: 'before', afterHash: 'after',
-                undoConflict: 'unknown-reason',
-            }],
-            warnings: [], recordedAt: '2026-08-13T00:00:00.000Z',
-            undoneAt: '2026-08-13T00:01:00.000Z',
-        }))) as unknown as typeof fetch
-
-        await expect(undoWikiTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: 'turn-stable', fetchImpl,
-            createAuth: async () => 'token',
-        })).rejects.toThrow('Invalid wiki turn receipt change')
     })
 
     it('loads Markdown documents without a graph DTO', async () => {

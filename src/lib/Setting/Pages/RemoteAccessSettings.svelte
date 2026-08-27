@@ -125,7 +125,7 @@
         </div>
 
     {:else if status === 'disabled'}
-        <div class="text-sm text-yellow-400">{language.remoteAccessDisabled}</div>
+        <div class="text-sm text-warning">{language.remoteAccessDisabled}</div>
 
     {:else if status === 'off'}
         <ShButton onclick={startTunnel} className="mt-2 self-start">{language.remoteAccessOpen}</ShButton>
@@ -182,7 +182,7 @@
 
     {:else if status === 'error'}
         <div class="flex flex-col gap-2">
-            <div class="text-sm text-red-400">
+            <div class="text-sm text-danger">
                 {language.remoteAccessError}{tunnelError ? `: ${tunnelError}` : ''}
             </div>
             <ShButton size="sm" onclick={startTunnel} className="mt-1 self-start">{language.remoteAccessRetry}</ShButton>

@@ -242,6 +242,7 @@ export async function exportChat(page:number){
         else if(mode === '2'){
 
             let chatContentHTML = ''
+            const exportTheme = getComputedStyle(document.documentElement)
 
             let i = 0
             for(const v of chat.message){
@@ -261,6 +262,8 @@ export async function exportChat(page:number){
                         <style>
                             body{
                                 font-family: Arial, sans-serif;
+                                color: ${exportTheme.getPropertyValue('--color-textcolor').trim()};
+                                background: ${exportTheme.getPropertyValue('--color-bgcolor').trim()};
                                 display: flex;
                                 justify-content: center;
                             }
@@ -273,7 +276,7 @@ export async function exportChat(page:number){
                                 gap: 1rem;
                             }
                             .chat{
-                                background: #f0f0f0;
+                                background: ${exportTheme.getPropertyValue('--color-darkbg').trim()};
                                 padding: 1rem;
                                 border-radius: 10px;
                                 display: flex;
@@ -572,6 +575,14 @@ function formatTavernChat(chat:string, charName:string){
     return chat.replace(/<([Uu]ser)>|\{\{([Uu]ser)\}\}/g, getUserName()).replace(/((\{\{)|<)([Cc]har)(=.+)?((\}\})|>)/g, charName)
 }
 
+function removeAppliedPostHistorySuffix(note:string, applied:string){
+    if(note === applied){
+        return ''
+    }
+    const suffix = '\n' + applied
+    return note.endsWith(suffix) ? note.slice(0, -suffix.length).trimEnd() : note
+}
+
 export function characterFormatUpdate(indexOrCharacter:number|character, arg:{
     updateInteraction?:boolean,
 } = {}){
@@ -627,10 +638,18 @@ export function characterFormatUpdate(indexOrCharacter:number|character, arg:{
         INTONATION_SCALE: 1,
         VOLUME_SCALE: 1
     }
-    if(cha.postHistoryInstructions){
-        cha.chats[cha.chatPage].note += "\n" + cha.postHistoryInstructions
+    const postHistoryInstructions = cha.postHistoryInstructions ?? ''
+    if(typeof cha.postHistoryInstructionsApplied === 'string' && cha.postHistoryInstructionsApplied !== postHistoryInstructions){
+        cha.chats[cha.chatPage].note = removeAppliedPostHistorySuffix(
+            cha.chats[cha.chatPage].note,
+            cha.postHistoryInstructionsApplied,
+        )
+        cha.postHistoryInstructionsApplied = undefined
+    }
+    if(postHistoryInstructions && cha.postHistoryInstructionsApplied !== postHistoryInstructions){
+        cha.chats[cha.chatPage].note += "\n" + postHistoryInstructions
         cha.chats[cha.chatPage].note = cha.chats[cha.chatPage].note.trim()
-        cha.postHistoryInstructions = null
+        cha.postHistoryInstructionsApplied = postHistoryInstructions
     }
     cha.additionalText ??= ''
     cha.depth_prompt ??= {
@@ -730,6 +749,7 @@ export function createBlankChar():character{
         scenario:"",
         firstMsgIndex: -1,
         replaceGlobalNote: "",
+        moduleNamespace: '',
         triggerscript: [{
             comment: "",
             type: "manual",

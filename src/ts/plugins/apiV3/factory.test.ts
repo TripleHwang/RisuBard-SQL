@@ -26,6 +26,7 @@ describe('API v3 plugin sandbox document', () => {
         expect(iframe.sandbox.contains('allow-scripts')).toBe(true)
         expect(iframe.sandbox.contains('allow-modals')).toBe(true)
         expect(iframe.sandbox.contains('allow-downloads')).toBe(true)
+        expect(iframe.getAttribute('allow') ?? '').toContain('screen-wake-lock')
         expect(iframe.getAttribute('csp')).toContain("default-src 'none'")
         expect(revokeObjectURL).not.toHaveBeenCalled()
 

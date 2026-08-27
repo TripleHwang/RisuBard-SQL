@@ -22,7 +22,7 @@
 
   } from "../../ts/stores.svelte";
     import { setDatabase } from "../../ts/storage/database.svelte";
-    import { DBState } from 'src/ts/stores.svelte';
+    import { DBState, SizeStore } from 'src/ts/stores.svelte';
     import BarIcon from "./BarIcon.svelte";
     import SidebarIndicator from "./SidebarIndicator.svelte";
     import {
@@ -53,6 +53,8 @@
     import SideChatList from "./SideChatList.svelte";
 
   import { sideBarSize } from "src/ts/gui/guisize";
+  import { normalizeCharacterSidebarWidth } from 'src/ts/gui/sidebarLayout';
+  import SidebarResizeHandle from './SidebarResizeHandle.svelte';
   import DevTool from "./DevTool.svelte";
     import QuickSettingsGui from "../Others/QuickSettingsGUI.svelte";
   import PluginDefinedIcon from "../Others/PluginDefinedIcon.svelte";
@@ -82,6 +84,14 @@
   let menuMode = $state(0);
   let devTool = $state(false)
   let characterManageOpen = $state(false)
+  let sidebarElement = $state<HTMLDivElement>()
+  const sidebarMaxWidth = $derived(Math.max(0, ($SizeStore.w || window.innerWidth)
+    - ($DynamicGUI ? 128 : 440)))
+  const sidebarWidth = $derived(
+    $selectedCharID >= 0 && Number.isFinite(DBState.db.characterSidebarWidth)
+      ? `${normalizeCharacterSidebarWidth(DBState.db.characterSidebarWidth, sidebarMaxWidth)}px`
+      : `min(${24 + 4 * $sideBarSize}rem, ${sidebarMaxWidth}px)`
+  )
   $effect(() => {
     if ($selectedCharID < 0) characterManageOpen = false
   })
@@ -420,7 +430,7 @@
     if (touchDragState.ghost) touchDragState.ghost.style.display = ''
 
     if (touchDragState.highlighted) {
-      touchDragState.highlighted.classList.remove('bg-green-500', 'ring-2', 'ring-green-400')
+      touchDragState.highlighted.classList.remove('bg-success', 'ring-2', 'ring-success')
       touchDragState.highlighted = null
     }
 
@@ -429,10 +439,10 @@
     const item = el.closest('[data-drag-index]') as HTMLElement | null
 
     if (spacer) {
-      spacer.classList.add('bg-green-500')
+      spacer.classList.add('bg-success')
       touchDragState.highlighted = spacer
     } else if (item && item !== touchDragState.element) {
-      item.classList.add('ring-2', 'ring-green-400')
+      item.classList.add('ring-2', 'ring-success')
       touchDragState.highlighted = item
     }
   }
@@ -442,7 +452,7 @@
     if (!touchDragState) return false
     touchDragState.element.style.opacity = ''
     if (touchDragState.highlighted) {
-      touchDragState.highlighted.classList.remove('bg-green-500', 'ring-2', 'ring-green-400')
+      touchDragState.highlighted.classList.remove('bg-success', 'ring-2', 'ring-success')
     }
     if (touchDragState.ghost) touchDragState.ghost.remove()
     touchDragState = null
@@ -586,7 +596,7 @@
   {#if !DBState.db.hamburgerButtonBottom}
   <button
     data-sidebar-options
-    class="risu-button-lift mt-3 flex h-10 min-h-10 w-[52px] min-w-[52px] cursor-pointer items-center justify-center rounded-md bg-primary text-white transition-colors hover:bg-primary/80"
+    class="risu-button-lift mt-3 flex h-10 min-h-10 w-[52px] min-w-[52px] cursor-pointer items-center justify-center rounded-md bg-primary text-accenttext transition-colors hover:bg-primary/80"
     class:max-xs:hidden={$leftBarCollapsed}
     onclick={() => {
       menuMode = 1 - menuMode;
@@ -601,7 +611,7 @@
     <ChevronsLeft size={20} />
   </button>
   {/if}
-  <div data-sidebar-options-divider class="w-full relative text-white" class:max-xs:hidden={$leftBarCollapsed}>
+  <div data-sidebar-options-divider class="w-full relative text-textcolor" class:max-xs:hidden={$leftBarCollapsed}>
     {#if menuMode === 1}
       <div class="absolute w-20 min-w-20 flex border-b-selected border-b bg-bgcolor flex-col items-center pt-2 rounded-b-md z-20 pb-2 max-h-[calc(100dvh-4rem)] overflow-x-hidden overflow-y-auto hamburger-menu">
         <BarIcon
@@ -666,7 +676,7 @@
     class:max-xs:hidden={$leftBarCollapsed}
   >
     <button
-      class="group relative grid h-[54px] w-[54px] place-items-center overflow-hidden rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm outline outline-4 outline-offset-0 outline-white transition-all hover:border-primary hover:text-primary"
+      class="group relative grid h-[54px] w-[54px] place-items-center overflow-hidden rounded-xl border border-borderc/25 bg-darkbg text-textcolor2 shadow-sm outline outline-4 outline-offset-0 outline-borderc transition-all hover:border-primary hover:text-primary"
       aria-label={language.persona}
       title={language.persona}
       onclick={() => openPersonaManager.set(true)}
@@ -702,7 +712,7 @@
   >
     <button
       type="button"
-      class="character-toolbar-button character-toolbar-button--chat risu-button-lift group relative overflow-hidden p-0 outline outline-4 outline-offset-0 outline-black"
+      class="character-toolbar-button character-toolbar-button--chat risu-button-lift group relative overflow-hidden p-0 outline outline-4 outline-offset-0 outline-darkborderc"
       style="width: 54px; height: 54px;"
       aria-label="Character Vault 열기"
       title="캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."
@@ -730,15 +740,15 @@
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'move'
-      e.currentTarget.classList.add('bg-green-500')
+      e.currentTarget.classList.add('bg-success')
     }} ondragleave={(e) => {
-      e.currentTarget.classList.remove('bg-green-500')
+      e.currentTarget.classList.remove('bg-success')
     }} ondrop={(e) => {
       const drag = getCurrentSidebarDrag(e)
       if(!drag){ return }
       e.preventDefault()
       e.stopPropagation()
-      e.currentTarget.classList.remove('bg-green-500')
+      e.currentTarget.classList.remove('bg-success')
       try {
         moveSidebarItem(drag,{index:0})
       } finally {
@@ -791,7 +801,7 @@
               chaId={DBState.db.characters[char.index]?.chaId}
             />
             {#if char.isNew}
-              <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-white" role="img" aria-label="새 캐릭터" title="새 캐릭터">
+              <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-media-text" role="img" aria-label="새 캐릭터" title="새 캐릭터">
                 <SolarBoldIcon name="star-shine" size={20} />
               </span>
             {/if}
@@ -909,15 +919,15 @@
             e.preventDefault()
             e.stopPropagation()
             e.dataTransfer.dropEffect = 'move'
-            e.currentTarget.classList.add('bg-green-500')
+            e.currentTarget.classList.add('bg-success')
           }} ondragleave={(e) => {
-            e.currentTarget.classList.remove('bg-green-500')
+            e.currentTarget.classList.remove('bg-success')
           }} ondrop={(e) => {
             const drag = getCurrentSidebarDrag(e)
             if(!drag){ return }
             e.preventDefault()
             e.stopPropagation()
-            e.currentTarget.classList.remove('bg-green-500')
+            e.currentTarget.classList.remove('bg-success')
             try {
               if(char.type === 'folder'){
                 moveSidebarItem(drag,{index:0,folder:char.id})
@@ -969,7 +979,7 @@
                   chaId={DBState.db.characters[char2.index]?.chaId}
                 />
                 {#if char2.isNew}
-                  <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-white" role="img" aria-label="새 캐릭터" title="새 캐릭터">
+                  <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-media-text" role="img" aria-label="새 캐릭터" title="새 캐릭터">
                     <SolarBoldIcon name="star-shine" size={20} />
                   </span>
                 {/if}
@@ -980,15 +990,15 @@
               e.preventDefault()
               e.stopPropagation()
               e.dataTransfer.dropEffect = 'move'
-              e.currentTarget.classList.add('bg-green-500')
+              e.currentTarget.classList.add('bg-success')
             }} ondragleave={(e) => {
-              e.currentTarget.classList.remove('bg-green-500')
+              e.currentTarget.classList.remove('bg-success')
             }} ondrop={(e) => {
               const drag = getCurrentSidebarDrag(e)
               if(!drag){ return }
               e.preventDefault()
               e.stopPropagation()
-              e.currentTarget.classList.remove('bg-green-500')
+              e.currentTarget.classList.remove('bg-success')
               try {
                 if(char.type === 'folder'){
                   moveSidebarItem(drag,{index:ind+1,folder:char.id})
@@ -1006,15 +1016,15 @@
         e.preventDefault()
         e.stopPropagation()
         e.dataTransfer.dropEffect = 'move'
-        e.currentTarget.classList.add('bg-green-500')
+        e.currentTarget.classList.add('bg-success')
       })} ondragleave={(e) => {
-        e.currentTarget.classList.remove('bg-green-500')
+        e.currentTarget.classList.remove('bg-success')
       }} ondrop={(e) => {
         const drag = getCurrentSidebarDrag(e)
         if(!drag){ return }
         e.preventDefault()
         e.stopPropagation()
-        e.currentTarget.classList.remove('bg-green-500')
+        e.currentTarget.classList.remove('bg-success')
         try {
           moveSidebarItem(drag,{index:ind+1})
         } finally {
@@ -1026,7 +1036,7 @@
       <button
         type="button"
         data-sidebar-new-character
-        class="flex h-14 w-14 cursor-pointer select-none items-center justify-center rounded-md border border-textcolor2 text-gray-300 transition-colors hover:border-gray-300"
+        class="flex h-14 w-14 cursor-pointer select-none items-center justify-center rounded-md border border-textcolor2 text-textcolor transition-colors hover:border-borderc"
         aria-label="새 캐릭터"
         title="새 캐릭터"
         use:tooltip={"새 캐릭터"}
@@ -1047,7 +1057,7 @@
     </div>
   </div>
   {#if DBState.db.hamburgerButtonBottom}
-  <div class="border-t border-t-selected w-full relative text-white" class:max-xs:hidden={$leftBarCollapsed}>
+  <div class="border-t border-t-selected w-full relative text-textcolor" class:max-xs:hidden={$leftBarCollapsed}>
     {#if menuMode === 1}
       <div class="absolute bottom-full w-20 min-w-20 flex border-t-selected border-t bg-bgcolor flex-col items-center pt-2 rounded-t-md z-20 pb-2 max-h-[calc(100dvh-4rem)] overflow-x-hidden overflow-y-auto hamburger-menu">
         <BarIcon
@@ -1115,7 +1125,7 @@
   </button>
   {/if}
   <button
-    class="risu-button-lift my-2 flex size-10 min-h-10 min-w-10 cursor-pointer items-center justify-center rounded-md bg-textcolor2 text-white transition-colors hover:bg-primary"
+    class="risu-button-lift my-2 flex size-10 min-h-10 min-w-10 cursor-pointer items-center justify-center rounded-md bg-darkbutton text-textcolor transition-colors hover:bg-primary hover:text-accenttext"
     class:max-xs:hidden={$leftBarCollapsed}
     onclick={() => {
       menuMode = 1 - menuMode;
@@ -1125,19 +1135,13 @@
 </div>
 {/if}
 <div
-  class="setting-area h-full max-xs:relative flex-col overflow-y-auto overflow-x-hidden bg-darkbg pt-2 pb-6 text-textcolor max-h-full"
+  bind:this={sidebarElement}
+  data-character-sidebar
+  class="setting-area relative h-full min-w-0 shrink-0 flex-col bg-darkbg text-textcolor max-h-full"
+  style:width={sidebarWidth}
+  style:--sidebar-size={sidebarWidth}
   class:risu-sidebar={!$sideBarClosing}
-  class:w-96={$sideBarSize === 0}
-  class:w-110={$sideBarSize === 1}
-  class:w-124={$sideBarSize === 2}
-  class:w-138={$sideBarSize === 3}
   class:risu-sidebar-close={$sideBarClosing}
-  class:min-w-96={!$DynamicGUI && $sideBarSize === 0}
-  class:min-w-110={!$DynamicGUI && $sideBarSize === 1}
-  class:min-w-124={!$DynamicGUI && $sideBarSize === 2}
-  class:min-w-138={!$DynamicGUI && $sideBarSize === 3}
-  class:px-2={$DynamicGUI}
-  class:px-4={!$DynamicGUI}
   class:dynamic-sidebar={$DynamicGUI}
   class:hidden={hidden}
   class:flex={!hidden}
@@ -1148,6 +1152,8 @@
     }
   }}
 >
+  <div data-character-sidebar-scroll class="min-h-0 min-w-0 w-full flex-1 overflow-y-auto overflow-x-hidden pt-2 pb-6"
+    class:px-2={$DynamicGUI} class:px-4={!$DynamicGUI}>
   <button
     class="flex w-full justify-end text-textcolor"
     onclick={async () => {
@@ -1161,7 +1167,7 @@
   </button>
   {#if $leftBarCollapsed}
     <button
-      class="hidden max-xs:flex absolute top-3 left-0 h-12 w-12 border-r border-b border-t border-borderc rounded-r-md bg-darkbg hover:border-neutral-200 transition-colors items-center justify-center text-textcolor opacity-50 hover:opacity-90 z-20"
+      class="hidden max-xs:flex absolute top-3 left-0 h-12 w-12 border-r border-b border-t border-borderc rounded-r-md bg-darkbg hover:border-borderc transition-colors items-center justify-center text-textcolor opacity-50 hover:opacity-90 z-20"
       aria-label="Expand sidebar"
       onclick={() => leftBarCollapsed.set(false)}
     >
@@ -1282,6 +1288,10 @@
       {/if}
     {/if}
   {/if}
+  </div>
+  {#if $selectedCharID >= 0}
+    <SidebarResizeHandle axis="width" target={sidebarElement} maxWidth={sidebarMaxWidth} />
+  {/if}
 </div>
 
 {#if $DynamicGUI}
@@ -1328,6 +1338,10 @@
 </ShDialog>
 
 <style>
+  [data-character-config-navigation] :global(.character-toolbar-button) {
+    min-width: 0;
+    flex: 0 1 2.25rem;
+  }
   .editMode {
     min-width: 6rem;
   }
@@ -1398,18 +1412,18 @@
   }
   @keyframes sidebar-dark-animation{
     from {
-      background-color: rgba(0,0,0,0) !important;
+      background-color: transparent !important;
     }
     to {
-      background-color: rgba(0,0,0,0.5) !important;
+      background-color: color-mix(in srgb, var(--color-overlay) 50%, transparent) !important;
     }
   }
   @keyframes sidebar-dark-closing-animation{
     from {
-      background-color: rgba(0,0,0,0.5) !important;
+      background-color: color-mix(in srgb, var(--color-overlay) 50%, transparent) !important;
     }
     to {
-      background-color: rgba(0,0,0,0) !important;
+      background-color: transparent !important;
     }
   }
 
@@ -1446,12 +1460,12 @@
   .sidebar-dark-animation{
     animation-name: sidebar-dark-transition;
     animation-duration: var(--risu-animation-speed);
-    background-color: rgba(0,0,0,0.5)
+    background-color: color-mix(in srgb, var(--color-overlay) 50%, transparent)
   }
   .sidebar-dark-close-animation{
     animation-name: sidebar-dark-closing-transition;
     animation-duration: var(--risu-animation-speed);
-    background-color: rgba(0,0,0,0)
+    background-color: transparent
   }
   .hamburger-menu {
     scrollbar-width: none;
@@ -1467,8 +1481,8 @@
     display: none;
   }
   :global([data-new-character-badge] svg path) {
-    fill: #fff;
-    stroke: #000;
+    fill: var(--color-media-text);
+    stroke: var(--color-shadow);
     stroke-width: 2px;
     stroke-linejoin: round;
     paint-order: stroke fill;

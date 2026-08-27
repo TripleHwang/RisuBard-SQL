@@ -15,7 +15,6 @@ import { findCharacterbyId, getPersonaPrompt, getUserIcon, getUserName, pickHash
 import { getInlayInfosBatch } from '../process/files/inlays';
 import { getModuleAssets, getModuleLorebooks, getModules } from '../process/modules';
 import hljs from 'highlight.js/lib/core'
-import 'highlight.js/styles/atom-one-dark.min.css'
 import { language } from 'src/lang';
 import katex from 'katex'
 import { getModelInfo } from '../model/modellist';
@@ -581,7 +580,7 @@ async function parseAdditionalAssets(data:string, char:simpleCharacterArgument|c
                 return `<audio controls autoplay loop><source src="${p}" type="audio/mpeg"></audio>\n`
             case 'bg':
                 if(mode === 'back'){
-                    return `<div style="width:100%;height:100%;background: linear-gradient(rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0.8)),url(${p}); background-size: cover;"></div>`
+                    return `<div style="width:100%;height:100%;background: linear-gradient(color-mix(in srgb, var(--color-overlay) 80%, transparent), color-mix(in srgb, var(--color-overlay) 80%, transparent)),url(${p}); background-size: cover;"></div>`
                 }
                 break
             case 'asset':{
@@ -714,7 +713,7 @@ export function parseInlayAssets(data:string){
             let cached = blobUrlCache.get(id)
             if(!cached){
                 // If not in memory cache, inject placeholder
-                const placeholder = `${prefix}<div data-inlay-id="${id}" data-inlay-type="${inlayType}" class="risu-inlay-placeholder risu-loading-spinner" style="width: 100%; min-height: 100px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.1); border-radius: 8px;"></div>${postfix}`
+                const placeholder = `${prefix}<div data-inlay-id="${id}" data-inlay-type="${inlayType}" class="risu-inlay-placeholder risu-loading-spinner" style="width: 100%; min-height: 100px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--color-selected) 20%, transparent); border-radius: 8px;"></div>${postfix}`
                 data = data.replace(inlay, placeholder)
                 continue
             }
@@ -961,6 +960,10 @@ export async function ParseMarkdown(
 // Chat re-renders hit the same message text repeatedly; this avoids redundant DOM parsing.
 const trimCache = new Map<string, string>()
 const TRIM_CACHE_MAX = 200
+const trimSanitizeConfig = {
+    ADD_TAGS: ["iframe", "style", "risu-style", "x-em", 'annotation', 'semantics', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac', 'msqrt'],
+    ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "scrolling", "risu-ctrl" ,"risu-btn", 'risu-trigger', 'risu-mark', 'risu-id', 'x-hl-lang', 'x-hl-text', 'data-inlay-id', 'data-inlay-type'],
+}
 
 /** Drops only parser-owned lookup/render caches; inlay URLs are direct server URLs, not owned blobs. */
 export function clearParserRuntimeCaches(): void {
@@ -975,13 +978,30 @@ export function clearParserRuntimeCaches(): void {
 
 export function trimMarkdown(data:string){
     // Include hideAllImages in cache key — DOMPurify hook rewrites <img> based on this flag
-    const cacheKey = (DBState.db?.hideAllImages ? '1|' : '0|') + data
+    const cacheKey = (DBState.db?.hideAllImages ? '1|' : '0|') + (DBState.db?.returnCSSError ? '1|' : '0|') + data
     let cached = trimCache.get(cacheKey)
     if (cached !== undefined) return cached
-    cached = decodeStyle(DOMPurify.sanitize(data, {
-        ADD_TAGS: ["iframe", "style", "risu-style", "x-em", 'annotation', 'semantics', 'mrow', 'mi', 'mo', 'mn', 'msup', 'msub', 'mfrac', 'msqrt'],
-        ADD_ATTR: ["allow", "allowfullscreen", "frameborder", "scrolling", "risu-ctrl" ,"risu-btn", 'risu-trigger', 'risu-mark', 'risu-id', 'x-hl-lang', 'x-hl-text', 'data-inlay-id', 'data-inlay-type'],
-    }))
+    if(data.includes('<risu-style')){
+        const sanitized = DOMPurify.sanitize(data, {
+            ...trimSanitizeConfig,
+            RETURN_DOM: true,
+        }) as HTMLElement
+        for(const encodedStyle of sanitized.querySelectorAll('risu-style')){
+            const decoded = decodeStyleContent(encodedStyle.textContent ?? '')
+            if(typeof decoded !== 'string'){
+                encodedStyle.replaceWith(document.createTextNode(decoded.diagnostic))
+                continue
+            }
+            const style = document.createElement('style')
+            // Style text is not parsed as markup. Escape only closing style tags before serialization.
+            style.textContent = decoded.replace(/<\/style/gi, '<\\/style')
+            encodedStyle.replaceWith(style)
+        }
+        cached = sanitized.innerHTML
+    }
+    else{
+        cached = DOMPurify.sanitize(data, trimSanitizeConfig)
+    }
     if (trimCache.size >= TRIM_CACHE_MAX) {
         // evict oldest entry
         const firstKey = trimCache.keys().next().value
@@ -1096,8 +1116,6 @@ function encodeStyle(txt:string){
         return "<risu-style>" + Buffer.from(c1).toString('hex') + "</risu-style>"
     })
 }
-const styleDecodeRegex = /\<risu-style\>(.+?)\<\/risu-style\>/gms
-
 function decodeStyleRule(rule:CssAtRuleAST){
     if(rule.type === 'rule'){
         if(rule.selectors){
@@ -1133,31 +1151,28 @@ function decodeStyleRule(rule:CssAtRuleAST){
     return rule
 }
 
-function decodeStyle(text:string){
-    return text.replaceAll(styleDecodeRegex, (full, txt:string) => {
-        try {
-            let text = Buffer.from(txt, 'hex').toString('utf-8')
-            text = risuChatParser(text)
-            const ast = css.parse(text)
-            const rules = ast?.stylesheet?.rules
-            if(rules){
-                for(let i=0;i<rules.length;i++){
-                    rules[i] = decodeStyleRule(rules[i])
-                }
-                ast.stylesheet.rules = rules
+function decodeStyleContent(encoded:string): string|{diagnostic:string}{
+    try {
+        let text = Buffer.from(encoded, 'hex').toString('utf-8')
+        text = risuChatParser(text)
+        const ast = css.parse(text)
+        const rules = ast?.stylesheet?.rules
+        if(rules){
+            for(let i=0;i<rules.length;i++){
+                rules[i] = decodeStyleRule(rules[i])
             }
-            return `<style>${css.stringify(ast, {
-                indent: '',
-                compress: true,
-            })}</style>`
-
-        } catch (error) {
-            if(DBState.db.returnCSSError){
-                return `CSS ERROR: ${error}`
-            }
-            return ""
+            ast.stylesheet.rules = rules
         }
-    })
+        return css.stringify(ast, {
+            indent: '',
+            compress: true,
+        })
+    } catch (error) {
+        if(DBState.db.returnCSSError){
+            return { diagnostic: `CSS ERROR: ${error}` }
+        }
+        return ""
+    }
 }
 
 export async function hasher(data:Uint8Array){

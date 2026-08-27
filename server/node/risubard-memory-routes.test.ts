@@ -41,6 +41,44 @@ function createHarness() {
 }
 
 describe('RisuBard memory routes', () => {
+    test.each([
+        { route: 'inquiry', method: 'inquireNarrative', extra: {
+            currentInput: '현재 사건', tokenBudget: { target: 50_000, maximum: 99_999 },
+        } },
+        { route: 'wiki/save', method: 'saveMarkdownWikiTurn', extra: {
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+            markdown: '# 사건\n\n새 사건.',
+        } },
+        { route: 'wiki/save', method: 'saveMarkdownWikiTurn', extra: {
+            sourceMessageIds: ['turn-en'], markdown: '## Arrival\n\n### Story Summary\n\n- Alice arrived.', writingLanguage: 'en',
+        } },
+        { route: 'wiki/document/save', method: 'saveCanonicalWikiDocument', extra: {
+            sourceMessageIds: ['turn-en'], type: 'character', title: 'Alice', markdown: '## Alice\n\nA traveler.', writingLanguage: 'en',
+        } },
+        { route: 'wiki/document/save', method: 'saveCanonicalWikiDocument', extra: {
+            sourceMessageIds: Array.from({ length: 13 }, (_, index) => `message-${index}`),
+            type: 'character', title: '인물', markdown: '# 인물\n\n새 상태.',
+        } },
+        { route: 'wiki/event/retract-sources', method: 'retractWikiEventsBySourceMessages', extra: {
+            sourceMessageIds: Array.from({ length: 101 }, (_, index) => `message-${index}`),
+        } },
+    ])('accepts configured analysis sizes through $route', async ({ route, method, extra }) => {
+        const { registerRisuBardMemoryRoutes } = require('./risubard-memory-routes.cjs')
+        const harness = createHarness()
+        const persist = vi.fn(async () => ({ ok: true }))
+        registerRisuBardMemoryRoutes(harness.app, {
+            auth: async () => true, service: { [method]: persist },
+        })
+        const body = { characterId: 'character', chatId: 'chat', ...extra }
+        const next = vi.fn()
+        await harness.routes.get(`/api/risubard/memory/${route}`)!(
+            { body }, harness.response, next,
+        )
+        expect(harness.response.statusCode).toBe(200)
+        expect(next).not.toHaveBeenCalled()
+        expect(persist).toHaveBeenCalledWith(body)
+    })
+
     test('validates reboot replacement, cleanup, and recovery operations', async () => {
         const service = {
             replaceMemory: vi.fn(async () => ({
@@ -48,7 +86,10 @@ describe('RisuBard memory routes', () => {
                 warnings: [], forkToken: 'token',
             })),
             removeRebootMemory: vi.fn(async () => ({ removed: true })),
+            beginWikiRebootBatch: vi.fn(async () => ({ canonicalCount: 0 })),
+            recordWikiRebootBatch: vi.fn(async (input) => input.receipt),
             recoverWikiRebootBatch: vi.fn(async () => ({ receipt: null })),
+            completeWikiRebootBatch: vi.fn(async () => ({ removed: true })),
         }
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'
@@ -69,9 +110,27 @@ describe('RisuBard memory routes', () => {
             characterId: 'character', chatId: 'reboot-job',
             sourceMessageIds: ['u1', 'a1'], eventSourceGroups: [['u1', 'a1']],
         } }, harness.response, vi.fn())
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/begin')!({ body: {
+            characterId: 'character', chatId: 'reboot-job',
+            sourceMessageIds: ['u1', 'a1'], eventSourceGroups: [['u1', 'a1']],
+        } }, harness.response, vi.fn())
+        const receipt = {
+            sourceMessageIds: ['u1', 'a1'], eventIds: [], changes: [],
+            warnings: [], recordedAt: 'now',
+        }
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/record')!({ body: {
+            characterId: 'character', chatId: 'reboot-job', receipt,
+        } }, harness.response, vi.fn())
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/complete')!({ body: {
+            characterId: 'character', chatId: 'reboot-job',
+            sourceMessageIds: ['u1', 'a1'],
+        } }, harness.response, vi.fn())
         expect(service.replaceMemory).toHaveBeenCalledOnce()
         expect(service.removeRebootMemory).toHaveBeenCalledOnce()
         expect(service.recoverWikiRebootBatch).toHaveBeenCalledOnce()
+        expect(service.beginWikiRebootBatch).toHaveBeenCalledOnce()
+        expect(service.recordWikiRebootBatch).toHaveBeenCalledOnce()
+        expect(service.completeWikiRebootBatch).toHaveBeenCalledOnce()
     })
 
     test('passes a bounded wiki-wide literal replacement to persistence', async () => {
@@ -105,7 +164,7 @@ describe('RisuBard memory routes', () => {
         expect(harness.response.statusCode).toBe(400)
     })
 
-    test('validates binary save creation and save list requests', async () => {
+    test.each([false, true])('validates binary save creation with overwrite=%s and save list requests', async (overwrite) => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'
         )
@@ -131,6 +190,7 @@ describe('RisuBard memory routes', () => {
                 'x-risubard-chat-name': Buffer.from('모험').toString('base64url'),
                 'x-risubard-turn-count': '7',
                 'x-risubard-latest-message-id': 'assistant-7',
+                ...(overwrite ? { 'x-risubard-save-overwrite': 'true' } : {}),
             },
             body: Buffer.from([1, 2, 3]),
         }, harness.response, vi.fn())
@@ -138,6 +198,7 @@ describe('RisuBard memory routes', () => {
             characterId: 'character', sourceChatId: 'chat-1',
             saveId: 'save-1', sourceChatName: '모험', turnCount: 7,
             latestMessageId: 'assistant-7',
+            ...(overwrite ? { overwrite: true } : {}),
             chatBytes: Buffer.from([1, 2, 3]),
         })
         expect(harness.response.body).toEqual(summary)
@@ -880,6 +941,35 @@ describe('RisuBard memory routes', () => {
         expect(harness.response.body).toEqual(document)
     })
 
+    test('passes an existing event manual edit to persistence', async () => {
+        const { registerRisuBardMemoryRoutes } = require(
+            './risubard-memory-routes.cjs'
+        )
+        const harness = createHarness()
+        const service = {
+            saveManualWikiDocument: vi.fn(async (body) => body),
+        }
+        registerRisuBardMemoryRoutes(harness.app, {
+            auth: async () => true,
+            service,
+        })
+        const body = {
+            characterId: 'character',
+            chatId: 'chat',
+            documentId: 'event.turn',
+            expectedContentHash: 'hash-event',
+            type: 'event',
+            title: '수정된 사건',
+            markdown: '## 수정된 사건\n\n### 이야기 요약\n\n- 수정된 내용.',
+        }
+
+        await harness.routes.get(
+            '/api/risubard/memory/wiki/document/manual-save'
+        )!({ body }, harness.response, vi.fn())
+
+        expect(service.saveManualWikiDocument).toHaveBeenCalledWith(body)
+    })
+
     test('passes a bounded canonical context-mode change to persistence', async () => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'
@@ -1034,74 +1124,70 @@ describe('RisuBard memory routes', () => {
         expect(harness.response.body).toEqual({ ok: true })
     })
 
-    test('passes a bounded pre-turn wiki snapshot request to the runtime', async () => {
+    test('passes a bounded reboot checkpoint request to the runtime', async () => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'
         )
         const harness = createHarness()
         const service = {
-            snapshotWikiBeforeTurn: vi.fn(async () => ({
-                snapshotId: 'turn-stable', canonicalCount: 2,
-            })),
+            beginWikiRebootBatch: vi.fn(async () => ({ canonicalCount: 2 })),
         }
         registerRisuBardMemoryRoutes(harness.app, {
             auth: async () => true, service,
         })
         const body = {
-            characterId: 'character', chatId: 'chat',
+            characterId: 'character', chatId: 'reboot-job',
             sourceMessageIds: ['user-1', 'assistant-1'],
+            eventSourceGroups: [['user-1', 'assistant-1']],
         }
 
-        await harness.routes.get('/api/risubard/memory/wiki/snapshot')!(
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/begin')!(
             { body }, harness.response, vi.fn()
         )
 
-        expect(service.snapshotWikiBeforeTurn).toHaveBeenCalledWith(body)
+        expect(service.beginWikiRebootBatch).toHaveBeenCalledWith(body)
+        expect(harness.response.body).toEqual({ canonicalCount: 2 })
+
+        service.beginWikiRebootBatch.mockRejectedValueOnce(new Error(
+            'Wiki reboot recovery conflict: checkpoint already in flight'
+        ))
+        harness.response.statusCode = 200
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/begin')!(
+            { body }, harness.response, vi.fn()
+        )
+        expect(harness.response.statusCode).toBe(409)
         expect(harness.response.body).toEqual({
-            snapshotId: 'turn-stable', canonicalCount: 2,
+            error: 'Wiki reboot recovery conflict: checkpoint already in flight',
         })
     })
 
-    test('passes turn receipt recording and undo requests to the runtime', async () => {
+    test('passes reboot recovery receipt recording to the runtime', async () => {
         const { registerRisuBardMemoryRoutes } = require(
             './risubard-memory-routes.cjs'
         )
         const harness = createHarness()
         const receipt = {
-            snapshotId: 'turn-stable', sourceMessageIds: ['assistant-1'],
+            sourceMessageIds: ['assistant-1'],
             eventIds: [], changes: [], warnings: [], recordedAt: 'now',
         }
         const service = {
-            recordWikiTurnReceipt: vi.fn(async () => receipt),
-            undoWikiTurnReceipt: vi.fn(async () => ({
-                ...receipt, undoneAt: 'later',
-            })),
+            recordWikiRebootBatch: vi.fn(async () => receipt),
         }
         registerRisuBardMemoryRoutes(harness.app, {
             auth: async () => true, service,
         })
         const record = {
-            characterId: 'character', chatId: 'chat',
-            snapshotId: 'turn-stable', sourceMessageIds: ['assistant-1'],
-            eventId: 'event.stable', changes: [{
-                documentId: 'location.ruins', type: 'location', title: '폐촌',
-                relativePath: 'locations/ruins.md', afterHash: 'hash-after',
-            }], warnings: ['낮은 확신'],
+            characterId: 'character', chatId: 'reboot-job', receipt,
         }
-        await harness.routes.get('/api/risubard/memory/wiki/receipt')!(
+        await harness.routes.get('/api/risubard/memory/wiki/reboot/record')!(
             { body: record }, harness.response, vi.fn()
         )
-        expect(service.recordWikiTurnReceipt).toHaveBeenCalledWith(record)
-
-        const undo = {
-            characterId: 'character', chatId: 'chat',
-            snapshotId: 'turn-stable', documentId: 'location.ruins',
-        }
-        await harness.routes.get('/api/risubard/memory/wiki/receipt/undo')!(
-            { body: undo }, harness.response, vi.fn()
-        )
-        expect(service.undoWikiTurnReceipt).toHaveBeenCalledWith(undo)
-        expect(harness.response.body).toMatchObject({ undoneAt: 'later' })
+        expect(service.recordWikiRebootBatch).toHaveBeenCalledWith(record)
+        for (const removed of [
+            '/api/risubard/memory/wiki/snapshot',
+            '/api/risubard/memory/wiki/receipt',
+            '/api/risubard/memory/wiki/receipt/undo',
+        ]) expect(harness.routes.has(removed)).toBe(false)
     })
 
     test.each([

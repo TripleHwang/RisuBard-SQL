@@ -413,16 +413,22 @@ export const helpEn = {
             "Show folder names on folder icons in the character grid. Makes large folder collections easier to scan.",
         showRequestStatus:
             "Show a floating chat-request toast with the live phase, injected context items and their token counts, total input tokens, thinking/output tokens, and speed. Contents are never stored; turning it off hides the notification entirely.",
+        risuBardAutosaveInterval:
+            "Choose how many turns pass between autosaves. An interval of 5 saves turns 1, 6, 11, and so on.",
+        risuBardAutosaveRetention:
+            "Maximum rotating autosave files kept per chat. After the limit, the oldest autosave slot is overwritten.",
         risuBardRecentMessages:
             "Maximum number of recent user and assistant messages sent to wiki analysis after a response completes.",
         risuBardResponseRecentMessages:
             "Maximum number of recent messages referenced when generating a new response. The current user request counts toward this limit.",
         risuBardCanonicalWritingStyle:
-            "Korean writing style used by chat event summaries and canonical Markdown. Concise is the default.",
+            "Writing style for event summaries and canonical Markdown, independent of wiki writing language. Concise is the default.",
+        risuBardWikiWritingLanguage:
+            "Language for event analysis, summaries and entire canonical bodies, independent of UI and conversation language. Current-chat settings can override this default. Takes priority over language requests in custom style and Wiki Guides. Existing titles, links, names and evidence quotations are preserved. Existing documents are not automatically translated; select a language and reboot to rebuild the entire wiki. Reboot keeps its starting language. Additional analysis cannot append to an event in another language.",
         risuBardCanonicalCustomStyle:
             "Controls style and expression only. Fact selection, evidence, structure, and safety rules take priority. Limited to 1,000 characters.",
         risuBardAnalysisTokenLimit:
-            "Maximum output tokens used for one memory analysis and canonical writing pass.",
+            "Input token budget for each memory analysis and canonical writing request. Long input is fitted before sending. Also used as the canonical output budget. There is no fixed app maximum; choose a value within your model's context and output limits.",
         risuBardInquiryTargetTokenBudget:
             "Target number of tokens for related documents in an ordinary wiki inquiry. It is not filled when fewer documents are relevant.",
         risuBardInquiryMaximumTokenBudget:

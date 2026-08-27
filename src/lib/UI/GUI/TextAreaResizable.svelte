@@ -9,9 +9,14 @@
     interface Props {
         value?: string;
         handleLongPress?: any;
+        onkeydown?: (event: KeyboardEvent) => void;
     }
 
-  let { value = $bindable(''), handleLongPress = (e:MouseEvent) => {} }: Props = $props();
+  let {
+      value = $bindable(''),
+      handleLongPress = (e:MouseEvent) => {},
+      onkeydown,
+  }: Props = $props();
 
     function resize() {
         textarea.style.height = '0px'; // Reset the textarea height
@@ -33,6 +38,7 @@
 <textarea
     bind:this={textarea}
     oninput={handleInput}
+    onkeydown={onkeydown}
     use:longpress={handleLongPress}
     bind:value={value}
     class="rounded-md p-2 text-textcolor bg-transparent resize-none overflow-y-hidden border border-darkborderc w-full message-edit-area"

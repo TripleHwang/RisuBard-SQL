@@ -147,9 +147,9 @@
     />
 {/if}
 {#if warns.length > 0 && subMenu === 0}
-    <div class="text-red-500 flex flex-col items-start p-2 rounded-md border-red-500 border mt-4">
+    <div class="text-danger flex flex-col items-start p-2 rounded-md border-danger-border border mt-4">
         <h2 class="text-xl font-bold">Warning</h2>
-        <div class="border-b border-b-red-500 mt-1 mb-2 w-full"></div>
+        <div class="border-b border-b-danger-border mt-1 mb-2 w-full"></div>
         {#each warns as warn}
             <span class="ml-4">{warn}</span>
         {/each}
@@ -314,7 +314,7 @@
                 value.push('')
                 settings.fallbackModels[arg] = value
             }}><PlusIcon /></button>
-            <button class="bg-red-500 text-white p-2 rounded-md" onclick={() => {
+            <button class="bg-danger text-on-danger p-2 rounded-md" onclick={() => {
                 let value = settings.fallbackModels[arg] ?? []
                 value.pop()
                 settings.fallbackModels[arg] = value

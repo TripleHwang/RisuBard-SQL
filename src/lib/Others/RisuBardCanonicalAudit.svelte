@@ -117,7 +117,7 @@
     pre { max-height:14rem; overflow:auto; white-space:pre-wrap; font-size:.72rem; padding:.5rem; border-radius:.4rem; background:color-mix(in srgb, var(--risu-theme-darkbg) 75%, transparent); }
     footer { justify-content:flex-end; margin-top:.5rem; }
     button { display:inline-flex; align-items:center; gap:.3rem; padding:.35rem .55rem; border-radius:.4rem; }
-    .accept { background:var(--risu-theme-primary); color:white; }
-    .audit-error { color:#ef4444; font-size:.75rem; }
+    .accept { background:var(--risu-theme-primary); color:var(--color-accenttext); }
+    .audit-error { color:var(--color-danger); font-size:.75rem; }
     @media (max-width: 720px) { .diff-grid { grid-template-columns:1fr; } }
 </style>

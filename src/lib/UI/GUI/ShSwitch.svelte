@@ -9,7 +9,7 @@
     //         so the inactive track stays visible against panel surfaces),
     //       border-ring/ring-ring → border-borderc/ring-borderc,
     //       border-destructive/ring-destructive → border-draculared/ring-draculared,
-    //       bg-background → bg-white (thumb is a light disc on the track —
+    //       bg-background → bg-switch-thumb (independently editable thumb —
     //         standard toggle UX has thumb always near-white regardless of
     //         theme; mapping bg-background → bg-textcolor would render a black
     //         thumb in light/monokai-light themes which is jarring and unlike
@@ -75,7 +75,7 @@
         class={
             'pointer-events-none block ring-0 transition-transform ' +
             'rtl:data-[state=checked]:translate-x-[calc(-100%)] ' +
-            'bg-white rounded-full ' +
+            'bg-switch-thumb rounded-full ' +
             'group-data-[size=default]/switch:size-4 group-data-[size=sm]/switch:size-3 ' +
             'group-data-[size=default]/switch:data-[state=checked]:translate-x-[calc(100%-2px)] ' +
             'group-data-[size=sm]/switch:data-[state=checked]:translate-x-[calc(100%-2px)] ' +

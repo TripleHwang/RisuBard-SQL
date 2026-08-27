@@ -207,7 +207,7 @@
     {@const position = buttonPosition(button, index)}
     <button
         type="button"
-        class="fixed z-50 flex cursor-move items-center gap-2 rounded-full bg-primary px-4 py-2 text-white shadow-lg transition-colors hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        class="fixed z-50 flex cursor-move items-center gap-2 rounded-full bg-primary px-4 py-2 text-accenttext shadow-lg transition-colors hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         style:left={`${position.left}px`}
         style:top={`${position.top}px`}
         style:transform="translate(-50%, -50%)"

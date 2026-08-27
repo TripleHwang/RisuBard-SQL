@@ -23,15 +23,15 @@
     height: 3.5rem;
     width: 3.5rem;
     min-height: 3.5rem;
-    --tw-shadow-color: 0, 0, 0;
-    --tw-shadow: 0 10px 15px -3px rgba(var(--tw-shadow-color), 0.1),
-      0 4px 6px -2px rgba(var(--tw-shadow-color), 0.05);
-    -webkit-box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000),
-      var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
-    box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000),
-      var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow);
+    --tw-shadow-color: var(--color-shadow);
+    --tw-shadow: 0 10px 15px -3px color-mix(in srgb, var(--tw-shadow-color) 10%, transparent),
+      0 4px 6px -2px color-mix(in srgb, var(--tw-shadow-color) 5%, transparent);
+    -webkit-box-shadow: var(--tw-ring-offset-shadow, 0 0 transparent),
+      var(--tw-ring-shadow, 0 0 transparent), var(--tw-shadow);
+    box-shadow: var(--tw-ring-offset-shadow, 0 0 transparent),
+      var(--tw-ring-shadow, 0 0 transparent), var(--tw-shadow);
     --tw-bg-opacity: 1;
-    background-color: rgba(107, 114, 128, var(--tw-bg-opacity));
+    background-color: color-mix(in srgb, var(--color-selected) calc(var(--tw-bg-opacity) * 100%), transparent);
     display: flex;
     justify-content: center;
     align-items: center;

@@ -190,20 +190,20 @@
 }}></svelte:window>
 
 {#if $alertStore.type !== 'none' &&  $alertStore.type !== 'cardexport' && $alertStore.type !== 'branches' && $alertStore.type !== 'selectModule' && $alertStore.type !== 'pukmakkurit' && $alertStore.type !== 'error' && $alertStore.type !== 'normal' && $alertStore.type !== 'markdown' && $alertStore.type !== 'ask' && $alertStore.type !== 'pluginconfirm' && $alertStore.type !== 'tos' && $alertStore.type !== 'input' && $alertStore.type !== 'select' && $alertStore.type !== 'wait' && $alertStore.type !== 'wait2' && $alertStore.type !== 'progress' && $alertStore.type !== 'confirmMulti'}
-    <div class="absolute w-full h-full z-50 bg-black/50 flex justify-center items-center">
-        <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
+    <div class="risu-modal-overlay absolute w-full h-full z-50 bg-overlay/50 flex justify-center items-center">
+        <div class="risu-modal-surface bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
             {#if $alertStore.type === 'selectChar'}
-                <h2 class="text-green-700 mt-0 mb-2 w-40 max-w-full">Select</h2>
+                <h2 class="text-success mt-0 mb-2 w-40 max-w-full">Select</h2>
             {/if}
             {#if $alertStore.type !== 'requestdata' && $alertStore.type !== 'addchar'}
-                <span class="text-gray-300 whitespace-pre-wrap">{$alertStore.msg}</span>
+                <span class="text-textcolor whitespace-pre-wrap">{$alertStore.msg}</span>
                 {#if $alertStore.submsg}
-                    <span class="text-gray-500 text-sm">{$alertStore.submsg}</span>
+                    <span class="text-textcolor2 text-sm">{$alertStore.submsg}</span>
                 {/if}
             {/if}
 
             {#if $alertStore.type === 'login'}
-                <div class="fixed top-0 left-0 bg-black/50 w-full h-full flex justify-center items-center">
+                <div class="risu-modal-overlay fixed top-0 left-0 bg-overlay/50 w-full h-full flex justify-center items-center">
                     <iframe src={hubURL + '/hub/login'} title="login" class="w-full h-full">
                     </iframe>
                 </div>
@@ -262,116 +262,116 @@
                     <div class="mt-4 flex justify-center w-full">
                         <div class="w-32 h-32 border-darkborderc border-4 rounded-lg" style:background={
                             `linear-gradient(0deg,
-                            rgb(59,130,246) 0%,
-                            rgb(59,130,246) ${($alertGenerationInfoStore.genInfo.inputTokens / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
-                            rgb(34 197 94) ${($alertGenerationInfoStore.genInfo.inputTokens / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
-                            rgb(34 197 94) ${(($alertGenerationInfoStore.genInfo.outputTokens + $alertGenerationInfoStore.genInfo.inputTokens) / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
-                            rgb(156 163 175) ${(($alertGenerationInfoStore.genInfo.outputTokens + $alertGenerationInfoStore.genInfo.inputTokens) / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
-                            rgb(156 163 175) 100%)`
+                            var(--color-info) 0%,
+                            var(--color-info) ${($alertGenerationInfoStore.genInfo.inputTokens / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
+                            var(--color-success) ${($alertGenerationInfoStore.genInfo.inputTokens / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
+                            var(--color-success) ${(($alertGenerationInfoStore.genInfo.outputTokens + $alertGenerationInfoStore.genInfo.inputTokens) / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
+                            var(--color-textcolor2) ${(($alertGenerationInfoStore.genInfo.outputTokens + $alertGenerationInfoStore.genInfo.inputTokens) / $alertGenerationInfoStore.genInfo.maxContext) * 100}%,
+                            var(--color-textcolor2) 100%)`
                         }>
 
                         </div>
                     </div>
                     <div class="grid grid-cols-2 gap-y-2 gap-x-4 mt-4">
-                        <span class="text-blue-500">{language.inputTokens}</span>
-                        <span class="text-blue-500 justify-self-end">{$alertGenerationInfoStore.genInfo.inputTokens ?? '?'} {language.tokens}</span>
-                        <span class="text-green-500">{language.outputTokens}</span>
-                        <span class="text-green-500 justify-self-end">{$alertGenerationInfoStore.genInfo.outputTokens ?? '?'} {language.tokens}</span>
-                        <span class="text-gray-400">{language.maxContextSize}</span>
-                        <span class="text-gray-400 justify-self-end">{$alertGenerationInfoStore.genInfo.maxContext ?? '?'} {language.tokens}</span>
+                        <span class="text-info">{language.inputTokens}</span>
+                        <span class="text-info justify-self-end">{$alertGenerationInfoStore.genInfo.inputTokens ?? '?'} {language.tokens}</span>
+                        <span class="text-success">{language.outputTokens}</span>
+                        <span class="text-success justify-self-end">{$alertGenerationInfoStore.genInfo.outputTokens ?? '?'} {language.tokens}</span>
+                        <span class="text-textcolor2">{language.maxContextSize}</span>
+                        <span class="text-textcolor2 justify-self-end">{$alertGenerationInfoStore.genInfo.maxContext ?? '?'} {language.tokens}</span>
                     </div>
                     <span class="text-textcolor2 text-sm">{language.tokenWarning}</span>
                 {/if}
                 {#if generationInfoMenuIndex === 1}
                 <div class="grid grid-cols-2 gap-y-2 gap-x-4 mt-4">
-                    <span class="text-blue-500">Index</span>
-                    <span class="text-blue-500 justify-self-end">{$alertGenerationInfoStore.idx}</span>
-                    <span class="text-amber-500">Model</span>
-                    <span class="text-amber-500 justify-self-end">{$alertGenerationInfoStore.genInfo.model}</span>
-                    <span class="text-green-500">ID</span>
-                    <span class="text-green-500 justify-self-end">{DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].chatId ?? "None"}</span>
-                    <span class="text-red-500">GenID</span>
-                    <span class="text-red-500 justify-self-end">{$alertGenerationInfoStore.genInfo.generationId}</span>
-                    <span class="text-cyan-500">Saying</span>
-                    <span class="text-cyan-500 justify-self-end">{DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].saying}</span>
-                    <span class="text-purple-500">Size</span>
-                    <span class="text-purple-500 justify-self-end">{JSON.stringify(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx]).length} Bytes</span>
-                    <span class="text-yellow-500">Time</span>
-                    <span class="text-yellow-500 justify-self-end">{(new Date(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].time ?? 0)).toLocaleString()}</span>
+                    <span class="text-info">Index</span>
+                    <span class="text-info justify-self-end">{$alertGenerationInfoStore.idx}</span>
+                    <span class="text-warning">Model</span>
+                    <span class="text-warning justify-self-end">{$alertGenerationInfoStore.genInfo.model}</span>
+                    <span class="text-success">ID</span>
+                    <span class="text-success justify-self-end">{DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].chatId ?? "None"}</span>
+                    <span class="text-danger">GenID</span>
+                    <span class="text-danger justify-self-end">{$alertGenerationInfoStore.genInfo.generationId}</span>
+                    <span class="text-info">Saying</span>
+                    <span class="text-info justify-self-end">{DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].saying}</span>
+                    <span class="text-secondary">Size</span>
+                    <span class="text-secondary justify-self-end">{JSON.stringify(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx]).length} Bytes</span>
+                    <span class="text-warning">Time</span>
+                    <span class="text-warning justify-self-end">{(new Date(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].time ?? 0)).toLocaleString()}</span>
                     {#if $alertGenerationInfoStore.genInfo.stageTiming}
                         {@const stage1 = parseFloat(((($alertGenerationInfoStore.genInfo.stageTiming.stage1 ?? 0) / 1000).toFixed(1)))}
                         {@const stage2 = parseFloat(((($alertGenerationInfoStore.genInfo.stageTiming.stage2 ?? 0) / 1000).toFixed(1)))}
                         {@const stage3 = parseFloat(((($alertGenerationInfoStore.genInfo.stageTiming.stage3 ?? 0) / 1000).toFixed(1)))}
                         {@const stage4 = parseFloat(((($alertGenerationInfoStore.genInfo.stageTiming.stage4 ?? 0) / 1000).toFixed(1)))}
                         {@const totalRounded = (stage1 + stage2 + stage3 + stage4).toFixed(1)}
-                        <span class="text-gray-400">Timing</span>
-                        <span class="text-gray-400 justify-self-end">
-                            <span style="color: #60a5fa;">{stage1}</span> + 
-                            <span style="color: #db2777;">{stage2}</span> + 
-                            <span style="color: #34d399;">{stage3}</span> + 
-                            <span style="color: #8b5cf6;">{stage4}</span> = 
-                            <span class="text-white font-bold">{totalRounded}s</span>
+                        <span class="text-textcolor2">Timing</span>
+                        <span class="text-textcolor2 justify-self-end">
+                            <span style="color: var(--color-info);">{stage1}</span> +
+                            <span style="color: var(--color-danger);">{stage2}</span> +
+                            <span style="color: var(--color-success);">{stage3}</span> +
+                            <span style="color: var(--color-secondary);">{stage4}</span> =
+                            <span class="text-textcolor font-bold">{totalRounded}s</span>
                         </span>
                     {/if}
 
-                    <span class="text-green-500">Tokens</span>
+                    <span class="text-success">Tokens</span>
                     {#await tokenize(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].data)}
-                        <span class="text-green-500 justify-self-end">Loading</span>
+                        <span class="text-success justify-self-end">Loading</span>
                     {:then tokens} 
-                        <span class="text-green-500 justify-self-end">{tokens}</span>
+                        <span class="text-success justify-self-end">{tokens}</span>
                     {/await}
                 </div>
                 {/if}
                 {#if generationInfoMenuIndex === 2}
                     {#await loadMessageRequestLog($alertStore.msg)}
-                        <span class="text-gray-500 mt-2">{language.loading}</span>
+                        <span class="text-textcolor2 mt-2">{language.loading}</span>
                     {:then data}
                         {#if !data}
-                            <span class="text-gray-300 text-lg mt-2">{language.errors.requestLogRemoved}</span>
-                            <span class="text-gray-500">{language.errors.requestLogRemovedDesc}</span>
+                            <span class="text-textcolor text-lg mt-2">{language.errors.requestLogRemoved}</span>
+                            <span class="text-textcolor2">{language.errors.requestLogRemovedDesc}</span>
                         {:else}
                             <h1 class="text-2xl font-bold my-4">URL</h1>
-                            <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{data.url}</code>
+                            <code class="text-textcolor border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{data.url}</code>
                             {#if data.durationMs !== undefined && data.durationMs !== null}
                                 <h1 class="text-2xl font-bold my-4">{language.requestLogsDuration}</h1>
-                                <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{(data.durationMs / 1000).toFixed(2)}s{data.firstTokenMs ? ` (${language.requestLogsFirstToken}: ${(data.firstTokenMs / 1000).toFixed(2)}s)` : ''}</code>
+                                <code class="text-textcolor border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{(data.durationMs / 1000).toFixed(2)}s{data.firstTokenMs ? ` (${language.requestLogsFirstToken}: ${(data.firstTokenMs / 1000).toFixed(2)}s)` : ''}</code>
                             {/if}
                             <h1 class="text-2xl font-bold my-4">Request Body</h1>
-                            <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{beautifyJSON(data.requestBody ?? '')}</code>
+                            <code class="text-textcolor border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{beautifyJSON(data.requestBody ?? '')}</code>
                             <h1 class="text-2xl font-bold my-4">Response</h1>
-                            <code class="text-gray-300 border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{beautifyJSON(data.responseBody ?? '')}</code>
+                            <code class="text-textcolor border border-darkborderc p-2 rounded-md whitespace-pre-wrap">{beautifyJSON(data.responseBody ?? '')}</code>
                         {/if}
                     {/await}
                 {/if}
                 {#if generationInfoMenuIndex === 3}
                     {#if Object.keys(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo || {}).length === 0}
-                        <div class="text-gray-300 text-lg mt-2">{language.promptInfoEmptyMessage}</div>
+                        <div class="text-textcolor text-lg mt-2">{language.promptInfoEmptyMessage}</div>
                     {:else}
                         <div class="grid grid-cols-2 gap-y-2 gap-x-4 mt-4">
-                            <span class="text-blue-500">Preset Name</span>
-                            <span class="text-blue-500 justify-self-end">{DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo.promptName}</span>
-                            <span class="text-purple-500">Toggles</span>
-                            <div class="col-span-2 max-h-32 overflow-y-auto border border-stone-500 rounded-sm p-2 bg-gray-900">
+                            <span class="text-info">Preset Name</span>
+                            <span class="text-info justify-self-end">{DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo.promptName}</span>
+                            <span class="text-secondary">Toggles</span>
+                            <div class="col-span-2 max-h-32 overflow-y-auto border border-borderc rounded-sm p-2 bg-darkbg">
                                 {#if DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo.promptToggles.length === 0}
-                                    <div class="text-gray-500 italic text-center py-4">{language.promptInfoEmptyToggle}</div>
+                                    <div class="text-textcolor2 italic text-center py-4">{language.promptInfoEmptyToggle}</div>
                                 {:else}
                                     <div class="grid grid-cols-2 gap-y-2 gap-x-4">
                                         {#each DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo.promptToggles as toggle}
-                                        <span class="text-gray-200 truncate">{toggle.key}</span>
-                                        <span class="text-gray-200 justify-self-end truncate">{toggle.value}</span>
+                                        <span class="text-textcolor truncate">{toggle.key}</span>
+                                        <span class="text-textcolor justify-self-end truncate">{toggle.value}</span>
                                         {/each}
                                     </div>
                                 {/if}
                             </div>
-                            <span class="text-red-500">Prompt Text</span>
-                            <div class="col-span-2 max-h-80 overflow-y-auto border border-stone-500 rounded-sm p-4 bg-gray-900">
+                            <span class="text-danger">Prompt Text</span>
+                            <div class="col-span-2 max-h-80 overflow-y-auto border border-borderc rounded-sm p-4 bg-darkbg">
                                 {#if !DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo.promptText}
-                                    <div class="text-gray-500 italic text-center py-4">{language.promptInfoEmptyText}</div>
+                                    <div class="text-textcolor2 italic text-center py-4">{language.promptInfoEmptyText}</div>
                                 {:else}
                                     {#each DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message[$alertGenerationInfoStore.idx].promptInfo.promptText as block}
                                         <div class="mb-2">
-                                            <div class="font-bold text-gray-600">{block.role}</div>
-                                            <pre class="whitespace-pre-wrap text-sm bg-stone-900 p-2 rounded-sm border border-stone-500">{block.content}</pre>
+                                            <div class="font-bold text-textcolor2">{block.role}</div>
+                                            <pre class="whitespace-pre-wrap text-sm bg-darkbg p-2 rounded-sm border border-borderc">{block.content}</pre>
                                         </div>
                                     {/each}
                                 {/if}
@@ -462,8 +462,8 @@
 
 {:else if $alertStore.type === 'cardexport'}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div  class="fixed top-0 left-0 h-full w-full bg-black/50 flex flex-col z-50 items-center justify-center" role="button" tabindex="0" onclick={close}>
-        <div class="bg-darkbg rounded-md p-4 max-w-full flex flex-col w-2xl" role="button" tabindex="0" onclick={(e) => {
+    <div  class="risu-modal-overlay fixed top-0 left-0 h-full w-full bg-overlay/50 flex flex-col z-50 items-center justify-center" role="button" tabindex="0" onclick={close}>
+        <div class="risu-modal-surface bg-darkbg rounded-md p-4 max-w-full flex flex-col w-2xl" role="button" tabindex="0" onclick={(e) => {
             e.stopPropagation()
         }}>
             <h1 class="font-bold text-2xl w-full">
@@ -489,19 +489,19 @@
                 {:else if $alertStore.submsg === 'preset'}
                     <span class="text-textcolor2 text-sm">{language.risupresetDesc}</span>
                     {#if cardExportType2 === 'preset' && (DBState.db.botPresets[DBState.db.botPresetsId].image || DBState.db.botPresets[DBState.db.botPresetsId].regex?.length > 0)}
-                        <span class="text-red-500 text-sm">Use RisuRealm to share the preset. Preset with image or regexes cannot be exported for now.</span>
+                        <span class="text-danger text-sm">Use RisuRealm to share the preset. Preset with image or regexes cannot be exported for now.</span>
                     {/if}
                 {:else}
                     <span class="text-textcolor2 text-sm">{language.ccv3Desc}</span>
                     {#if cardExportType2 !== 'charx' && cardExportType2 !== 'charxJpeg' && isCharacterHasAssets(DBState.db.characters[$selectedCharID])}
-                        <span class="text-red-500 text-sm">{language.notCharxWarn}</span>
+                        <span class="text-danger text-sm">{language.notCharxWarn}</span>
                     {/if}
                 {/if}
             {:else if cardExportType === 'json'}
                 <span class="text-textcolor2 text-sm">{language.jsonDesc}</span>
             {:else if cardExportType === 'ccv2'}
                 <span class="text-textcolor2 text-sm">{language.ccv2Desc}</span>
-                <span class="text-red-500 text-sm">{language.v2Warning}</span>
+                <span class="text-danger text-sm">{language.v2Warning}</span>
             {/if}
             <div class="flex items-center flex-wrap mt-2">
                 {#if $alertStore.submsg === 'preset'}
@@ -543,25 +543,25 @@
             alertStore.set({ type: 'none', msg: d })
         }} />
     {:else if $pluginStateStore === 'failed'}
-        <div class="absolute inset-0 z-50 flex flex-col gap-3 items-center justify-center bg-black/60 text-textcolor">
+        <div class="absolute inset-0 z-50 flex flex-col gap-3 items-center justify-center bg-overlay/50 text-textcolor">
             <span>Plugin initialization failed. Module tools are unavailable.</span>
             <Button onclick={() => alertStore.set({ type: 'none', msg: '' })}>Close</Button>
         </div>
     {:else}
-        <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/60 text-textcolor">Loading plugins…</div>
+        <div class="absolute inset-0 z-50 flex items-center justify-center bg-overlay/50 text-textcolor">Loading plugins…</div>
     {/if}
 {:else if $alertStore.type === 'pukmakkurit'}
     <!-- Log Generator by dootaang, GPL3 -->
     <!-- Svelte, Typescript version by Kwaroran -->
     
-    <div class="absolute w-full h-full z-50 bg-black/50 flex justify-center items-center">
-        <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
-            <h2 class="text-green-700 mt-0 mb-2 w-40 max-w-full">{language.preview}</h2>
+    <div class="risu-modal-overlay absolute w-full h-full z-50 bg-overlay/50 flex justify-center items-center">
+        <div class="risu-modal-surface bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl  max-h-full overflow-y-auto">
+            <h2 class="text-success mt-0 mb-2 w-40 max-w-full">{language.preview}</h2>
 
         </div>
     </div>
 {:else if $alertStore.type === 'branches'}
-    <div class="absolute w-full h-full z-50 bg-black/80 flex justify-center items-center overflow-x-auto overflow-y-auto">
+    <div class="risu-modal-overlay absolute w-full h-full z-50 bg-overlay/80 flex justify-center items-center overflow-x-auto overflow-y-auto">
         {#if branchHover !== null}
             <div class="z-30 whitespace-pre-wrap p-4 text-textcolor bg-darkbg border-darkborderc border rounded-md absolute" style="top: {branchHover.y * 80 + 24}px; left: {(branchHover.x + 1) * 80 + 24}px">
                 {branchHover.content}
@@ -614,19 +614,19 @@
             </div>
             {#if obj.connectX === obj.x}
                 {#if obj.multiChild}
-                    <div class="w-0 h-20 border-x border-x-red-500 absolute" style="top: {(obj.y-1) * 80 + 24}px; left: {obj.x * 80 + 45}px">
+                    <div class="w-0 h-20 border-x border-x-danger-border absolute" style="top: {(obj.y-1) * 80 + 24}px; left: {obj.x * 80 + 45}px">
 
                     </div>
                 {:else}
-                    <div class="w-0 h-20 border-x border-x-blue-500 absolute" style="top: {(obj.y-1) * 80 + 24}px; left: {obj.x * 80 + 45}px">
+                    <div class="w-0 h-20 border-x border-x-info-border absolute" style="top: {(obj.y-1) * 80 + 24}px; left: {obj.x * 80 + 45}px">
 
                     </div>
                 {/if}
             {:else if obj.connectX !== -1}
-                <div class="w-0 h-10 border-x border-x-red-500 absolute" style="top: {(obj.y) * 80}px; left: {obj.x * 80 + 45}px">
+                <div class="w-0 h-10 border-x border-x-danger-border absolute" style="top: {(obj.y) * 80}px; left: {obj.x * 80 + 45}px">
 
                 </div>
-                <div class="h-0 border-y border-y-red-500 absolute" style="top: {(obj.y) * 80}px; left: {obj.connectX * 80 + 46}px" style:width={Math.abs((obj.x - obj.connectX) * 80) + 'px'}>
+                <div class="h-0 border-y border-y-danger-border absolute" style="top: {(obj.y) * 80}px; left: {obj.connectX * 80 + 46}px" style:width={Math.abs((obj.x - obj.connectX) * 80) + 'px'}>
 
                 </div>
             {/if}

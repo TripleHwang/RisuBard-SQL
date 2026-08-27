@@ -72,6 +72,32 @@ afterEach(async () => {
 })
 
 describe('RisuBardWikiEditor', () => {
+    it('shows recent update badges on the right of root and folder pages without changing their selection', async () => {
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: {
+                characterId: 'character', chatId: 'chat',
+                documents: [
+                    ...documents,
+                    { ...documents[0], id: 'scene', title: '현재 장면', type: 'scene',
+                        relativePath: 'current-scene.md', updated: '2026-08-08T00:01:02Z' },
+                    { ...documents[0], id: 'new-character', title: '새 인물',
+                        updated: '2026-08-08T00:01:04Z', relativePath: 'characters/new.md' },
+                ],
+            },
+        })
+        await tick()
+        const badges = [...document.querySelectorAll('[data-wiki-recent-update]')]
+        expect(badges.map((badge) => badge.parentElement?.getAttribute('aria-label')))
+            .toEqual(['현재 장면', '새 인물 ', '전투 '])
+        expect(badges.every((badge) => badge.textContent === 'New'
+            && badge === badge.parentElement?.lastElementChild)).toBe(true)
+        badges[0].parentElement!.click()
+        await tick()
+        expect(document.querySelector<HTMLInputElement>('[aria-label="항목 이름"]')?.value)
+            .toBe('현재 장면')
+    })
+
     it('collapses action labels instead of wrapping the toolbar at narrow widths', async () => {
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
@@ -302,7 +328,13 @@ describe('RisuBardWikiEditor', () => {
         }))
     })
 
-    it('renders a folder tree and keeps event evidence read-only', async () => {
+    it('edits an active event while keeping its event type and source identity', async () => {
+        mocks.saveManualWikiDocument.mockResolvedValue({
+            ...documents[1],
+            authoring: 'manual',
+            content: '# 전투\n\n패배했다.',
+            contentHash: 'hash-event-edited',
+        })
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
             target,
@@ -316,9 +348,30 @@ describe('RisuBardWikiEditor', () => {
             .find((button) => button.textContent?.includes('전투'))!
         eventButton.click()
         await tick()
-        expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Markdown"]')?.readOnly)
-            .toBe(true)
-        expect(document.body.textContent).toContain('읽기 전용')
+        const type = document.querySelector<HTMLSelectElement>('[aria-label="항목 유형"]')!
+        const markdown = document.querySelector<HTMLTextAreaElement>('[aria-label="Markdown"]')!
+        expect(type.value).toBe('event')
+        expect(type.disabled).toBe(true)
+        expect(markdown.readOnly).toBe(false)
+
+        markdown.value = '# 전투\n\n패배했다.'
+        markdown.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        const save = [...document.querySelectorAll('button')]
+            .find((button) => button.textContent?.trim() === '저장')!
+        save.click()
+
+        await vi.waitFor(() => {
+            expect(mocks.saveManualWikiDocument).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    documentId: 'event.turn',
+                    expectedContentHash: 'hash-event',
+                    type: 'event',
+                    title: '전투',
+                    markdown: '# 전투\n\n패배했다.',
+                })
+            )
+        })
     })
 
     it('permanently deletes an active event after explicit confirmation', async () => {

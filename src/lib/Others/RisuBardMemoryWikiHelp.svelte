@@ -24,9 +24,9 @@
     closeOnEscape
     contentClass="memory-wiki-help-dialog"
     bodyClass="memory-wiki-help-body"
-    closeAriaLabel="도움말 닫기"
+    closeAriaLabel="사용 가이드 닫기"
 >
-    {#snippet title()}리스바드 메모리 도움말{/snippet}
+    {#snippet title()}BardWiki 사용 가이드{/snippet}
     <article class="help-document" data-memory-help-content>
         {@html helpHtml}
     </article>
@@ -57,6 +57,7 @@
     .help-document { max-width: 48rem; margin: 0 auto; color: var(--color-textcolor2); line-height: 1.7; }
     .help-document :global(h1) { margin: 0 0 .7rem; color: var(--color-textcolor); font: 700 1.35rem/1.25 Georgia, serif; }
     .help-document :global(h2) { margin: 1.7rem 0 .55rem; padding-top: .75rem; border-top: 1px solid var(--color-darkborderc); color: var(--color-textcolor); font-size: .98rem; font-weight: 750; }
+    .help-document :global(h3) { margin: 1.25rem 0 .4rem; color: var(--color-textcolor); font-size: .92rem; font-weight: 700; line-height: 1.5; }
     .help-document :global(p) { margin: .45rem 0; }
     .help-document :global(ul),
     .help-document :global(ol) { display: grid; gap: .32rem; margin: .5rem 0; padding-left: 1.35rem; }

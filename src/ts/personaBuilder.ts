@@ -4,6 +4,7 @@ import type {
     character,
     loreBook,
 } from './storage/database.svelte'
+import type { RequestInjectionSource } from './status/requestStatus'
 
 export type PersonaBuilderPromptKind = PersonaBuilderPromptPreset['kind']
 
@@ -133,23 +134,31 @@ export interface PersonaBuilderSourceSnapshot {
     characterDescription: string
     characterLorebook: string
     moduleLorebook: string
+    characterLorebookSources?: RequestInjectionSource[]
+    moduleLorebookSources?: RequestInjectionSource[]
 }
 
-function formatLorebooks(entries: Array<{ scopeId?: string; entry: loreBook }>): string {
-    return entries
+interface PersonaBuilderLorebookSnapshot {
+    content: string
+    sources: RequestInjectionSource[]
+}
+
+function formatLorebooks(entries: Array<{ scopeId?: string; entry: loreBook }>): PersonaBuilderLorebookSnapshot {
+    const sources: RequestInjectionSource[] = entries
         .filter(({ entry }) => entry.enabled !== false
             && entry.mode !== 'folder'
             && entry.content.trim().length > 0)
         .map(({ scopeId, entry }) => {
             const title = entry.comment.trim() || entry.key.trim() || 'Untitled'
             const keys = [entry.key, entry.secondkey].filter((value) => value?.trim()).join(', ')
-            return [
+            const content = [
                 `## ${title}${scopeId ? ` [${scopeId}]` : ''}`,
                 keys ? `Keys: ${keys}` : '',
                 entry.content.trim(),
             ].filter(Boolean).join('\n')
+            return { kind: 'lorebook', name: title, role: 'user', content }
         })
-        .join('\n\n')
+    return { content: sources.map((source) => source.content).join('\n\n'), sources }
 }
 
 function resolveSystemPrompt(database: Database, currentCharacter?: character | null): string {
@@ -183,16 +192,36 @@ export function collectPersonaBuilderSources(input: {
     character?: character | null
     moduleLorebooks: Array<{ scopeId: string; entry: loreBook }>
 }): PersonaBuilderSourceSnapshot {
+    const characterLorebook = formatLorebooks((input.character?.globalLore ?? []).map((entry) => ({ entry })))
+    const moduleLorebook = formatLorebooks(input.moduleLorebooks)
     return {
         systemPrompt: resolveSystemPrompt(input.database, input.character),
         characterDescription: resolveCharacterDescription(input.character),
-        characterLorebook: formatLorebooks((input.character?.globalLore ?? []).map((entry) => ({ entry }))),
-        moduleLorebook: formatLorebooks(input.moduleLorebooks),
+        characterLorebook: characterLorebook.content,
+        moduleLorebook: moduleLorebook.content,
+        characterLorebookSources: characterLorebook.sources,
+        moduleLorebookSources: moduleLorebook.sources,
     }
 }
 
 function escapeBlockClosers(value: string): string {
     return value.replace(/<\/(instruction|context|draft)>/gi, '<\\/$1>')
+}
+
+export async function matchPersonaBuilderCharacterLorebook(input: {
+    character?: character | null
+    userInstruction: string
+    draft: string
+}): Promise<PersonaBuilderLorebookSnapshot> {
+    if (!input.character) return { content: '', sources: [] }
+    const { loadLoreBookV3Prompt } = await import('./process/lorebook.svelte')
+    const result = await loadLoreBookV3Prompt({
+        character: input.character,
+        text: [input.userInstruction, input.draft].join('\n\n'),
+    })
+    return formatLorebooks(result.actives.map((active) => ({
+        entry: { ...active.sourceIdentity.entry, content: active.prompt },
+    })))
 }
 
 function block(tag: 'instruction' | 'context' | 'draft', name: string, title: string, content: string): string {
@@ -206,36 +235,53 @@ export function buildPersonaBuilderMessages(input: {
     draft: string
     selections: PersonaBuilderSelections
     sources: PersonaBuilderSourceSnapshot
-}): Array<{ role: 'system' | 'user'; content: string }> {
+}): Array<{ role: 'system' | 'user'; content: string; requestStatusSources: RequestInjectionSource[] }> {
     if (!input.taskInstruction.trim()) throw new Error('persona-builder-task-required')
     if (!input.userInstruction.trim()) throw new Error('persona-builder-user-required')
 
-    const system = [
-        block('instruction', 'task_instruction', '작업 지시 프롬프트', input.taskInstruction),
-        input.styleInstruction.trim()
-            ? block('instruction', 'style_instruction', '스타일 지시 프롬프트', input.styleInstruction)
-            : '',
-    ].filter(Boolean).join('\n\n')
+    const systemSources: RequestInjectionSource[] = [{
+        kind: 'instruction', name: '작업 지시 프롬프트', role: 'system',
+        content: block('instruction', 'task_instruction', '작업 지시 프롬프트', input.taskInstruction),
+    }]
+    if (input.styleInstruction.trim()) systemSources.push({
+        kind: 'instruction', name: '스타일 지시 프롬프트', role: 'system',
+        content: block('instruction', 'style_instruction', '스타일 지시 프롬프트', input.styleInstruction),
+    })
+    const system = systemSources.map((source) => source.content).join('\n\n')
 
     const contextSpecs = [
-        ['systemPrompt', 'system_prompt', '시스템 프롬프트'],
-        ['characterDescription', 'character_description', '캐릭터 설명'],
-        ['characterLorebook', 'character_lorebook', '캐릭터 로어북'],
-        ['moduleLorebook', 'module_lorebook', '모듈 로어북'],
+        ['systemPrompt', 'system_prompt', '시스템 프롬프트', 'systemPrompt'],
+        ['characterDescription', 'character_description', '캐릭터 설명', 'character'],
+        ['characterLorebook', 'character_lorebook', '캐릭터 로어북', 'lorebook'],
+        ['moduleLorebook', 'module_lorebook', '모듈 로어북', 'lorebook'],
     ] as const
+    const userSources: RequestInjectionSource[] = []
     const contexts = contextSpecs
         .filter(([key]) => input.selections[key] && input.sources[key].trim())
-        .map(([key, name, title]) => block('context', name, title, input.sources[key]))
+        .map(([key, name, title, kind]) => {
+            const content = block('context', name, title, input.sources[key])
+            const loreSources = key === 'characterLorebook' ? input.sources.characterLorebookSources
+                : key === 'moduleLorebook' ? input.sources.moduleLorebookSources : undefined
+            userSources.push(...(loreSources?.length
+                ? loreSources.map((source) => ({ ...source, content: escapeBlockClosers(source.content) }))
+                : [{ kind, name: title, role: 'user' as const, content }]))
+            return content
+        })
+
+    const draft = input.draft.trim() ? block('draft', 'draft', '초안', input.draft) : ''
+    if (draft) userSources.push({ kind: 'persona', name: '초안', role: 'user', content: draft })
+    const instruction = `# 사용자 OOC 지시\n${escapeBlockClosers(input.userInstruction.trim())}`
+    userSources.push({ kind: 'instruction', name: '사용자 OOC 지시', role: 'user', content: instruction })
 
     const user = [
         contexts.length ? `# 참고 컨텍스트\n${contexts.join('\n\n')}` : '',
-        input.draft.trim() ? block('draft', 'draft', '초안', input.draft) : '',
-        `# 사용자 OOC 지시\n${escapeBlockClosers(input.userInstruction.trim())}`,
+        draft,
+        instruction,
     ].filter(Boolean).join('\n\n')
 
     return [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
+        { role: 'system', content: system, requestStatusSources: systemSources },
+        { role: 'user', content: user, requestStatusSources: userSources },
     ]
 }
 

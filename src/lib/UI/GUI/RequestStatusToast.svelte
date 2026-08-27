@@ -252,6 +252,6 @@
     .rs-context li b { color: var(--risu-theme-textcolor); font-weight: 500; font-variant-numeric: tabular-nums; }
 
     .rs-badge-row { font-size: 12px; color: var(--risu-theme-textcolor2); margin-top: 5px; }
-    .rs-badge-success { color: #4ade80; }
-    .rs-badge-warn { color: #facc15; }
+    .rs-badge-success { color: var(--color-success); }
+    .rs-badge-warn { color: var(--color-warning); }
 </style>

@@ -407,7 +407,7 @@
         ></canvas>
     <div
         bind:this={selection}
-        class="absolute top-0 left-0 w-0 h-0 pointer-events-none z-10 opacity-50 bg-blue-500"
+        class="absolute top-0 left-0 w-0 h-0 pointer-events-none z-10 opacity-50 bg-info"
         class:backdrop-blur={loading && mode === 'manual'}
     ></div>
 </div>
@@ -436,15 +436,15 @@
     @keyframes backdrop-blur-animation {
         0% {
             backdrop-filter: blur(5px);
-            background-color: rgb(59 130 246 / 50%);
+            background-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
         }
         50% {
             backdrop-filter: blur(10px);
-            background-color: rgb(59 130 246 / 70%);
+            background-color: color-mix(in srgb, var(--color-primary) 70%, transparent);
         }
         100% {
             backdrop-filter: blur(5px);
-            background-color: rgb(59 130 246 / 50%);
+            background-color: color-mix(in srgb, var(--color-primary) 50%, transparent);
         }
     }
 </style>

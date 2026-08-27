@@ -3,7 +3,7 @@ import { loadBundledRegistry } from '../registry/loader'
 import { resolveSnapshot } from '../registry/snapshot'
 import type { ModelPreset, ResolvedModelProfileSnapshot } from '../types'
 import { ModelPresetAdapterError } from './error'
-import { sendChatRequest, streamChatRequest, previewChatRequest } from './openaiCompatible'
+import { sendChatRequest, streamChatRequest, previewChatRequest, parseChatCompletion, parseChatStreamDelta } from './openaiCompatible'
 import type { AdapterChatMessage } from './types'
 
 function makeSnapshot(overrides: Partial<ResolvedModelProfileSnapshot> = {}): ResolvedModelProfileSnapshot {
@@ -113,6 +113,132 @@ function captureFetch(response: Response | (() => Response)): {
 }
 
 describe('sendChatRequest (non-stream)', () => {
+    test('classifies an explicit refusal separately from an empty successful response', async () => {
+        const { fetchImpl } = captureFetch(jsonResponse({
+            choices: [{ message: { content: null, refusal: 'Unable to comply.' }, finish_reason: 'stop' }],
+        }))
+        const result = await sendChatRequest(makePreset(), { messages: userMessages, fetchImpl }, { apiKey: 'sk' })
+        expect(result).toMatchObject({ text: '', finishReason: 'refusal' })
+    })
+
+    test('surfaces streamed refusal chunks without copying refusal prose into answer text', async () => {
+        const { fetchImpl } = captureFetch(sseResponse([
+            'data: {"choices":[{"delta":{"refusal":"Unable to comply."},"finish_reason":null}]}\n\n',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+            'data: [DONE]\n\n',
+        ]))
+        const deltas = []
+        for await (const delta of streamChatRequest(makePreset(), { messages: userMessages, fetchImpl }, { apiKey: 'sk' })) {
+            deltas.push(delta)
+        }
+        expect(deltas.map(({ textDelta, finishReason }) => ({ textDelta, finishReason }))).toEqual([
+            { textDelta: '', finishReason: 'refusal' },
+            { textDelta: '', finishReason: 'stop' },
+        ])
+    })
+
+    test('gives an explicit refusal precedence over a stop reason in a single stream chunk', () => {
+        expect(parseChatStreamDelta({
+            choices: [{ delta: { refusal: 'Unable to comply.' }, finish_reason: 'stop' }],
+        })).toMatchObject({ textDelta: '', finishReason: 'refusal' })
+    })
+
+    test.each([undefined, null, '', '   '])('does not classify an empty refusal value %j as refusal', (refusal) => {
+        expect(parseChatCompletion({
+            choices: [{ message: { content: 'ok', refusal }, finish_reason: 'stop' }],
+        })).toMatchObject({ text: 'ok', finishReason: 'stop' })
+        expect(parseChatStreamDelta({
+            choices: [{ delta: { content: 'ok', refusal }, finish_reason: 'stop' }],
+        })).toMatchObject({ textDelta: 'ok', finishReason: 'stop' })
+        expect(parseChatStreamDelta({ choices: [{ delta: { refusal } }] })).toBeNull()
+    })
+
+    test('per-call controls override preset, custom body and additional parameters without mutating them', async () => {
+        const snapshot = resolveSnapshot(loadBundledRegistry(), 'openai:gpt-4o')
+        const preset = makePreset({
+            profileSnapshot: snapshot,
+            userValues: { temperature: 0.8, max_tokens: 100 },
+            customBody: { temperature: 0.9, max_tokens: 200, top_p: 0.7 },
+            additionalParamsText: 'temperature=1.2\nmax_tokens=300',
+        })
+        const original = structuredClone(preset)
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+
+        await sendChatRequest(preset, {
+            messages: userMessages, temperature: 0, maxOutputTokens: 8192, fetchImpl,
+        }, { apiKey: 'sk' })
+
+        expect(calls[0].body).toMatchObject({ temperature: 0, max_tokens: 8192, top_p: 0.7 })
+        expect(calls[0].body).not.toHaveProperty('max_completion_tokens')
+        expect(preset).toEqual(original)
+    })
+
+    test.each(['openai:o3', 'openai:gpt-55', 'lightning-ai:gpt-54-mini'])(
+        'uses the completion-token schema and omits unsupported temperature for %s', async (profileId) => {
+            const preset = makePreset({
+                profileSnapshot: resolveSnapshot(loadBundledRegistry(), profileId),
+                customBody: { max_tokens: 100, max_completion_tokens: 200, temperature: 0.9 },
+            })
+            const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+
+            await sendChatRequest(preset, {
+                messages: userMessages, temperature: 0, maxOutputTokens: 8192, fetchImpl,
+            }, { apiKey: 'sk' })
+
+            expect(calls[0].body.max_completion_tokens).toBe(8192)
+            expect(calls[0].body).not.toHaveProperty('max_tokens')
+            expect(calls[0].body).not.toHaveProperty('temperature')
+        },
+    )
+
+    test('uses an existing completion-token field when the profile has no token mapping', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+        await sendChatRequest(makePreset({ customBody: { max_completion_tokens: 200 } }), {
+            messages: userMessages, maxOutputTokens: 2048, fetchImpl,
+        }, { apiKey: 'sk' })
+        expect(calls[0].body.max_completion_tokens).toBe(2048)
+        expect(calls[0].body).not.toHaveProperty('max_tokens')
+    })
+
+    test('keeps a reasoning profile sampling restriction when its wire model is a gateway alias', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+        await sendChatRequest(makePreset({
+            profileSnapshot: resolveSnapshot(loadBundledRegistry(), 'lightning-ai:gpt-54-mini'),
+            userValues: { modelId: 'my-deployment-alias' },
+        }), { messages: userMessages, temperature: 0, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body.model).toBe('my-deployment-alias')
+        expect(calls[0].body).not.toHaveProperty('temperature')
+    })
+
+    test('prefers a legacy token schema over a conflicting custom completion-token field', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+        await sendChatRequest(makePreset({
+            profileSnapshot: resolveSnapshot(loadBundledRegistry(), 'openai:gpt-4o'),
+            customBody: { max_completion_tokens: 200 },
+        }), { messages: userMessages, maxOutputTokens: 2048, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body.max_tokens).toBe(2048)
+        expect(calls[0].body).not.toHaveProperty('max_completion_tokens')
+    })
+
+    test('does not change existing sampling fields when per-call controls are absent', async () => {
+        const { fetchImpl, calls } = captureFetch(jsonResponse({ choices: [{ message: { content: 'ok' } }] }))
+        await sendChatRequest(makePreset({
+            customBody: { temperature: 0.7, max_tokens: 200, max_completion_tokens: 300 },
+        }), { messages: userMessages, fetchImpl }, { apiKey: 'sk' })
+        expect(calls[0].body).toEqual({
+            model: 'demo-fast', temperature: 0.7, max_tokens: 200, max_completion_tokens: 300,
+            messages: userMessages, stream: false,
+        })
+    })
+
+    test('applies per-call token controls to streaming requests too', async () => {
+        const { fetchImpl, calls } = captureFetch(sseResponse(['data: [DONE]\n\n']))
+        for await (const _ of streamChatRequest(makePreset(), {
+            messages: userMessages, maxOutputTokens: 2048, fetchImpl,
+        }, { apiKey: 'sk' })) { /* drain */ }
+        expect(calls[0].body).toMatchObject({ stream: true, max_tokens: 2048 })
+    })
+
     test('adds JSON mode and the response schema only for structured DeepSeek requests', async () => {
         const { fetchImpl, calls } = captureFetch(
             jsonResponse({ choices: [{ message: { content: '{"value":"ok"}' } }] }),
@@ -140,7 +266,7 @@ describe('sendChatRequest (non-stream)', () => {
         expect(wire.slice(1)).toEqual(userMessages)
     })
 
-    test('grounds structured Ollama Cloud requests with JSON mode and the response schema', async () => {
+    test('grounds Ollama Cloud requests with a prompt schema without unsupported response_format', async () => {
         const { fetchImpl, calls } = captureFetch(
             jsonResponse({ choices: [{ message: { content: '{"value":"ok"}' } }] }),
         )
@@ -154,12 +280,13 @@ describe('sendChatRequest (non-stream)', () => {
         await sendChatRequest(
             makePreset({
                 profileSnapshot: makeSnapshot({ providerBaseId: 'ollama-cloud' }),
+                customBody: { response_format: { type: 'json_object' } },
             }),
             { messages: userMessages, responseSchema, fetchImpl },
             { apiKey: 'sk' },
         )
 
-        expect(calls[0].body.response_format).toEqual({ type: 'json_object' })
+        expect(calls[0].body).not.toHaveProperty('response_format')
         const wire = calls[0].body.messages as Array<Record<string, unknown>>
         expect(wire[0]).toMatchObject({ role: 'system' })
         expect(wire[0].content).toContain('Return exactly one JSON object')
@@ -167,11 +294,10 @@ describe('sendChatRequest (non-stream)', () => {
         expect(wire.slice(1)).toEqual(userMessages)
     })
 
-    test('does not add DeepSeek JSON hints to ordinary or other-provider requests', async () => {
+    test('does not add DeepSeek JSON hints to ordinary requests', async () => {
         const { fetchImpl, calls } = captureFetch(() =>
             jsonResponse({ choices: [{ message: { content: 'ok' } }] }),
         )
-        const responseSchema = { type: 'object' }
 
         await sendChatRequest(
             makePreset({
@@ -180,16 +306,39 @@ describe('sendChatRequest (non-stream)', () => {
             { messages: userMessages, fetchImpl },
             { apiKey: 'sk' },
         )
+
+        expect(calls[0].body.response_format).toBeUndefined()
+        expect(calls[0].body.messages).toEqual(userMessages)
+    })
+
+    test('sends native JSON Schema for structured OpenAI-compatible requests', async () => {
+        const { fetchImpl, calls } = captureFetch(() =>
+            jsonResponse({ choices: [{ message: { content: '{"value":"ok"}' } }] }),
+        )
+        const responseSchema = {
+            type: 'object',
+            additionalProperties: false,
+            required: ['value'],
+            properties: { value: { type: 'string' } },
+        }
+
         await sendChatRequest(
-            makePreset(),
+            makePreset({
+                profileSnapshot: makeSnapshot({ providerBaseId: 'openrouter' }),
+            }),
             { messages: userMessages, responseSchema, fetchImpl },
             { apiKey: 'sk' },
         )
 
-        expect(calls[0].body.response_format).toBeUndefined()
+        expect(calls[0].body.response_format).toEqual({
+            type: 'json_schema',
+            json_schema: {
+                name: 'format',
+                strict: true,
+                schema: responseSchema,
+            },
+        })
         expect(calls[0].body.messages).toEqual(userMessages)
-        expect(calls[1].body.response_format).toBeUndefined()
-        expect(calls[1].body.messages).toEqual(userMessages)
     })
 
     test('builds OpenAI-compatible body and parses choices/usage', async () => {

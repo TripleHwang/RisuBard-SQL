@@ -715,7 +715,7 @@ async function importCharacterCardSpec<T extends boolean = false>(card:Character
     let im = img ? await saveAsset(img) : undefined
     let db = getDatabase()
 
-    const risuext = safeStructuredClone(data.extensions.risuai)
+    const risuext = data.extensions?.risuai ? safeStructuredClone(data.extensions.risuai) : undefined
     let emotions:[string, string][] = []
     let bias:[string, number][] = []
     let viewScreen: "none" | "emotion" | "imggen" = 'none'
@@ -961,7 +961,7 @@ async function importCharacterCardSpec<T extends boolean = false>(card:Character
         exampleMessage: data.mes_example ?? '',
         creatorNotes:data.creator_notes ?? '',
         systemPrompt:data.system_prompt ?? '',
-        postHistoryInstructions:'',
+        postHistoryInstructions: data.post_history_instructions ?? '',
         alternateGreetings:data.alternate_greetings ?? [],
         tags:data.tags ?? [],
         creator:data.creator ?? '',
@@ -978,7 +978,9 @@ async function importCharacterCardSpec<T extends boolean = false>(card:Character
             character_version: data.character_version
         },
         additionalAssets: extAssets,
-        replaceGlobalNote: data.post_history_instructions ?? '',
+        replaceGlobalNote: risuext && !Object.prototype.hasOwnProperty.call(risuext, 'replaceGlobalNote')
+            ? data.post_history_instructions ?? ''
+            : risuext?.replaceGlobalNote ?? '',
         backgroundHTML: data?.extensions?.risuai?.backgroundHTML,
         license: data?.extensions?.risuai?.license,
         triggerscript: data?.extensions?.risuai?.triggerscript ?? [],
@@ -995,6 +997,8 @@ async function importCharacterCardSpec<T extends boolean = false>(card:Character
         source: card?.data?.extensions?.risuai?.source ?? [],
         ccAssets: ccAssets,
         lowLevelAccess: risuext?.lowLevelAccess ?? false,
+        hideChatIcon: risuext?.hideChatIcon ?? false,
+        moduleNamespace: risuext?.moduleNamespace ?? '',
         defaultVariables: data?.extensions?.risuai?.defaultVariables ?? '',
         chatFolders: [],
         prebuiltAssetCommand: data?.extensions?.risuai?.prebuiltAssetCommand ?? '',
@@ -1214,7 +1218,7 @@ export function createBaseV2(char:character) {
             mes_example: char.exampleMessage ?? '',
             creator_notes: char.creatorNotes ?? '',
             system_prompt: char.systemPrompt ?? '',
-            post_history_instructions: char.replaceGlobalNote ?? '',
+            post_history_instructions: char.postHistoryInstructions ?? '',
             alternate_greetings: char.alternateGreetings ?? [],
             character_book: {
                 scan_depth: char.loreSettings?.scanDepth,
@@ -1244,7 +1248,11 @@ export function createBaseV2(char:character) {
                     largePortrait: char.largePortrait,
                     inlayViewScreen: char.inlayViewScreen,
                     newGenData: char.newGenData,
-                    vits: {}
+                    vits: {},
+                    replaceGlobalNote: char.replaceGlobalNote ?? '',
+                    hideChatIcon: char.hideChatIcon ?? false,
+                    moduleNamespace: char.moduleNamespace ?? '',
+                    defaultVariables: char.defaultVariables ?? ''
                 },
                 depth_prompt: char.depth_prompt
             }
@@ -1656,7 +1664,7 @@ export function createBaseV3(char:character){
             mes_example: char.exampleMessage ?? '',
             creator_notes: char.creatorNotes ?? '',
             system_prompt: char.systemPrompt ?? '',
-            post_history_instructions: char.replaceGlobalNote ?? '',
+            post_history_instructions: char.postHistoryInstructions ?? '',
             alternate_greetings: char.alternateGreetings ?? [],
             character_book: {
                 scan_depth: char.loreSettings?.scanDepth,
@@ -1686,6 +1694,9 @@ export function createBaseV3(char:character){
                     newGenData: char.newGenData,
                     vits: {},
                     lowLevelAccess: char.lowLevelAccess ?? false,
+                    replaceGlobalNote: char.replaceGlobalNote ?? '',
+                    hideChatIcon: char.hideChatIcon ?? false,
+                    moduleNamespace: char.moduleNamespace ?? '',
                     defaultVariables: char.defaultVariables ?? '',
                     prebuiltAssetCommand: char.prebuiltAssetCommand ?? '',
                     prebuiltAssetExclude: char.prebuiltAssetExclude ?? [],
@@ -1908,6 +1919,10 @@ type CharacterCardV2Risu = {
                     emotionInstructions: string,
                 },
                 vits?: {[key:string]:string}
+                replaceGlobalNote?:string
+                hideChatIcon?:boolean
+                moduleNamespace?:string
+                defaultVariables?: string
             }
             depth_prompt?: { depth: number, prompt: string }
         }

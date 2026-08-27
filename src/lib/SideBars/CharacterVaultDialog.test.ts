@@ -134,6 +134,18 @@ describe('CharacterVaultDialog', () => {
         expect(source).toMatch(/\.vault-title\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
     })
 
+    test('uses square character cards with a centered title overlay on hover', () => {
+        const source = readFileSync(
+            'src/lib/SideBars/CharacterVaultDialog.svelte', 'utf8'
+        )
+
+        expect(source).toMatch(/\.character-card\s*\{[^}]*aspect-ratio:\s*1/s)
+        expect(source).toMatch(/\.portrait\s*\{[^}]*inset:\s*0/s)
+        expect(source).toMatch(/\.character-caption\s*\{[^}]*position:\s*absolute[^}]*inset:\s*0[^}]*place-items:\s*center[^}]*opacity:\s*0/s)
+        expect(source).toMatch(/\.character-card:hover \.character-caption[^}]*\{[^}]*opacity:\s*1/s)
+        expect(source).toMatch(/\.character-caption strong\s*\{[^}]*font-size:\s*clamp\(/s)
+    })
+
     test('filters the full vault by character name', async () => {
         await render()
         const search = document.body.querySelector<HTMLInputElement>(

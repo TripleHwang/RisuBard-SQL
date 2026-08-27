@@ -57,8 +57,8 @@
 
 {#if openOptions}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="fixed top-0 w-full h-full left-0 bg-black/50 z-50 flex justify-center items-center" role="button" tabindex="0" onclick={() => { openOptions = false }}>
-        <div class="w-96 max-w-full max-h-full overflow-x-hidden bg-bgcolor p-4 flex flex-col" role="button" tabindex="0" onclick={(e) => { e.stopPropagation() }}>
+    <div class="risu-modal-overlay fixed top-0 w-full h-full left-0 bg-overlay/50 z-50 flex justify-center items-center" role="button" tabindex="0" onclick={() => { openOptions = false }}>
+        <div class="risu-modal-surface w-96 max-w-full max-h-full overflow-x-hidden bg-bgcolor p-4 flex flex-col" role="button" tabindex="0" onclick={(e) => { e.stopPropagation() }}>
             <div class="shrink-0 flex items-center gap-3 mb-3">
                 <button
                     class="flex items-center justify-center p-2 rounded-lg hover:bg-selected transition-colors shrink-0"
@@ -101,7 +101,7 @@
 <ShButton
     className={`w-full min-w-0 justify-start${disabled ? ' opacity-50 pointer-events-none' : ''} ${
         bound ? 'border-selected text-textcolor'
-        : (dangling || (warnIfEmpty && !value)) ? 'border-amber-500 text-amber-500'
+        : (dangling || (warnIfEmpty && !value)) ? 'border-warning-border text-warning'
         : 'text-textcolor2 opacity-75 hover:opacity-100'
     }`}
     onclick={() => { if (!disabled) { openOptions = true } }}

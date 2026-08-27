@@ -3,6 +3,7 @@
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
+    import { canBranchFromMessage, deletionTouchesBardWikiEvidence } from "src/ts/risubard/chatHistoryPolicy"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { getModelInfo } from "src/ts/model/modellist"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
@@ -66,10 +67,6 @@
         onConfirmMemory?: (messageId: string) => Promise<boolean>;
         memoryConfirmed?: boolean;
         canonicalReceipt?: CanonicalTurnReceipt;
-        onUndoCanonical?: (
-            messageId: string,
-            documentId?: string
-        ) => Promise<boolean>;
         character?: simpleCharacterArgument|string|null;
         firstMessage?: boolean;
         altGreeting?: boolean;
@@ -101,7 +98,6 @@
         onConfirmMemory = async () => false,
         memoryConfirmed = false,
         canonicalReceipt,
-        onUndoCanonical = async () => false,
         character = null,
         firstMessage = false,
         altGreeting = false,
@@ -149,6 +145,10 @@
         }
         const sel = await alertConfirmMulti(language.removeChat, actions)
         if(sel < 0) return
+        if(deletionTouchesBardWikiEvidence(messages, idx, sel === 1)){
+            notifyInfo(language.bardWikiDeleteBlocked)
+            return
+        }
         const currentCharacter = DBState.db.characters[selIdState.selId]
         const currentChat = currentCharacter.chats[currentCharacter.chatPage]
         let msg = currentChat.message
@@ -234,7 +234,16 @@
         return {
             project,
             variables: readFirstMessageStudioVariables(scriptstate, current?.defaultVariables ?? ''),
+            assets: current?.type === 'character' ? current.additionalAssets ?? [] : [],
             visible: shouldRenderFirstMessageStudio(firstMessage, project, scriptstate, current?.defaultVariables ?? ''),
+        }
+    }
+
+    function finishMessageEdit(event: KeyboardEvent) {
+        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault()
+            editMode = false
+            edit()
         }
     }
 
@@ -427,12 +436,6 @@
         {#if role === 'char' && canonicalReceipt && idx >= 0}
             <RisuBardTurnReceipt
                 receipt={canonicalReceipt}
-                onUndo={(documentId) => onUndoCanonical(
-                    DBState.db.characters[selIdState.selId]
-                        .chats[DBState.db.characters[selIdState.selId].chatPage]
-                        .message[idx]?.chatId ?? '',
-                    documentId
-                )}
             />
         {/if}
         {#if messageGenerationInfo && (DBState.db.requestInfoInsideChat || aiLawApplies())}
@@ -467,7 +470,7 @@
                     {language.retranslate}
                 </span>
             </button>
-            <button class={"text-sm p-1 border-darkborderc float-end mr-2 my-1 hover:ring-darkbutton hover:ring-3 rounded-md hover:text-textcolor transition-all flex justify-center items-center " + (editTranslationMode ? 'text-blue-400' : 'text-textcolor2')}
+            <button class={"text-sm p-1 border-darkborderc float-end mr-2 my-1 hover:ring-darkbutton hover:ring-3 rounded-md hover:text-textcolor transition-all flex justify-center items-center " + (editTranslationMode ? 'text-info' : 'text-textcolor2')}
                     onclick={() => {
                         if(editTranslationMode){
                             saveTranslationEdit()
@@ -493,7 +496,7 @@
             saveTranslationEdit()
         }} />
     {:else if editMode}
-        <AutoresizeArea bind:value={message} handleLongPress={() => {
+        <AutoresizeArea bind:value={message} onkeydown={finishMessageEdit} handleLongPress={() => {
             editMode = false
         }} />
     {:else if isComment}
@@ -504,7 +507,7 @@
                 {@const type = parts[1]}
 
                 {#if type === 'branchedfrom'}
-                    <button class="text-blue-500 hover:underline"
+                    <button class="text-info hover:underline"
                         onclick={() => {
                             console.log(parts)
                             changeChatTo(parts[2] ?? '')
@@ -524,6 +527,7 @@
             <FirstMessageStudioRuntime
                 project={studioContext.project}
                 variables={studioContext.variables}
+                assets={studioContext.assets}
                 onChange={handleFirstMessageStudioChange}
             />
         </div>
@@ -583,7 +587,7 @@
     <div class="grow flex items-center justify-end" class:text-textcolor2={options?.applyTextColors !== false}>
         {#if isComment}
             <button
-                class="flex items-center hover:text-red-400 transition-colors button-icon-remove"
+                class="flex items-center hover:text-danger/80 transition-colors button-icon-remove"
                 onclick={async () => {
                     await rm()
                 }}
@@ -613,7 +617,7 @@
                     {/if}
                 {/if}
                 {#if firstMessage}
-                    <button class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-red-500 hover:text-red-400' : 'hover:text-primary')} onclick={async () => {
+                    <button class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-danger hover:text-danger/80' : 'hover:text-primary')} onclick={async () => {
                         await sleep(1)
                         const currentCharacter = DBState.db.characters[selIdState.selId]
                         const chat = currentCharacter.chats[currentCharacter.chatPage]
@@ -646,6 +650,7 @@
             try {
                 alertWait(language.loading)
                 const root = document.querySelector(':root') as HTMLElement;
+                const exportShadow = getComputedStyle(root).getPropertyValue('--color-shadow').trim();
 
                 const parser = new DOMParser()
                 const doc = parser.parseFromString(
@@ -689,7 +694,7 @@
                         max-width: 100%;
                         margin: 10px 0;
                         border-radius: 8px;
-                        box-shadow: rgba(0,0,0,0.1) 0px 2px 8px;
+                        box-shadow: color-mix(in srgb, ${exportShadow} 10%, transparent) 0px 2px 8px;
                         display: block;
                         margin-left: auto;
                         margin-right: auto;
@@ -828,7 +833,7 @@
                     }
                 }
                 
-                const html = `<div style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; color: ${root.style.getPropertyValue('--risu-theme-textcolor')}; line-height: 1.6; max-width: 600px; margin: 1rem auto; background: ${root.style.getPropertyValue('--risu-theme-bgcolor')}; border-radius: 12px; box-shadow: 0px 4px 12px rgba(0,0,0,0.15); overflow: hidden;">
+                const html = `<div style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; color: ${root.style.getPropertyValue('--risu-theme-textcolor')}; line-height: 1.6; max-width: 600px; margin: 1rem auto; background: ${root.style.getPropertyValue('--risu-theme-bgcolor')}; border-radius: 12px; box-shadow: 0px 4px 12px color-mix(in srgb, ${exportShadow} 15%, transparent); overflow: hidden;">
 <div style="padding: 20px;">
 <div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 1rem; text-align: center;">
     ${finalHasValidImage ? `<img style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid ${root.style.getPropertyValue('--risu-theme-darkborderc')}; margin-bottom: 0.75rem; object-fit: cover;" src="${finalIconDataUrl}" alt="profile">` : ''}
@@ -881,7 +886,7 @@
             {/if}
         </button>
     {/if}
-    <button class="flex items-center hover:text-red-400 transition-colors button-icon-remove" onclick={rm}>
+    <button class="flex items-center hover:text-danger/80 transition-colors button-icon-remove" onclick={rm}>
         <TrashIcon size={20}/>
 
         {#if showNames}
@@ -893,7 +898,7 @@
 
 {#snippet translationButton(showNames = false)}
     {#if DBState.db.translator !== '' && !blankMessage && !isOptimizedStreamingMessage}
-        <button class={"flex items-center cursor-pointer hover:text-primary transition-colors button-icon-translate " + (translated ? 'text-blue-400':'')} class:translating={translating} onclick={async () => {
+        <button class={"flex items-center cursor-pointer hover:text-primary transition-colors button-icon-translate " + (translated ? 'text-info':'')} class:translating={translating} onclick={async () => {
             translated = !translated
         }}>
             <LanguagesIcon />
@@ -906,7 +911,7 @@
         && !isOptimizedStreamingMessage
         && !memoryConfirmed
         && !memoryConfirming}
-        <button class={"flex items-center hover:text-primary transition-colors button-icon-edit "+(editMode?'text-blue-400':'')} onclick={() => {
+        <button class={"flex items-center hover:text-primary transition-colors button-icon-edit "+(editMode?'text-info':'')} onclick={() => {
             if(!editMode){
                 editMode = true
             }
@@ -978,7 +983,7 @@
         <button
             data-risubard-confirm-memory
             class="flex items-center hover:text-primary transition-colors"
-            class:text-green-400={memoryConfirmed}
+            class:text-success={memoryConfirmed}
             disabled={memoryConfirmed || memoryConfirming}
             onclick={async () => {
                 const current = DBState.db.characters[selIdState.selId]
@@ -1016,7 +1021,7 @@
         </button>
     {/if}
     {#if DBState.db.enableBookmark}
-        <button class="flex items-center hover:text-primary transition-colors button-icon-bookmark {isBookmarked ? 'text-yellow-400' : ''}" onclick={async () => {
+        <button class="flex items-center hover:text-primary transition-colors button-icon-bookmark {isBookmarked ? 'text-warning' : ''}" onclick={async () => {
             await sleep(1)
             toggleBookmark()
         }}>
@@ -1028,7 +1033,7 @@
     {/if}
 
     {#if totalPages > 1 && !memoryConfirmed && !memoryConfirming}
-        <button class="flex items-center hover:text-red-500 transition-colors" onclick={async () => {
+        <button class="flex items-center hover:text-danger/80 transition-colors" onclick={async () => {
             await sleep(1)
             if(await alertConfirm(language.deleteRerollMessageConfirm)){
                 onDeleteSwipe()
@@ -1045,6 +1050,10 @@
         await sleep(1)
         const currentCharacter = DBState.db.characters[selIdState.selId]
         const currentChat = currentCharacter.chats[currentCharacter.chatPage]
+        if(!canBranchFromMessage(currentChat.message, idx)){
+            notifyInfo(language.bardWikiHistoricalBranchBlocked)
+            return
+        }
         const currentMessage = currentChat.message[idx]
         const newChat = $state.snapshot(currentChat)
         newChat.name = createChatCopyName(newChat.name, 'Branch')
@@ -1379,14 +1388,14 @@
 
 
 {#if disabled === true}
-<div class="w-full border-t-2 border-dashed border-blue-500"></div>
+<div class="w-full border-t-2 border-dashed border-info-border"></div>
 {/if}
 {#if DBState.db.theme === ''}
 <!-- NodeOnly Standard: 전용 외부 구조 -->
 <div class="flex max-w-full justify-center risu-chat"
      data-chat-index={idx}
      data-chat-id={DBState.db.characters?.[selIdState.selId]?.chats?.[DBState.db.characters?.[selIdState.selId]?.chatPage]?.message?.[idx]?.chatId ?? ''}
-     style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid rgba(98, 114, 164, 0.7);` : ''}
+     style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);` : ''}
      onclickcapture={handleButtonTriggerWithin}>
     <div class="text-textcolor grow max-w-full sm:px-4 py-4">
         {#if !blankMessage}
@@ -1432,20 +1441,20 @@
 <div class="flex max-w-full justify-center risu-chat"
      data-chat-index={idx}
      data-chat-id={DBState.db.characters?.[selIdState.selId]?.chats?.[DBState.db.characters?.[selIdState.selId]?.chatPage]?.message?.[idx]?.chatId ?? ''}
-     style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid rgba(98, 114, 164, 0.7);` : ''}
+     style={isLastMemory ? `border-top:${DBState.db.memoryLimitThickness}px solid color-mix(in srgb, var(--color-borderc) 70%, transparent);` : ''}
      onclickcapture={handleButtonTriggerWithin}>
-    <div class="text-textcolor mt-1 ml-4 mr-4 mb-1 p-2 bg-transparent grow border-t-gray-900 border-opacity/30 border-transparent flexium items-start max-w-full" >
+    <div class="text-textcolor mt-1 ml-4 mr-4 mb-1 p-2 bg-transparent grow border-t-darkborderc border-opacity/30 border-transparent flexium items-start max-w-full" >
         {#if DBState.db.theme === 'mobilechat' && !blankMessage}
             <div class={role === 'user' ? "flex items-start w-full justify-end" : "flex items-start"}>
                 {#if role !== 'user'}
                     {@render senderIcon({rounded: true})}
                 {/if}
                 <div
-                    class="bg-gray-100 rounded-lg p-3 max-w-[70%] mx-2"
+                    class="bg-darkbg rounded-lg p-3 max-w-[70%] mx-2"
                     class:rounded-tl-none={role !== 'user'}
                     class:rounded-tr-none={role === 'user'}
                 >
-                    <p class="text-gray-800">{@render textBox()}</p>
+                    <p class="text-textcolor">{@render textBox()}</p>
                     {#if DBState.db.characters?.[selIdState.selId]?.chats?.[DBState.db.characters?.[selIdState.selId]?.chatPage]?.message?.[idx]?.time}
                         <span class="text-xs text-textcolor2 mt-1 block">
                             {new Intl.DateTimeFormat(undefined, {
@@ -1465,17 +1474,17 @@
             </div>
         {:else if DBState.db.theme === 'cardboard' && !blankMessage}
             <div class="w-full flex flex-col px-0 sm:px-4 py-4 relative">
-                <div class="bg-linear-to-b from-gray-100 to-gray-200 rounded-lg shadow-lg border-gray-400 border p-4 flex flex-col">
+                <div class="bg-linear-to-b from-darkbg to-selected rounded-lg shadow-lg border-borderc border p-4 flex flex-col">
                     <div class="flex gap-4 mt-2 flex-col sm:flex-row">
                         <div class="flex flex-col items-center">
                             <div class="sm:h-96 sm:w-72 sm:min-w-72 w-48 h-64">
                                 {@render senderIcon({rounded: false, styleFix:'height:100%;width:100%;'})}
                             </div>
-                            <h2 class="text-base font-bold text-gray-500 text-center mt-2 max-w-full text-ellipsis">{name}</h2>
+                            <h2 class="text-base font-bold text-textcolor2 text-center mt-2 max-w-full text-ellipsis">{name}</h2>
 
                         </div>
                         {#if editMode}
-                            <textarea class="grow h-138 sm:h-96 overflow-y-auto bg-transparent text-black p-2 mb-2 resize-none message-edit-area" bind:value={message}></textarea>
+                            <textarea class="grow h-138 sm:h-96 overflow-y-auto bg-transparent text-textcolor p-2 mb-2 resize-none message-edit-area" bind:value={message} onkeydown={finishMessageEdit}></textarea>
                         {:else}
                             <div class="grow h-138 sm:h-96 overflow-y-auto p-2 mb-2 sm:mb-0">
                                 {@render textBox()}
@@ -1483,7 +1492,7 @@
                         {/if}
                     </div>
                 </div>
-                <div class="absolute bottom-0 right-0 bg-linear-to-b from-gray-200 to-gray-300 p-2 rounded-md border border-gray-400 text-gray-400">
+                <div class="absolute bottom-0 right-0 bg-linear-to-b from-selected to-darkbutton p-2 rounded-md border border-borderc text-textcolor2">
                     {@render iconButtons({applyTextColors: false})}
                 </div>
             </div>
@@ -1491,7 +1500,7 @@
             {@render renderGuiHtmlPart(RenderGUIHtml(DBState.db.guiHTML))}
         {:else if DBState.db.theme === 'standardRisu' && !blankMessage}
             {@render senderIcon({rounded: DBState.db.roundIcons})}
-            <span class="flex flex-col ml-4 w-full max-w-full min-w-0 text-black">
+            <span class="flex flex-col ml-4 w-full max-w-full min-w-0 text-textcolor">
                 <div class="flexium items-center chat-width">
                     {#if DBState.db.characters[selIdState.selId]?.chaId === "§playground" && !blankMessage && DBState.db.characters[selIdState.selId]?.chats?.[DBState.db.characters[selIdState.selId]?.chatPage]?.message?.[idx]}
                         <span class="chat-width text-xl border-darkborderc flex items-center text-textcolor">
@@ -1513,7 +1522,7 @@
             </span>
         {:else}
             {@render senderIcon({rounded: DBState.db.roundIcons})}
-            <span class="flex flex-col ml-4 w-full max-w-full min-w-0 text-black">
+            <span class="flex flex-col ml-4 w-full max-w-full min-w-0 text-textcolor">
                 <div class="flexium items-center chat-width">
                     {#if DBState.db.characters[selIdState.selId]?.chaId === "§playground" && !blankMessage && DBState.db.characters[selIdState.selId]?.chats?.[DBState.db.characters[selIdState.selId]?.chatPage]?.message?.[idx]}
                         <span class="chat-width text-xl border-darkborderc flex items-center text-textcolor">
@@ -1541,7 +1550,7 @@
 {#if disabled}
 <div class={{
     "w-full border-t-2 border-dashed": true,
-    "border-blue-500": disabled === true,
-    "border-amber-500": disabled === 'allBefore',
+    "border-info-border": disabled === true,
+    "border-warning-border": disabled === 'allBefore',
 }}></div>
 {/if}

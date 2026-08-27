@@ -3,11 +3,11 @@
 }}>
     
     {#if key === "experimental"}
-        <div class="text-red-500 hover:text-primary">
+        <div class="text-danger hover:text-primary">
             <FlaskConicalIcon size={16} />
         </div>
     {:else if unrecommended}
-        <div class="text-red-500 hover:text-primary">
+        <div class="text-danger hover:text-primary">
             <TriangleAlert size={14} />
         </div>
     {:else}

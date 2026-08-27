@@ -63,12 +63,12 @@
     <button class="min-w-0 flex-1 flex items-center gap-1 text-left" onclick={() => changeModel(id)}>
         {#if showUnrec}
             <span class="shrink-0 w-4 flex items-center justify-center">
-                {#if unrec}<TriangleAlert size={12} class="text-amber-500" />{/if}
+                {#if unrec}<TriangleAlert size={12} class="text-warning" />{/if}
             </span>
         {/if}
         <span class="truncate">{name}</span>
     </button>
-    <button class={`shrink-0 p-1 rounded hover:bg-darkbutton${modelFavoritesStore.isFavorite(id) ? ' text-amber-400' : ''}`} onclick={() => modelFavoritesStore.toggle(id)} title="Toggle favorite">
+    <button class={`shrink-0 p-1 rounded hover:bg-darkbutton${modelFavoritesStore.isFavorite(id) ? ' text-warning' : ''}`} onclick={() => modelFavoritesStore.toggle(id)} title="Toggle favorite">
         <Star size={14} fill={modelFavoritesStore.isFavorite(id) ? 'currentColor' : 'none'} />
     </button>
     </div>
@@ -78,7 +78,7 @@
     <button class="shrink-0 w-full flex items-center gap-1 px-3 py-1.5 text-sm font-medium hover:bg-selected rounded" onclick={() => toggleGroup(key)}>
         {#if showUnrec}
             <span class="shrink-0 w-4 flex items-center justify-center">
-                {#if unrec}<TriangleAlert size={12} class="text-amber-500" />{/if}
+                {#if unrec}<TriangleAlert size={12} class="text-warning" />{/if}
             </span>
         {/if}
         <span class="truncate flex-1 text-left">{label}</span>
@@ -109,10 +109,10 @@
 
 {#if openOptions}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="fixed top-0 w-full h-full left-0 bg-black/50 z-50 flex justify-center items-center" role="button" tabindex="0" onclick={() => {
+    <div class="risu-modal-overlay fixed top-0 w-full h-full left-0 bg-overlay/50 z-50 flex justify-center items-center" role="button" tabindex="0" onclick={() => {
         openOptions = false
     }}>
-        <div class="w-96 max-w-full max-h-full overflow-x-hidden bg-bgcolor p-4 flex flex-col" role="button" tabindex="0" onclick={(e)=>{
+        <div class="risu-modal-surface w-96 max-w-full max-h-full overflow-x-hidden bg-bgcolor p-4 flex flex-col" role="button" tabindex="0" onclick={(e)=>{
             e.stopPropagation()
             onclick?.(e)
         }}>

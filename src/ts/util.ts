@@ -5,7 +5,7 @@ import { selectedCharID } from "./stores.svelte"
 import { createBlankChar, getCharImage } from "./characters"
 import { isIOS } from "src/ts/platform"
 import PopupList from "src/lib/UI/PopupList.svelte"
-import { resolvePersonaById } from "./personaScopes"
+import { normalizeSelectedPersonaIndex, resolvePersonaById } from "./personaScopes"
 
 export interface Messagec extends Message{
     index: number
@@ -41,7 +41,16 @@ export function checkNullish(data:any){
 
 export async function selectSingleFile(ext:string[]){
     const v = await selectFileByDom(ext, 'single')
+    if(v === null){
+        return null
+    }
     const file = v[0]
+    if(!file){
+        const { notifyError } = await import('./alert')
+        const { language } = await import('../lang')
+        notifyError(`${language.unsupportedFileType} (.${ext.join(', .')})`)
+        return null
+    }
     return {name: file.name,data:await readFileAsUint8Array(file)}
 }
 
@@ -54,7 +63,7 @@ export async function selectSingleNativeFile(ext: string[]): Promise<File | null
 export async function selectMultipleFile(ext:string[]){
     const v = await selectFileByDom(ext, 'multiple')
     let arr:{name:string, data:Uint8Array}[] = []
-    for(const file of v){
+    for(const file of v ?? []){
         arr.push({name: file.name,data:await readFileAsUint8Array(file)})
     }
     return arr
@@ -118,7 +127,8 @@ export function getUserIconProtrait(){
             return bindedPersona.largePortrait
         }
         const db = getDatabase()
-        return db.personas[db.selectedPersona].largePortrait       
+        const index = normalizeSelectedPersonaIndex(db.personas.length, db.selectedPersona)
+        return db.personas[index]?.largePortrait ?? false
     } catch (error) {
         return false
     }
@@ -140,9 +150,18 @@ export function selectFileByDom(allowedExtensions:string[], multiple:'multiple'|
         }
 
     
-        fileInput.addEventListener('change', (event) => {
+        let settled = false
+        const finish = (files: null | File[]) => {
+            if(settled) return
+            settled = true
+            fileInput.remove()
+            resolve(files)
+        }
+
+        fileInput.addEventListener('cancel', () => finish(null), { once: true })
+        fileInput.addEventListener('change', () => {
             if (fileInput.files.length === 0) {
-                resolve([]);
+                finish(null)
                 return;
             }
     
@@ -151,8 +170,7 @@ export function selectFileByDom(allowedExtensions:string[], multiple:'multiple'|
                 return !allowedExtensions || allowedExtensions.includes(fileExtension);
             })) 
     
-            fileInput.remove()
-            resolve(files);
+            finish(files)
         });
     
         document.body.appendChild(fileInput);

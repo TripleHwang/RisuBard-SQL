@@ -21,6 +21,16 @@ const event = (overrides: Partial<Document>): Document => ({
 })
 
 describe('story so far projection', () => {
+    it('reads English summaries alongside legacy Korean without including related links', () => {
+        const entries = buildStorySoFar([event({}), event({
+            id: 'event.english',
+            content: '## Arrival\n\n### Story Summary\n\n- [[Alice]] arrived.\n\n### Related Documents\n\n- [[Station]]',
+        })])
+        expect(entries.map((entry) => entry.summary)).toEqual([
+            ['기본 사건이 일어났다.'], ['Alice arrived.'],
+        ])
+    })
+
     it('builds one chronological story from active event summaries only', () => {
         const entries = buildStorySoFar([
             event({

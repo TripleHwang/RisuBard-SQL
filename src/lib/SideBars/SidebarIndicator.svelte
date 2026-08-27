@@ -8,7 +8,7 @@
 
 <div
   class="
-      group-hover:bg-white
+      group-hover:bg-textcolor
       absolute
       left-[-4px]
       h-[8px]
@@ -16,6 +16,6 @@
       rounded-full
       transition-all
       duration-300
-      {isActive ? 'bg-white h-[20px]!' : 'group-hover:h-[10px]'}
+      {isActive ? 'bg-textcolor h-[20px]!' : 'group-hover:h-[10px]'}
     "
 ></div>

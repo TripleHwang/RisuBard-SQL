@@ -326,7 +326,7 @@
               {item.type}
             </span>
             {#if getStatusLabel(item)}
-              <span class="px-2 py-1 text-xs rounded bg-black/20 text-textcolor2">
+              <span class="px-2 py-1 text-xs rounded bg-bgcolor/20 text-textcolor2">
                 {getStatusLabel(item)}
               </span>
             {/if}
@@ -334,9 +334,9 @@
 
           <div class="mb-3">
             {#if item.type === 'image'}
-              <img alt={item.name} class="w-full h-40 object-contain rounded bg-black/20" src={`/api/asset/${Buffer.from('inlay_thumb/' + item.id, 'utf-8').toString('hex')}`} loading="lazy" />
+              <img alt={item.name} class="w-full h-40 object-contain rounded bg-bgcolor/20" src={`/api/asset/${Buffer.from('inlay_thumb/' + item.id, 'utf-8').toString('hex')}`} loading="lazy" />
             {:else}
-              <div class="w-full h-40 rounded bg-black/20 border border-darkborderc/50 flex items-center justify-center text-sm text-textcolor2">
+              <div class="w-full h-40 rounded bg-bgcolor/20 border border-darkborderc/50 flex items-center justify-center text-sm text-textcolor2">
                 {item.type === 'audio' ? language.playground.inlayAudioAsset : item.type === 'video' ? language.playground.inlayVideoAsset : item.type === 'signature' ? language.playground.inlaySignatureAsset : language.playground.inlayOriginalLoadNeeded}
               </div>
             {/if}

@@ -89,7 +89,7 @@
                         <hr class="border-selected my-4" />
                     {/if}
                     <span class="text-textcolor2 text-sm">{language.type}
-                        <button aria-labelledby="Add Conditions" class="float-right text-textcolor2 hover:text-red-400" onclick={() => {
+                        <button aria-labelledby="Add Conditions" class="float-right text-textcolor2 hover:text-danger/80" onclick={() => {
                             value.conditions.splice(i, 1)
                             value.conditions = value.conditions
         
@@ -197,7 +197,7 @@
                         <hr class="border-selected my-4" />
                     {/if}
                     <span class="text-textcolor2 text-sm">{language.type}
-                        <button aria-labelledby="Add Conditions" class="float-right text-textcolor2 hover:text-red-400" onclick={() => {
+                        <button aria-labelledby="Add Conditions" class="float-right text-textcolor2 hover:text-danger/80" onclick={() => {
                             value.effect.splice(i, 1)
                             value.effect = value.effect
         
@@ -332,7 +332,7 @@
                         (value.type !== 'start' && (effect.type === 'systemprompt' || effect.type === 'stop')) ||
                         (value.type !== 'output' && effect.type === 'sendAIprompt')
                     }
-                        <span class="text-red-400 text-sm">{language.invaildTriggerEffect}</span>
+                        <span class="text-danger text-sm">{language.invaildTriggerEffect}</span>
                     {/if}
                     {#if
                         !lowLevelAble && (
@@ -345,7 +345,7 @@
                             effect.type === 'runAxLLM'
                         )
                     }
-                        <span class="text-red-400 text-sm">{language.triggerLowLevelOnly}</span>
+                        <span class="text-danger text-sm">{language.triggerLowLevelOnly}</span>
 
                     {/if}
 
@@ -484,7 +484,7 @@
 
 <style>
     .valuer:hover{
-        color: rgba(16, 185, 129, 1);
+        color: var(--color-success);
         cursor: pointer;
     }
 

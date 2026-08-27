@@ -9,6 +9,7 @@
     import { getModuleAssets } from "src/ts/process/modules";
     import { getCurrentCharacter } from "src/ts/storage/database.svelte";
     import { getFileSrc } from "src/ts/globalApi.svelte";
+    import { clearGenericChatImageStyles, isFirstMessageStudioManagedImage } from './chatImageHandling'
 
     interface Props {
         character?: simpleCharacterArgument|string|null
@@ -109,7 +110,7 @@
             }
             if(retranslate || translated){
                 if (DBState.db.showTranslationLoading) {
-                    lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid #3b82f6; border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
+                    lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid var(--color-primary); border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
                 }
 
                 let transResult
@@ -189,6 +190,8 @@
             const exactAssets = new Map(normalizedAssets.map((asset) => [asset.name, asset.path]))
 
             imgs.forEach(async (img) => {
+                const studioManagedImage = isFirstMessageStudioManagedImage(img)
+                if (studioManagedImage) clearGenericChatImageStyles(img)
                 const name = img.getAttribute('src')?.toLocaleLowerCase() || ''
                 console.log(name)
 
@@ -203,8 +206,10 @@
                 const foundAsset = exactAssets.get(name)
                 console.log('Checking image:', name, 'Assets:', assets)
                 if(foundAsset){
-                    img.classList.add('root-loaded-image')
-                    img.classList.add('root-loaded-image-' + styl)
+                    if (!studioManagedImage) {
+                        img.classList.add('root-loaded-image')
+                        img.classList.add('root-loaded-image-' + styl)
+                    }
                     img.src = await getFileSrc(foundAsset)
                     return
                 }
@@ -234,7 +239,7 @@
                         img.setAttribute('src', got)
                     }
 
-                    if(img.classList.length === 0){
+                    if(!studioManagedImage && img.classList.length === 0){
                         img.classList.add('root-loaded-image')
                         img.classList.add('root-loaded-image-' + styl)
                     }

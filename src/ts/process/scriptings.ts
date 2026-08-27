@@ -28,9 +28,14 @@ let lastRequestsCount = 0
 
 interface BasicScriptingEngineState {
     code?: string;
+    permissionFingerprint?: string;
     mutex: Mutex;
+    activeRuns: number;
+    retired?: boolean;
     chat?: Chat;
-    setVar?: (key:string, value:string) => void,
+    char?: character|simpleCharacterArgument;
+    stopSending?: boolean;
+    setVar?: (key:string, value:string) => boolean | void,
     getVar?: (key:string) => string,
     /**
      * Module that owns the currently running script, for per-module model
@@ -56,12 +61,13 @@ type ScriptingEngineState = LuaScriptingEngineState | PythonScriptingEngineState
 let ScriptingEngines = new Map<string, ScriptingEngineState>()
 let luaFactoryPromise: Promise<void> | null = null;
 let pendingEngineCreations = new Map<string, Promise<ScriptingEngineState>>();
+const MAX_SCRIPTING_ENGINES = 8
 
 export async function runScripted(code:string, arg:{
     char?:character|simpleCharacterArgument,
     chat?:Chat
     data?: string|OpenAIChat[],
-    setVar?: (key:string, value:string) => void,
+    setVar?: (key:string, value:string) => boolean | void,
     getVar?: (key:string) => string,
     lowLevelAccess?: boolean,
     meta?: object,
@@ -78,26 +84,38 @@ export async function runScripted(code:string, arg:{
     const mode = arg.mode ?? 'manual'
 
     let chat = arg.chat ?? getCurrentChat()
-    let stopSending = false
     let lowLevelAccess = arg.lowLevelAccess ?? false
+    const permissionFingerprint = lowLevelAccess ? 'low-level' : 'standard'
 
     if(type === 'lua'){
         await ensureLuaFactory()
     }
     let ScriptingEngineState = await getOrCreateEngineState(mode, type);
     
-    return await ScriptingEngineState.mutex.runExclusive(async () => {
+    try {
+        return await ScriptingEngineState.mutex.runExclusive(async () => {
         ScriptingEngineState.moduleId = arg.moduleId
         ScriptingEngineState.chat = chat
+        ScriptingEngineState.char = char
+        ScriptingEngineState.stopSending = false
         ScriptingEngineState.setVar = setVar
         ScriptingEngineState.getVar = getVar
-        if (code !== ScriptingEngineState.code) {
+        if (
+            code !== ScriptingEngineState.code
+            || permissionFingerprint !== ScriptingEngineState.permissionFingerprint
+        ) {
+            // Invalidate the cached identity before rebuilding. If engine creation or
+            // script initialization fails, the next run must retry instead of using
+            // a closed or partially initialized runtime under the previous identity.
+            ScriptingEngineState.code = undefined
+            ScriptingEngineState.permissionFingerprint = undefined
             let declareAPI:(name: string, func:Function) => void
 
             if(ScriptingEngineState.type === 'lua'){
                 console.log('Creating new Lua engine for mode:', mode)
-                ScriptingEngineState.engine?.global.close()
-                ScriptingEngineState.code = code
+                const previousEngine = ScriptingEngineState.engine
+                ScriptingEngineState.engine = undefined
+                previousEngine?.global.close()
                 ScriptingEngineState.engine = await luaFactory.createEngine({injectObjects: true})
                 const luaEngine = ScriptingEngineState.engine
                 declareAPI = (name:string, func:Function) => {
@@ -106,7 +124,9 @@ export async function runScripted(code:string, arg:{
             }
             if(ScriptingEngineState.type === 'py'){
                 console.log('Creating new Pyodide context for mode:', mode)
-                ScriptingEngineState.pyodide?.close()
+                const previousContext = ScriptingEngineState.pyodide
+                ScriptingEngineState.pyodide = undefined
+                previousContext?.close()
                 ScriptingEngineState.pyodide = new PyodideContext()
                 declareAPI = (name:string, func:Function) => {
                     ScriptingEngineState.pyodide?.declareAPI(name, func as any)
@@ -121,6 +141,12 @@ export async function runScripted(code:string, arg:{
                 }
                 ScriptingEngineState.setVar(key, value)
             })
+            declareAPI('setChatVarChanged', (id:string,key:string, value:string) => {
+                if(!ScriptingSafeIds.has(id) && !ScriptingEditDisplayIds.has(id)){
+                    return false
+                }
+                return ScriptingEngineState.setVar(key, value) === true
+            })
             declareAPI('getGlobalVar', (id:string, key:string) => {
                 return getGlobalChatVar(key)
             })
@@ -128,7 +154,7 @@ export async function runScripted(code:string, arg:{
                 if(!ScriptingSafeIds.has(id)){
                     return
                 }
-                stopSending = true
+                ScriptingEngineState.stopSending = true
             })
             declareAPI('alertError', (id:string, value:string) => {
                 if(!ScriptingSafeIds.has(id)){
@@ -172,6 +198,26 @@ export async function runScripted(code:string, arg:{
                     time: chat.time ?? 0
                 }
                 return JSON.stringify(data)
+            })
+
+            declareAPI('getChatData', (id:string, index:number) => {
+                return ScriptingEngineState.chat.message.at(index)?.data ?? ''
+            })
+
+            declareAPI('getChatRole', (id:string, index:number) => {
+                return ScriptingEngineState.chat.message.at(index)?.role ?? ''
+            })
+
+            declareAPI('getRecentChatsMain', (id:string, count:number) => {
+                const chats = ScriptingEngineState.chat.message
+                const safeCount = Number.isFinite(count)
+                    ? Math.min(chats.length, Math.max(0, Math.floor(count)))
+                    : 0
+                return JSON.stringify(chats.slice(chats.length - safeCount).map((message) => ({
+                    role: message.role,
+                    data: message.data,
+                    time: message.time ?? 0,
+                })))
             })
 
             declareAPI('setChat', (id:string, index:number, value:string) => {
@@ -396,7 +442,11 @@ export async function runScripted(code:string, arg:{
                 if(!ScriptingLowLevelIds.has(id)){
                     return
                 }
-                const gen = await generateAIImage(value, char as character, negValue, 'inlay')
+                const currentChar = ScriptingEngineState.char
+                if(!currentChar || currentChar.type !== 'character'){
+                    return 'Error: Character context is unavailable'
+                }
+                const gen = await generateAIImage(value, currentChar, negValue, 'inlay')
                 if(!gen){
                     return 'Error: Image generation failed'
                 }
@@ -791,7 +841,8 @@ export async function runScripted(code:string, arg:{
                     return
                 }
 
-                if (char.type !== 'character') {
+                const currentChar = ScriptingEngineState.char
+                if (!currentChar || currentChar.type !== 'character') {
                     return
                 }
 
@@ -803,7 +854,7 @@ export async function runScripted(code:string, arg:{
                     secondKey = '',
                 } = options
 
-                const currentChat = char.chats[char.chatPage]
+                const currentChat = currentChar.chats[currentChar.chatPage]
 
                 const newLocalLoreBooks = currentChat.localLore.filter((book) => book.comment !== name)
                 newLocalLoreBooks.push({
@@ -1060,6 +1111,7 @@ export async function runScripted(code:string, arg:{
                 await ScriptingEngineState.pyodide?.init(code)
             }
             ScriptingEngineState.code = code
+            ScriptingEngineState.permissionFingerprint = permissionFingerprint
         }
         let accessKey = v4()
         if(mode === 'editDisplay'){
@@ -1124,7 +1176,7 @@ export async function runScripted(code:string, arg:{
                     }
                 }   
                 if(res === false){
-                    stopSending = true
+                    ScriptingEngineState.stopSending = true
                 }
             } catch (error) {
                 console.error(error)
@@ -1163,13 +1215,17 @@ export async function runScripted(code:string, arg:{
             }
         }
         ScriptingSafeIds.delete(accessKey)
+        ScriptingEditDisplayIds.delete(accessKey)
         ScriptingLowLevelIds.delete(accessKey)
         chat = ScriptingEngineState.chat
 
         return {
-            stopSending, chat, res
+            stopSending: ScriptingEngineState.stopSending ?? false, chat, res
         }
-    })
+        })
+    } finally {
+        await releaseEngineState(ScriptingEngineState)
+    }
 }
 
 async function makeLuaFactory(){
@@ -1217,30 +1273,114 @@ async function getOrCreateEngineState(
     type: 'lua'|'py'
 ): Promise<ScriptingEngineState> {
     let engineState = ScriptingEngines.get(mode);
-    if (engineState) {
+    if (engineState?.type === type) {
+        ScriptingEngines.delete(mode)
+        ScriptingEngines.set(mode, engineState)
+        engineState.activeRuns += 1
         return engineState;
+    }
+
+    if (engineState) {
+        ScriptingEngines.delete(mode)
+        await retireEngineState(engineState)
     }
     
     let pendingCreation = pendingEngineCreations.get(mode);
     if (pendingCreation) {
-        return pendingCreation;
+        const pendingState = await pendingCreation
+        if(pendingState.type !== type){
+            return getOrCreateEngineState(mode, type)
+        }
+        pendingState.activeRuns += 1
+        return pendingState
     }
     
-    const creationPromise = (() => {
+    const creationPromise = Promise.resolve().then(() => {
         const engineState: ScriptingEngineState = {
             mutex: new Mutex(),
+            activeRuns: 0,
             type: type,
         };
-        ScriptingEngines.set(mode, engineState);
-
-        pendingEngineCreations.delete(mode);
-
-        return Promise.resolve(engineState);
-    })();
+        return engineState;
+    });
     
     pendingEngineCreations.set(mode, creationPromise);
-    
-    return creationPromise;
+
+    try {
+        engineState = await creationPromise
+        ScriptingEngines.set(mode, engineState)
+        engineState.activeRuns += 1
+        await evictIdleEngineStates()
+        return engineState
+    } finally {
+        if(pendingEngineCreations.get(mode) === creationPromise){
+            pendingEngineCreations.delete(mode)
+        }
+    }
+}
+
+async function disposeEngineState(engineState:ScriptingEngineState):Promise<void>{
+    await engineState.mutex.runExclusive(async () => {
+        if(engineState.type === 'lua'){
+            engineState.engine?.global.close()
+            engineState.engine = undefined
+        }
+        else{
+            engineState.pyodide?.close()
+            engineState.pyodide = undefined
+        }
+        engineState.code = undefined
+        engineState.permissionFingerprint = undefined
+        engineState.chat = undefined
+        engineState.char = undefined
+        engineState.stopSending = undefined
+        engineState.setVar = undefined
+        engineState.getVar = undefined
+        engineState.moduleId = undefined
+    })
+}
+
+async function retireEngineState(engineState:ScriptingEngineState):Promise<void>{
+    engineState.retired = true
+    if(engineState.activeRuns === 0){
+        await disposeEngineState(engineState)
+    }
+}
+
+async function evictIdleEngineStates():Promise<void>{
+    while(ScriptingEngines.size > MAX_SCRIPTING_ENGINES){
+        let victim:[string, ScriptingEngineState] | undefined
+        for(const entry of ScriptingEngines.entries()){
+            if(entry[1].activeRuns === 0){
+                victim = entry
+                break
+            }
+        }
+        if(!victim){
+            return
+        }
+        const [mode, state] = victim
+        ScriptingEngines.delete(mode)
+        await disposeEngineState(state)
+    }
+}
+
+async function releaseEngineState(engineState:ScriptingEngineState):Promise<void>{
+    engineState.activeRuns = Math.max(0, engineState.activeRuns - 1)
+    if(engineState.retired && engineState.activeRuns === 0){
+        await disposeEngineState(engineState)
+    }
+    await evictIdleEngineStates()
+}
+
+export async function resetScriptingEngineCache():Promise<void>{
+    const pending = [...pendingEngineCreations.values()]
+    pendingEngineCreations.clear()
+    const pendingStates = (await Promise.allSettled(pending))
+        .flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])
+    const states = new Set([...ScriptingEngines.values(), ...pendingStates])
+    ScriptingEngines.clear()
+    await Promise.all([...states].map(retireEngineState))
 }
 
 function luaCodeWrapper(code:string){
@@ -1253,6 +1393,10 @@ end
 
 function getFullChat(id)
     return json.decode(getFullChatMain(id))
+end
+
+function getRecentChats(id, count)
+    return json.decode(getRecentChatsMain(id, count))
 end
 
 function setFullChat(id, value)
@@ -1329,6 +1473,11 @@ end
 function setState(id, name, value)
     local escapedName = "__"..name
     setChatVar(id, escapedName, json.encode(value))
+end
+
+function setStateChanged(id, name, value)
+    local escapedName = "__"..name
+    return setChatVarChanged(id, escapedName, json.encode(value))
 end
 
 function async(callback)

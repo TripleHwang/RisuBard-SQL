@@ -3,7 +3,7 @@
     // desktop/mobile use (NodeOnly is also accessed via Tailscale on phones).
     // See .agent/guide/ui.md "Sh* sizing scale" for the rationale and the
     // coordination with ShInput / ShToggle / SelectInput.
-    export type ShButtonVariant = 'default' | 'outline' | 'secondary' | 'ghost' | 'destructive' | 'success' | 'primary' | 'soft-primary' | 'link';
+    export type ShButtonVariant = 'default' | 'outline' | 'secondary' | 'ghost' | 'destructive' | 'success' | 'primary' | 'soft-primary' | 'binding' | 'link';
     export type ShButtonSize = 'default' | 'xs' | 'sm' | 'lg' | 'icon' | 'icon-xs' | 'icon-sm' | 'icon-lg';
 </script>
 
@@ -48,20 +48,11 @@
         outline:     'bg-transparent text-textcolor border border-darkborderc hover:bg-selected/30',
         secondary:   'bg-darkbg text-textcolor border border-darkborderc hover:bg-selected',
         ghost:       'bg-transparent text-textcolor border border-transparent hover:bg-selected/30',
-        destructive: 'bg-draculared/20 text-red-400 border border-draculared/40 hover:bg-draculared/30',
-        // Success: muted pair of destructive — same outline + tinted-bg pattern.
-        // Text uses Tailwind green-400 (brighter than --risu-theme-success #16a34a)
-        // so the green text reads on top of bg-success/20; mirrors destructive's
-        // text-red-400 choice. bg/border use the success token so themes can
-        // shift the hue without re-touching this file.
-        success:     'bg-success/20 text-green-400 border border-success/40 hover:bg-success/30',
-        // Primary: filled-solid (shadcn vega original pattern, NOT muted).
-        // Pairs with ShSwitch checked-track which is also a full bg-primary fill,
-        // so the visual weight matches when both appear in the same form. text
-        // uses textcolor; primary hues per theme are picked dark enough that the
-        // theme textcolor (mostly off-white) stays readable.
-        primary:     'bg-primary text-textcolor border border-transparent hover:bg-primary/90',
-        'soft-primary': 'bg-primary/25 text-textcolor border border-primary/45 hover:bg-primary/35',
+        destructive: 'bg-danger-bg text-danger border border-danger-border hover:bg-danger/15',
+        success:     'bg-success-bg text-success border border-success-border hover:bg-success/15',
+        primary:     'bg-primary text-accenttext border border-transparent hover:bg-primary/90',
+        'soft-primary': 'bg-binding text-binding-text border border-binding-border hover:bg-binding/80',
+        binding:     'bg-binding text-binding-text border border-binding-border hover:bg-binding/80',
         link:        'bg-transparent text-borderc border-none underline-offset-4 hover:underline',
     };
 

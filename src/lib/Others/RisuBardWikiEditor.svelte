@@ -26,10 +26,10 @@
         revealWikiDocument,
         retractWikiEvent,
         trashWikiDocument,
-        type CanonicalMarkdownWikiDocumentType,
+        type MarkdownWikiDocumentType,
         type NarrativeMemoryWikiMarkdown,
     } from 'src/ts/risubard/memoryWiki'
-    import { buildWikiFileTree } from 'src/ts/risubard/wikiFileTree'
+    import { buildWikiFileTree, getRecentlyUpdatedWikiDocumentIds } from 'src/ts/risubard/wikiFileTree'
     import { publishRisuBardMemoryActivity } from 'src/ts/risubard/memoryActivity'
     import { copyWikiDocumentToLorebook } from 'src/ts/risubard/wikiLorebookCopy'
     import { normalizeMemoryWikiTreeHeight } from 'src/ts/risubard/memoryWikiLayout'
@@ -62,7 +62,7 @@
         onOpenFindReplace,
     }: Props = $props()
     let creating = $state(false)
-    let type = $state<CanonicalMarkdownWikiDocumentType>('character')
+    let type = $state<MarkdownWikiDocumentType>('character')
     let title = $state('')
     let markdown = $state('')
     let saving = $state(false)
@@ -70,7 +70,7 @@
     let notice = $state('')
     let loadedDocumentId = $state('')
     let loadedContentHash = $state('')
-    let loadedType = $state<CanonicalMarkdownWikiDocumentType>('character')
+    let loadedType = $state<MarkdownWikiDocumentType>('character')
     let loadedTitle = $state('')
     let loadedMarkdown = $state('')
     let contextDocumentId = $state('')
@@ -93,11 +93,11 @@
     })
 
     let tree = $derived(buildWikiFileTree(documents))
+    let recentlyUpdatedIds = $derived(getRecentlyUpdatedWikiDocumentIds(documents))
     let selected = $derived(
         documents.find((document) => document.id === selectedId) ?? null
     )
-    let readOnly = $derived(locked
-        || (selected?.type === 'event' && !creating))
+    let readOnly = $derived(locked)
     let contextDocument = $derived(
         documents.find((document) => document.id === contextDocumentId) ?? null
     )
@@ -110,12 +110,12 @@
     function loadDocument(document: WikiDocument) {
         selectedId = document.id
         creating = false
-        type = document.type === 'event' ? 'other' : document.type
+        type = document.type
         title = document.title
         markdown = document.content
         loadedDocumentId = document.id
         loadedContentHash = document.contentHash
-        loadedType = document.type === 'event' ? 'other' : document.type
+        loadedType = document.type
         loadedTitle = document.title
         loadedMarkdown = document.content
         error = ''
@@ -448,7 +448,7 @@
         const current = documents.find((document) => document.id === selectedId)
             ?? documents[0]
         if (creating || !current) return
-        const incomingType = current.type === 'event' ? 'other' : current.type
+        const incomingType = current.type
         const matchesIncoming = title === current.title
             && type === incomingType
             && markdown === current.content
@@ -521,7 +521,8 @@
                                 >
                                     {#if child.readOnly}<FileLock2Icon size={13} />
                                     {:else}<FileIcon size={13} />{/if}
-                                    <span>{child.title}</span>
+                                    <span class="document-title">{child.title}</span>
+                                    {@render recentUpdateBadge(child.documentId)}
                                 </button>
                             {/if}
                         {/each}
@@ -539,11 +540,19 @@
                     oncontextmenu={(event) => openContextMenu(event, node.documentId)}
                     aria-label={node.title}
                 >
-                    <FileIcon size={13} /><span>{node.title}</span>
+                    <FileIcon size={13} /><span class="document-title">{node.title}</span>
+                    {@render recentUpdateBadge(node.documentId)}
                 </button>
             {/if}
         {/each}
     </nav>
+
+    {#snippet recentUpdateBadge(documentId: string)}
+        {#if recentlyUpdatedIds.has(documentId)}
+            <span class="recent-update-badge" data-wiki-recent-update
+                title="최근 분석 이후 갱신된 문서" aria-label="최근 갱신">New</span>
+        {/if}
+    {/snippet}
 
     <button
         type="button"
@@ -586,7 +595,8 @@
             <div class="editor-title-row" data-wiki-title-row>
                 <label>
                     <span>타입</span>
-                    <select aria-label="항목 유형" bind:value={type} disabled={readOnly}>
+                    <select aria-label="항목 유형" bind:value={type} disabled={readOnly || selected?.type === 'event'}>
+                        {#if selected?.type === 'event'}<option value="event">사건</option>{/if}
                         <option value="character">캐릭터</option>
                         <option value="location">장소</option>
                         <option value="faction">세력</option>
@@ -650,11 +660,12 @@
                 </label>
             </div>
         </header>
-        {#if selected?.status === 'retracted' || readOnly || dirty}
+        {#if selected?.status === 'retracted' || readOnly || dirty || selected?.type === 'event'}
             <div class="document-meta">
             {#if selected?.status === 'retracted'}<span class="readonly-badge">철회된 사건 기록</span>
-            {:else if readOnly}<span class="readonly-badge">읽기 전용 사건 기록</span>
-            {:else if dirty}<span class="dirty-badge">저장하지 않은 변경</span>{/if}
+            {:else if readOnly}<span class="readonly-badge">위키 작업 잠김</span>
+            {:else if dirty}<span class="dirty-badge">저장하지 않은 변경</span>
+            {:else if selected?.type === 'event'}<span>사용자 편집 사건</span>{/if}
             </div>
         {/if}
         {#if markdownPreview}
@@ -675,7 +686,8 @@
             {#if error}<span class="error">{error}</span>
             {:else if notice}<span class="success">{notice}</span>
             {:else if selected?.status === 'retracted'}<span>철회되어 활성 컨텍스트와 자동 처리에서 제외된 감사 기록입니다.</span>
-            {:else if readOnly}<span>이 파일은 확정된 채팅과 연결된 근거이므로 여기서 수정할 수 없습니다.</span>{/if}
+            {:else if readOnly}<span>현재 위키 작업이 끝난 뒤 수정할 수 있습니다.</span>
+            {:else if selected?.type === 'event'}<span>수정 내용은 지금까지의 이야기에 반영되며 연결된 채팅 출처는 유지됩니다.</span>{/if}
         </div>
     </div>
 </section>
@@ -709,7 +721,7 @@
 <style>
     .wiki-editor { display: grid; grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr); min-height: 27rem; border-bottom: 1px solid var(--risu-theme-darkborderc); }
     .portrait-panel-header, .editor-section-resizer { display: none; }
-    .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black); }
+    .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor)); }
     .tree-toolbar, .editor-title-row { display: flex; align-items: center; gap: .5rem; }
     .tree-toolbar { justify-content: space-between; padding: .2rem .25rem .6rem; }
     .wiki-health { display: flex; flex-wrap: wrap; gap: .3rem; padding: 0 .25rem .55rem; color: var(--risu-theme-textcolor2); font-size: .65rem; }
@@ -721,8 +733,9 @@
     .folder-row.locked { opacity: .72; }
     .folder-children { margin-left: .7rem; padding-left: .35rem; border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, var(--risu-theme-darkborderc)); }
     .root-file:hover, .folder-children button:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
-    .root-file span, .folder-children span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, black); }
+    .document-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recent-update-badge { flex: 0 0 auto; margin-left: auto; padding: .12rem .32rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 45%, transparent); border-radius: .25rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 18%, transparent); font-size: .6rem; font-weight: 700; line-height: 1.2; white-space: nowrap; }
+    .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, var(--color-bgcolor)); }
     .editor-header { min-width: 0; border-bottom: 1px solid var(--risu-theme-darkborderc); }
     .editor-title-row { min-width: 0; padding: .65rem .75rem; }
     .editor-title-row label { display: grid; min-width: 0; gap: .2rem; color: var(--risu-theme-textcolor2); font-size: .62rem; font-weight: 700; }
@@ -755,7 +768,7 @@
     .markdown-preview :global(th) { background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent); font-weight: 750; }
     .markdown-preview :global(blockquote) { margin: .75rem 0; padding: .15rem .8rem; border-left: 3px solid var(--risu-theme-primary); color: var(--risu-theme-textcolor2); }
     .markdown-preview :global(code) { padding: .08rem .28rem; border-radius: .25rem; background: color-mix(in srgb, var(--risu-theme-primary) 14%, transparent); font: .76rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .markdown-preview :global(pre) { overflow-x: auto; padding: .75rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .4rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, black); }
+    .markdown-preview :global(pre) { overflow-x: auto; padding: .75rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .4rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, var(--color-bgcolor)); }
     .markdown-preview :global(pre code) { padding: 0; background: transparent; }
     .markdown-preview :global(a) { color: var(--risu-theme-primary); text-decoration: underline; text-underline-offset: .15em; }
     .editor-status { min-height: 1.8rem; padding: .35rem .75rem; color: var(--risu-theme-textcolor2); font-size: .66rem; }
@@ -769,8 +782,8 @@
         padding: .28rem;
         border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 28%, var(--risu-theme-darkborderc));
         border-radius: .45rem;
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black);
-        box-shadow: 0 .75rem 2rem rgb(0 0 0 / .32);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor));
+        box-shadow: 0 .75rem 2rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
     }
     .file-context-menu button {
         display: flex;
@@ -811,7 +824,7 @@
             display: flex;
             min-width: 0;
             border-bottom: 1px solid var(--risu-theme-darkborderc);
-            background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, black);
+            background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
         }
         .portrait-panel-header > button {
             display: flex;

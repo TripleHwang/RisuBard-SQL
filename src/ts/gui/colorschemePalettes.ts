@@ -64,3 +64,9 @@ export function resolveBuiltInColorScheme(name: string, stored: ColorScheme): Co
     if(normalizedName === 'custom') return stored
     return { ...builtInColorSchemes[normalizedName] }
 }
+
+export function copyColorSchemeForEdit(name: string, stored: ColorScheme): ColorScheme {
+    const normalizedName = normalizeColorSchemeName(name)
+    const scheme = resolveBuiltInColorScheme(normalizedName, stored)
+    return { ...scheme, baseScheme: normalizedName === 'custom' ? scheme.baseScheme : normalizedName }
+}

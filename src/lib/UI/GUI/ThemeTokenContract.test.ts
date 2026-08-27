@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { extname, join, relative } from 'node:path'
 import { describe, expect, test } from 'vitest'
+import { uiThemeTokens } from 'src/ts/gui/uiThemeTokens'
 
 const sourceRoot = join(process.cwd(), 'src')
 const sourceExtensions = new Set(['.css', '.js', '.svelte', '.ts'])
@@ -17,6 +18,41 @@ function sourceFiles(directory: string): string[] {
 }
 
 describe('RisuBard UI theme token contract', () => {
+    test('code highlighting also follows editable colors rather than a fixed dark stylesheet', () => {
+        const parser = readFileSync(join(sourceRoot, 'ts/parser/parser.svelte.ts'), 'utf8')
+        const styles = readFileSync(join(sourceRoot, 'styles.css'), 'utf8')
+        expect(parser.includes('highlight.js/styles/')).toBe(false)
+        expect(styles.includes('.hljs { color: var(--color-textcolor); background: var(--color-surface-inset); }')).toBe(true)
+        expect(styles.includes('.hljs-doctag, .hljs-formula, .hljs-keyword { color: var(--color-secondary); }')).toBe(true)
+    })
+
+    test('declares every editable role even when it is used only in component CSS', () => {
+        const styles = readFileSync(join(sourceRoot, 'styles.css'), 'utf8')
+        expect(styles.includes('@theme static {'), 'Raw component CSS needs unpruned theme aliases').toBe(true)
+        for (const { token } of uiThemeTokens) {
+            expect(styles.includes(`--color-${token}: var(--risu-theme-${token})`), token).toBe(true)
+        }
+        for (const { token, dark } of uiThemeTokens) {
+            expect(styles.includes(`--risu-theme-${token}: ${dark};`), `${token} boot fallback`).toBe(true)
+        }
+    })
+
+    test('global UI rules use tokens and legacy scales derive from editable colors', () => {
+        const styles = readFileSync(join(sourceRoot, 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+        const violations = styles.split(/\r?\n/).flatMap((line, index) => {
+            if (/^\s*--/.test(line)) return [] // Central bootstrap token defaults.
+            return /#[\da-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(\s*[\d.]|(?<![\w-])(?:white|black)(?![\w-])/i.test(line)
+                ? [`${index + 1}: ${line.trim()}`] : []
+        })
+        expect(violations).toEqual([])
+        expect(styles).not.toMatch(/--risu-theme-(?:primary|secondary|danger|success|neutral)-\d+:\s*#/)
+        expect(styles).not.toMatch(/--color-(?:gray|slate|zinc|white|black)-?\d*/)
+        expect(styles).not.toMatch(/@apply[^;]*(?:amber|green|blue|purple|pink|cyan)-\d+/)
+        expect(styles).toContain('--tw-prose-body: var(--color-textcolor)')
+        expect(styles).toContain('--tw-prose-pre-bg: var(--color-surface-inset)')
+        expect(styles).toContain(':root[data-risu-base-scheme="pastel-pop"]')
+    })
+
     test('rejects undefined legacy theme variables in production UI sources', () => {
         const violations = sourceFiles(sourceRoot).flatMap((path) => {
             const source = readFileSync(path, 'utf8')

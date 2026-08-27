@@ -49,7 +49,29 @@ vi.mock('./process/files/inlays', () => ({ reencodeImage: vi.fn() }))
 vi.mock('./characterVault', () => ({ pinCharacterVaultQuickAccess: (...args: any[]) => state.pin(...args) }))
 vi.mock('src/lang', () => ({ language: { errors: { noData: 'invalid-data' }, importedCharacter: 'imported' } }))
 
-import { importCharacter, importCharacterProcess } from './characterCards'
+import { createBaseV2, createBaseV3, importCharacter, importCharacterProcess } from './characterCards'
+
+function cardFixture(spec: 'chara_card_v2'|'chara_card_v3', risuai: Record<string, unknown>|undefined, postHistory = 'legacy card global note') {
+    return {
+        spec,
+        spec_version: spec === 'chara_card_v2' ? '2.0' : '3.0',
+        data: {
+            name: 'Legacy card', description: '', personality: '', scenario: '', first_mes: '', mes_example: '',
+            creator_notes: '', system_prompt: '', post_history_instructions: postHistory,
+            alternate_greetings: [], tags: [], creator: '', character_version: '',
+            extensions: risuai === undefined ? {} : { risuai },
+        },
+    }
+}
+
+async function importFixture(card: ReturnType<typeof cardFixture>) {
+    state.db.characters = []
+    await importCharacterProcess({
+        name: 'fixture.json',
+        data: Buffer.from(JSON.stringify(card)),
+    })
+    return state.db.characters[0]
+}
 
 describe('CharX import completion', () => {
     beforeEach(() => {
@@ -178,5 +200,73 @@ describe('Node-assisted CharX import', () => {
         expect(state.importCharX).not.toHaveBeenCalled()
         expect(state.importerCalls).toBe(1)
         expect(state.waitAlerts).toEqual(['Loading... (Reading)'])
+    })
+})
+
+describe('legacy character-card replace-global-note compatibility', () => {
+    test.each(['chara_card_v2', 'chara_card_v3'] as const)('restores legacy replaceGlobalNote from %s cards with a Risu extension that does not own it', async (spec) => {
+        const imported = await importFixture(cardFixture(spec, {}))
+
+        expect(imported).toMatchObject({
+            postHistoryInstructions: 'legacy card global note',
+            replaceGlobalNote: 'legacy card global note',
+        })
+    })
+
+    test('does not fall back when a new card explicitly owns an empty replaceGlobalNote', async () => {
+        const imported = await importFixture(cardFixture('chara_card_v3', { replaceGlobalNote: '' }, 'standard post history'))
+
+        expect(imported).toMatchObject({
+            postHistoryInstructions: 'standard post history',
+            replaceGlobalNote: '',
+        })
+    })
+
+    test.each(['chara_card_v2', 'chara_card_v3'] as const)('does not create a Risu replaceGlobalNote for ordinary %s cards', async (spec) => {
+        const imported = await importFixture(cardFixture(spec, undefined, 'standard post history'))
+
+        expect(imported).toMatchObject({
+            postHistoryInstructions: 'standard post history',
+            replaceGlobalNote: '',
+        })
+    })
+
+    test('imports Risu module extension fields through the public card lifecycle', async () => {
+        const imported = await importFixture(cardFixture('chara_card_v3', {
+            moduleNamespace: 'fixture-namespace', hideChatIcon: true,
+        }, ''))
+
+        expect(imported).toMatchObject({ moduleNamespace: 'fixture-namespace', hideChatIcon: true })
+    })
+})
+
+describe('public character-card lifecycle round-trips', () => {
+    test.each([
+        ['v2', createBaseV2],
+        ['v3', createBaseV3],
+    ] as const)('preserves Risu extensions and post-history instructions through %s export, import, and re-export', async (_spec, createCard) => {
+        const source = {
+            name: 'Lifecycle fixture', globalLore: [], loreExt: {},
+            postHistoryInstructions: 'standard post-history instructions',
+            replaceGlobalNote: 'explicit Risu global-note replacement',
+            moduleNamespace: 'lifecycle-namespace',
+            hideChatIcon: true,
+        } as any
+
+        const imported = await importFixture(createCard(source) as any)
+        const reexported = createCard(imported)
+
+        expect(imported).toMatchObject({
+            postHistoryInstructions: source.postHistoryInstructions,
+            replaceGlobalNote: source.replaceGlobalNote,
+            moduleNamespace: source.moduleNamespace,
+            hideChatIcon: source.hideChatIcon,
+        })
+        expect(reexported.data.post_history_instructions).toBe(source.postHistoryInstructions)
+        expect(reexported.data.extensions.risuai).toMatchObject({
+            replaceGlobalNote: source.replaceGlobalNote,
+            moduleNamespace: source.moduleNamespace,
+            hideChatIcon: source.hideChatIcon,
+        })
     })
 })

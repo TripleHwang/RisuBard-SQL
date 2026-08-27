@@ -19,6 +19,14 @@ const messages = [
 ] as const
 
 describe('BardWiki reboot domain', () => {
+    test('persists the starting language across resume and keeps legacy jobs Korean', () => {
+        const job = createWikiRebootJob({ jobId: 'job-en', stagingChatId: 'reboot-en',
+            batchSize: 2, targetAssistantMessageIds: ['a1'], writingLanguage: 'en' })
+        expect(job.writingLanguage).toBe('en')
+        expect(normalizeWikiRebootJob(JSON.parse(JSON.stringify(job)))?.writingLanguage).toBe('en')
+        expect(normalizeWikiRebootJob({ ...job, writingLanguage: undefined })?.writingLanguage).toBe('ko')
+    })
+
     test('projects active stable assistant turns with their preceding user', () => {
         expect(projectWikiRebootTurns(messages)).toEqual([
             { assistantMessageId: 'a1', messageIds: ['u1', 'a1'], messages: [

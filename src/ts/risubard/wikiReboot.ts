@@ -1,4 +1,5 @@
 import type { CanonicalTurnReceipt } from './memoryWiki'
+import { normalizeWikiWritingLanguage, type WikiWritingLanguage } from './wikiWritingLanguage'
 
 export type WikiRebootBatchSize = 1 | 2
 export type WikiRebootStatus =
@@ -13,6 +14,7 @@ export interface WikiRebootJob {
     jobId: string
     stagingChatId: string
     batchSize: WikiRebootBatchSize
+    writingLanguage?: WikiWritingLanguage
     status: WikiRebootStatus
     targetAssistantMessageIds: string[]
     completedAssistantMessageIds: string[]
@@ -99,6 +101,7 @@ export function createWikiRebootJob(input: {
     batchSize: WikiRebootBatchSize
     targetAssistantMessageIds: string[]
     now?: number
+    writingLanguage?: WikiWritingLanguage
 }): WikiRebootJob {
     const now = input.now ?? Date.now()
     return {
@@ -106,6 +109,7 @@ export function createWikiRebootJob(input: {
         jobId: input.jobId,
         stagingChatId: input.stagingChatId,
         batchSize: input.batchSize,
+        writingLanguage: normalizeWikiWritingLanguage(input.writingLanguage),
         status: 'running',
         targetAssistantMessageIds: [...input.targetAssistantMessageIds],
         completedAssistantMessageIds: [],
@@ -158,6 +162,7 @@ export function normalizeWikiRebootJob(value: unknown): WikiRebootJob | undefine
         || job.status === 'finalizing'
     return {
         ...(job as WikiRebootJob),
+        writingLanguage: normalizeWikiWritingLanguage(job.writingLanguage),
         status: interrupted ? 'paused' : job.status as WikiRebootStatus,
         targetAssistantMessageIds: [...new Set(job.targetAssistantMessageIds)],
         completedAssistantMessageIds: [...new Set(

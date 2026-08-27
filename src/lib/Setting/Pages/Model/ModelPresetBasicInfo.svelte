@@ -121,7 +121,7 @@
         <div class="flex items-center justify-between gap-2">
             <span class="text-sm text-textcolor truncate">{preset.profileSnapshot.profileId}</span>
             {#if updateStatus === 'updatable'}
-                <button class="text-xs px-2 py-0.5 rounded border border-amber-500 text-amber-500 hover:bg-amber-500/10 cursor-pointer shrink-0" onclick={applyUpdate}>{language.profileUpdateAvailable}</button>
+                <button class="text-xs px-2 py-0.5 rounded border border-warning-border text-warning hover:bg-warning-bg cursor-pointer shrink-0" onclick={applyUpdate}>{language.profileUpdateAvailable}</button>
             {:else if updateStatus === 'missing'}
                 <span class="text-xs px-2 py-0.5 rounded border border-darkborderc text-textcolor2 shrink-0">{language.profileSourceMissing}</span>
             {/if}

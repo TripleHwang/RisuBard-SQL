@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
+import { get_encoding } from '@dqbd/tiktoken'
 import {
     createStoredResponseMemoryAnalysis,
     projectRecentMemoryMessages,
@@ -337,12 +338,6 @@ describe('stored response memory analysis', () => {
             fetchImpl: vi.fn(async (input) => {
                 const url = String(input)
                 calls.push(url)
-                if (url.endsWith('/wiki/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'bounded-v1-fallback',
@@ -373,14 +368,6 @@ describe('stored response memory analysis', () => {
                         documents: [],
                     }))
                 }
-                if (url.endsWith('/wiki/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        sourceMessageIds: ['message-1'],
-                        eventIds: ['event.message-1'],
-                        changes: [], warnings: [], recordedAt: '2026-08-12',
-                    }))
-                }
                 return new Response(JSON.stringify({
                     facts: [],
                     events: [],
@@ -403,13 +390,17 @@ describe('stored response memory analysis', () => {
         })).resolves.toMatchObject({
             facts: [],
             events: [],
+            canonicalReceipt: {
+                sourceMessageIds: ['message-1'],
+                eventIds: [],
+                changes: [],
+                warnings: [],
+            },
         })
         expect(calls).toEqual([
             '/api/risubard/memory/view',
-            '/api/risubard/memory/wiki/snapshot',
             '/api/risubard/memory/inquiry',
             '/api/risubard/memory/wiki/save',
-            '/api/risubard/memory/wiki/receipt',
         ])
         expect(JSON.parse(submittedSchema)).toMatchObject({
             type: 'object',
@@ -423,13 +414,24 @@ describe('stored response memory analysis', () => {
         expect(onError).not.toHaveBeenCalled()
     })
 
-    test('retries once when structured memory output is not one JSON object', async () => {
+    test.each([
+        { result: '분석 결과를 만들지 못했습니다.' },
+        { result: JSON.stringify({ schemaVersion: 1, title: '변화 없음', establishedEvents: [], stateChanges: [], characterKnowledge: [], persistentFacts: [], openContinuity: [], canonicalUpdateCandidates: [] }), finishReason: 'length' },
+        { result: '<think>unfinished reasoning', finishReason: 'stop' },
+        { result: 'not JSON', repeat: true, expectedAttempts: 2 },
+        { result: '', finishReason: 'SAFETY', expectedAttempts: 1 },
+        { result: 'not JSON', noRetry: true, expectedAttempts: 1 },
+        { result: 'not JSON', toolExecuted: true, expectedAttempts: 1 },
+    ])('bounds structured-output recovery without replaying writes: %j', async (firstResponse) => {
         const requestModel = vi.fn(async (
             request: MemoryAnalysisModelCall
         ) => ({
             type: 'success' as const,
-            result: requestModel.mock.calls.length === 1
-                ? '분석 결과를 만들지 못했습니다.'
+            noRetry: firstResponse.noRetry,
+            toolExecuted: firstResponse.toolExecuted,
+            finishReason: requestModel.mock.calls.length === 1 ? firstResponse.finishReason : 'stop',
+            result: requestModel.mock.calls.length === 1 || firstResponse.repeat
+                ? firstResponse.result
                 : JSON.stringify({
                     schemaVersion: 1,
                     title: '변화 없음',
@@ -456,12 +458,6 @@ describe('stored response memory analysis', () => {
                         documents: [],
                     }))
                 }
-                if (url.endsWith('/wiki/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'bounded-v1-fallback',
@@ -481,16 +477,6 @@ describe('stored response memory analysis', () => {
                         },
                     }))
                 }
-                if (url.endsWith('/wiki/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'turn-message-1',
-                        sourceMessageIds: ['message-1'],
-                        eventIds: [],
-                        changes: [],
-                        warnings: [],
-                        recordedAt: '2026-08-13',
-                    }))
-                }
                 throw new Error(`Unexpected request: ${url}`)
             }),
             createAuth: async () => 'test-jwt',
@@ -498,7 +484,7 @@ describe('stored response memory analysis', () => {
             nativeV2Analysis: true,
         })
 
-        await expect(analysis.run({
+        const operation = analysis.run({
             characterId: 'character',
             chatId: 'chat',
             messages: [{
@@ -506,10 +492,14 @@ describe('stored response memory analysis', () => {
                 role: 'assistant',
                 content: '아무 변화도 없었다.',
             }],
-        })).resolves.toMatchObject({ facts: [], events: [] })
-        expect(requestModel).toHaveBeenCalledTimes(2)
-        expect(requestModel.mock.calls[1][0].formated[0].content)
-            .toContain('previous response')
+        })
+        if (firstResponse.expectedAttempts) await expect(operation).rejects.toThrow()
+        else await expect(operation).resolves.toMatchObject({ facts: [], events: [] })
+        expect(requestModel).toHaveBeenCalledTimes(firstResponse.expectedAttempts ?? 2)
+        for (const [request] of requestModel.mock.calls) expect(request.extractJson).toBe('')
+        if (requestModel.mock.calls.length > 1) {
+            expect(requestModel.mock.calls[1][0].formated[0].content).toContain('previous response')
+        }
     })
 
     test('does not prepare or store a v1 snapshot for native v2 analysis', async () => {
@@ -560,6 +550,17 @@ describe('stored response memory analysis', () => {
                 }
             })
         )
+    })
+
+    test('projects configured windows beyond one hundred without truncating message text', () => {
+        const messages = Array.from({ length: 151 }, (_, index) => ({
+            role: 'char', chatId: `id-${index}`, data: `message-${index}`,
+        }))
+        messages[149].data = '원문 '.repeat(45_000)
+        const projected = projectRecentMemoryMessages(messages, 150, 'id-149')
+        expect(projected).toHaveLength(150)
+        expect(projected.at(-1)?.content).toBe(messages[149].data)
+        expect(projected.some((message) => message.messageId === 'id-150')).toBe(false)
     })
 
     test('projects the configured recent raw context only through the confirmed message', () => {
@@ -1179,11 +1180,6 @@ describe('stored response memory analysis', () => {
                         health: { danglingLinks: [], unlinkedDocumentIds: [] },
                     }))
                 }
-                if (url.endsWith('/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1', canonicalCount: 0,
-                    }))
-                }
                 if (url.endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
                         mode: 'v2-current', graphRevision: 0, indexRevision: 0,
@@ -1194,14 +1190,6 @@ describe('stored response memory analysis', () => {
                             selectedTokens: 0, hopCount: 0,
                             auxiliaryModelCalls: 0,
                         },
-                    }))
-                }
-                if (url.endsWith('/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1',
-                        sourceMessageIds: ['assistant-1'],
-                        eventIds: [], changes: [], warnings: [],
-                        recordedAt: '2026-08-13T00:00:00.000Z',
                     }))
                 }
                 return new Response(JSON.stringify({ ok: true }))
@@ -1227,7 +1215,11 @@ describe('stored response memory analysis', () => {
         expect(requestModel).toHaveBeenCalledOnce()
     })
 
-    test('sends one structured canonical batch request for multiple targets', async () => {
+    test.each([
+        { analysisTokenLimit: 12_000, longEvidence: false },
+        { analysisTokenLimit: 12_000, longEvidence: true },
+        { analysisTokenLimit: 65_536, longEvidence: true },
+    ])('fits evidence with $analysisTokenLimit tokens (long: $longEvidence)', async ({ analysisTokenLimit, longEvidence }) => {
         const modelCalls: MemoryAnalysisModelCall[] = []
         const savedTitles: string[] = []
         const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {
@@ -1255,10 +1247,10 @@ describe('stored response memory analysis', () => {
                 type: 'success' as const,
                 result: JSON.stringify({
                     schemaVersion: 1,
-                    documents: ['사만다', '아만다'].map(
-                        (title, candidateIndex) => ({
+                    documents: JSON.parse(request.formated[1].content).targets.map(
+                        ({ candidateIndex, target }) => ({
                             candidateIndex,
-                            markdown: `# ${title}\n\n지속 정보.`,
+                            markdown: `# ${target.title}\n\n지속 정보.`,
                         })
                     ),
                 }),
@@ -1272,11 +1264,6 @@ describe('stored response memory analysis', () => {
                     return new Response(JSON.stringify({
                         mode: 'markdown', wikiPath: 'wiki', documents: [],
                         health: { danglingLinks: [], unlinkedDocumentIds: [] },
-                    }))
-                }
-                if (url.endsWith('/snapshot')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1', canonicalCount: 0,
                     }))
                 }
                 if (url.endsWith('/inquiry')) {
@@ -1304,14 +1291,6 @@ describe('stored response memory analysis', () => {
                         reviewStatus: 'reviewed',
                     }))
                 }
-                if (url.endsWith('/receipt')) {
-                    return new Response(JSON.stringify({
-                        snapshotId: 'snapshot-1',
-                        sourceMessageIds: ['assistant-1'], eventIds: [],
-                        changes: [], warnings: [],
-                        recordedAt: '2026-08-13T00:00:00.000Z',
-                    }))
-                }
                 return new Response(JSON.stringify({ id: 'event-1' }))
             }) as unknown as typeof fetch,
             createAuth: async () => 'test-jwt',
@@ -1322,16 +1301,29 @@ describe('stored response memory analysis', () => {
             characterId: 'character', chatId: 'chat',
             messages: [{
                 messageId: 'assistant-1', role: 'assistant',
-                content: '사만다는 생물학자이고 아만다는 감사관이다.',
+                content: (longEvidence ? '확정된 사건 원문이다. '.repeat(7_000) : '')
+                    + '사만다는 생물학자이고 아만다는 감사관이다.',
             }],
-            analysisTokenLimit: 12_000,
+            analysisTokenLimit,
         })
 
-        expect(modelCalls).toHaveLength(2)
+        // Long evidence can split the rewrite into one request per target.
+        expect(modelCalls).toHaveLength(longEvidence ? 3 : 2)
         expect(modelCalls[1].schema).toContain('candidateIndex')
         expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
         expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
-        expect(modelCalls[1].maxTokens).toBe(12_000)
+        expect(modelCalls[1].maxTokens).toBe(analysisTokenLimit)
+        const tokenizer = get_encoding('cl100k_base')
+        try {
+            for (const call of modelCalls) {
+                expect(tokenizer.encode(call.formated.map((message) => message.content).join('\n')).length)
+                    .toBeLessThanOrEqual(analysisTokenLimit)
+                if (call.logPurpose === 'bardwiki-canonical-update') {
+                    expect(call.maxTokens).toBe(analysisTokenLimit)
+                }
+            }
+        }
+        finally { tokenizer.free() }
         expect(modelCalls[1].formated[1].content).toContain('confirmedMessages')
         expect(savedTitles).toEqual(['사만다', '아만다'])
     })
@@ -1390,7 +1382,10 @@ describe('stored response memory analysis', () => {
                 role: 'assistant',
                 content: 'The accepted turn.',
             }],
-        })).resolves.toBeUndefined()
+        })).resolves.toMatchObject({
+            sourceMessageIds: ['message-1'],
+            changes: [],
+        })
         expect(requestModel).toHaveBeenCalledOnce()
     })
 

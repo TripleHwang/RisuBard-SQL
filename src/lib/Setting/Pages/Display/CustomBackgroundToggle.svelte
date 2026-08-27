@@ -6,6 +6,7 @@
     import { selectSingleFile } from 'src/ts/util';
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte';
     import { ImageIcon, XIcon } from '@lucide/svelte';
+    import { updateTextThemeAndCSS } from 'src/ts/gui/colorscheme';
 
     const hasBg = $derived(!!DBState.db.customBackground && DBState.db.customBackground !== '-');
 
@@ -23,9 +24,11 @@
         const d = await selectSingleFile(['png', 'webp', 'gif', 'jpg', 'jpeg']);
         if (!d) return;
         DBState.db.customBackground = await saveImage(d.data);
+        updateTextThemeAndCSS();
     }
     function clear() {
         DBState.db.customBackground = '';
+        updateTextThemeAndCSS();
     }
 </script>
 

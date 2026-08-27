@@ -1,4 +1,15 @@
 import type { AdapterChatStreamDelta } from "src/ts/preset/adapter"
+import { stripModelReasoning } from '../../../../packages/risubard-core/src/modelOutput'
+import { ModelOutputError, readModelResponseText } from '../../../../packages/risubard-core/src/modelResponse'
+
+// Stream errors discard queued chunks. Keep the last display snapshot out of
+// enumerable error properties/logs, only for the consumer handling that error.
+const partialStreamText = new WeakMap<object, string>()
+
+export function getPartialPresetStreamText(error: unknown): string | undefined {
+    return error !== null && (typeof error === 'object' || typeof error === 'function')
+        ? partialStreamText.get(error) : undefined
+}
 
 // Coalesces streaming deltas into throttled renderer flushes.
 //
@@ -84,6 +95,7 @@ export interface StreamChunkController {
 
 export interface PumpPresetStreamOptions {
     intervalMs: number
+    abortSignal?: AbortSignal
     // Wraps accumulated reasoning text for display (e.g. in <Thoughts>). Called
     // only when reasoning is present. Kept injected so the pump stays free of
     // request.ts's formatting/import graph.
@@ -93,15 +105,23 @@ export interface PumpPresetStreamOptions {
     // Observes each raw delta for status reporting (request-status channel),
     // BEFORE throttling — so token counts and phase reflect every chunk even
     // though the renderer flush is throttled. Injected (not a store import) so
-    // the pump stays decoupled; the caller wraps it harmlessly. Never affects
+    // the pump stays decoupled; observer errors are isolated. Never affects
     // what is enqueued to the controller.
     onDelta?: (delta: AdapterChatStreamDelta) => void
     // Fires exactly once when the stream ends, with the terminal outcome — the
     // symmetric end signal for status reporting. `lastUsage` carries the final
     // delta's usage (most providers only attach it to the last chunk) so the
-    // caller can reconcile token counts. Like the others, the caller wraps it
-    // harmlessly; it never affects stream output.
-    onFinish?: (outcome: 'done' | 'failed', lastUsage?: AdapterChatStreamDelta['usage']) => void
+    // caller can reconcile token counts. Observer errors never affect output.
+    onFinish?: (outcome: 'done' | 'failed', lastUsage?: AdapterChatStreamDelta['usage'], finishReason?: string) => void
+}
+
+function observe(callback: () => unknown): void {
+    try {
+        const result = callback()
+        if (result !== undefined) void Promise.resolve(result).catch(() => {})
+    } catch {
+        // Status/logging failures cannot change delivery or terminal outcome.
+    }
 }
 
 // Drains an adapter stream into a chunk controller, accumulating text/reasoning
@@ -111,8 +131,13 @@ export async function pumpPresetStream(
     controller: StreamChunkController,
     options: PumpPresetStreamOptions,
 ): Promise<void> {
-    const { intervalMs, formatReasoning, onError, onDelta, onFinish } = options
+    const { intervalMs, formatReasoning, onError, onDelta, onFinish, abortSignal } = options
     let lastUsage: AdapterChatStreamDelta['usage'] | undefined
+    let finishReason: string | undefined
+    let generatorFinished = false
+    let interrupt: ((error: unknown) => void) | undefined
+    const abortError = () => abortSignal?.reason ?? new DOMException('Stream cancelled', 'AbortError')
+    const onAbort = () => interrupt?.(abortError())
     let fullText = ''
     let reasoningText = ''
     // Prepend accumulated reasoning (mirrors the non-streaming path) so thinking
@@ -144,21 +169,42 @@ export async function pumpPresetStream(
         }
         trailingTimer = setTimeout(() => {
             trailingTimer = null
-            if (throttle.onTrailing(Date.now())) {
-                armTrailing()
+            try {
+                if (throttle.onTrailing(Date.now())) {
+                    armTrailing()
+                }
+            } catch (error) {
+                // Timer callbacks are outside the pump's try/catch. Route the
+                // failure through its pending read so there is one finalizer.
+                interrupt?.(error)
             }
         }, intervalMs)
     }
 
     try {
-        for await (const delta of gen) {
-            onDelta?.(delta)
+        abortSignal?.addEventListener('abort', onAbort, { once: true })
+        while (true) {
+            if (abortSignal?.aborted) throw abortError()
+            // Do not await generator.return() on cancellation: a suspended
+            // upstream read may still be pending. Its eventual result is ignored.
+            const next = await new Promise<IteratorResult<AdapterChatStreamDelta, void>>((resolve, reject) => {
+                interrupt = reject
+                gen.next().then(resolve, reject)
+            })
+            if (abortSignal?.aborted) throw abortError()
+            if (next.done === true) {
+                generatorFinished = true
+                break
+            }
+            const delta = next.value
+            observe(() => onDelta?.(delta))
             // Merge rather than replace: Anthropic splits usage across events
             // (input_tokens on message_start, output_tokens on message_delta),
             // so overwriting would discard whichever half arrived first.
             if (delta.usage) {
                 lastUsage = lastUsage ? { ...lastUsage, ...delta.usage } : delta.usage
             }
+            if (delta.finishReason && finishReason !== 'refusal') finishReason = delta.finishReason
             if (delta.reasoningDelta) {
                 reasoningText += delta.reasoningDelta
             }
@@ -171,12 +217,34 @@ export async function pumpPresetStream(
         }
         clearTrailing()
         throttle.onEnd(Date.now())
+        try {
+            readModelResponseText({ type: 'success', result: fullText, finishReason })
+        } catch (error) {
+            // Ordinary chat can display useful partial text at the token limit;
+            // empty/reasoning-only output is never a successful final answer.
+            if (!(error instanceof ModelOutputError && error.reason === 'truncated'
+                && stripModelReasoning(fullText).trim())) throw error
+        }
         controller.close()
-        onFinish?.('done', lastUsage)
+        observe(() => onFinish?.('done', lastUsage, finishReason))
     } catch (err) {
         clearTrailing()
-        onError?.(err)
-        controller.error(err)
-        onFinish?.('failed', lastUsage)
+        const error = err !== null && (typeof err === 'object' || typeof err === 'function')
+            ? err : new Error('AI 스트리밍 응답이 중단되었습니다.')
+        partialStreamText.delete(error)
+        if (stripModelReasoning(fullText).trim()
+            && !(error instanceof ModelOutputError && (error.reason === 'blocked' || error.reason === 'empty'))) {
+            observe(() => partialStreamText.set(error, buildChunk()))
+        }
+        // An actively waiting reader can receive this final snapshot; a slow
+        // consumer must recover it through the error's private WeakMap entry.
+        observe(() => throttle.onEnd(Date.now()))
+        observe(() => onError?.(error))
+        observe(() => controller.error(error))
+        observe(() => onFinish?.('failed', lastUsage, finishReason))
+    } finally {
+        clearTrailing()
+        abortSignal?.removeEventListener('abort', onAbort)
+        if (!generatorFinished) observe(() => gen.return())
     }
 }

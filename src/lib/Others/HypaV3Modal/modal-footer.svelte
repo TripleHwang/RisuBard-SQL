@@ -68,22 +68,22 @@
           : nextMessage.chatId == null
             ? language.hypaV3Modal.nextSummarizationNoMessageIdLabel
             : nextMessage.chatId}
-      <div class="mb-2 text-sm sm:mb-4 text-zinc-400">
+      <div class="mb-2 text-sm sm:mb-4 text-textcolor2">
         {language.hypaV3Modal.nextSummarizationLabel.replace("{0}", chatId)}
       </div>
 
       <textarea
-        class="w-full p-2 overflow-y-auto transition-colors border rounded-sm resize-none sm:p-4 min-h-40 sm:min-h-56 border-zinc-700 focus:outline-hidden text-zinc-200 bg-zinc-900"
+        class="w-full p-2 overflow-y-auto transition-colors border rounded-sm resize-none sm:p-4 min-h-40 sm:min-h-56 border-darkborderc focus:outline-hidden text-textcolor bg-darkbg"
         readonly
         value={nextMessage.data}
       ></textarea>
     {:else}
-      <span class="text-sm text-red-400"
+      <span class="text-sm text-danger"
         >{language.hypaV3Modal.nextSummarizationNoMessagesFoundLabel}</span
       >
     {/if}
   {:catch error}
-    <span class="text-sm text-red-400"
+    <span class="text-sm text-danger"
       >{language.hypaV3Modal.nextSummarizationLoadingError.replace(
         "{0}",
         error.message
@@ -93,13 +93,13 @@
 </div>
 
 <div class="mt-2 sm:mt-4">
-  <div class="mb-2 text-sm sm:mb-4 text-zinc-400">
+  <div class="mb-2 text-sm sm:mb-4 text-textcolor2">
     {language.hypaV3Modal.summarizationConditionLabel}
   </div>
 
   <!-- No First Message -->
   {#if !getFirstMessage()}
-    <span class="text-sm text-red-400"
+    <span class="text-sm text-danger"
       >{language.hypaV3Modal.emptySelectedFirstMessageLabel}</span
     >
   {/if}

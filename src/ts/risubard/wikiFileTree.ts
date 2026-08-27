@@ -7,6 +7,23 @@ export interface WikiTreeDocumentInput {
     type: MarkdownWikiDocumentType
     status?: 'active' | 'superseded' | 'retracted'
     created?: string
+    updated?: string
+}
+
+export function getRecentlyUpdatedWikiDocumentIds(
+    documents: readonly WikiTreeDocumentInput[]
+): Set<string> {
+    const dated = documents
+        .filter((document) => document.status !== 'retracted')
+        .map((document) => ({ document, timestamp: Date.parse(document.updated ?? '') }))
+        .filter(({ timestamp }) => Number.isFinite(timestamp))
+    // Canonical pages are written separately after the analysis event is saved.
+    const latestEvent = dated.reduce((latest, { document, timestamp }) =>
+        document.type === 'event' ? Math.max(latest, timestamp) : latest, -Infinity)
+    const since = Number.isFinite(latestEvent) ? latestEvent
+        : dated.reduce((latest, { timestamp }) => Math.max(latest, timestamp), -Infinity)
+    return new Set(dated.filter(({ timestamp }) => timestamp >= since)
+        .map(({ document }) => document.id))
 }
 
 export type WikiFileTreeNode = {
@@ -44,7 +61,7 @@ export function buildWikiFileTree(
             kind: 'folder',
             name,
             path: name,
-            readOnly: name === 'events',
+            readOnly: false,
             children: [],
         })
     }
@@ -54,7 +71,7 @@ export function buildWikiFileTree(
         }
         const parts = document.relativePath.split('/').filter(Boolean)
         if (parts.length === 0) continue
-        const readOnly = document.type === 'event'
+        const readOnly = false
         if (parts.length === 1) {
             roots.set(document.relativePath, {
                 kind: 'file',
@@ -75,7 +92,7 @@ export function buildWikiFileTree(
                 kind: 'folder',
                 name: folderName,
                 path: folderPath,
-                readOnly: folderName === 'events',
+                readOnly: false,
                 children: [],
             }
             roots.set(folderPath, folder)

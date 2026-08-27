@@ -16,7 +16,7 @@
     });
 </script>
 
-<div class="cl rounded-full bg-white">
+<div class="cl rounded-full bg-darkbg">
     <ColorPicker
         label="" bind:hex={value}
         nullable={nullable}
@@ -28,8 +28,8 @@
         --cp-bg-color: var(--risu-theme-bgcolor);
         --cp-border-color: var(--risu-theme-darkborderc);
         --cp-text-color: var(--risu-theme-textcolor);
-        --cp-input-color: #555;
-        --cp-button-hover-color: #777;
+        --cp-input-color: var(--color-darkbg);
+        --cp-button-hover-color: var(--color-selected);
     }
 
     /*

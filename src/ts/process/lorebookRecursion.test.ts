@@ -41,6 +41,8 @@ vi.mock('./modules', () => ({
 }))
 
 import { convertImportedLorebook, exportLoreBook, importLoreBook, loadLoreBookV3Prompt } from './lorebook.svelte'
+import { buildPersonaBuilderMessages, matchPersonaBuilderCharacterLorebook } from '../personaBuilder'
+import { buildInjectionManifest } from '../status/requestStatus'
 
 function lore(comment: string, key: string, content: string) {
     return {
@@ -70,6 +72,116 @@ function importedFile(comment: string) {
         })),
     }
 }
+
+describe('persona builder character lorebook search', () => {
+    function prepare(entries: ReturnType<typeof lore>[], settings: Record<string, unknown> = {}) {
+        mockModuleSources.splice(0, mockModuleSources.length, {
+            scopeId: 'module:hidden', entry: { ...lore('Module', '', 'MODULE SECRET'), alwaysActive: true },
+        })
+        const character = {
+            chaId: 'builder-character', name: 'Builder character', chatPage: 0,
+            globalLore: entries,
+            chats: [{
+                id: 'chat-1', message: [{ role: 'user', data: 'chat-only keyword' }],
+                localLore: [{ ...lore('Local', '', 'LOCAL SECRET'), alwaysActive: true }],
+                scriptstate: { '$__internal_ka_sticky': 'true' },
+            }],
+            loreSettings: {
+                tokenBudget: 8000, scanDepth: 1, recursiveScanning: false,
+                matchingMode: 'partial', ...settings,
+            },
+        }
+        mockDBState.db = {
+            username: 'user', loreBookDepth: 5, loreBookToken: 8000,
+            characters: [character],
+        }
+        return character
+    }
+
+    it('carries only matched entry names from the search into the request manifest', async () => {
+        const character = prepare([
+            lore('라이잘린 슈타우트', '라이잘린 슈타우트, 라이자, Ryza', '연금술사\n## 내부 제목'),
+            lore('Unmatched', 'other', 'NOT INJECTED'),
+        ])
+        const userInstruction = '라이자가 나오는 셋팅에 어울리는 남자 캐릭터를 만들어 줘'
+        const matched = await matchPersonaBuilderCharacterLorebook({ character: character as any, userInstruction, draft: '' })
+        expect(matched).toMatchObject({
+            content: expect.stringContaining('## 라이잘린 슈타우트'),
+            sources: [{ kind: 'lorebook', name: '라이잘린 슈타우트', role: 'user', content: expect.stringContaining('연금술사') }],
+        })
+        const messages = buildPersonaBuilderMessages({
+            taskInstruction: 'Create a persona', styleInstruction: '', userInstruction, draft: '',
+            selections: { systemPrompt: false, characterDescription: false, characterLorebook: true, moduleLorebook: false },
+            sources: {
+                systemPrompt: '', characterDescription: '', moduleLorebook: '',
+                characterLorebook: matched.content, characterLorebookSources: matched.sources,
+            },
+        })
+        const manifest = await buildInjectionManifest(messages, [232, 25839], async (source) => source.content.length)
+        expect(manifest.items.filter((item) => item.kind === 'lorebook')).toEqual([
+            { kind: 'lorebook', name: '라이잘린 슈타우트', tokens: expect.any(Number) },
+        ])
+        expect(manifest.items.some((item) => item.kind === 'chatHistory')).toBe(false)
+    })
+
+    it('matches input and draft without injecting unrelated, local, or module lore', async () => {
+        const character = prepare([
+            lore('Input match', 'moon', 'MOON FACT'),
+            lore('Draft match', 'sun', 'SUN FACT'),
+            lore('Unrelated', 'chat-only', 'UNRELATED SECRET'),
+            { ...lore('Always', '', 'ALWAYS FACT'), alwaysActive: true },
+            { ...lore('Disabled', 'moon', 'DISABLED SECRET'), enabled: false },
+            { ...lore('Folder', 'moon', 'FOLDER SECRET'), mode: 'folder' },
+        ] as ReturnType<typeof lore>[])
+        const before = JSON.stringify(character)
+        const context = await matchPersonaBuilderCharacterLorebook({
+            character: character as any, userInstruction: 'Describe the moon', draft: 'Lives near the sun',
+        })
+        expect(context.content).toContain('MOON FACT')
+        expect(context.content).toContain('SUN FACT')
+        expect(context.content).toContain('ALWAYS FACT')
+        expect(context.content).not.toContain('SECRET')
+        expect(JSON.stringify(character)).toBe(before)
+    })
+
+    it('reevaluates changed drafts and honors secondary keys and word boundaries', async () => {
+        const character = prepare([
+            { ...lore('Selective', 'alice', 'SELECTIVE FACT'), selective: true, secondkey: 'mage' },
+            lore('Longer name', 'aliceford', 'WRONG NAME'),
+        ], { matchingMode: 'word-boundary' })
+        const input = { character: character as any, userInstruction: 'Alice, please', draft: 'A mage.' }
+        expect((await matchPersonaBuilderCharacterLorebook(input)).content).toContain('SELECTIVE FACT')
+        expect(await matchPersonaBuilderCharacterLorebook({ ...input, draft: 'A warrior.' })).toEqual({ content: '', sources: [] })
+        expect(await matchPersonaBuilderCharacterLorebook({ ...input, userInstruction: 'Alicea' })).toEqual({ content: '', sources: [] })
+    })
+
+    it('uses chat decorators, recursive scanning, and token priority without mutating activation state', async () => {
+        const character = prepare([
+            { ...lore('Seed', 'seed', '@@keep_activate_after_match\nbridge'), id: 'seed', insertorder: 300 },
+            { ...lore('Bridge', 'bridge', 'BRIDGE FACT'), insertorder: 200 },
+            { ...lore('Sticky', 'absent', '@@keep_activate_after_match\nSTICKY SECRET'), id: 'sticky' },
+            lore('Excluded', 'seed', '@@exclude_keys blocked\nEXCLUDED SECRET'),
+            lore('Low priority', 'seed', 'BUDGET SECRET'),
+        ] as ReturnType<typeof lore>[], { recursiveScanning: true, maxRecursionSteps: 2, tokenBudget: 2 })
+        const before = JSON.stringify(character)
+        const context = await matchPersonaBuilderCharacterLorebook({
+            character: character as any, userInstruction: 'seed blocked', draft: '',
+        })
+        expect(context.content).toContain('bridge')
+        expect(context.content).toContain('BRIDGE FACT')
+        expect(context.content).not.toContain('SECRET')
+        expect(context.content).not.toContain('@@')
+        expect(JSON.stringify(character)).toBe(before)
+    })
+
+    it('does not fall back to the selected chat when no character or no keys match', async () => {
+        const character = prepare([lore('Unrelated', 'chat-only', 'SECRET')])
+        expect(await matchPersonaBuilderCharacterLorebook({ userInstruction: 'other', draft: '' })).toEqual({ content: '', sources: [] })
+        expect(await matchPersonaBuilderCharacterLorebook({
+            character: character as any, userInstruction: 'other', draft: '',
+        })).toEqual({ content: '', sources: [] })
+    })
+})
 
 describe('lorebook recursion steps', () => {
     it('does not activate newly discovered keys during the same sweep', async () => {

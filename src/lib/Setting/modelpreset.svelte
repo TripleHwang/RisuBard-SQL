@@ -75,12 +75,12 @@
     }
 </script>
 
-<div class="absolute w-full h-full z-40 bg-black/50 flex justify-center items-center">
-    <div class="bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl w-124 max-h-full overflow-y-auto">
-        <div class="flex items-center text-textcolor mb-4">
+<div class="risu-modal-overlay absolute w-full h-full z-40 bg-overlay/50 flex justify-center items-center">
+    <div class="risu-modal-surface bg-darkbg p-4 break-any rounded-md flex flex-col max-w-3xl w-124 max-h-full overflow-y-auto">
+        <div class="risu-modal-header flex items-center text-textcolor mb-4">
             <h2 class="mt-0 mb-0">{language.modelPresets}</h2>
             <div class="grow flex justify-end">
-                <button class="text-textcolor2 hover:text-primary mr-2 cursor-pointer items-center" onclick={close}>
+                <button class="risu-modal-close text-textcolor2 hover:text-primary mr-2 cursor-pointer items-center" onclick={close}>
                     <XIcon size={24}/>
                 </button>
             </div>
@@ -105,9 +105,9 @@
             <div class="w-full transition-all duration-200"
                 class:h-0.5={!isDragging || dragOverIndex !== i}
                 class:h-1={isDragging && dragOverIndex === i}
-                class:bg-blue-500={isDragging && dragOverIndex === i}
+                class:bg-info={isDragging && dragOverIndex === i}
                 class:shadow-lg={isDragging && dragOverIndex === i}
-                class:hover:bg-gray-600={!isDragging}
+                class:hover:bg-darkbutton={!isDragging}
                 role="listitem"
                 ondragover={(e) => {
                     e.preventDefault()
@@ -186,7 +186,7 @@
                     }}>
                         <CopyIcon size={18}/>
                     </div>
-                    <div class="text-textcolor2 hover:text-red-400 cursor-pointer" role="button" tabindex="0" onclick={(e) => {
+                    <div class="text-textcolor2 hover:text-danger/80 cursor-pointer" role="button" tabindex="0" onclick={(e) => {
                         e.stopPropagation()
                         deletePreset(i)
                     }} onkeydown={(e) => {
@@ -203,9 +203,9 @@
         <div class="w-full transition-all duration-200"
             class:h-0.5={!isDragging || dragOverIndex !== DBState.db.modelPresets.length}
             class:h-1={isDragging && dragOverIndex === DBState.db.modelPresets.length}
-            class:bg-blue-500={isDragging && dragOverIndex === DBState.db.modelPresets.length}
+            class:bg-info={isDragging && dragOverIndex === DBState.db.modelPresets.length}
             class:shadow-lg={isDragging && dragOverIndex === DBState.db.modelPresets.length}
-            class:hover:bg-gray-600={!isDragging}
+            class:hover:bg-darkbutton={!isDragging}
             role="listitem"
             ondragover={(e) => {
                 e.preventDefault()

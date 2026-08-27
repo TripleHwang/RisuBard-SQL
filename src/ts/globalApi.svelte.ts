@@ -34,6 +34,7 @@ import {
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
 import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
+import { collectDatabaseAssetReferences } from './storage/assetRefs'
 
 export const forageStorage = new AutoStorage()
 
@@ -243,6 +244,7 @@ export let requiresFullEncoderReload = $state({
 
 let requestImmediateSaveImpl: ((options?: {
     forceFullWrite?: boolean
+    flushServer?: boolean
     rejectOnFailure?: boolean
 }) => Promise<void> | void) = () => {}
 let patchSyncBaseline: Database | null = null
@@ -350,6 +352,7 @@ export function previewPersistFailureToast() {
 
 export function requestImmediateSave(options?: {
     forceFullWrite?: boolean
+    flushServer?: boolean
     rejectOnFailure?: boolean
 }) {
     return requestImmediateSaveImpl(options)
@@ -489,13 +492,20 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
         return toSave
     }
 
+    async function flushServerDbNow(keepalive = false) {
+        const response = await fetch('/api/db/flush', {
+            method: 'POST',
+            keepalive,
+            credentials: 'same-origin'
+        })
+        if (!response.ok) {
+            throw new Error(`Server database flush failed (${response.status})`)
+        }
+    }
+
     async function flushServerDbKeepalive() {
         try {
-            fetch('/api/db/flush', {
-                method: 'POST',
-                keepalive: true,
-                credentials: 'same-origin'
-            }).catch(() => {})
+            await flushServerDbNow(true)
         } catch {
             // ignore best-effort flush failures
         }
@@ -1164,6 +1174,9 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             forceFullWrite: options?.forceFullWrite,
             rejectOnFailure: options?.rejectOnFailure,
         })
+        if (options?.flushServer && supportsPatchSync) {
+            await flushServerDbNow()
+        }
     }
 
     let savetrys = 0
@@ -1499,104 +1512,9 @@ export function getBasename(data: string) {
  * @returns {string[]} - An array of uncleanable resources.
  */
 export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'basename') {
-    const uncleanable = new Set<string>();
-
-    /**
-     * Adds a resource to the uncleanable list if it is not already included.
-     * 
-     * @param {string} data - The resource to add.
-     */
-    function addUncleanable(data: string) {
-        if (!data) {
-            return;
-        }
-        if (data === '') {
-            return;
-        }
-        const bn = uptype === 'basename' ? getBasename(data) : data;
-        uncleanable.add(bn);
-    }
-
-    addUncleanable(db.customBackground);
-    addUncleanable(db.userIcon);
-    // Uploaded notification sounds. Preset-id values (e.g. "bell") are not
-    // asset paths, so they add a harmless basename that matches no stored asset.
-    addUncleanable(db.messageSound);
-    addUncleanable(db.translateSound);
-    if (db.customSounds) {
-        for (const s of db.customSounds) {
-            addUncleanable(s.path);
-        }
-    }
-
-    for (const cha of db.characters) {
-        if (cha.image) {
-            addUncleanable(cha.image);
-        }
-        if (cha.emotionImages) {
-            for (const em of cha.emotionImages) {
-                addUncleanable(em[1]);
-            }
-        }
-        if (cha.additionalAssets) {
-            for (const em of cha.additionalAssets) {
-                addUncleanable(em[1]);
-            }
-        }
-        if (cha.vits) {
-            const keys = Object.keys(cha.vits.files);
-            for (const key of keys) {
-                const vit = cha.vits.files[key];
-                addUncleanable(vit);
-            }
-        }
-        if (cha.ccAssets) {
-            for (const asset of cha.ccAssets) {
-                addUncleanable(asset.uri);
-            }
-        }
-    }
-
-    if (db.modules) {
-        for (const module of db.modules) {
-            const assets = module.assets
-            if (assets) {
-                for (const asset of assets) {
-                    addUncleanable(asset[1])
-                }
-            }
-            if(module.icon){
-                addUncleanable(module.icon)
-            }
-        }
-    }
-
-    if (db.personas) {
-        db.personas.map((v) => {
-            addUncleanable(v.icon);
-
-            if(v.embeddedModule){
-                const assets = v.embeddedModule.assets
-                if (assets) {
-                    for (const asset of assets) {
-                        addUncleanable(asset[1])
-                    }
-                }
-                if(v.embeddedModule.icon){
-                    addUncleanable(v.embeddedModule.icon)
-                }
-            }
-        });
-    }
-
-    if (db.characterOrder) {
-        db.characterOrder.forEach((item) => {
-            if (typeof item === 'object' && 'imgFile' in item) {
-                addUncleanable(item.imgFile);
-            }
-        })
-    }
-    return Array.from(uncleanable);
+    return Array.from(collectDatabaseAssetReferences(db), (asset) =>
+        uptype === 'basename' ? getBasename(asset) : asset,
+    );
 }
 
 

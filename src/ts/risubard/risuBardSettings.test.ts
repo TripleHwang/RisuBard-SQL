@@ -7,6 +7,7 @@ import {
     RISUBARD_INQUIRY_MAXIMUM_TOKEN_BUDGET_DEFAULT,
     RISUBARD_INQUIRY_TARGET_TOKEN_BUDGET_DEFAULT,
     buildRisuBardCanonicalWritingPolicy,
+    buildRisuBardEventWritingPolicy,
     normalizeRisuBardAnalysisTokenLimit,
     normalizeRisuBardAdditionalSearchLimit,
     normalizeRisuBardCanonicalCustomStyle,
@@ -17,6 +18,28 @@ import {
 } from './risuBardSettings'
 
 describe('RisuBard analysis settings', () => {
+    test('defaults wiki language to Korean and resolves a chat language independently', () => {
+        expect(resolveRisuBardChatSettings({}).risuBardWikiWritingLanguage).toBe('ko')
+        expect(resolveRisuBardChatSettings({ risuBardWikiWritingLanguage: 'en' })
+            .risuBardWikiWritingLanguage).toBe('en')
+        expect(resolveRisuBardChatSettings({ risuBardWikiWritingLanguage: 'en' }, {
+            risuBardWikiWritingLanguage: 'ko',
+        }).risuBardWikiWritingLanguage).toBe('ko')
+    })
+
+    test.each(['standard', 'concise', 'ultra-concise', 'custom'])(
+        'uses only English built-in writing instructions for %s', (style) => {
+            const event = buildRisuBardEventWritingPolicy(style, 'Use short sentences.', 'en')
+            const canon = buildRisuBardCanonicalWritingPolicy(style, 'Use short sentences.', 'en')
+            expect(event).toContain('English')
+            expect(canon).toContain('### Story History')
+            expect(canon).toContain('16')
+            expect(canon).toContain('entire body')
+            expect(canon).toContain('existing document titles')
+            expect(event + canon).not.toMatch(/[가-힣]/)
+        }
+    )
+
     test('uses conservative defaults for missing and invalid values', () => {
         expect(normalizeRisuBardAnalysisTokenLimit(undefined))
             .toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
@@ -26,13 +49,15 @@ describe('RisuBard analysis settings', () => {
             .toBe(RISUBARD_CANONICAL_TARGET_LIMIT_DEFAULT)
     })
 
-    test('clamps integer values to the supported bounded ranges', () => {
+    test('retains minimums without imposing arbitrary setting maxima', () => {
         expect(normalizeRisuBardAnalysisTokenLimit(12)).toBe(3_072)
-        expect(normalizeRisuBardAnalysisTokenLimit(99_999)).toBe(32_768)
+        expect(normalizeRisuBardAnalysisTokenLimit(99_999)).toBe(99_999)
         expect(normalizeRisuBardAdditionalSearchLimit(-3)).toBe(0)
-        expect(normalizeRisuBardAdditionalSearchLimit(99)).toBe(4)
+        expect(normalizeRisuBardAdditionalSearchLimit(99)).toBe(99)
         expect(normalizeRisuBardCanonicalTargetLimit(0)).toBe(1)
-        expect(normalizeRisuBardCanonicalTargetLimit(99)).toBe(8)
+        expect(normalizeRisuBardCanonicalTargetLimit(99)).toBe(99)
+        expect(normalizeRisuBardAnalysisTokenLimit(Infinity)).toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
+        expect(normalizeRisuBardAnalysisTokenLimit(Number.MAX_SAFE_INTEGER + 1)).toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
     })
 
     test('normalizes configurable inquiry target and maximum budgets', () => {
@@ -44,7 +69,15 @@ describe('RisuBard analysis settings', () => {
         expect(normalizeRisuBardInquiryTokenBudget(8_000, 4_000))
             .toEqual({ target: 4_000, maximum: 4_000 })
         expect(normalizeRisuBardInquiryTokenBudget(1, 99_999))
-            .toEqual({ target: 256, maximum: 32_768 })
+            .toEqual({ target: 256, maximum: 99_999 })
+    })
+
+    test('keeps configured message windows above one hundred', () => {
+        const settings = resolveRisuBardChatSettings({
+            risuBardRecentMessageCount: 250, risuBardResponseMessageCount: 300,
+        })
+        expect(settings.risuBardRecentMessageCount).toBe(250)
+        expect(settings.risuBardResponseMessageCount).toBe(300)
     })
 
     test('normalizes the shared canonical writing policy', () => {

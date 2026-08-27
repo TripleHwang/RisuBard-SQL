@@ -39,10 +39,13 @@ import {
 import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
 import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
 import { pumpPresetStream } from "./presetStreamPump";
+import { preparePresetResponse, presetGenerationOverrides } from './presetResponse';
+import { filterResponseCharacters, normalizeRequestRetryLimit, presetFailureRetryPolicy } from './responseRetryPolicy';
 import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
 import { resolveChatModelBinding, resolveRequestModelBindingTarget, resolvePresetMaxOutputTokens, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
+import { createModelPresetRequestProvenance } from './modelProvenance';
 import {
     createStructuredOutputFallbackMessage,
     sendWithStructuredOutputFallback,
@@ -127,6 +130,9 @@ export type requestDataResponse = {
     type: 'success'|'fail'
     result: string
     noRetry?: boolean,
+    fallbackEligible?: boolean,
+    finishReason?: string,
+    usage?: AdapterUsage,
     bindingFailure?: 'main-unset' | 'sub-unset',
     // Set when a ModelPreset request actually executed tools. The outer
     // requestChatData loop must not re-run such a response (banned-charset /
@@ -157,6 +163,8 @@ export interface StreamResponseChunk{[key:string]:string}
 
 export async function requestChatData(arg:RequestDataArgumentExtended, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = getDatabase()
+    const retryLimit = normalizeRequestRetryLimit(db.requestRetrys)
+    const internalOutput = Boolean(arg.schema) || arg.logSource === 'memory'
     const fallBackModels = createModelAttemptOrder(
         safeStructuredClone(db?.fallbackModels?.[model] ?? [])
     )
@@ -262,31 +270,19 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
                 }
             }
 
-            if(da.type === 'success' && db.banCharacterset?.length > 0){
-                let failed = false
-                for(const set of db.banCharacterset){
-                    console.log(set)
-                    const checkRegex = new RegExp(`\\p{Script=${set}}`, 'gu')
-    
-                    if(checkRegex.test(da.result)){
-                        trys += 1
-                        failed = true
-                        break
-                    }
-                }
-    
-                if(failed){
-                    continue
-                }
+            if(!internalOutput && db.banCharacterset?.length > 0){
+                da = filterResponseCharacters(da, db.banCharacterset)
             }
     
-            if(da.type === 'success' && fallbackIndex !== fallBackModels.length-1 && db.fallbackWhenBlankResponse){
+            if(!internalOutput && da.type === 'success' && !da.noRetry && fallbackIndex !== fallBackModels.length-1 && db.fallbackWhenBlankResponse){
                 if(da.result.trim() === ''){
                     break
                 }
             }
     
             if(da.type !== 'fail' || da.noRetry){
+                if (da.type === 'fail' && da.fallbackEligible
+                    && hasNextModelAttempt(fallbackIndex, fallBackModels.length)) break
                 return {
                     ...da,
                     // fallBackModels[fallbackIndex] is '' for the primary (non-fallback)
@@ -304,11 +300,11 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
             }
             
             trys += 1
-            if(trys > db.requestRetrys){
+            if(trys > retryLimit){
                 if(!hasNextModelAttempt(
                     fallbackIndex,
                     fallBackModels.length
-                )){
+                ) || da.fallbackEligible === false){
                     return da
                 }
                 break
@@ -758,6 +754,7 @@ const formatPresetReasoning = formatReasoningParts
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
     const kind = preset.profileSnapshot.adapterKind
     const usePageFold = preset.usePageFold === true
+    const provenance = createModelPresetRequestProvenance(preset)
     // arg.chatId is the per-request generationId for main chat (sendChat passes
     // it under that name; see generation-state-keying.md §1-bis). Aux requests
     // (translate/memory/emotion/sub) don't supply one, so mint a per-request key
@@ -784,7 +781,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         chatId: genId,
         sessionChatId: arg.realChatId,
         generationId: genId,
-        model: preset.profileSnapshot.modelId,
+        model: provenance.wireModelId,
         provider: preset.profileSnapshot.providerBaseId,
         streaming: usePageFold ? false : resolvePresetStreaming(preset, arg),
     })
@@ -839,7 +836,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             }),
             generationId: genId,
             adapterKind: kind,
-            model: preset.profileSnapshot.modelId,
+            model: provenance.wireModelId,
             streaming: resolvePresetStreaming(preset, arg),
             timeoutMs: (getDatabase().localNetworkTimeoutSec ?? 600) * 1000,
             fallbackFetch: proxiedFetch,
@@ -937,7 +934,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     try {
         arg.formated = reformater(safeStructuredClone(arg.formated), presetFlags)
     } catch (err) {
-        return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: preset.name }
+        return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: provenance.wireModelId }
     }
 
     let requestStatusManifest: RequestInjectionManifest | undefined
@@ -1059,15 +1056,16 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             return {
                 type: 'success',
                 result: JSON.stringify({ url: prepared.url, body: prepared.body, headers: prepared.headers }),
-                model: preset.name,
+                model: provenance.wireModelId,
             }
         } catch (err) {
-            return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: preset.name }
+            return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: provenance.wireModelId }
         } finally {
             void logScope.close()
         }
     }
 
+    let streamedOutputStarted = false
     try {
         // Tool runs always go non-streaming for now: the execute→re-request loop
         // needs the full structured response (tool_calls) each turn, and
@@ -1078,14 +1076,13 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // The tool loop issues one request per turn; each is its own log
             // entry and all of them flush together here.
             void logScope.close()
-            return { type: 'success', result, model: preset.name, toolExecuted: toolsExecuted }
+            return { type: 'success', result, model: provenance.wireModelId, toolExecuted: toolsExecuted }
         }
 
         const useStreaming = resolvePresetStreaming(preset, arg)
         const options: AdapterChatOptions = {
             messages, abortSignal: abortSignal ?? undefined, fetchImpl, generationId: genId, cache,
-            temperature: arg.schema ? arg.temperature : undefined,
-            maxOutputTokens: arg.schema ? arg.maxTokens : undefined,
+            ...presetGenerationOverrides(arg),
             responseSchema: arg.schema
                 ? convertInterfaceToSchema(arg.schema)
                 : undefined,
@@ -1100,7 +1097,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             safeStatus(() => startStatus(genId, {
                 kind: statusKind,
                 purpose: logPurpose,
-                label: preset.name,
+                label: provenance.displayModel,
                 chatId: arg.realChatId,
                 phase: 'connecting',
                 now: Date.now(),
@@ -1108,30 +1105,43 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             }))
         }
         if(useStreaming){
-            const gen = streamModelPreset(kind, preset, options, credential)
+            const streamAbort = new AbortController()
+            const abortStream = () => streamAbort.abort(abortSignal?.reason)
+            if (abortSignal?.aborted) abortStream()
+            else abortSignal?.addEventListener('abort', abortStream, { once: true })
+            let streamUsage: AdapterUsage | undefined
+            let streamFinishReason: string | undefined
+            const gen = streamModelPreset(kind, preset, { ...options, abortSignal: streamAbort.signal }, credential)
             const stream = new ReadableStream<StreamResponseChunk>({
                 start(controller){
                     return pumpPresetStream(gen, controller, {
                         intervalMs: STREAM_FLUSH_INTERVAL_MS,
+                        abortSignal: streamAbort.signal,
                         formatReasoning: (text) => formatPresetReasoning([{ text }]),
                         onError: (err) => console.error('[ModelPreset] stream error', describeModelPresetError(err)),
                         // appendText owns the phase transition (thinking/responding)
                         // from which kind of text arrives, and recovers from 'stalled'
                         // when chunks resume — no local phase tracking needed here.
-                        onDelta: reportStatus ? (delta) => safeStatus(() => {
-                            const now = Date.now()
-                            if (delta.reasoningDelta) appendText(genId, { thinking: delta.reasoningDelta }, now)
-                            if (delta.textDelta) appendText(genId, { response: delta.textDelta }, now)
-                        }) : undefined,
+                        onDelta: (delta) => {
+                            streamedOutputStarted ||= Boolean(delta.textDelta || delta.reasoningDelta)
+                            if (reportStatus) safeStatus(() => {
+                                const now = Date.now()
+                                if (delta.reasoningDelta) appendText(genId, { thinking: delta.reasoningDelta }, now)
+                                if (delta.textDelta) appendText(genId, { response: delta.textDelta }, now)
+                            })
+                        },
                         // Always registered: the request log needs the stream's
                         // end to attach the adapter's authoritative usage and
                         // flush, independent of whether the status toast is on.
-                        onFinish: (outcome, lastUsage) => {
+                        onFinish: (outcome, lastUsage, finishReason) => {
+                            streamUsage = lastUsage
+                            streamFinishReason = finishReason
+                            abortSignal?.removeEventListener('abort', abortStream)
                             if (reportStatus) safeStatus(() => {
                                 // A stream that ends via abort throws inside the
                                 // generator → 'failed'; reclassify as 'aborted' so the
                                 // toast shows "Cancelled" rather than an error.
-                                const finalOutcome = outcome === 'failed' && abortSignal?.aborted ? 'aborted' : outcome
+                                const finalOutcome = outcome === 'failed' && streamAbort.signal.aborted ? 'aborted' : outcome
                                 // Confirmed cache hit (usageMetadata.cachedContentTokenCount
                                 // > 0) → savings badge on the status toast. Gated on the
                                 // cache context so behavior is unchanged with caching off.
@@ -1153,7 +1163,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                             void logScope.close()
                         },
                     })
-                }
+                },
+                cancel(reason) { streamAbort.abort(reason) },
             })
             // Decoupled streaming: the wire request still streams (keeping the
             // provider's lenient streaming limits), but we drain the stream here
@@ -1163,11 +1174,12 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // once instead of token-by-token.
             if(preset.decoupledStreaming){
                 const text = await collectStreamingText(stream)
-                return { type: 'success', result: text, model: preset.name }
+                return { type: 'success', result: text, model: provenance.wireModelId,
+                    noRetry: true, finishReason: streamFinishReason, usage: streamUsage }
             }
             // endStatus fires from the pump's onFinish once the consumer drains
             // the stream — NOT here, because the stream outlives this return.
-            return { type: 'streaming', result: stream, model: preset.name }
+            return { type: 'streaming', result: stream, model: provenance.wireModelId }
         }
         const response = await sendWithStructuredOutputFallback(
             options,
@@ -1184,6 +1196,11 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         )
         logScope.setUsage(toLogUsage(response.usage))
         void logScope.close()
+        const prepared = preparePresetResponse(response, {
+            internal: Boolean(arg.schema) || arg.logSource === 'memory',
+            model: provenance.wireModelId,
+            formatReasoning: formatPresetReasoning,
+        })
         if (reportStatus) {
             safeStatus(() => {
                 // Cache-hit badge: same rule as the streaming onFinish above.
@@ -1191,7 +1208,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                 if (cache && cachedTokens > 0) {
                     addBadge(genId, { key: 'cache', text: language.requestStatus.cacheHit.replace('{n}', cachedTokens.toLocaleString()), tone: 'success' })
                 }
-                endStatus(genId, 'done', {
+                endStatus(genId, prepared.type === 'fail' ? 'failed' : 'done', {
                     now: Date.now(),
                     usage: response.usage && (response.usage.promptTokens !== undefined || response.usage.completionTokens !== undefined)
                         ? {
@@ -1202,7 +1219,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                 })
             })
         }
-        return { type: 'success', result: formatPresetReasoning(response.reasoning) + response.text, model: preset.name }
+        return prepared
     } catch (err) {
         console.error('[ModelPreset] request failed', describeModelPresetError(err))
         // A throw before the stream started (or instead of it) means onFinish
@@ -1216,7 +1233,9 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         return {
             type: 'fail',
             result: err instanceof Error ? err.message : String(err),
-            model: preset.name,
+            model: provenance.wireModelId,
+            ...presetFailureRetryPolicy(err, abortSignal?.aborted),
+            ...(streamedOutputStarted ? { noRetry: true, fallbackEligible: false } : {}),
         }
     }
 }

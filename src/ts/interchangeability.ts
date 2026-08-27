@@ -18,6 +18,7 @@ export function convertModuleToCharacter(m: RisuModule): character {
     char.triggerscript = m.trigger || []
     char.lowLevelAccess = m.lowLevelAccess || false
     char.hideChatIcon = m.hideIcon || false
+    char.moduleNamespace = m.namespace || ''
     char.backgroundHTML = m.backgroundEmbedding || ""
     char.additionalAssets = m.assets || []
     char.customModuleToggle = m.customModuleToggle || ""
@@ -25,8 +26,10 @@ export function convertModuleToCharacter(m: RisuModule): character {
 
     for(let i = 0; i < char.globalLore.length; i++){
         const lore = safeStructuredClone(char.globalLore[i])
-        if(lore.content.startsWith('@@indicator phi')){
-            char.postHistoryInstructions = lore.content.replace('@@indicator phi', '').trim()
+        if(/^@@indicator (?:replace_global_note|phi)(?:\s|$)/.test(lore.content)){
+            char.replaceGlobalNote = lore.content
+                .replace(/^@@indicator (?:replace_global_note|phi)/, '')
+                .trim()
             char.globalLore.splice(i, 1)
             i--
         }
@@ -60,6 +63,7 @@ export function convertCharacterToModule(c: character): RisuModule {
         trigger: c.triggerscript,
         lowLevelAccess: c.lowLevelAccess,
         hideIcon: c.hideChatIcon,
+        namespace: c.moduleNamespace,
         backgroundEmbedding: c.backgroundHTML,
         assets: c.additionalAssets,
         customModuleToggle: c.customModuleToggle,
@@ -102,13 +106,13 @@ export function convertCharacterToModule(c: character): RisuModule {
         })
     }
 
-    if(c.postHistoryInstructions){
+    if(c.replaceGlobalNote){
         mod.lorebook.push({
             key: "",
             secondkey: "",
             insertorder: 0,
-            comment: "From PHI",
-            content: `@@indicator phi\n\n${c.postHistoryInstructions}`,
+            comment: "From Replace Global Note",
+            content: `@@indicator replace_global_note\n\n${c.replaceGlobalNote}`,
             mode: 'constant',
             alwaysActive: true,
             selective: false

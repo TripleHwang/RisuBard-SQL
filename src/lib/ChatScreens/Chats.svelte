@@ -25,7 +25,6 @@
         unReroll,
         onDeleteSwipe = () => {},
         onConfirmMemory = async () => false,
-        onUndoCanonical = async () => false,
         currentUsername,
         userIcon,
         pageStart,
@@ -43,10 +42,6 @@
         unReroll: () => void
         onDeleteSwipe?: () => void
         onConfirmMemory?: (messageId: string) => Promise<boolean>
-        onUndoCanonical?: (
-            messageId: string,
-            documentId?: string
-        ) => Promise<boolean>
         currentUsername: string
         userIcon: string
         pageStart: number
@@ -168,7 +163,6 @@
                         unReroll: unReroll,
                         onDeleteSwipe: i === lastRealCharIdx ? onDeleteSwipe : () => {},
                         onConfirmMemory,
-                        onUndoCanonical,
                         memoryConfirmed:
                             message.risubardMemoryConfirmed === true,
                         canonicalReceipt: message.risubardCanonicalReceipt,

@@ -428,7 +428,7 @@
                             DBState.db.NAIImgConfig.vibe_data = undefined;
                             DBState.db.NAIImgConfig.vibe_model_selection = undefined;
                         }}
-                        class="absolute top-2 right-2 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-2 rounded-sm"
+                        class="absolute top-2 right-2 bg-danger hover:bg-danger/85 text-on-danger font-bold py-1 px-2 rounded-sm"
                     >
                         Delete
                     </button>
@@ -522,7 +522,7 @@
                                 DBState.db.NAIImgConfig.character_image = undefined;
                                 DBState.db.NAIImgConfig.character_base64image = undefined;
                             }}
-                            class="absolute top-2 right-2 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-2 rounded-sm"
+                            class="absolute top-2 right-2 bg-danger hover:bg-danger/85 text-on-danger font-bold py-1 px-2 rounded-sm"
                         >
                             Delete
                         </button>
@@ -622,7 +622,7 @@
                                 DBState.db.NAIImgConfig.image = undefined;
                                 DBState.db.NAIImgConfig.base64image = undefined;
                             }}
-                            class="absolute top-2 right-2 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-2 rounded-sm"
+                            class="absolute top-2 right-2 bg-danger hover:bg-danger/85 text-on-danger font-bold py-1 px-2 rounded-sm"
                         >
                             Delete
                         </button>
@@ -923,7 +923,7 @@
                                     DBState.db.wavespeedImage.reference_image = undefined;
                                     DBState.db.wavespeedImage.reference_base64image = undefined;
                                 }}
-                              class="absolute top-2 right-2 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-2 rounded-sm"
+                              class="absolute top-2 right-2 bg-danger hover:bg-danger/85 text-on-danger font-bold py-1 px-2 rounded-sm"
                             >
                                 Delete
                             </button>
@@ -1041,7 +1041,7 @@
                     <PencilIcon size={24}/>
                 </button>
 
-                <button class="mr-2 text-textcolor2 hover:text-red-400 cursor-pointer" onclick={async (e) => {
+                <button class="mr-2 text-textcolor2 hover:text-danger/80 cursor-pointer" onclick={async (e) => {
                     const presets = DBState.db.hypaV3Presets
 
                     if(presets.length <= 1){
@@ -1092,7 +1092,7 @@
 
                 <button class="mr-2 text-textcolor2 hover:text-primary cursor-pointer" onclick={async() => {
                     try {
-                        const bytesImport = (await selectSingleFile(['json'])).data
+                        const bytesImport = (await selectSingleFile(['json']))?.data
 
                         if(!bytesImport) return
 
@@ -1143,7 +1143,7 @@
                 <span class="text-textcolor">{language.hypaV3Settings.maxMemoryTokensRatioLabel}</span>
                 <NumberInput className="mt-2" marginBottom disabled value={maxMemoryRatio} />
                 {:catch error}
-                <span class="mb-4 text-red-400">{language.hypaV3Settings.maxMemoryTokensRatioError}</span>
+                <span class="mb-4 text-danger">{language.hypaV3Settings.maxMemoryTokensRatioError}</span>
                 {/await}
                 <span class="text-textcolor">{language.hypaV3Settings.memoryTokensRatioLabel} <Help key="hypaV3MemoryTokensRatio"/></span>
                 <SliderInput className="mt-2" marginBottom min={0} max={1} step={0.01} fixed={2} bind:value={settings.memoryTokensRatio} />

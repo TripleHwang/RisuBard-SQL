@@ -1,8 +1,11 @@
 import { describe, expect, test, vi } from 'vitest'
 import {
+    beginWikiRebootBatch,
     cleanupWikiRebootWorkspace,
+    completeWikiRebootBatch,
     prepareWikiRebootReplacement,
     recoverWikiRebootBatch,
+    recordWikiRebootBatchReceipt,
 } from './wikiRebootTransport'
 
 const response = (value: unknown) => new Response(JSON.stringify(value), {
@@ -28,7 +31,7 @@ describe('BardWiki reboot transport', () => {
 
     test('cleans staging and recovers a persisted batch receipt', async () => {
         const receipt = {
-            snapshotId: 'turn-1', sourceMessageIds: ['u1', 'a1'],
+            sourceMessageIds: ['u1', 'a1'],
             eventIds: ['event-1'], changes: [], warnings: [], recordedAt: 'now',
         }
         const fetchImpl = vi.fn()
@@ -43,5 +46,36 @@ describe('BardWiki reboot transport', () => {
             sourceMessageIds: ['u1', 'a1'], eventSourceGroups: [['u1', 'a1']],
             fetchImpl, createAuth: async () => 'auth',
         })).resolves.toEqual(receipt)
+    })
+
+    test('begins, records, and completes one bounded reboot batch', async () => {
+        const receipt = {
+            sourceMessageIds: ['u1', 'a1'], eventIds: [], changes: [],
+            warnings: [], recordedAt: 'now',
+        }
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(response({ canonicalCount: 3 }))
+            .mockResolvedValueOnce(response(receipt))
+            .mockResolvedValueOnce(response({ removed: true }))
+        const fetchImpl = fetchMock as unknown as typeof fetch
+        const base = {
+            characterId: 'character', stagingChatId: 'reboot-job',
+            fetchImpl, createAuth: async () => 'auth',
+        }
+        await expect(beginWikiRebootBatch({
+            ...base, sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
+        })).resolves.toEqual({ canonicalCount: 3 })
+        await expect(recordWikiRebootBatchReceipt({
+            ...base, receipt,
+        })).resolves.toEqual(receipt)
+        await expect(completeWikiRebootBatch({
+            ...base, sourceMessageIds: ['u1', 'a1'],
+        })).resolves.toEqual({ removed: true })
+        expect(vi.mocked(fetchImpl).mock.calls.map((call) => call[0])).toEqual([
+            '/api/risubard/memory/wiki/reboot/begin',
+            '/api/risubard/memory/wiki/reboot/record',
+            '/api/risubard/memory/wiki/reboot/complete',
+        ])
     })
 })

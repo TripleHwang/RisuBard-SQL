@@ -247,25 +247,25 @@ function createRuntimeMemoryService(userDataDirectory, options = {}) {
                 return { ok: true }
             }
         ),
-        snapshotWikiBeforeTurn: (input) => serialized(
+        beginWikiRebootBatch: (input) => serialized(
             input.characterId,
             input.chatId,
-            () => wiki.snapshotBeforeTurn(input)
+            () => wiki.beginRebootBatch(input)
         ),
-        recordWikiTurnReceipt: (input) => serialized(
+        recordWikiRebootBatch: (input) => serialized(
             input.characterId,
             input.chatId,
-            () => wiki.recordTurnReceipt(input)
+            () => wiki.recordRebootBatchReceipt(input)
         ),
         recoverWikiRebootBatch: (input) => serialized(
             input.characterId,
             input.chatId,
             async () => ({ receipt: await wiki.recoverRebootBatch(input) })
         ),
-        undoWikiTurnReceipt: (input) => serialized(
+        completeWikiRebootBatch: (input) => serialized(
             input.characterId,
             input.chatId,
-            () => wiki.undoTurnReceipt(input)
+            () => wiki.completeRebootBatch(input)
         ),
         recordGraphAnalysis: (characterId, chatId, result) => serialized(
             characterId,

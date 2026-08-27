@@ -279,7 +279,7 @@
         overflow: hidden;
         border: 1px solid var(--line);
         border-radius: .65rem;
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, black);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor));
     }
     header, footer {
         display: flex;
@@ -340,7 +340,7 @@
         border: 1px solid var(--risu-theme-darkborderc);
         border-radius: .38rem;
         color: var(--risu-theme-textcolor);
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, black);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, var(--color-bgcolor));
         font: inherit;
     }
     textarea { resize: vertical; line-height: 1.55; }

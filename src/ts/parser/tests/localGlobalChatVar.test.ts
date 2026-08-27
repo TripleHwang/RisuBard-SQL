@@ -13,6 +13,9 @@ describe('per-chat global variable compatibility', () => {
         const source = readFileSync('src/lib/SideBars/Toggles.svelte', 'utf8')
         expect(source).toContain('setGlobalChatVar(`toggle_${toggle.key}`')
         expect(source).toContain('getGlobalChatVarValue(`toggle_${toggle.key}`)')
-        expect(source).toContain('currentChat.useLocallySetGlobalVariables = checked')
+        // Upstream v0.9.2 replaced RisuVault's "store toggles for this chat" switch
+        // with the pin-to-chat control; both enable the same per-chat override.
+        expect(source).toContain('onclick={pinToChat}')
+        expect(source).toContain('currentChat?.useLocallySetGlobalVariables')
     })
 })

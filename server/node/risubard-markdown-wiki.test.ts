@@ -16,7 +16,55 @@ afterEach(async () => {
 })
 
 describe('Markdown narrative wiki', () => {
-    test('restores an interrupted reboot batch or returns its completed receipt', async () => {
+    test('can append the first summary to an English event with only a title', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const scope = { characterId: 'character', chatId: 'chat', sourceMessageIds: ['empty'], writingLanguage: 'en' as const }
+        await wiki.saveConfirmedTurn({ ...scope, markdown: '## Discovery' })
+        const saved = await wiki.saveConfirmedTurn({ ...scope, append: true,
+            markdown: '## Discovery\n\n### Story Summary\n\n- Alice found a clue.',
+        })
+        expect(saved.content).toContain('### Additional Analysis')
+        expect(saved.content).not.toMatch(/[가-힣]/)
+    })
+
+    test('keeps automatic related and additional-analysis headings in English', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const scope = { characterId: 'character', chatId: 'chat', sourceMessageIds: ['turn-en'] }
+        await wiki.saveManualDocument({ ...scope, type: 'character',
+            title: 'Alice', markdown: '## Alice\n\nA traveler.',
+        })
+        const canon = await wiki.saveCanonicalDocument({ ...scope, type: 'location',
+            title: 'Station', markdown: '## Station\n\nAlice arrived here.', writingLanguage: 'en',
+        })
+        expect(canon.content).toContain('### Related Documents\n\n- [[Alice]]')
+        const event = await wiki.saveConfirmedTurn({ ...scope, writingLanguage: 'en',
+            markdown: '## Arrival\n\n### Story Summary\n\n- Alice arrived at Station.',
+        })
+        expect(event.content).toContain('### Related Documents')
+        const appended = await wiki.saveConfirmedTurn({ ...scope, append: true, writingLanguage: 'en',
+            markdown: '## Arrival\n\n### Story Summary\n\n- Alice found a key.',
+        })
+        expect(appended.content).toContain('### Additional Analysis')
+        expect(canon.content + appended.content).not.toMatch(/[가-힣]/)
+        const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
+        expect(await fs.readFile(workspace.indexFile, 'utf8')).toContain('## Narrative Wiki')
+        const updated = await wiki.saveCanonicalDocument({ ...scope, documentId: canon.id,
+            type: 'location', title: 'Station', writingLanguage: 'en',
+            markdown: '## Station\n\n### 작중 행적\n\n- Alice arrived.\n\n### 관련 문서\n\n- [[Alice]]',
+        })
+        expect(updated.content).toContain('### Story History')
+        expect(updated.content).toContain('### Related Documents')
+        expect(updated.content).not.toMatch(/[가-힣]/)
+        await expect(wiki.saveConfirmedTurn({ ...scope, append: true, writingLanguage: 'ko',
+            markdown: '## 도착\n\n### 이야기 요약\n\n- 열쇠를 찾았다.',
+        })).rejects.toThrow('language')
+    })
+
+    test('uses one temporary reboot checkpoint and removes it after recovery', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
         const wiki = createMarkdownNarrativeWiki(root)
@@ -24,9 +72,10 @@ describe('Markdown narrative wiki', () => {
             characterId: 'character', chatId: 'chat', type: 'character',
             title: '라비안', markdown: '## 라비안\n\n검을 가진다.',
         })
-        const snapshot = await wiki.snapshotBeforeTurn({
+        await wiki.beginRebootBatch({
             characterId: 'character', chatId: 'chat',
             sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
         })
         await wiki.saveCanonicalDocument({
             characterId: 'character', chatId: 'chat', documentId: baseline.id,
@@ -42,6 +91,16 @@ describe('Markdown narrative wiki', () => {
             characterId: 'character', chatId: 'chat',
             sourceMessageIds: ['u1', 'a1'], markdown: '## 분실\n\n- 검을 잃었다.',
         })
+        await expect(wiki.beginRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
+        })).rejects.toThrow('checkpoint already in flight')
+        await expect(wiki.beginRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u2', 'a2'],
+            eventSourceGroups: [['u2', 'a2']],
+        })).rejects.toThrow('checkpoint already in flight')
 
         await expect(wiki.recoverRebootBatch({
             characterId: 'character', chatId: 'chat',
@@ -53,15 +112,77 @@ describe('Markdown narrative wiki', () => {
             .toContain('검을 가진다.')
         expect(restored.documents.some((item) => item.type === 'item')).toBe(false)
         expect(restored.documents.some((item) => item.type === 'event')).toBe(false)
+        const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
+        await expect(fs.access(join(
+            workspace.recoveryDirectory, 'reboot-batch'
+        ))).rejects.toMatchObject({ code: 'ENOENT' })
 
-        await wiki.recordTurnReceipt({
-            characterId: 'character', chatId: 'chat', snapshotId: snapshot.snapshotId,
-            sourceMessageIds: ['u1', 'a1'], changes: [], warnings: [],
+        await wiki.beginRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
         })
+        const receipt = {
+            sourceMessageIds: ['u1', 'a1'], eventIds: [], changes: [],
+            warnings: [], recordedAt: '2026-08-27T00:00:00.000Z',
+        }
+        await wiki.recordRebootBatchReceipt({
+            characterId: 'character', chatId: 'chat', receipt,
+        })
+        await expect(wiki.beginRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
+        })).rejects.toThrow('completed batch awaits cleanup')
         await expect(wiki.recoverRebootBatch({
             characterId: 'character', chatId: 'chat',
             sourceMessageIds: ['u1', 'a1'], eventSourceGroups: [['u1', 'a1']],
-        })).resolves.toMatchObject({ snapshotId: snapshot.snapshotId })
+        })).resolves.toEqual(receipt)
+        await expect(wiki.completeRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+        })).resolves.toEqual({ removed: true })
+        await expect(wiki.completeRebootBatch({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+        })).resolves.toEqual({ removed: false })
+    })
+
+    test('cleans an unpublished reboot checkpoint before retrying begin', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const workspace = resolveMarkdownWikiWorkspace(
+            root, 'character', 'chat'
+        )
+        const creatingDirectory = join(
+            workspace.recoveryDirectory,
+            'reboot-batch.creating'
+        )
+        await fs.mkdir(creatingDirectory, { recursive: true })
+        await fs.writeFile(join(creatingDirectory, 'partial.md'), 'partial')
+
+        const scope = {
+            characterId: 'character',
+            chatId: 'chat',
+            sourceMessageIds: ['u1', 'a1'],
+            eventSourceGroups: [['u1', 'a1']],
+        }
+        await expect(wiki.recoverRebootBatch(scope)).resolves.toBeNull()
+        await expect(fs.access(creatingDirectory)).rejects.toMatchObject({
+            code: 'ENOENT',
+        })
+        await expect(wiki.beginRebootBatch(scope)).resolves.toEqual({
+            canonicalCount: 0,
+        })
+        await expect(fs.access(join(
+            workspace.recoveryDirectory,
+            'reboot-batch',
+            'manifest.json'
+        ))).resolves.toBeUndefined()
+        await expect(fs.access(creatingDirectory)).rejects.toMatchObject({
+            code: 'ENOENT',
+        })
     })
 
     test('replaces literal text in canonical and event documents without history', async () => {
@@ -348,190 +469,77 @@ describe('Markdown narrative wiki', () => {
         })).rejects.toThrow('Wiki document does not exist')
     })
 
-    test('snapshots canonical pages before applying a confirmed turn', async () => {
+    test('ordinary writes create no snapshots and remove legacy snapshots on access', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
-        const wiki = createMarkdownNarrativeWiki(root, {
-            now: () => new Date('2026-08-09T01:02:03.000Z'),
-        })
-        const page = await wiki.saveManualDocument({
+        const wiki = createMarkdownNarrativeWiki(root)
+        await wiki.saveManualDocument({
             characterId: 'character', chatId: 'chat', type: 'character',
-            title: '라비안', markdown: '# 라비안\n\n이전 상태.',
+            title: '라비안', markdown: '# 라비안\n\n현재 상태.',
         })
         await wiki.saveConfirmedTurn({
             characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['assistant-old'],
-            markdown: '# 이전 사건\n\n과거 사건.',
+            sourceMessageIds: ['assistant-1'], markdown: '# 사건\n\n진행됨.',
         })
-
-        const receipt = await wiki.snapshotBeforeTurn({
-            characterId: 'character',
-            chatId: 'chat',
-            sourceMessageIds: ['user-1', 'assistant-1'],
-        })
-
-        expect(receipt).toMatchObject({ canonicalCount: 1 })
         const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
-        const snapshot = join(workspace.snapshotsDirectory, receipt.snapshotId)
-        await expect(fs.readFile(
-            join(snapshot, ...page.relativePath.split('/')),
-            'utf8'
-        )).resolves.toContain('이전 상태')
-        await expect(fs.readFile(join(snapshot, 'manifest.json'), 'utf8'))
-            .resolves.toContain('event.')
-
-        await wiki.saveManualDocument({
-            characterId: 'character', chatId: 'chat', documentId: page.id,
-            type: 'character', title: '라비안',
-            markdown: '# 라비안\n\n갱신된 상태.',
-        })
-        await wiki.snapshotBeforeTurn({
-            characterId: 'character',
-            chatId: 'chat',
-            sourceMessageIds: ['user-1', 'assistant-1'],
-        })
-        await expect(fs.readFile(
-            join(snapshot, ...page.relativePath.split('/')),
-            'utf8'
-        )).resolves.toContain('이전 상태')
+        await expect(fs.access(workspace.snapshotsDirectory))
+            .rejects.toMatchObject({ code: 'ENOENT' })
+        await fs.mkdir(workspace.snapshotsDirectory, { recursive: true })
+        await fs.writeFile(join(workspace.snapshotsDirectory, 'legacy'), 'x')
+        await wiki.loadView('character', 'chat')
+        await expect(fs.access(workspace.snapshotsDirectory))
+            .rejects.toMatchObject({ code: 'ENOENT' })
     })
 
-    test('records a turn receipt and safely undoes one page or the whole turn', async () => {
+    test('does not follow linked wiki or legacy snapshot directories', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)
+        const linkedWorkspace = resolveMarkdownWikiWorkspace(
+            root, 'character', 'linked-chat'
+        )
+        const externalWiki = join(root, 'external-wiki')
+        const externalLegacy = join(
+            externalWiki, '.risubard-snapshots', 'keep'
+        )
+        await fs.mkdir(join(linkedWorkspace.directory, '..'), {
+            recursive: true,
+        })
+        await fs.mkdir(join(externalLegacy, '..'), { recursive: true })
+        await fs.writeFile(externalLegacy, 'protected')
+        await fs.symlink(
+            externalWiki,
+            linkedWorkspace.directory,
+            process.platform === 'win32' ? 'junction' : 'dir'
+        )
         const wiki = createMarkdownNarrativeWiki(root)
-        const original = await wiki.saveManualDocument({
-            characterId: 'character', chatId: 'chat', type: 'location',
-            title: '케사리아 외곽 폐촌',
-            markdown: '# 케사리아 외곽 폐촌\n\n이전 상태.',
-        })
-        const snapshot = await wiki.snapshotBeforeTurn({
-            characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['user-1', 'assistant-1'],
-        })
-        const event = await wiki.saveConfirmedTurn({
-            characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['user-1', 'assistant-1'],
-            markdown: '# 폐촌 도착\n\n도착했다.',
-        })
-        const updated = await wiki.saveCanonicalDocument({
-            characterId: 'character', chatId: 'chat',
-            documentId: original.id, type: 'location',
-            title: original.title,
-            sourceMessageIds: ['user-1', 'assistant-1'],
-            markdown: '# 케사리아 외곽 폐촌\n\n새 상태.',
-            expectedContentHash: original.contentHash,
-        })
-        const created = await wiki.saveCanonicalDocument({
-            characterId: 'character', chatId: 'chat', type: 'item',
-            title: '은빛 열쇠', sourceMessageIds: ['assistant-1'],
-            markdown: '# 은빛 열쇠\n\n새로 생겼다.',
-        })
-        const receipt = await wiki.recordTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: snapshot.snapshotId,
-            sourceMessageIds: ['user-1', 'assistant-1'],
-            eventId: event.id,
-            changes: [updated, created].map((document) => ({
-                documentId: document.id,
-                type: document.type,
-                title: document.title,
-                relativePath: document.relativePath,
-                afterHash: document.contentHash,
-            })),
-            warnings: ['낮은 확신: 은빛 열쇠'],
-        })
-        expect(receipt.changes).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                documentId: original.id, action: 'update',
-                beforeHash: original.contentHash,
-            }),
-            expect.objectContaining({
-                documentId: created.id, action: 'create', beforeHash: null,
-            }),
-        ]))
+        await expect(wiki.loadView('character', 'linked-chat'))
+            .rejects.toThrow('unsafe')
+        await expect(wiki.saveManualDocument({
+            characterId: 'character', chatId: 'linked-chat',
+            type: 'character', title: '라비안', markdown: '## 라비안',
+        })).rejects.toThrow('unsafe')
+        await expect(fs.readFile(externalLegacy, 'utf8'))
+            .resolves.toBe('protected')
 
-        const partial = await wiki.undoTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: snapshot.snapshotId, documentId: created.id,
-        })
-        expect(partial.changes.find((change) =>
-            change.documentId === created.id
-        )?.undoneAt).toBeTruthy()
-        expect((await wiki.loadView('character', 'chat')).documents
-            .some((document) => document.id === created.id)).toBe(false)
-
-        const undone = await wiki.undoTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: snapshot.snapshotId,
-        })
-        const view = await wiki.loadView('character', 'chat')
-        expect(view.documents.find((document) => document.id === original.id)
-            ?.content).toContain('이전 상태')
-        expect(view.documents.some((document) => document.id === event.id))
-            .toBe(false)
-        expect(undone.undoneAt).toBeTruthy()
-    })
-
-    test('preserves conflicts while undoing the safe remainder of a turn', async () => {
-        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
-        temporaryDirectories.push(root)
-        const wiki = createMarkdownNarrativeWiki(root)
-        const original = await wiki.saveManualDocument({
-            characterId: 'character', chatId: 'chat', type: 'character',
-            title: '라비안', markdown: '# 라비안\n\n이전 상태.',
-        })
-        const snapshot = await wiki.snapshotBeforeTurn({
-            characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['assistant-1'],
-        })
-        const updated = await wiki.saveCanonicalDocument({
-            characterId: 'character', chatId: 'chat', documentId: original.id,
-            type: 'character', title: '라비안',
-            sourceMessageIds: ['assistant-1'], markdown: '# 라비안\n\n자동 상태.',
-            expectedContentHash: original.contentHash,
-        })
-        const created = await wiki.saveCanonicalDocument({
-            characterId: 'character', chatId: 'chat', type: 'item',
-            title: '은빛 열쇠', sourceMessageIds: ['assistant-1'],
-            markdown: '# 은빛 열쇠\n\n새로 생겼다.',
-        })
-        await wiki.recordTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: snapshot.snapshotId, sourceMessageIds: ['assistant-1'],
-            changes: [updated, created].map((document) => ({
-                documentId: document.id, type: document.type,
-                title: document.title, relativePath: document.relativePath,
-                afterHash: document.contentHash,
-            })), warnings: [],
-        })
-        await wiki.saveManualDocument({
-            characterId: 'character', chatId: 'chat', documentId: updated.id,
-            type: 'character', title: '라비안',
-            markdown: '# 라비안\n\n사용자의 후속 편집.',
-        })
-        await expect(wiki.undoTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: snapshot.snapshotId, documentId: updated.id,
-        })).rejects.toThrow(/changed after|후속|conflict/i)
-
-        const receipt = await wiki.undoTurnReceipt({
-            characterId: 'character', chatId: 'chat',
-            snapshotId: snapshot.snapshotId,
-        })
-        const view = await wiki.loadView('character', 'chat')
-        expect(view.documents.find((document) => document.id === updated.id)
-            ?.content).toContain('사용자의 후속 편집')
-        expect(view.documents.some((document) =>
-            document.id === created.id
-        )).toBe(false)
-        expect(receipt.changes.find((change) =>
-            change.documentId === updated.id
-        )?.undoConflict).toBe('changed-after-turn')
-        expect(receipt.changes.find((change) =>
-            change.documentId === created.id
-        )?.undoneAt).toBeTruthy()
-        expect(receipt.undoneAt).toBeTruthy()
+        const safeWorkspace = resolveMarkdownWikiWorkspace(
+            root, 'character', 'safe-chat'
+        )
+        const externalSnapshots = join(root, 'external-snapshots')
+        const externalSnapshotFile = join(externalSnapshots, 'keep')
+        await fs.mkdir(safeWorkspace.directory, { recursive: true })
+        await fs.mkdir(externalSnapshots, { recursive: true })
+        await fs.writeFile(externalSnapshotFile, 'protected')
+        await fs.symlink(
+            externalSnapshots,
+            safeWorkspace.snapshotsDirectory,
+            process.platform === 'win32' ? 'junction' : 'dir'
+        )
+        await expect(wiki.loadView('character', 'safe-chat'))
+            .resolves.toMatchObject({ mode: 'markdown' })
+        await expect(fs.access(safeWorkspace.snapshotsDirectory))
+            .rejects.toMatchObject({ code: 'ENOENT' })
+        await expect(fs.readFile(externalSnapshotFile, 'utf8'))
+            .resolves.toBe('protected')
     })
 
     test('renames and moves a manual page while preserving its ID and backlinks', async () => {
@@ -619,6 +627,49 @@ describe('Markdown narrative wiki', () => {
             chatId: 'chat',
             documentId: event.id,
         })).rejects.toThrow('Event documents are read-only')
+    })
+
+    test('manually edits event content while preserving its provenance and path', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const times = [
+            new Date('2026-08-08T08:00:00.000Z'),
+            new Date('2026-08-08T09:00:00.000Z'),
+        ]
+        const wiki = createMarkdownNarrativeWiki(root, {
+            now: () => times.shift() ?? new Date('2026-08-08T10:00:00.000Z'),
+        })
+        const event = await wiki.saveConfirmedTurn({
+            characterId: 'character',
+            chatId: 'chat',
+            sourceMessageIds: ['user-1', 'assistant-1'],
+            markdown: '## 잘못된 전투\n\n### 이야기 요약\n\n- 전투에서 승리했다.',
+        })
+
+        const edited = await wiki.saveManualDocument({
+            characterId: 'character',
+            chatId: 'chat',
+            documentId: event.id,
+            expectedContentHash: event.contentHash,
+            type: 'event',
+            title: '수정된 전투',
+            markdown: '## 수정된 전투\n\n### 이야기 요약\n\n- 전투에서 패배했다.',
+        })
+
+        expect(edited).toMatchObject({
+            id: event.id,
+            type: 'event',
+            title: '수정된 전투',
+            relativePath: event.relativePath,
+            sourceMessageIds: ['user-1', 'assistant-1'],
+            created: event.created,
+            authoring: 'manual',
+            contextMode: 'auto',
+        })
+        expect(edited.content).toContain('전투에서 패배했다.')
+        const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
+        expect(await fs.readdir(join(workspace.historyDirectory, event.id)))
+            .toHaveLength(1)
     })
 
     test('permanently deletes a retracted event from the view and filesystem', async () => {
@@ -750,7 +801,10 @@ describe('Markdown narrative wiki', () => {
 
         await expect(wiki.retractEventsBySourceMessages({
             characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['assistant-1'],
+            sourceMessageIds: [
+                ...Array.from({ length: 100 }, (_, index) => `message-${index}`),
+                'assistant-1',
+            ],
         })).resolves.toEqual({ retractedIds: [removed.id] })
         const view = await wiki.loadView('character', 'chat')
         expect(view.documents.some((item) => item.id === removed.id)).toBe(false)

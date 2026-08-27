@@ -61,6 +61,7 @@ const EXPECTED_PROFILE_IDS = [
     "google:gemini-35-flash",
     "google:gemini-35-flash-lite",
     "google:gemini-36-flash",
+    "google:gemini-37-flash",
     "google:gemma-4-26b",
     "google:gemma-4-31b",
     "lightning-ai:claude-fable-5",
@@ -98,6 +99,7 @@ const EXPECTED_PROFILE_IDS = [
     "llmgateway:gemini-35-flash",
     "llmgateway:gemini-35-flash-lite",
     "llmgateway:gemini-36-flash",
+    "llmgateway:gemini-37-flash",
     "llmgateway:glm-52",
     "llmgateway:gpt-55",
     "llmgateway:gpt-56-luna",
@@ -113,6 +115,7 @@ const EXPECTED_PROFILE_IDS = [
     "nanogpt:deepseek-v4-pro",
     "nanogpt:gemini-35-flash-lite",
     "nanogpt:gemini-36-flash",
+    "nanogpt:gemini-37-flash",
     "nanogpt:gemma-4-31b",
     "nanogpt:glm-51",
     "nanogpt:glm-52",
@@ -186,6 +189,7 @@ const EXPECTED_PROFILE_IDS = [
     "openrouter:gemini-35-flash",
     "openrouter:gemini-35-flash-lite",
     "openrouter:gemini-36-flash",
+    "openrouter:gemini-37-flash",
     "openrouter:gemma-4-26b",
     "openrouter:gemma-4-31b",
     "openrouter:glm-51",
@@ -224,6 +228,7 @@ const EXPECTED_PROFILE_IDS = [
     "vercel:gemini-35-flash",
     "vercel:gemini-35-flash-lite",
     "vercel:gemini-36-flash",
+    "vercel:gemini-37-flash",
     "vercel:gemma-4-26b",
     "vercel:gemma-4-31b",
     "vercel:glm-51",
@@ -258,6 +263,7 @@ const EXPECTED_PROFILE_IDS = [
     "vertex-gemini-native:gemini-35-flash",
     "vertex-gemini-native:gemini-35-flash-lite",
     "vertex-gemini-native:gemini-36-flash",
+    "vertex-gemini-native:gemini-37-flash",
     "vertex-gemini-native:pro",
     "vertex-openai:standard",
     "wellspring:deepseek-v32-marp",
@@ -300,5 +306,15 @@ describe('loadBundledRegistry', () => {
         const first = loadBundledRegistry()
         const second = loadBundledRegistry()
         expect(second).toBe(first)
+    })
+
+    test('ships Gemini 3.7 Flash profiles with provider-correct model ids', () => {
+        const profiles = loadBundledRegistry().registries[getBundledRegistryId()]!.profiles
+        expect(profiles['google:gemini-37-flash']?.modelId).toBe('gemini-3.7-flash')
+        expect(profiles['llmgateway:gemini-37-flash']?.modelId).toBe('gemini-3.7-flash')
+        expect(profiles['nanogpt:gemini-37-flash']?.modelId).toBe('google/gemini-3.7-flash')
+        expect(profiles['openrouter:gemini-37-flash']?.modelId).toBe('google/gemini-3.7-flash')
+        expect(profiles['vercel:gemini-37-flash']?.modelId).toBe('google/gemini-3.7-flash')
+        expect(profiles['vertex-gemini-native:gemini-37-flash']?.modelId).toBe('gemini-3.7-flash')
     })
 })

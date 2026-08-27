@@ -117,7 +117,7 @@ let specialDay = $state('')
     </h1>
 {/if}
 {#if clicks >= 5}
-    <div class="bg-black w-full p-3 mt-4 mb-4 rounded-md max-w-2xl" id="minigame-div">
+    <div class="bg-darkbg text-textcolor w-full p-3 mt-4 mb-4 rounded-md max-w-2xl" id="minigame-div">
         <span class="font-semibold text-lg">Score: {score}</span><br>
         <span class="font-semibold text-lg">Time: {time.toFixed(0)}</span>
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

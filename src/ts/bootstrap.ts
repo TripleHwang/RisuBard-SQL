@@ -32,6 +32,7 @@ import { registerModelDynamic } from "./model/modellist";
 import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
+import { canDeleteAssetsAfterPluginStorageScan, characterAssetReferencesComplete, collectNestedAssetReferences, isAutoAssetCleanupEnabled, shouldDeleteUnreferencedAsset } from './storage/assetRefs'
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
 import { markPerformance } from './performance/startupMetrics'
@@ -539,8 +540,30 @@ async function checkNewFormat(): Promise<void> {
  */
 async function cleanChunks() {
     const db = getDatabase()
-    const uncleanable = new Set(getUncleanables(db))
     const indexes = await forageStorage.keys()
+    const assetCleanupRequested = isAutoAssetCleanupEnabled(db)
+    const uncleanable = assetCleanupRequested ? new Set(getUncleanables(db)) : new Set<string>()
+    let pluginStorageScanSucceeded = true
+    if (assetCleanupRequested) {
+        for (const key of indexes) {
+            if (!key.startsWith('cache/plugin-storage/') || !key.endsWith('.json')) continue
+            try {
+                const data = await forageStorage.getItem(key) as unknown as Uint8Array
+                for (const asset of collectNestedAssetReferences(JSON.parse(new TextDecoder().decode(data)))) {
+                    uncleanable.add(getBasename(asset))
+                }
+            } catch {
+                // Missing or corrupt plugin data means references are unknown.
+                pluginStorageScanSucceeded = false
+                break
+            }
+        }
+    }
+    // Under metadata-first startup the character list is summaries, whose asset
+    // references getUncleanables() cannot see. Unknown references are not absent
+    // ones, so this gates deletion exactly like a failed plugin-storage scan.
+    const referencesComplete = pluginStorageScanSucceeded && characterAssetReferencesComplete(db.characters)
+    const cleanAssets = canDeleteAssetsAfterPluginStorageScan(assetCleanupRequested, referencesComplete)
     const allKeys = new Set(indexes)
     const characterIds = new Set<string>(
         db.characters.map((v) => v.chaId)
@@ -549,11 +572,8 @@ async function cleanChunks() {
         if (asset.endsWith('.meta')) {
             continue
         }
-        else if (asset.startsWith('assets/')) {
-            const n = getBasename(asset)
-            if(!uncleanable.has(n)) {
-                await forageStorage.removeItem(asset)
-            }
+        else if (shouldDeleteUnreferencedAsset(asset, cleanAssets, uncleanable)) {
+            await forageStorage.removeItem(asset)
         }
         else if (asset.startsWith('remotes/')) {
             const name = getBasename(asset).slice(0, -10) //remove .local.bin

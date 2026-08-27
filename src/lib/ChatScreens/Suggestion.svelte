@@ -129,7 +129,7 @@
     {:else if !$doingChat}
         {#if DBState.db.translator !== ''}
             <div class="flex mr-2 mb-2">
-                <button class={"bg-textcolor2 hover:bg-darkbutton font-bold py-2 px-4 rounded-sm " + (toggleTranslate ? 'text-green-500' : 'text-textcolor')}
+                <button class={"bg-textcolor2 hover:bg-darkbutton font-bold py-2 px-4 rounded-sm " + (toggleTranslate ? 'text-success' : 'text-textcolor')}
                     onclick={() => {
                         toggleTranslate = !toggleTranslate
                     }}
@@ -186,7 +186,7 @@
     .loadmove {
         animation: spin 1s linear infinite;
         border-radius: 50%;
-        border: 0.4rem solid rgba(0,0,0,0);
+        border: 0.4rem solid transparent;
         width: 1rem;
         height: 1rem;
         border-top: 0.4rem solid var(--risu-theme-textcolor);

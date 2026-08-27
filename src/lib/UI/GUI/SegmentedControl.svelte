@@ -147,7 +147,7 @@
     }
 
     .segmented-btn-active {
-        color: #fff;
+        color: var(--color-accenttext);
     }
 
     .segmented-btn:focus-visible {

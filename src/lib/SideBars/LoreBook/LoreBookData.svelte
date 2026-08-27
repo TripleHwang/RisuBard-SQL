@@ -293,7 +293,7 @@
 
 <style>
     .valuer:hover{
-        color: rgba(16, 185, 129, 1);
+        color: var(--color-success);
         cursor: pointer;
     }
 
@@ -304,10 +304,10 @@
     }
 
     .inline-status { display: inline-flex; align-items: center; margin-right: .22rem; }
-    .inline-delete { display: inline-grid; width: 2rem; height: 2rem; flex: 0 0 2rem; padding: 0; place-items: center; border-radius: .38rem; color: var(--color-danger-500, #dc2626); opacity: 0; pointer-events: none; transition: opacity 140ms ease, background-color 140ms ease; }
+    .inline-delete { display: inline-grid; width: 2rem; height: 2rem; flex: 0 0 2rem; padding: 0; place-items: center; border-radius: .38rem; color: var(--color-danger); opacity: 0; pointer-events: none; transition: opacity 140ms ease, background-color 140ms ease; }
     .lore-row:hover .inline-delete, .lore-row:focus-within .inline-delete { opacity: 1; pointer-events: auto; }
-    .inline-delete:hover { background: color-mix(in srgb, var(--color-danger-500, #dc2626) 12%, transparent); }
-    .unreachable-entry .lore-row-title { color: var(--color-danger-500, #dc2626); }
+    .inline-delete:hover { background: color-mix(in srgb, var(--color-danger) 12%, transparent); }
+    .unreachable-entry .lore-row-title { color: var(--color-danger); }
     .hidden-entry .lore-row-title { color: var(--color-textcolor2); opacity: .56; }
 
     @media (hover: none) {
@@ -326,7 +326,7 @@
 
     :global(.risu-ghost-item) {
         /* The placeholder for the drop location */
-        background-color: rgba(var(--risu-theme-selected-rgb), 0.2);
+        background-color: color-mix(in srgb, var(--color-selected) 20%, transparent);
 
     }
 </style>

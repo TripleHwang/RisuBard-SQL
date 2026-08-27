@@ -125,7 +125,7 @@
                         <button class="text-textcolor2 hover:text-primary" title={language.edit} onclick={() => openEdit(entry.id)}>
                             <PencilIcon size={18} />
                         </button>
-                        <button class="text-textcolor2 hover:text-red-400" title={language.remove} onclick={() => remove(entry.id, entry.name)}>
+                        <button class="text-textcolor2 hover:text-danger/80" title={language.remove} onclick={() => remove(entry.id, entry.name)}>
                             <TrashIcon size={18} />
                         </button>
                     </div>

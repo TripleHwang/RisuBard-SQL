@@ -27,6 +27,7 @@ import type { ModelModeExtended } from "src/ts/process/request/shared";
 import { requestChatDataMain } from "src/ts/process/request/request";
 import type { OpenAIChat } from "src/ts/process/index.svelte";
 import { getModuleLorebooks } from "src/ts/process/modules";
+import { addOwnedChatOutputListener, readInlayWithPermission, removeOwnedChatOutputListener } from "../pluginChatOutput";
 import {
     registerTTSPreprocessor,
     unregisterTTSPreprocessor,
@@ -59,7 +60,7 @@ import {
 */
 
 const pluginChannel = new Map<string, Function>();
-const documentEventListeners: Array<{type: string, listener: EventListenerOrEventListenerObject, options: any}> = [];
+const documentEventListeners: Array<{target: HTMLElement, type: string, listener: EventListenerOrEventListenerObject, options: any}> = [];
 
 class SafeElement {
     #element: HTMLElement;
@@ -319,8 +320,9 @@ class SafeElement {
                 listener(trimEvent(event))
             }
             this.#eventIdMap.set(id, modifiedListener)
-            documentEventListeners.push({type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
-            document.addEventListener(type, modifiedListener, realOptions)
+            documentEventListeners.push({target: this.#element, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
+            // Element listeners must not receive input meant for an overlying dialog.
+            this.#element.addEventListener(type, modifiedListener, realOptions)
             return id;
         }
         else if(allowedDelayedEventListeners.includes(type)){
@@ -334,8 +336,8 @@ class SafeElement {
                 }, delay);
             }
             this.#eventIdMap.set(id, modifiedListener)
-            documentEventListeners.push({type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
-            document.addEventListener(type, modifiedListener, realOptions);
+            documentEventListeners.push({target: this.#element, type, listener: modifiedListener as EventListenerOrEventListenerObject, options: realOptions})
+            this.#element.addEventListener(type, modifiedListener, realOptions);
             return id;
         }
         else{
@@ -347,7 +349,7 @@ class SafeElement {
         const listener = this.#eventIdMap.get(id);
         if(listener){
             const realOptions = typeof options === 'boolean' ? { capture: options } : options || {};
-            document.removeEventListener(type, listener as EventListenerOrEventListenerObject, realOptions);
+            this.#element.removeEventListener(type, listener as EventListenerOrEventListenerObject, realOptions);
             const idx = documentEventListeners.findIndex(e => e.listener === listener);
             if(idx !== -1) documentEventListeners.splice(idx, 1);
             this.#eventIdMap.delete(id);
@@ -932,16 +934,29 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             oldApis.addRisuReplacer(name, func as any);
         },
         removeRisuReplacer: oldApis.removeRisuReplacer,
+        addRisuChatListener: async (mode: 'output', func: Function) => {
+            const conf = await getPluginPermission(plugin.name, 'replacer', 'periodically');
+            if(!conf){
+                return;
+            }
+            const owner = `v3:${plugin.name}`;
+            addOwnedChatOutputListener(pluginV2.chatOutput, owner, mode, func as any);
+            pluginV2.chatOutput.ensureOwnerCleanup(owner, (cleanup) =>
+                addPluginUnloadCallback(plugin.name, cleanup)
+            );
+        },
+        removeRisuChatListener: (mode: 'output', func: Function) => {
+            removeOwnedChatOutputListener(pluginV2.chatOutput, `v3:${plugin.name}`, mode, func as any);
+        },
         setDatabaseLite: oldApis.setDatabaseLite,
         setDatabase: oldApis.setDatabase,
         loadPlugins: oldApis.loadPlugins,
         readImage: oldApis.readImage,
         readInlay: async (id: string) => {
-            const conf = await getPluginPermission(plugin.name, 'inlay', 'periodically');
-            if(!conf){
-                return null;
-            }
-            return await getInlayAsset(id);
+            return await readInlayWithPermission(
+                () => getPluginPermission(plugin.name, 'inlay', 'periodically'),
+                () => getInlayAsset(id),
+            );
         },
         saveAsset: oldApis.saveAsset,
         //Same functionality, but new implementation
@@ -1615,7 +1630,7 @@ export async function loadV3Plugins(plugins:RisuPlugin[]){
     }));
 
     for(const entry of documentEventListeners){
-        document.removeEventListener(entry.type, entry.listener, entry.options);
+        entry.target.removeEventListener(entry.type, entry.listener, entry.options);
     }
     documentEventListeners.length = 0;
 

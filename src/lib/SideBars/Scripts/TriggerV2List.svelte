@@ -2199,49 +2199,49 @@
         const type = effect.type
 
         if(!checkSupported(type)){
-            return `<span class="text-red-500">${language.triggerDesc.v2UnsupportedTriggerDesc}</span>`
+            return `<span class="text-danger">${language.triggerDesc.v2UnsupportedTriggerDesc}</span>`
         }
 
         const txt = (language.triggerDesc[type + 'Desc'] as string || type).replace(/{{(.+?)}}/g, (match, p1) => {
             const d = effect[p1]
             
             if(type === 'v2Comment' && p1 === 'value') {
-                return `<span class="text-gray-400">${d || ''}</span>`
+                return `<span class="text-textcolor2">${d || ''}</span>`
             }
             
             if(typeof d === 'boolean'){
-                return `<span class="text-blue-500">${d ? 'true' : 'false'}</span>`
+                return `<span class="text-info">${d ? 'true' : 'false'}</span>`
             }
             
             if(p1.endsWith('Type')){
-                return `<span class="text-blue-500">${d || 'null' }</span>`
+                return `<span class="text-info">${d || 'null' }</span>`
             }
             if(p1 === 'condition' || p1 === 'operator'){
-                return `<span class="text-green-500">${d || 'null'}</span>`
+                return `<span class="text-success">${d || 'null'}</span>`
             }
             if(effect[p1 + 'Type'] === 'var'){
-                return `<span class="text-yellow-500">${d || 'null'}</span>`
+                return `<span class="text-warning">${d || 'null'}</span>`
             }
             if(effect[p1 + 'Type'] === 'value'){
-                return `<span class="text-green-500">"${d}"</span>`
+                return `<span class="text-success">"${d}"</span>`
             }
             if(effect.type === 'v2If' && p1 === 'source'){
-                return `<span class="text-yellow-500">${d || 'null'}</span>`
+                return `<span class="text-warning">${d || 'null'}</span>`
             }
             if(effect.type === 'v2SetVar' && p1 === 'var'){
-                return `<span class="text-yellow-500">${d || 'null'}</span>`
+                return `<span class="text-warning">${d || 'null'}</span>`
             }
             if(effect.type === 'v2DeclareLocalVar' && p1 === 'var'){
-                return `<span class="text-cyan-500">${d || 'null'}</span>`
+                return `<span class="text-info">${d || 'null'}</span>`
             }
-            return `<span class="text-blue-500">${d || 'null'}</span>`
+            return `<span class="text-info">${d || 'null'}</span>`
         })
 
         if(type === 'v2Comment') {
-            return `<div class="text-gray-500 italic line-clamp-4" style="margin-left:${(effect as triggerEffectV2).indent}rem; word-break: break-all; overflow-wrap: break-word;">// ${txt}</div>`
+            return `<div class="text-textcolor2 italic line-clamp-4" style="margin-left:${(effect as triggerEffectV2).indent}rem; word-break: break-all; overflow-wrap: break-word;">// ${txt}</div>`
         }
 
-        return `<div class="text-purple-500 line-clamp-4" style="margin-left:${(effect as triggerEffectV2).indent}rem; word-break: break-all; overflow-wrap: break-word;">${txt}</div>`
+        return `<div class="text-secondary line-clamp-4" style="margin-left:${(effect as triggerEffectV2).indent}rem; word-break: break-all; overflow-wrap: break-word;">${txt}</div>`
     }
     
     const updateGuideLines = () => {
@@ -2313,7 +2313,7 @@
 <Portal>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="text-textcolor absolute top-0 bottom-0 bg-black/50 max-w-full w-full h-full z-40 flex justify-center items-center" 
+    <div class="risu-modal-overlay text-textcolor absolute top-0 bottom-0 bg-overlay/50 max-w-full w-full h-full z-40 flex justify-center items-center"
          onclick={(e) => {
              if (e.target === e.currentTarget) {
                  contextMenu = false
@@ -2434,7 +2434,7 @@
                 {/if}
             </div>
         {/if}
-        <div class="max-w-full p-2 border border-darkborderc bg-bgcolor flex max-h-full flex-col-reverse md:flex-row overflow-y-auto md:overflow-y-visible" 
+        <div class="risu-modal-surface max-w-full p-2 border border-darkborderc bg-bgcolor flex max-h-full flex-col-reverse md:flex-row overflow-y-auto md:overflow-y-visible"
              class:w-7xl={menuMode === 0} 
              class:w-3xl={menuMode !== 0} 
              class:h-full={menuMode!==2}
@@ -2471,10 +2471,10 @@
                                 <!-- Header, skip the first trigger -->
                             {:else}
                                                         <div class="w-full h-0.5 min-h-0.5 transition-all duration-200" 
-                            class:hover:bg-gray-600={!isMobileScreen && !isDragging}
+                            class:hover:bg-darkbutton={!isMobileScreen && !isDragging}
                             class:h-0.5={!isDragging || dragOverIndex !== i}
                             class:h-1={isDragging && dragOverIndex === i}
-                            class:bg-blue-500={isDragging && dragOverIndex === i}
+                            class:bg-info={isDragging && dragOverIndex === i}
                             class:shadow-lg={isDragging && dragOverIndex === i}
                             role="listitem"
                             ondragover={handleTriggerDragOver}
@@ -2570,10 +2570,10 @@
                         {/each}
                         
                         <div class="w-full h-0.5 min-h-0.5 transition-all duration-200" 
-                            class:hover:bg-gray-600={!isMobileScreen && !isDragging}
+                            class:hover:bg-darkbutton={!isMobileScreen && !isDragging}
                             class:h-0.5={!isDragging || dragOverIndex !== value.length}
                             class:h-1={isDragging && dragOverIndex === value.length}
-                            class:bg-blue-500={isDragging && dragOverIndex === value.length}
+                            class:bg-info={isDragging && dragOverIndex === value.length}
                             class:shadow-lg={isDragging && dragOverIndex === value.length}
                             role="listitem"
                             ondragover={(e) => {
@@ -2676,7 +2676,7 @@
 
                     <!-- <div class="mx-2 mb-2 p-2 bg-darkbg2 border border-darkborderc rounded-md">
                         <div class="flex flex-wrap gap-2">
-                            <button class="px-3 py-1 text-xs bg-primary hover:bg-primary/90 text-white rounded-md transition-colors">
+                            <button class="px-3 py-1 text-xs bg-primary hover:bg-primary/90 text-accenttext rounded-md transition-colors">
                                 TBD
                             </button>
                         </div>
@@ -2716,11 +2716,11 @@
                                             {@const endTop = endRect.top - containerRect.top + menu0Container.scrollTop + endRect.height * 0.5}
                                             {#if endTop > startTop}
                                                 <div 
-                                                    class="absolute w-px bg-gray-600 opacity-40"
+                                                    class="absolute w-px bg-darkbutton opacity-40"
                                                     style="left: {0.5 + blockIndent * 1}rem; top: {startTop}px; height: {endTop - startTop}px;"
                                                 ></div>
                                                 <div 
-                                                    class="absolute h-px bg-gray-600 opacity-40"
+                                                    class="absolute h-px bg-darkbutton opacity-40"
                                                     style="left: {0.5 + blockIndent * 1}rem; top: {endTop}px; width: 0.5rem;"
                                                 ></div>
                                             {/if}
@@ -2732,10 +2732,10 @@
                         
                         {#each (value && value[selectedIndex] && value[selectedIndex].effect) ? value[selectedIndex].effect : [] as effect, i}
                             <div class="w-full h-0.5 min-h-0.5 transition-all duration-200" 
-                                class:hover:bg-gray-600={!isMobileScreen && !isEffectDragging}
+                                class:hover:bg-darkbutton={!isMobileScreen && !isEffectDragging}
                                 class:h-0.5={!isEffectDragging || effectDragOverIndex !== i}
                                 class:h-1={isEffectDragging && effectDragOverIndex === i}
-                                class:bg-blue-500={isEffectDragging && effectDragOverIndex === i}
+                                class:bg-info={isEffectDragging && effectDragOverIndex === i}
                                 class:shadow-lg={isEffectDragging && effectDragOverIndex === i}
                                 role="listitem"
                                 ondragover={handleEffectDragOver}
@@ -2782,7 +2782,7 @@
                                         effectDragOverIndex = -1
                                     }
                                 }}>
-                                <button class="flex-1 p-2 text-start text-purple-500 relative break-all whitespace-normal overflow-hidden"
+                                <button class="flex-1 p-2 text-start text-secondary relative break-all whitespace-normal overflow-hidden"
                                     bind:this={effectElements[i]}
                                     onclick={() => {
                                         if(selectedEffectIndex === i && lastClickTime + 500 > Date.now()){
@@ -2850,10 +2850,10 @@
                         {/each}
                         
                         <div class="w-full h-0.5 min-h-0.5 transition-all duration-200" 
-                            class:hover:bg-gray-600={!isMobileScreen && !isEffectDragging}
+                            class:hover:bg-darkbutton={!isMobileScreen && !isEffectDragging}
                             class:h-0.5={!isEffectDragging || effectDragOverIndex !== (value && value[selectedIndex] && value[selectedIndex].effect ? value[selectedIndex].effect.length : 0)}
                             class:h-1={isEffectDragging && effectDragOverIndex === (value && value[selectedIndex] && value[selectedIndex].effect ? value[selectedIndex].effect.length : 0)}
-                            class:bg-blue-500={isEffectDragging && effectDragOverIndex === (value && value[selectedIndex] && value[selectedIndex].effect ? value[selectedIndex].effect.length : 0)}
+                            class:bg-info={isEffectDragging && effectDragOverIndex === (value && value[selectedIndex] && value[selectedIndex].effect ? value[selectedIndex].effect.length : 0)}
                             class:shadow-lg={isEffectDragging && effectDragOverIndex === (value && value[selectedIndex] && value[selectedIndex].effect ? value[selectedIndex].effect.length : 0)}
                             role="listitem"
                             ondragover={handleEffectDragOver}

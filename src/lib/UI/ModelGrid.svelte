@@ -107,7 +107,7 @@
     <div class="h-80 overflow-y-auto rounded-lg border border-darkborderc bg-bgcolor">
         {#if loading}
             <div class="flex h-full items-center justify-center">
-                <div class="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
+                <div class="h-8 w-8 rounded-full border-2 border-info-border border-t-transparent animate-spin"></div>
             </div>
         {:else}
             <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 p-2">

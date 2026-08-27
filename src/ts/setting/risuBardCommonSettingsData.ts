@@ -3,11 +3,41 @@ import { normalizeRisuBardCanonicalCustomStyle } from '../risubard/risuBardSetti
 
 export const risuBardCommonSettingsItems: SettingItem[] = [
     {
+        id: 'risubard.common.wikiWritingLanguage',
+        type: 'select',
+        labelKey: 'risuBardWikiWritingLanguage',
+        helpKey: 'risuBardWikiWritingLanguage',
+        bindKey: 'risuBardWikiWritingLanguage',
+        options: { selectOptions: [
+            { value: 'ko', label: '한국어' },
+            { value: 'en', label: 'English' },
+        ] },
+        keywords: ['wiki', 'language', 'English', '위키', '언어', '영어'],
+    },
+    {
         id: 'risubard.common.showSaveLoadShortcuts',
         type: 'check',
         labelKey: 'risuBardShowSaveLoadShortcuts',
         bindKey: 'showRisuBardSaveLoadShortcuts',
         keywords: ['save', 'load', 'shortcut', 'floating', '세이브', '로드', '바로가기'],
+    },
+    {
+        id: 'risubard.common.autosaveInterval',
+        type: 'number',
+        labelKey: 'risuBardAutosaveInterval',
+        helpKey: 'risuBardAutosaveInterval',
+        bindKey: 'risuBardAutosaveInterval',
+        options: { min: 1, max: 100, step: 1 },
+        keywords: ['autosave', 'interval', 'turn', '자동 저장', '간격', '턴'],
+    },
+    {
+        id: 'risubard.common.autosaveRetention',
+        type: 'number',
+        labelKey: 'risuBardAutosaveRetention',
+        helpKey: 'risuBardAutosaveRetention',
+        bindKey: 'risuBardAutosaveRetention',
+        options: { min: 1, max: 20, step: 1 },
+        keywords: ['autosave', 'retention', 'slots', '자동 저장', '보관', '개수'],
     },
     {
         id: 'risubard.common.canonicalWritingStyle',

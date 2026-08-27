@@ -209,14 +209,14 @@
         const reclaimable = stats.storage.reclaimable
         const structuralOverhead = Math.max(0, stats.files.db - stats.kvTotalBytes - reclaimable)
         const rows: DiskRow[] = [
-            { id: 'kv-database',     label: language.storageRowKvDatabase,     desc: language.storageRowKvDatabaseDesc,     size: dbRowSize,                     color: 'bg-rose-500' },
-            { id: 'kv-assets',       label: language.storageRowKvAssets,       desc: language.storageRowKvAssetsDesc,       size: get('assets/'),                color: 'bg-amber-500' },
-            { id: 'kv-inlay',        label: language.storageRowKvInlay,        desc: language.storageRowKvInlayDesc,        size: inlayTotal,                    color: 'bg-emerald-500' },
-            { id: 'kv-remotes',      label: language.storageRowKvRemotes,      desc: language.storageRowKvRemotesDesc,      size: get('remotes/'),               color: 'bg-cyan-500' },
-            { id: 'kv-cold',         label: language.storageRowKvColdStorage,  desc: language.storageRowKvColdStorageDesc,  size: get('coldstorage/'),           color: 'bg-stone-500' },
-            { id: 'kv-uncat',        label: language.storageRowKvUncategorized, desc: language.storageRowKvUncategorizedDesc, size: uncategorizedKv,             color: 'bg-stone-600' },
-            { id: 'overhead',        label: language.storageRowSqliteOverhead, desc: language.storageRowSqliteOverheadDesc, size: structuralOverhead,            color: 'bg-zinc-500' },
-            { id: 'reclaimable',     label: language.storageRowReclaimablePages, desc: language.storageRowReclaimablePagesDesc, size: reclaimable,               color: 'bg-yellow-500' },
+            { id: 'kv-database',     label: language.storageRowKvDatabase,     desc: language.storageRowKvDatabaseDesc,     size: dbRowSize,                     color: 'bg-danger' },
+            { id: 'kv-assets',       label: language.storageRowKvAssets,       desc: language.storageRowKvAssetsDesc,       size: get('assets/'),                color: 'bg-warning' },
+            { id: 'kv-inlay',        label: language.storageRowKvInlay,        desc: language.storageRowKvInlayDesc,        size: inlayTotal,                    color: 'bg-success' },
+            { id: 'kv-remotes',      label: language.storageRowKvRemotes,      desc: language.storageRowKvRemotesDesc,      size: get('remotes/'),               color: 'bg-info' },
+            { id: 'kv-cold',         label: language.storageRowKvColdStorage,  desc: language.storageRowKvColdStorageDesc,  size: get('coldstorage/'),           color: 'bg-textcolor2' },
+            { id: 'kv-uncat',        label: language.storageRowKvUncategorized, desc: language.storageRowKvUncategorizedDesc, size: uncategorizedKv,             color: 'bg-darkbutton' },
+            { id: 'overhead',        label: language.storageRowSqliteOverhead, desc: language.storageRowSqliteOverheadDesc, size: structuralOverhead,            color: 'bg-borderc' },
+            { id: 'reclaimable',     label: language.storageRowReclaimablePages, desc: language.storageRowReclaimablePagesDesc, size: reclaimable,               color: 'bg-warning' },
         ]
         return rows.filter(r => r.size > 0)
     })
@@ -323,13 +323,13 @@
         </div>
 
         {#if diskUsageLevel === 'crit' && diskUsedPct != null}
-            <div class="bg-draculared/20 border border-draculared/40 rounded-md px-4 py-3 mb-3 flex items-center gap-2.5 text-red-300">
-                <TriangleAlertIcon class="size-4 shrink-0 text-red-400" />
+            <div class="bg-draculared/20 border border-draculared/40 rounded-md px-4 py-3 mb-3 flex items-center gap-2.5 text-danger">
+                <TriangleAlertIcon class="size-4 shrink-0 text-danger" />
                 <span class="leading-relaxed text-sm">{language.storageDiskUsageHighWarning(diskUsedPct)}</span>
             </div>
         {:else if diskUsageLevel === 'warn' && diskUsedPct != null}
-            <div class="bg-yellow-900/30 border border-yellow-700/40 rounded-md px-4 py-3 mb-3 flex items-center gap-2.5 text-yellow-300">
-                <TriangleAlertIcon class="size-4 shrink-0 text-yellow-400" />
+            <div class="bg-warning-bg border border-warning-border/40 rounded-md px-4 py-3 mb-3 flex items-center gap-2.5 text-warning">
+                <TriangleAlertIcon class="size-4 shrink-0 text-warning" />
                 <span class="leading-relaxed text-sm">{language.storageDiskUsageHighWarning(diskUsedPct)}</span>
             </div>
         {/if}
@@ -471,7 +471,7 @@
             <Tooltip.Root>
                 <Tooltip.Trigger>
                     {#snippet child({ props })}
-                        <div {...props} class="bg-yellow-500 cursor-help" style:width={pctOf(stats.storage.reclaimable, stats.files.db).toFixed(3) + '%'}></div>
+                        <div {...props} class="bg-warning cursor-help" style:width={pctOf(stats.storage.reclaimable, stats.files.db).toFixed(3) + '%'}></div>
                     {/snippet}
                 </Tooltip.Trigger>
                 <Tooltip.Portal>
@@ -488,7 +488,7 @@
         </div>
         <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-textcolor2 text-xs mb-3 tabular-nums">
             <span><span class="inline-block size-2 bg-primary rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarUsed} {fmtBytes(overheadUsed)}</span>
-            <span><span class="inline-block size-2 bg-yellow-500 rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarReclaimable} {fmtBytes(stats.storage.reclaimable)}</span>
+            <span><span class="inline-block size-2 bg-warning rounded-sm align-middle mr-1"></span>{language.storageOptimizeBarReclaimable} {fmtBytes(stats.storage.reclaimable)}</span>
         </div>
 
         <p class="text-textcolor2 text-sm leading-relaxed mb-2">{language.storageOptimizeWhat}</p>
@@ -550,14 +550,14 @@
                                 <span class="text-textcolor text-sm tabular-nums shrink-0">{fmtBytes(c.totalBytes)}</span>
                             </div>
                             <div class="flex h-1.5 bg-bgcolor border border-darkborderc rounded-md overflow-hidden">
-                                <div class="bg-rose-500" style:width={pctOf(c.cardBytes, c.totalBytes).toFixed(2) + '%'}></div>
-                                <div class="bg-amber-500" style:width={pctOf(c.imgBytes, c.totalBytes).toFixed(2) + '%'}></div>
-                                <div class="bg-cyan-500" style:width={pctOf(c.chatBytes, c.totalBytes).toFixed(2) + '%'}></div>
+                                <div class="bg-danger" style:width={pctOf(c.cardBytes, c.totalBytes).toFixed(2) + '%'}></div>
+                                <div class="bg-warning" style:width={pctOf(c.imgBytes, c.totalBytes).toFixed(2) + '%'}></div>
+                                <div class="bg-info" style:width={pctOf(c.chatBytes, c.totalBytes).toFixed(2) + '%'}></div>
                             </div>
                             <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-textcolor2 text-xs mt-1 tabular-nums">
-                                <span><span class="inline-block size-2 bg-rose-500 rounded-sm align-middle mr-1"></span>{language.storageCharactersCard} {fmtBytes(c.cardBytes)}</span>
-                                <span><span class="inline-block size-2 bg-amber-500 rounded-sm align-middle mr-1"></span>{language.storageCharactersImage} {fmtBytes(c.imgBytes)}</span>
-                                <span><span class="inline-block size-2 bg-cyan-500 rounded-sm align-middle mr-1"></span>{language.storageCharactersChat} {fmtBytes(c.chatBytes)}</span>
+                                <span><span class="inline-block size-2 bg-danger rounded-sm align-middle mr-1"></span>{language.storageCharactersCard} {fmtBytes(c.cardBytes)}</span>
+                                <span><span class="inline-block size-2 bg-warning rounded-sm align-middle mr-1"></span>{language.storageCharactersImage} {fmtBytes(c.imgBytes)}</span>
+                                <span><span class="inline-block size-2 bg-info rounded-sm align-middle mr-1"></span>{language.storageCharactersChat} {fmtBytes(c.chatBytes)}</span>
                             </div>
                         </button>
                     {/each}
@@ -617,12 +617,12 @@
                                 <span class="text-textcolor text-sm tabular-nums shrink-0">{fmtBytes(m.totalBytes)}</span>
                             </div>
                             <div class="flex h-1.5 bg-bgcolor border border-darkborderc rounded-md overflow-hidden">
-                                <div class="bg-violet-500" style:width={pctOf(m.bodyBytes, m.totalBytes).toFixed(2) + '%'}></div>
-                                <div class="bg-amber-500" style:width={pctOf(m.assetBytes, m.totalBytes).toFixed(2) + '%'}></div>
+                                <div class="bg-secondary" style:width={pctOf(m.bodyBytes, m.totalBytes).toFixed(2) + '%'}></div>
+                                <div class="bg-warning" style:width={pctOf(m.assetBytes, m.totalBytes).toFixed(2) + '%'}></div>
                             </div>
                             <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-textcolor2 text-xs mt-1 tabular-nums">
-                                <span><span class="inline-block size-2 bg-violet-500 rounded-sm align-middle mr-1"></span>{language.storageModulesBody} {fmtBytes(m.bodyBytes)}</span>
-                                <span><span class="inline-block size-2 bg-amber-500 rounded-sm align-middle mr-1"></span>{language.storageModulesAssets} {fmtBytes(m.assetBytes)}</span>
+                                <span><span class="inline-block size-2 bg-secondary rounded-sm align-middle mr-1"></span>{language.storageModulesBody} {fmtBytes(m.bodyBytes)}</span>
+                                <span><span class="inline-block size-2 bg-warning rounded-sm align-middle mr-1"></span>{language.storageModulesAssets} {fmtBytes(m.assetBytes)}</span>
                             </div>
                         </div>
                     {/each}

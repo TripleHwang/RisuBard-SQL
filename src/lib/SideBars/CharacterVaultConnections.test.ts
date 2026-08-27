@@ -29,7 +29,7 @@ describe('Character Vault sidebar integration', () => {
         expect(persona).toContain('outline outline-4')
         expect(persona).toContain('outline-offset-0')
         expect(persona).not.toContain('outline-offset-[-4px]')
-        expect(persona).toContain('outline-white')
+        expect(persona).toContain('outline-borderc')
         expect(vault).toContain('character-toolbar-button--chat')
         expect(vault).not.toContain('border-b')
         expect(vault).toContain('data-character-vault-label')
@@ -37,7 +37,7 @@ describe('Character Vault sidebar integration', () => {
         expect(vault).toContain('outline outline-4')
         expect(vault).toContain('outline-offset-0')
         expect(vault).not.toContain('outline-offset-[-4px]')
-        expect(vault).toContain('outline-black')
+        expect(vault).toContain('outline-darkborderc')
     })
 
     test('uses the books artwork and swaps to its animation on hover', () => {
@@ -61,9 +61,10 @@ describe('Character Vault sidebar integration', () => {
         expect(sidebar).toContain('data-sidebar-options-divider')
         expect(sidebar).toMatch(/data-sidebar-options[\s\S]*mt-3[\s\S]*h-10[\s\S]*w-\[52px\][\s\S]*bg-primary[\s\S]*data-sidebar-options-divider/)
         expect(sidebar).toMatch(/data-sidebar-persona[\s\S]*px-2 py-3/)
-        expect(sidebar).toMatch(/data-sidebar-options-divider class="w-full relative text-white"/)
+        expect(sidebar).toMatch(/data-sidebar-options-divider class="w-full relative text-textcolor"/)
         expect(sidebar).not.toContain('data-sidebar-options-divider class="w-full border-b border-b-selected')
-        expect(sidebar).toContain('bg-darkbg pt-2 pb-6 text-textcolor')
+        expect(sidebar).toMatch(/data-character-sidebar\s+class="[^"]*bg-darkbg text-textcolor/)
+        expect(sidebar).toMatch(/data-character-sidebar-scroll class="[^"]*pt-2 pb-6"/)
         expect(sidebar).toMatch(/data-character-workspace-header class="flex min-h-10/)
         expect(sidebar).not.toMatch(/data-character-workspace-header class="[^"]*mt-1\.5/)
     })
@@ -133,9 +134,9 @@ describe('Character Vault sidebar integration', () => {
         expect(sidebar).toContain('data-new-character-badge')
         expect(sidebar).toContain('<SolarBoldIcon name="star-shine"')
         expect(sidebar).toContain('aria-label="새 캐릭터"')
-        expect(sidebar).toContain('stroke: #000;')
+        expect(sidebar).toContain('stroke: var(--color-shadow);')
         expect(sidebar).toContain('stroke-width: 2px;')
-        expect(sidebar).toContain('fill: #fff;')
+        expect(sidebar).toContain('fill: var(--color-media-text);')
         expect(icons).toContain("| 'star-shine'")
     })
 
@@ -207,9 +208,10 @@ describe('Character Vault sidebar integration', () => {
         }
     })
 
-    test('renders wider 4:3 character cards with the open action in the portrait', () => {
+    test('renders square character cards with a hover title and the open action in the portrait', () => {
         const dialog = source('src/lib/SideBars/CharacterVaultDialog.svelte')
-        expect(dialog).toContain('aspect-ratio: 4 / 3')
+        expect(dialog).toContain('aspect-ratio: 1')
+        expect(dialog).toContain('.character-card:hover .character-caption')
         expect(dialog).toContain('class="open-character"')
         expect(dialog.indexOf('class="open-character"'))
             .toBeLessThan(dialog.indexOf('class="character-caption"'))

@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 import type { character } from './storage/database.svelte'
 import { convertCharbook, createBaseV2, createBaseV3, readFirstMessageStudioExtension } from './characterCards'
 import { createBlankStudioProject } from './firstMessageStudio'
+import { characterFormatUpdate } from './characters'
 
 vi.mock('./process/modules', () => ({
     exportModuleLegacy: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('./process/modules', () => ({
     moduleUpdate: vi.fn(),
     readModule: vi.fn(),
 }))
+vi.mock('./process/inlayScreen', () => ({ updateInlayScreen: (char: character) => char }))
 
 vi.mock('./stores.svelte', () => ({
     selectedCharID: { set: vi.fn(), subscribe: vi.fn(() => () => undefined) },
@@ -189,6 +191,21 @@ describe('Character Card lorebook enabled state', () => {
 })
 
 describe('first message studio character-card extension', () => {
+    test('exports editable Studio source and generated Risu variables together in v2', () => {
+        const project = createBlankStudioProject()
+        project.fallbackMessage = 'Editable source'
+        const card = createBaseV2({
+            ...nativeCharacter([]),
+            firstMessage: '<div data-first-message-studio-compatible></div>',
+            firstMessageStudio: project,
+            defaultVariables: 'first_message_studio_done=0',
+        })
+
+        expect(card.data.first_mes).toContain('data-first-message-studio-compatible')
+        expect(card.data.extensions.risuai?.firstMessageStudio?.fallbackMessage).toBe('Editable source')
+        expect(card.data.extensions.risuai?.defaultVariables).toBe('first_message_studio_done=0')
+    })
+
     test('preserves a project through v3 export and import without sharing references', () => {
         const project = createBlankStudioProject()
         project.variables.push({
@@ -207,5 +224,86 @@ describe('first message studio character-card extension', () => {
         expect(imported).toEqual(project)
         expect(imported).not.toBe(project)
         expect(imported?.stages).not.toBe(project.stages)
+    })
+})
+
+describe('Risu character-card extensions', () => {
+    test('exports post-history instructions separately from the Risu replace-global-note extension', () => {
+        const source = {
+            ...nativeCharacter([]),
+            postHistoryInstructions: 'standard post-history instructions',
+            replaceGlobalNote: 'Risu global-note replacement',
+        }
+        const exported = createBaseV3(source)
+
+        expect(exported.data.post_history_instructions).toBe('standard post-history instructions')
+        expect(exported.data.extensions.risuai?.replaceGlobalNote).toBe('Risu global-note replacement')
+    })
+
+    test('exports module namespace and hidden chat icon through v3 extensions', () => {
+        const source = {
+            ...nativeCharacter([]),
+            moduleNamespace: 'test-namespace',
+            hideChatIcon: true,
+        }
+        const exported = createBaseV3(source)
+
+        expect(exported.data.extensions.risuai).toMatchObject({
+            moduleNamespace: 'test-namespace',
+            hideChatIcon: true,
+        })
+    })
+
+    test('keeps post-history instructions for export after applying them only once', () => {
+        const char = {
+            ...nativeCharacter([]),
+            chats: [{ message: [], note: '', name: 'Chat 1', localLore: [] }],
+            chatPage: 0,
+            postHistoryInstructions: 'apply once and preserve',
+        }
+
+        characterFormatUpdate(char)
+        characterFormatUpdate(char)
+
+        expect(char.chats[0].note).toBe('apply once and preserve')
+        expect(char.postHistoryInstructions).toBe('apply once and preserve')
+        expect(createBaseV3(char).data.post_history_instructions).toBe('apply once and preserve')
+    })
+
+    test('replaces an unchanged auto-applied post-history suffix when its value changes or clears', () => {
+        const char = {
+            ...nativeCharacter([]),
+            chats: [{ message: [], note: 'existing note', name: 'Chat 1', localLore: [] }],
+            chatPage: 0,
+            postHistoryInstructions: 'first instruction',
+        }
+
+        characterFormatUpdate(char)
+        char.postHistoryInstructions = 'second instruction'
+        characterFormatUpdate(char)
+        char.postHistoryInstructions = ''
+        characterFormatUpdate(char)
+        char.postHistoryInstructions = 'first instruction'
+        characterFormatUpdate(char)
+
+        expect(char.chats[0].note).toBe('existing note\nfirst instruction')
+        expect(char.postHistoryInstructionsApplied).toBe('first instruction')
+    })
+
+    test('does not remove user-edited post-history note content while resetting its marker', () => {
+        const char = {
+            ...nativeCharacter([]),
+            chats: [{ message: [], note: '', name: 'Chat 1', localLore: [] }],
+            chatPage: 0,
+            postHistoryInstructions: 'first instruction',
+        }
+
+        characterFormatUpdate(char)
+        char.chats[0].note = 'first instruction (user edited)'
+        char.postHistoryInstructions = ''
+        characterFormatUpdate(char)
+
+        expect(char.chats[0].note).toBe('first instruction (user edited)')
+        expect(char.postHistoryInstructionsApplied).toBeUndefined()
     })
 })

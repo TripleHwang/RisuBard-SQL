@@ -1,13 +1,13 @@
 import tippy from 'tippy.js'
 import 'tippy.js/dist/tippy.css';
-import 'tippy.js/themes/translucent.css';
+import '../../styles/tooltip-theme.css';
 
 export function tooltip(node:HTMLElement, tip:string) {
     const instance = tippy(node, {
         content: tip,
         animation: 'fade',
         arrow: true,
-        theme: 'translucent',
+        theme: 'risubard',
     })
     return {
         update(newTip: string) {
@@ -25,7 +25,7 @@ export function tooltipRight(node:HTMLElement, tip:string) {
         animation: 'fade',
         arrow: true,
         placement: 'right',
-        theme: 'translucent',
+        theme: 'risubard',
     })
     return {
         update(newTip: string) {

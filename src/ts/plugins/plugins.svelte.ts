@@ -13,6 +13,7 @@ import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
 import { runPluginUpdate } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
+import { PluginChatOutputListeners, V2_CHAT_OUTPUT_OWNER, createV2ChatOutputApi } from "./pluginChatOutput";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -132,7 +133,7 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
 
 export async function updatePlugin(plugin: RisuPlugin) {
     const updated = await runPluginUpdate(plugin, {
-        fetcher: fetch,
+        fetcher: (url) => fetchNative(url, { method: 'GET' }),
         importer: async (source) => {
             await importPlugin(source, {
                 isUpdate: true,
@@ -451,7 +452,7 @@ export async function importPlugin(code:string|null = null, argu:{
         console.log(`Imported plugin: ${pluginData.name} (API v${apiVersion})`)
         setDatabaseLite(db)
         if (isUpdate) {
-            await requestImmediateSave({ rejectOnFailure: true })
+            await requestImmediateSave({ flushServer: true, rejectOnFailure: true })
         } else {
             void requestImmediateSave()
         }
@@ -547,6 +548,7 @@ export const pluginV2 = {
     editinput: new Set<EditFunction>(),
     replacerbeforeRequest: new Set<ReplacerFunction>(),
     replacerafterRequest: new Set<(content: string, type: string) => string | Promise<string>>(),
+    chatOutput: new PluginChatOutputListeners(),
     unload: new Set<() => void | Promise<void>>(),
     loaded: false
 }
@@ -578,6 +580,7 @@ export const allowedDbKeys = [
 ]
 
 export const getV2PluginAPIs = () => {
+    const chatOutputApi = createV2ChatOutputApi(pluginV2.chatOutput)
     return {
         risuFetch: globalFetch,
         nativeFetch: fetchNative,
@@ -642,6 +645,7 @@ export const getV2PluginAPIs = () => {
                 throw (`replacer handler named ${name} not found`)
             }
         },
+        ...chatOutputApi,
         onUnload: (func: () => void | Promise<void>) => {
             pluginV2.unload.add(func)
         },
@@ -903,6 +907,7 @@ export async function loadV2Plugin(plugins: RisuPlugin[]) {
         pluginV2.editoutput.clear()
         pluginV2.editprocess.clear()
         pluginV2.editinput.clear()
+        pluginV2.chatOutput.clear(V2_CHAT_OUTPUT_OWNER)
     }
 
     pluginV2.loaded = true

@@ -293,7 +293,7 @@
                         </td>
                         
                         <th class="font-medium cursor-pointer w-10">
-                            <button class="hover:text-red-400" onclick={() => {
+                            <button class="hover:text-danger/80" onclick={() => {
                                 let additionalAssets = currentModule.assets
                                 additionalAssets.splice(i, 1)
                                 currentModule.assets = additionalAssets

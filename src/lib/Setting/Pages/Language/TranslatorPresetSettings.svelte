@@ -84,7 +84,7 @@
     </button>
 
     <button
-        class="mr-2 text-textcolor2 hover:text-red-400 cursor-pointer"
+        class="mr-2 text-textcolor2 hover:text-danger/80 cursor-pointer"
         onclick={async () => {
             const presets = DBState.db.translatorPresets;
 

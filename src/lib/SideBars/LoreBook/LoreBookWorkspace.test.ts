@@ -25,7 +25,11 @@ const operationMocks = vi.hoisted(() => ({
 
 const environmentMock = vi.hoisted(() => ({
     mobile: false,
-    db: { disableMobileDragDrop: false },
+    db: {
+        disableMobileDragDrop: false,
+        templateDefaultVariables: '',
+        characters: [] as Array<{ chaId: string; name: string; chatPage: number; defaultVariables: string; chats: Array<{ id: string; name: string; scriptstate?: Record<string, string> }> }>,
+    },
     listeners: new Set<(event: MediaQueryListEvent) => void>(),
     alertConfirm: vi.fn<(message: string) => Promise<boolean>>(async () => true),
     notifySuccess: vi.fn<(message: string) => void>(),
@@ -142,6 +146,8 @@ beforeEach(() => {
     clearLorebookWorkspaceSessions()
     environmentMock.mobile = false
     environmentMock.db.disableMobileDragDrop = false
+    environmentMock.db.characters = []
+    environmentMock.db.templateDefaultVariables = ''
     environmentMock.alertConfirm.mockResolvedValue(true)
     Object.defineProperty(window, 'matchMedia', {
         configurable: true,
@@ -277,6 +283,253 @@ describe('LoreBookWorkspace', () => {
         expect(changed).toHaveLength(1)
         expect(changed[0]).toMatchObject({ mode: 'folder' })
         expect(changed[0].key).toMatch(/^\uf000folder:/u)
+    })
+
+    it('keeps guidance and warnings out of the compact document flow', async () => {
+        const content = '{{#if {{or::1::0::1}}}}Body{{/if}}'
+        await render([entry('one', { content })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        const view = document.body.querySelector('[data-cbs-condition-view]')!
+        expect(view.querySelector('.view-note')).toBeNull()
+        expect(view.querySelector('.view-warning')).toBeNull()
+        expect(view.textContent).not.toContain(languageEnglish.cbsEditor.end)
+        expect(view.querySelector('[data-cbs-warning]')?.getAttribute('aria-label')).toContain('first 2')
+        expect(view.querySelector('aside[data-cbs-variable-sidebar] [data-cbs-variable-list]')).not.toBeNull()
+        expect(view.querySelector('[data-cbs-document] [data-cbs-body]')).not.toBeNull()
+        expect(view.querySelector('[data-cbs-document] [data-cbs-variable-list]')).toBeNull()
+    })
+
+    it('renders distinct comparison chips and nested logical groups without changing source', async () => {
+        const opening = '{{#if {{and::{{or::{{equal::{{getvar::a}}::1}}::{{equal::{{getvar::b}}::2}}}}::{{not::{{equal::{{getvar::mode}}::OR <img src=x onerror=alert(1)>}}}}}}}}'
+        const content = `${opening}Body{{/if}}`
+        const onChange = await render([entry('one', { content })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        const summary = document.body.querySelector('[data-cbs-summary]')!
+        expect(summary.querySelectorAll('[data-cbs-clause]')).toHaveLength(3)
+        expect(summary.querySelector('[data-cbs-logic="AND"] [data-cbs-logic="OR"]')).not.toBeNull()
+        expect(summary.querySelector('[data-cbs-logic="AND"] [data-cbs-logic="NOT"]')).not.toBeNull()
+        expect(summary.closest('summary')?.getAttribute('aria-label')).toContain('(($a = "1") OR ($b = "2")) AND')
+        expect([...summary.querySelectorAll('[data-cbs-operator]')].map(el => el.textContent)).toEqual(['OR', 'AND', 'NOT'])
+        expect(summary.querySelector('[data-cbs-token="literal"]')?.textContent).toBe('"1"')
+        expect(summary.textContent).toContain('OR <img src=x onerror=alert(1)>')
+        expect(summary.querySelector('img')).toBeNull()
+        click('.condition summary')
+        await tick()
+        expect(document.body.querySelector('.condition-source')?.textContent).toBe(opening)
+        expect(onChange).not.toHaveBeenCalled()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        expect(document.body.querySelector<HTMLTextAreaElement>('.lore-content')!.value).toBe(content)
+    })
+
+    it('places all metadata in one row and edits each key in a full-width expansion', async () => {
+        const onChange = await render([entry('one', { key: 'first, second', secondkey: 'other' }), entry('two', { key: 'next' })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        const heading = document.body.querySelector('.editor-heading')!
+        expect([...heading.querySelectorAll('[data-lorebook-field]')].map(el => el.getAttribute('data-lorebook-field')))
+            .toEqual(['comment', 'key', 'secondkey', 'insertorder'])
+        for (const field of ['key', 'secondkey']) {
+            click(`[data-lorebook-expand-key="${field}"]`)
+            await tick()
+            const expanded = document.body.querySelector<HTMLTextAreaElement>(`[data-lorebook-expanded-key="${field}"]`)!
+            expect(expanded).not.toBeNull()
+            expect(heading.contains(expanded)).toBe(false)
+            expect(expanded.closest('.editor-fields')).not.toBeNull()
+            expect(document.body.querySelector(`[data-lorebook-expand-key="${field}"]`)?.getAttribute('aria-expanded')).toBe('true')
+            expanded.value = 'alpha,\nbeta, gamma'
+            expanded.dispatchEvent(new Event('input', { bubbles: true }))
+            expanded.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+            await tick()
+            expect(vi.mocked(onChange).mock.calls.at(-1)?.[0][0][field]).toBe('alpha,\nbeta, gamma')
+            click(`[data-lorebook-expand-key="${field}"]`)
+            await tick()
+            click(`[data-lorebook-expand-key="${field}"]`)
+            await tick()
+            expect(document.body.querySelector<HTMLTextAreaElement>(`[data-lorebook-expanded-key="${field}"]`)!.value).toBe('alpha,\nbeta, gamma')
+        }
+        click('[data-lorebook-row="two"] [data-lorebook-open]')
+        await tick()
+        expect(document.body.querySelector<HTMLTextAreaElement>('[data-lorebook-expanded-key="key"]')!.value).toBe('next')
+    })
+
+    it('resizes the settings and variables independently with keyboard reset', async () => {
+        await render([entry('one', { content: '{{getvar::test}}' })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        const grid = document.body.querySelector<HTMLElement>('.lore-editor-grid')!
+        grid.getBoundingClientRect = () => ({ ...rect(0, 600), width: 800 })
+        const rail = document.body.querySelector<HTMLElement>('.lore-state-rail')!
+        rail.getBoundingClientRect = () => ({ ...rect(0, 600), width: 192 })
+        const stateHandle = document.body.querySelector<HTMLElement>('[data-lorebook-state-splitter]')!
+        expect(stateHandle).not.toBeNull()
+        stateHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+        expect(grid.style.getPropertyValue('--lore-state-width')).toBe('176px')
+        stateHandle.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+        expect(grid.style.getPropertyValue('--lore-state-width')).toBe('')
+        click('[data-cbs-view-toggle]')
+        await tick()
+        click('[data-cbs-variable-toggle]')
+        await tick()
+        const layout = document.body.querySelector<HTMLElement>('.view-layout')!
+        layout.getBoundingClientRect = () => ({ ...rect(0, 600), width: 700 })
+        const variables = document.body.querySelector<HTMLElement>('[data-cbs-variable-sidebar]')!
+        variables.getBoundingClientRect = () => ({ ...rect(0, 600), width: 272 })
+        const handle = document.body.querySelector<HTMLElement>('[data-cbs-variable-splitter]')!
+        expect(handle).not.toBeNull()
+        handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+        expect(layout.style.getPropertyValue('--cbs-variable-width')).toBe('256px')
+        handle.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+        expect(layout.style.getPropertyValue('--cbs-variable-width')).toBe('')
+    })
+
+    it('discovers variables without writing them, then applies only to the chosen variable target', async () => {
+        const owner = {
+            chaId: 'bot', name: 'Persona', chatPage: 0, defaultVariables: 'cv_spoiler=lock',
+            chats: [{ id: 'chat', name: 'Main', scriptstate: {} as Record<string, string> }],
+        }
+        environmentMock.db.characters = [owner]
+        const content = '{{#if {{equal::{{getvar::cv_spoiler}}::request}}}}Body{{/if}}'
+        const onChange = await render([entry('one', { content })], { scopeKey: JSON.stringify(['lorebook', 'character', 'bot']) })
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        const sidebar = document.body.querySelector<HTMLElement>('[data-cbs-variable-sidebar]')!
+        const toggle = document.body.querySelector<HTMLButtonElement>('[data-cbs-variable-toggle]')!
+        expect(sidebar).not.toBeNull()
+        expect(toggle.getAttribute('aria-controls')).toBe(sidebar.id)
+        expect(sidebar.hidden).toBe(true)
+        click('[data-cbs-variable-toggle]')
+        await tick()
+        expect(sidebar.hidden).toBe(false)
+        expect(toggle.getAttribute('aria-expanded')).toBe('true')
+        expect(owner.chats[0].scriptstate).toEqual({})
+        const input = document.body.querySelector<HTMLInputElement>('[data-cbs-variable="cv_spoiler"]')!
+        expect(input.value).toBe('lock')
+        expect(document.body.querySelector('datalist option')?.getAttribute('value')).toBe('request')
+        input.value = 'request'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        expect(owner.chats[0].scriptstate).toEqual({})
+        click('[data-cbs-variable-toggle]')
+        await tick()
+        expect(sidebar.hidden).toBe(true)
+        expect(toggle.getAttribute('aria-expanded')).toBe('false')
+        click('[data-cbs-variable-toggle]')
+        await tick()
+        expect(document.body.querySelector('[data-cbs-variable="cv_spoiler"]')).toBe(input)
+        expect(input.value).toBe('request')
+        expect(document.body.querySelector<HTMLSelectElement>('[data-cbs-variable-target]')!.value).toBe('chat')
+        expect(document.body.querySelector<HTMLButtonElement>('[data-cbs-variable-apply="cv_spoiler"]')!.disabled).toBe(false)
+        click('[data-cbs-variable-apply="cv_spoiler"]')
+        await tick()
+        expect(owner.chats[0].scriptstate).toEqual({ $cv_spoiler: 'request' })
+        expect(owner.defaultVariables).toBe('cv_spoiler=lock')
+        const target = document.body.querySelector<HTMLSelectElement>('[data-cbs-variable-target]')!
+        target.value = 'default'
+        target.dispatchEvent(new Event('change', { bubbles: true }))
+        await tick()
+        const defaultInput = document.body.querySelector<HTMLInputElement>('[data-cbs-variable="cv_spoiler"]')!
+        expect(defaultInput.getAttribute('aria-label')).toContain('Character default')
+        defaultInput.value = 'open'
+        defaultInput.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        expect(document.body.querySelector<HTMLButtonElement>('[data-cbs-variable-apply="cv_spoiler"]')!.disabled).toBe(false)
+        click('[data-cbs-variable-apply="cv_spoiler"]')
+        await tick()
+        expect(owner.defaultVariables).toBe('cv_spoiler=open')
+        expect(owner.chats[0].scriptstate.$cv_spoiler).toBe('request')
+        expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it('edits conditional lore bodies without changing their CBS wrappers', async () => {
+        const opening = '{{#if {{equal::{{getvar::cv_g8}}::1}}}}'
+        const content = `${opening}Original body{{/if}}`
+        const onChange = await render([entry('one', { content })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        expect(document.body.querySelector('[data-cbs-view-toggle]')).not.toBeNull()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        expect(document.body.textContent).toContain('$cv_g8 = "1"')
+        const body = document.body.querySelector<HTMLTextAreaElement>('[data-cbs-body]')!
+        expect(body.value).toBe('Original body')
+        body.value = 'Edited body'
+        body.dispatchEvent(new Event('input', { bubbles: true }))
+        body.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+        await tick()
+        expect(onChange).toHaveBeenLastCalledWith([
+            expect.objectContaining({ content: `${opening}Edited body{{/if}}` }),
+        ])
+        click('[data-cbs-view-toggle]')
+        await tick()
+        expect(document.body.querySelector<HTMLTextAreaElement>('.lore-content')!.value)
+            .toBe(`${opening}Edited body{{/if}}`)
+    })
+
+    it('keeps an active body editor mounted while typing an unfinished CBS expression', async () => {
+        const onChange = await render([entry('one', { content: '{{#if 1}}Body{{/if}}' })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        const body = document.body.querySelector<HTMLTextAreaElement>('[data-cbs-body]')!
+        body.focus()
+        body.value = 'Body {{'
+        body.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        expect(document.body.querySelector('[data-cbs-body]')).toBe(body)
+        expect(body.value).toBe('Body {{')
+        expect(document.activeElement).toBe(body)
+        body.value = 'Body {{char}}'
+        body.dispatchEvent(new Event('input', { bubbles: true }))
+        body.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+        await tick()
+        expect(onChange).toHaveBeenLastCalledWith([
+            expect.objectContaining({ content: '{{#if 1}}Body {{char}}{{/if}}' }),
+        ])
+    })
+
+    it('allows editing a whitespace-only conditional body', async () => {
+        await render([entry('one', { content: '{{#if 1}}\n{{/if}}' })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        expect(document.body.querySelector<HTMLTextAreaElement>('[data-cbs-body]')?.value).toBe('\n')
+    })
+
+    it('saves successive body edits at current offsets and refreshes the view when switching entries', async () => {
+        const content = '{{#if 1}}First{{/if}}\r\n{{#if 0}}Second{{/if}}'
+        const onChange = await render([entry('one', { content }), entry('two', { content: '{{#if 1}}Other{{/if}}' })])
+        click('[data-lorebook-row="one"] [data-lorebook-open]')
+        await tick()
+        click('[data-cbs-view-toggle]')
+        await tick()
+        for (const text of ['Longer first body', 'Short']) {
+            const first = document.body.querySelector<HTMLTextAreaElement>('[data-cbs-body]')!
+            first.value = text
+            first.dispatchEvent(new Event('input', { bubbles: true }))
+            await tick()
+        }
+        const second = document.body.querySelectorAll<HTMLTextAreaElement>('[data-cbs-body]')[1]
+        second.value = 'Changed second'
+        second.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        click('[data-lorebook-row="two"] [data-lorebook-open]')
+        await tick()
+        expect(onChange).toHaveBeenLastCalledWith([
+            expect.objectContaining({ content: '{{#if 1}}Short{{/if}}\r\n{{#if 0}}Changed second{{/if}}' }),
+            expect.objectContaining({ content: '{{#if 1}}Other{{/if}}' }),
+        ])
+        expect(document.body.querySelector<HTMLTextAreaElement>('[data-cbs-body]')!.value).toBe('Other')
     })
 
     it('routes a single editor commit through the pure batch patch operation', async () => {
@@ -1181,13 +1434,9 @@ describe('LoreBookWorkspaceDialog source contract', () => {
 
         expect(source).toContain('min(96vw, 1700px)')
         expect(source).toContain('min(92vh, 1000px)')
-        expect(source).toContain('new MediaQuery(\'(min-width: 900px)\')')
-        expect(source).toContain('data-lorebook-splitter')
-        expect(source).toContain('pointermove')
-        expect(source).toContain('setPointerCapture')
-        expect(workspaceSource).toContain('--lore-list-width: clamp(26%, var(--lore-list-ratio, 38%), 52%)')
-        expect(workspaceSource).toContain('--lore-effective-list-width: max(19rem, var(--lore-list-width, 38%))')
-        expect(workspaceSource).toContain('minmax(19rem, var(--lore-list-width, 38%))')
+        expect(source).toContain('data-lorebook-window-resize')
+        expect(workspaceSource).toContain('data-lorebook-splitter')
+        expect(workspaceSource).not.toContain('minmax(19rem')
         expect(workspaceSource).toContain('left: calc(var(--lore-effective-list-width) - .25rem)')
         expect(workspaceSource).toContain('container-name: lore-workbench')
         expect(workspaceSource).toContain('@container lore-workbench (max-width: 1199px)')
@@ -1294,23 +1543,60 @@ describe('LoreBookWorkspaceDialog source contract', () => {
         const shell = document.body.querySelector<HTMLElement>('.lore-workspace')!
         const splitter = document.body.querySelector<HTMLElement>('[data-lorebook-splitter]')!
         shell.getBoundingClientRect = () => ({ ...rect(0, 600), left: 0, right: 1000, width: 1000 })
+        document.body.querySelector<HTMLElement>('.lore-list-pane')!.getBoundingClientRect = () => ({ ...rect(0, 600), width: 380 })
         splitter.setPointerCapture = vi.fn()
         splitter.hasPointerCapture = vi.fn(() => true)
         splitter.releasePointerCapture = vi.fn()
 
         splitter.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 7, clientX: 380 }))
-        splitter.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 7, clientX: 900 }))
+        window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 7, clientX: 900 }))
         expect(splitter.setPointerCapture).toHaveBeenCalledWith(7)
-        expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('52%')
+        expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('76%')
         splitter.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 7, clientX: 100 }))
-        expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('26%')
+        expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('12%')
+        splitter.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 8, clientX: 600 }))
+        expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('12%')
+        splitter.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 7 }))
+        expect(splitter.releasePointerCapture).toHaveBeenCalledWith(7)
+        splitter.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 7, clientX: 600 }))
+        expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('12%')
         splitter.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
         expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('38%')
 
+        splitter.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 7, clientX: 380 }))
         await unmount(mounted)
         mounted = undefined
         shell.style.setProperty('--lore-list-ratio', '31%')
         splitter.dispatchEvent(new PointerEvent('pointermove', { pointerId: 7, clientX: 700 }))
         expect(shell.style.getPropertyValue('--lore-list-ratio')).toBe('31%')
+    })
+
+    it('resizes the centered window from edges and corners and clamps it to the viewport', async () => {
+        mounted = mount(LoreBookWorkspaceDialog, {
+            target: document.body.appendChild(document.createElement('div')),
+            props: { open: true, entries: [entry('one')], scopeLabel: 'Dialog lore', onChange: vi.fn() },
+        })
+        await vi.waitFor(() => expect(document.body.querySelector('.lore-dialog')).not.toBeNull())
+        const dialog = document.body.querySelector<HTMLElement>('.lore-dialog')!
+        dialog.getBoundingClientRect = () => ({ ...rect(0, 600), width: 800, height: 600 })
+        const corner = document.body.querySelector<HTMLElement>('[data-lorebook-window-resize="se"]')!
+        expect(corner).not.toBeNull()
+        corner.setPointerCapture = vi.fn()
+        corner.hasPointerCapture = vi.fn(() => true)
+        corner.releasePointerCapture = vi.fn()
+        corner.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 2, clientX: 800, clientY: 600, bubbles: true }))
+        corner.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 700, clientY: 520, bubbles: true }))
+        expect(dialog.style.getPropertyValue('--lore-dialog-width')).toBe('600px')
+        expect(dialog.style.getPropertyValue('--lore-dialog-height')).toBe('440px')
+        corner.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 3000, clientY: 3000, bubbles: true }))
+        expect(parseFloat(dialog.style.getPropertyValue('--lore-dialog-width'))).toBe(window.innerWidth - 16)
+        expect(parseFloat(dialog.style.getPropertyValue('--lore-dialog-height'))).toBe(window.innerHeight - 16)
+        corner.dispatchEvent(new PointerEvent('pointerup', { pointerId: 2, bubbles: true }))
+        const west = document.body.querySelector<HTMLElement>('[data-lorebook-window-resize="w"]')!
+        west.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+        expect(dialog.style.getPropertyValue('--lore-dialog-width')).toBe('768px')
+        west.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+        expect(dialog.style.getPropertyValue('--lore-dialog-width')).toBe('')
+        expect(dialog.style.getPropertyValue('--lore-dialog-height')).toBe('')
     })
 })

@@ -319,8 +319,8 @@
         overflow: hidden;
         background:
             radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--risu-theme-primary) 12%, transparent), transparent 32%),
-            color-mix(in srgb, var(--risu-theme-darkbg) 96%, black);
-        box-shadow: 0 18px 42px rgb(0 0 0 / .16);
+            color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor));
+        box-shadow: 0 18px 42px color-mix(in srgb, var(--color-shadow) 16%, transparent);
     }
     .writer-heading {
         display: flex;
@@ -417,7 +417,7 @@
         border-radius: .45rem;
         padding: .5rem .58rem;
         color: var(--risu-theme-textcolor);
-        background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, black);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, var(--color-bgcolor));
         font: inherit;
         resize: vertical;
     }
@@ -456,7 +456,7 @@
         min-height: 3.7rem;
         padding: .7rem 1rem;
         border-top: 1px solid var(--writer-line);
-        background: rgb(0 0 0 / .08);
+        background: color-mix(in srgb, var(--color-overlay) 8%, transparent);
     }
     .proposal-ledger.ready {
         background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent);

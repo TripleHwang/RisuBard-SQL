@@ -144,7 +144,7 @@
 {#if submenu !== 2}
     <button
         data-lorebook-workspace-open
-        class="mt-2 mb-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 font-semibold text-white shadow-sm transition-colors hover:bg-blue-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400 active:bg-blue-700"
+        class="mt-2 mb-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-info px-4 py-2.5 font-semibold text-on-info shadow-sm transition-colors hover:bg-info/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info active:bg-info/75"
         aria-label={language.lorebookWorkspace.openScope(activeBinding.scopeLabel)}
         title={language.lorebookWorkspace.open}
         onclick={() => { workspaceOpen = true }}

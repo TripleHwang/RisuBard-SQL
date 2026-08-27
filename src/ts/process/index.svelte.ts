@@ -9,8 +9,10 @@ import { parseChatML } from "../parser/chatML";
 import { loadLoreBookV3Prompt } from "./lorebook.svelte";
 import { findCharacterbyId, getAuthorNoteDefaultText, getPersonaPrompt, getUserName, isLastCharPunctuation, trimUntilPunctuation, parseToggleSyntax, prebuiltAssetCommand } from "../util";
 import { requestChatData } from "./request/request";
+import { getPartialPresetStreamText } from './request/presetStreamPump';
 import { stableDiff } from "./stableDiff";
 import { processScript, processScriptFull, risuChatParser } from "./scripts";
+import { getGlobalChatVar } from "../parser/chatVar.svelte";
 import { exampleMessage } from "./exampleMessages";
 import { sayTTS } from "./tts";
 import { v4 } from "uuid";
@@ -26,6 +28,8 @@ import { getGenerationModelString } from "./models/modelString";
 import { runInlayScreen } from "./inlayScreen";
 import { runImageEmbedding } from "./transformers";
 import { runLuaEditTrigger } from "./scriptings";
+import { pluginV2 } from "../plugins/plugins.svelte";
+import { dispatchCommittedChatOutput } from "../plugins/pluginChatOutput";
 import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
@@ -65,7 +69,6 @@ import {
     retractWikiEvent,
     saveManualWikiDocument,
     trashWikiDocument,
-    undoWikiTurnReceipt,
 } from '../risubard/memoryWiki';
 import { announceRisuBardMemoryUpdated } from '../risubard/memoryEvents';
 import {
@@ -88,6 +91,7 @@ import {
 } from '../risubard/wikiReboot';
 import {
     cleanupWikiRebootWorkspace,
+    completeWikiRebootBatch,
     prepareWikiRebootReplacement,
     recoverWikiRebootBatch,
 } from '../risubard/wikiRebootTransport';
@@ -95,6 +99,7 @@ import { completeMemoryWikiFork } from '../risubard/memoryWikiFork';
 import {
     beginWikiGeneration,
     endWikiGeneration,
+    isWikiGenerating,
 } from '../risubard/wikiGenerationState';
 
 function resolvedRisuBardSettings(chat?: Chat) {
@@ -172,6 +177,7 @@ async function confirmProjectedNarrativeTurn(input: {
             },
             canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
             canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+            wikiWritingLanguage: settings.risuBardWikiWritingLanguage,
             ...(compiledWikiPromptGuide ? {
                 wikiPromptGuide: {
                     analysis: compiledWikiPromptGuide.analysis,
@@ -264,7 +270,6 @@ export async function forceCurrentNarrativeWikiUpdate(): Promise<boolean> {
         additionalAnalysis: true,
         excludeCanonicalDocumentIds: target.risubardCanonicalReceipt
             ?.changes
-            .filter((change) => !change.undoneAt)
             .map((change) => change.documentId) ?? [],
         ...projected,
     })
@@ -443,6 +448,15 @@ async function runWikiReboot(
                 if (recovered) {
                     applyWikiRebootBatchReceipt(chat, batch, recovered)
                     await persistWikiReboot(character, chat, chatIndex)
+                    await completeWikiRebootBatch({
+                        characterId: character.chaId,
+                        stagingChatId: job.stagingChatId,
+                        sourceMessageIds: projected.sourceMessageIds,
+                        fetchImpl: fetch,
+                        createAuth: () => forageStorage.createAuth(),
+                    }).catch((error) => {
+                        console.warn('[RisuBard wiki reboot batch cleanup]', error)
+                    })
                     continue
                 }
             }
@@ -484,6 +498,7 @@ async function runWikiReboot(
                 },
                 canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
                 canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
+                wikiWritingLanguage: job.writingLanguage ?? 'ko',
                 ...(compiledWikiPromptGuide ? {
                     wikiPromptGuide: {
                         analysis: compiledWikiPromptGuide.analysis,
@@ -504,6 +519,15 @@ async function runWikiReboot(
             }
             applyWikiRebootBatchReceipt(chat, batch, receipt)
             await persistWikiReboot(character, chat, chatIndex)
+            await completeWikiRebootBatch({
+                characterId: character.chaId,
+                stagingChatId: job.stagingChatId,
+                sourceMessageIds: projected.sourceMessageIds,
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            }).catch((error) => {
+                console.warn('[RisuBard wiki reboot batch cleanup]', error)
+            })
         }
         return true
     }
@@ -537,6 +561,7 @@ export async function startCurrentWikiReboot(
     current.chat.risuBardWikiReboot = createWikiRebootJob({
         jobId,
         stagingChatId: `reboot-${jobId}`,
+        writingLanguage: resolvedRisuBardSettings(current.chat).risuBardWikiWritingLanguage,
         batchSize,
         targetAssistantMessageIds: turns.map((turn) =>
             turn.assistantMessageId
@@ -727,34 +752,6 @@ export async function executeCurrentNarrativeWikiCommand(
     }
 }
 
-export async function undoCurrentNarrativeCanonicalReceipt(
-    messageId: string,
-    documentId?: string
-): Promise<boolean> {
-    const character = DBState.db.characters[get(selectedCharID)]
-    const chat = character?.chats[character.chatPage]
-    const message = chat?.message.find((item) => item.chatId === messageId)
-    const receipt = message?.risubardCanonicalReceipt
-    if (!character || !chat || !message || !receipt) return false
-    const updated = await undoWikiTurnReceipt({
-        characterId: character.chaId,
-        chatId: ensureNarrativeSessionChatId(chat, v4),
-        snapshotId: receipt.snapshotId,
-        ...(documentId ? { documentId } : {}),
-        fetchImpl: fetch,
-        createAuth: () => forageStorage.createAuth(),
-    })
-    message.risubardCanonicalReceipt = updated
-    if (!documentId && updated.undoneAt) {
-        message.risubardMemoryConfirmed = false
-    }
-    announceRisuBardMemoryUpdated({
-        characterId: character.chaId,
-        chatId: ensureNarrativeSessionChatId(chat, v4),
-    })
-    return true
-}
-
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
     content: string
@@ -766,6 +763,13 @@ export interface OpenAIChat{
     thoughts?: string[]
     cachePoint?: boolean
     requestStatusSources?: RequestInjectionSource[]
+}
+
+function findMessageIndexByChatId(chat: { message: Array<{ chatId?: string }> }, chatId?: string) {
+    if(!chatId){
+        return -1
+    }
+    return chat.message.findIndex((message) => message.chatId === chatId)
 }
 
 function setRequestStatusSource(
@@ -824,6 +828,11 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     preview?:boolean
     previewPrompt?:boolean
 } = {}):Promise<boolean> {
+
+    if (!arg.preview && !arg.previewPrompt && get(isWikiGenerating)) {
+        alertError(language.risuBardWikiGenerationChatLocked)
+        return false
+    }
 
     const selected = DBState.db.characters[get(selectedCharID)]
     const selectedConversation = selected?.chats[selected.chatPage]
@@ -1015,7 +1024,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         initialPresetNameForPromptInfo = DBState.db.botPresets[DBState.db.botPresetsId]?.name ?? ''
         initialPromptTogglesForPromptInfo = parseToggleSyntax(DBState.db.customPromptTemplateToggle + getModuleToggles())
             .flatMap(toggle => {
-                const raw = DBState.db.globalChatVariables[`toggle_${toggle.key}`]
+                const raw = getGlobalChatVar(`toggle_${toggle.key}`)
                 if (toggle.type === 'select' || toggle.type === 'text') {
                     return [{ key: toggle.value, value: toggle.options[raw] }];
                 }
@@ -2564,6 +2573,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     let result = ''
     let emoChanged = false
     let resendChat = false
+    let outputMessageId: string | undefined
     
     if(abortSignal.aborted === true){
         if (realChatId) clearPendingSend(realChatId)
@@ -2595,6 +2605,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             })
             markSqlMessageDirty(DBState.db.characters[selectedChar].chats[selectedChat].id!, generationId)
         }
+        outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.chatId
         // Snapshot the mode for this generation. Saver Mode may choose a more
         // conservative mode for later generations without changing this one.
         // Snapshot once at stream start. Entering saver mode later must not
@@ -2662,6 +2673,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         try {
             while(streamAborted === false){
                 let readed: ReadableStreamReadResult<{ [key: string]: string }>
+                let readFailure: unknown
                 try {
                     readed = await reader.read()
                 }
@@ -2670,7 +2682,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         streamAborted = true
                         break
                     }
-                    throw error
+                    const partial = getPartialPresetStreamText(error)
+                    if (partial === undefined) throw error
+                    readed = { done: false, value: { "0": partial } }
+                    readFailure = error
                 }
                 if(readed.value){
                     receivedStreamingResult = true
@@ -2690,6 +2705,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                         await applyStreamingDisplay(result)
                     }
                 }
+                // Render the last received snapshot, but do not run successful
+                // turn completion / automatic wiki analysis for a failed stream.
+                if (readFailure) throw readFailure
                 if(readed.done){
                     break
                 }
@@ -2790,6 +2808,13 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 markSqlMessageDirty(streamingChatId, streamingMessageId, true)
             }
         }
+        await dispatchCommittedChatOutput(pluginV2.chatOutput, {
+            char: currentChar,
+            chat: currentChat,
+            characterIndex: selectedChar,
+            chatIndex: selectedChat,
+            messageIndex: findMessageIndexByChatId(currentChat, outputMessageId),
+        })
         if(DBState.db.ttsAutoSpeech){
             await sayTTS(currentChar, result)
         }
@@ -2853,6 +2878,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             else{
                 mrerolls.push(result)
             }
+            if(i === 0){
+                outputMessageId = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.chatId
+            }
             DBState.db.characters[selectedChar].reloadKeys += 1
             if(DBState.db.ttsAutoSpeech){
                 await sayTTS(currentChar, result)
@@ -2864,11 +2892,19 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
         const triggerResult = await runTrigger(currentChar, 'output', {chat:currentChat})
         if(triggerResult && triggerResult.chat){
-            DBState.db.characters[selectedChar].chats[selectedChat] = normalizeChat(triggerResult.chat)
+            currentChat = normalizeChat(triggerResult.chat)
+            DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
         }
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true
         }
+        await dispatchCommittedChatOutput(pluginV2.chatOutput, {
+            char: currentChar,
+            chat: currentChat,
+            characterIndex: selectedChar,
+            chatIndex: selectedChat,
+            messageIndex: findMessageIndexByChatId(currentChat, outputMessageId),
+        })
     }
 
     let needsAutoContinue = false

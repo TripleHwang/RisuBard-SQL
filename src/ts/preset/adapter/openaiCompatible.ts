@@ -194,8 +194,53 @@ async function prepareOpenAiBody(
     ].map(toWireMessage)
     prepared.body.model = modelId
     prepared.body.stream = stream
+    if (options.temperature !== undefined || options.maxOutputTokens !== undefined) {
+        const bodyFields = new Set(preset.profileSnapshot.schema
+            .filter((field) => field.mapsTo?.target === 'body')
+            .map((field) => field.mapsTo!.path))
+        if (options.temperature !== undefined) {
+            // Sampling is deliberately absent on first-party reasoning profiles.
+            // Generic gateways can inherit a temperature field even for these
+            // models (e.g. Lightning), including deployments using an alias.
+            const fixedSampling = [modelId, preset.profileSnapshot.modelId].some((id) =>
+                /(?:^|\/)(?:o[1-9](?:[.-]|$)|gpt-5(?:[.-]|$))/i.test(id ?? ''))
+            if (bodyFields.has('temperature') && !fixedSampling) {
+                prepared.body.temperature = options.temperature
+            } else {
+                delete prepared.body.temperature
+            }
+        }
+        if (options.maxOutputTokens !== undefined) {
+            // Schema mappings win over customBody, including schemas whose
+            // user-facing max_tokens key maps to max_completion_tokens.
+            const completionTokens = bodyFields.has('max_completion_tokens')
+                || (!bodyFields.has('max_tokens') && prepared.body.max_completion_tokens !== undefined)
+            const tokenField = completionTokens ? 'max_completion_tokens' : 'max_tokens'
+            const otherTokenField = completionTokens ? 'max_tokens' : 'max_completion_tokens'
+            prepared.body[tokenField] = options.maxOutputTokens
+            delete prepared.body[otherTokenField]
+        }
+    }
     if (structuredOutputMessage) {
-        prepared.body.response_format = { type: 'json_object' }
+        // Cloud does not support constrained outputs, including format hints.
+        // Keep the schema in the prompt instead of relying on response_format.
+        // https://docs.ollama.com/capabilities/structured-outputs
+        if (preset.profileSnapshot.providerBaseId === 'ollama-cloud') {
+            delete prepared.body.response_format
+        }
+        else {
+            prepared.body.response_format = { type: 'json_object' }
+        }
+    }
+    else if (options.responseSchema) {
+        prepared.body.response_format = {
+            type: 'json_schema',
+            json_schema: {
+                name: 'format',
+                strict: true,
+                schema: options.responseSchema,
+            },
+        }
     }
     // Streaming responses carry no usage unless it is requested. Only set when
     // the user opted in: a strict OpenAI-compatible server can 400 on an
@@ -322,9 +367,14 @@ export function parseChatCompletion(raw: unknown): AdapterChatResponse {
         : ''
     const toolCalls = isPlainObject(message) ? parseToolCalls(message['tool_calls']) : undefined
     const reasoning = isPlainObject(message) ? parseReasoning(message) : undefined
-    const finishReason = typeof first['finish_reason'] === 'string'
+    let finishReason = typeof first['finish_reason'] === 'string'
         ? (first['finish_reason'] as string)
         : undefined
+    if (isPlainObject(message) && typeof message['refusal'] === 'string' && message['refusal'].trim().length > 0) {
+        // Structured-output refusals commonly report stop with null content.
+        // Preserve the refusal signal without treating its prose as an answer.
+        finishReason = 'refusal'
+    }
     return {
         text,
         toolCalls,
@@ -401,6 +451,9 @@ export function parseChatStreamDelta(raw: unknown): AdapterChatStreamDelta | nul
         }
         if (typeof first['finish_reason'] === 'string') {
             finishReason = first['finish_reason'] as string
+        }
+        if (isPlainObject(delta) && typeof delta['refusal'] === 'string' && delta['refusal'].trim().length > 0) {
+            finishReason = 'refusal'
         }
     }
     const usage = parseUsage(raw['usage'])

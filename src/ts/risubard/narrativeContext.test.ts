@@ -363,6 +363,22 @@ describe('actual narrative inquiry prompt', () => {
         expect(prompt).toContain('character knowledge boundary')
     })
 
+    it('gives canonical current-state sections precedence', () => {
+        const prompt = createNarrativeSourcesPrompt([{
+            id: 'narrative-memory:wiki:characters/체사레.md',
+            kind: 'memory', role: 'system',
+            content: '## 체사레\n\n### 현재 상태\n\n- 쉽독이다.',
+            tokens: 20, priority: 120,
+        }], '')!
+
+        expect(prompt).toContain(
+            'Current-state sections in canonical character documents outrank older historical descriptions'
+        )
+        expect(prompt).toContain(
+            'Do not replace an established identity, status, relationship, duration, location, or goal with an unsupported detail'
+        )
+    })
+
     it('injects preset-bound response guidance only beside retrieved Wiki sources', () => {
         const source = {
             id: 'narrative-memory:wiki:events/stone-door.md',
@@ -437,7 +453,9 @@ describe('selectNarrativeWorkingMessages', () => {
     it('normalizes a user-configured full-message window', () => {
         expect(normalizeNarrativeWorkingMessageLimit(undefined)).toBe(12)
         expect(normalizeNarrativeWorkingMessageLimit(0)).toBe(12)
-        expect(normalizeNarrativeWorkingMessageLimit(101)).toBe(12)
+        expect(normalizeNarrativeWorkingMessageLimit(101)).toBe(101)
+        expect(normalizeNarrativeWorkingMessageLimit(Infinity)).toBe(12)
+        expect(normalizeNarrativeWorkingMessageLimit(Number.MAX_SAFE_INTEGER + 1)).toBe(12)
         expect(normalizeNarrativeWorkingMessageLimit(24)).toBe(24)
     })
 

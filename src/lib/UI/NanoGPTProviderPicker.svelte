@@ -33,8 +33,8 @@
 
     function discountBadge(pct: number, dir: 'less' | 'more'): { label: string; cls: string } | null {
         if (Math.abs(pct) < 0.5) return null
-        if (dir === 'less') return { label: `↓${Math.round(pct)}%`, cls: 'bg-green-700 text-white' }
-        return { label: `↑${Math.round(Math.abs(pct))}%`, cls: 'bg-red-700 text-white' }
+        if (dir === 'less') return { label: `↓${Math.round(pct)}%`, cls: 'bg-success text-on-success' }
+        return { label: `↑${Math.round(Math.abs(pct))}%`, cls: 'bg-danger text-on-danger' }
     }
 </script>
 

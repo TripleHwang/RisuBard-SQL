@@ -77,21 +77,21 @@
   })
 </script>
 
-<div class="fixed inset-0 z-50 flex flex-col" style="background: #09090b;">
+<div class="fixed inset-0 z-50 flex flex-col" style="background: var(--color-media-bg);">
   <!-- Header: title + search + close -->
-  <div class="shrink-0 flex items-center gap-3 px-4 py-3 border-b border-white/10">
-    <span class="text-white text-sm font-semibold truncate">{assetViewerStore.title}</span>
+  <div class="shrink-0 flex items-center gap-3 px-4 py-3 border-b border-media-text/10">
+    <span class="text-media-text text-sm font-semibold truncate">{assetViewerStore.title}</span>
     <div class="flex items-center gap-2 ml-auto">
       <div class="relative">
-        <SearchIcon size={14} class="absolute left-2 top-1/2 -translate-y-1/2 text-white/40 pointer-events-none" />
+        <SearchIcon size={14} class="absolute left-2 top-1/2 -translate-y-1/2 text-media-text/40 pointer-events-none" />
         <input
-          class="w-40 sm:w-56 pl-7 pr-2 py-1.5 rounded bg-white/5 border border-white/15 text-white text-sm placeholder:text-white/30 focus:outline-none focus:border-white/40"
+          class="w-40 sm:w-56 pl-7 pr-2 py-1.5 rounded bg-media-text/5 border border-media-text/15 text-media-text text-sm placeholder:text-media-text/30 focus:outline-none focus:border-media-text/40"
           placeholder={language.search}
           bind:value={search}
         />
       </div>
       <button
-        class="w-9 h-9 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+        class="w-9 h-9 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
         onclick={closeAssetViewer}
         title={language.goback}
       >
@@ -114,8 +114,8 @@
             {#if srcs[item.origIndex]}
               <img alt={item.name} class="w-full h-full object-cover" src={srcs[item.origIndex]} loading="lazy" />
             {/if}
-            <div class="absolute inset-x-0 bottom-0 pt-6 pb-1.5 px-2 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-              <p class="text-white text-[11px] truncate leading-tight">{item.name}</p>
+            <div class="absolute inset-x-0 bottom-0 pt-6 pb-1.5 px-2 bg-gradient-to-t from-media-bg/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+              <p class="text-media-text text-[11px] truncate leading-tight">{item.name}</p>
             </div>
           </button>
         {/each}
@@ -126,15 +126,15 @@
 
 <!-- Fullscreen zoom -->
 {#if zoomIndex >= 0}
-  <div class="fixed inset-0 z-[60]" style="background: #09090b;">
+  <div class="fixed inset-0 z-[60]" style="background: var(--color-media-bg);">
     <!-- Toolbar -->
-    <div class="absolute top-0 inset-x-0 z-10 flex items-center gap-3 px-4 py-3 bg-gradient-to-b from-black/70 to-transparent pointer-events-none">
+    <div class="absolute top-0 inset-x-0 z-10 flex items-center gap-3 px-4 py-3 bg-gradient-to-b from-media-bg/70 to-transparent pointer-events-none">
       <div class="flex-1 min-w-0">
-        <p class="text-white text-sm font-semibold truncate">{current?.name}</p>
-        <p class="text-white/40 text-xs">{zoomIndex + 1} / {filtered.length}</p>
+        <p class="text-media-text text-sm font-semibold truncate">{current?.name}</p>
+        <p class="text-media-text/40 text-xs">{zoomIndex + 1} / {filtered.length}</p>
       </div>
       <button
-        class="w-9 h-9 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors shrink-0 pointer-events-auto"
+        class="w-9 h-9 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors shrink-0 pointer-events-auto"
         onclick={() => (zoomIndex = -1)}
         title={language.goback}
       >
@@ -144,7 +144,7 @@
 
     {#if canPrev}
       <button
-        class="absolute left-3 top-1/2 -translate-y-1/2 z-10 w-11 h-11 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+        class="absolute left-3 top-1/2 -translate-y-1/2 z-10 w-11 h-11 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
         onclick={() => go(-1)}
       >
         <ChevronLeft size={22} />
@@ -177,7 +177,7 @@
 
     {#if canNext}
       <button
-        class="absolute right-3 top-1/2 -translate-y-1/2 z-10 w-11 h-11 rounded-full border border-white/20 bg-black/50 hover:bg-black/70 flex items-center justify-center text-white transition-colors"
+        class="absolute right-3 top-1/2 -translate-y-1/2 z-10 w-11 h-11 rounded-full border border-media-text/20 bg-media-bg/50 hover:bg-media-bg/70 flex items-center justify-center text-media-text transition-colors"
         onclick={() => go(1)}
       >
         <ChevronRight size={22} />

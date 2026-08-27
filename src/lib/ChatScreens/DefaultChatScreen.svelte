@@ -6,7 +6,7 @@
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
     import ShDropdownMenuItem from 'src/lib/UI/GUI/ShDropdownMenuItem.svelte';
-    import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore, MobileGUI } from "../../ts/stores.svelte";
+    import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
     import {
@@ -31,7 +31,6 @@
         resumeCurrentWikiReboot,
         startCurrentWikiReboot,
         stopCurrentWikiReboot,
-        undoCurrentNarrativeCanonicalReceipt,
         sendChat,
     } from "../../ts/process/index.svelte";
     import { abortGeneration, chatGenKey, endGeneration, generationStates, registerAbort } from "../../ts/process/generationState";
@@ -108,6 +107,8 @@ import { isMobile } from 'src/ts/platform'
         customStyle?: string;
         onSaveChat?: () => void | Promise<void>;
         onOpenChatLoad?: () => void;
+        onQuickSave?: () => void | Promise<void>;
+        onQuickLoad?: () => void | Promise<void>;
         savingSlot?: boolean;
     }
 
@@ -135,12 +136,17 @@ import { isMobile } from 'src/ts/platform'
         customStyle = '',
         onSaveChat = () => {},
         onOpenChatLoad = () => {},
+        onQuickSave = () => {},
+        onQuickLoad = () => {},
         savingSlot = false,
     }: Props = $props();
     let currentCharacter = $derived(DBState.db.characters[$selectedCharID])
     let currentChatSlot = $derived(currentCharacter?.chats[currentCharacter.chatPage])
     let wikiRebootBlocksGeneration = $derived(
         blocksChatGeneration(currentChatSlot?.risuBardWikiReboot)
+    )
+    let wikiBlocksGeneration = $derived(
+        wikiRebootBlocksGeneration || $isWikiGenerating
     )
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
@@ -458,9 +464,9 @@ import { isMobile } from 'src/ts/platform'
                     scrollWithinContainer(element as HTMLElement, chatContainer, { block: 'start', behavior: 'instant' })
                 }
 
-                element.classList.add('ring-2', 'ring-blue-500')
+                element.classList.add('ring-2', 'ring-info')
                 setTimeout(() => {
-                    element.classList.remove('ring-2', 'ring-blue-500')
+                    element.classList.remove('ring-2', 'ring-info')
                 }, 2000)
             }
         } finally {
@@ -480,8 +486,10 @@ import { isMobile } from 'src/ts/platform'
         if($doingChat){
             return
         }
-        if (wikiRebootBlocksGeneration) {
-            alertError(language.risuBardWikiRebootChatLocked)
+        if (wikiBlocksGeneration) {
+            alertError($isWikiGenerating
+                ? language.risuBardWikiGenerationChatLocked
+                : language.risuBardWikiRebootChatLocked)
             return
         }
 
@@ -602,8 +610,10 @@ import { isMobile } from 'src/ts/platform'
 
     async function reroll() {
         if($doingChat) return
-        if (wikiRebootBlocksGeneration) {
-            alertError(language.risuBardWikiRebootChatLocked)
+        if (wikiBlocksGeneration) {
+            alertError($isWikiGenerating
+                ? language.risuBardWikiGenerationChatLocked
+                : language.risuBardWikiRebootChatLocked)
             return
         }
         const lastMsg = getLastCharMsg()
@@ -716,7 +726,7 @@ import { isMobile } from 'src/ts/platform'
     async function sendChatMain(continued:boolean = false) {
 
         messageInput = ''
-        if (wikiRebootBlocksGeneration) return false
+        if (wikiBlocksGeneration) return false
         const genKey = currentChatGenKey()
         // Mirror sendChat's per-chat guard BEFORE any side effects: a blocked
         // send must not run the unconditional conclude below, which would tear
@@ -760,7 +770,7 @@ import { isMobile } from 'src/ts/platform'
     // server-side CLAIM must succeed — the atomic claim is what makes the
     // re-run at-most-once across devices, tabs and reloads.
     async function resumeInterruptedSend(chatId: string) {
-        if (wikiRebootBlocksGeneration) {
+        if (wikiBlocksGeneration) {
             markResumable(chatId)
             return
         }
@@ -823,7 +833,6 @@ import { isMobile } from 'src/ts/platform'
     let inputEle:HTMLTextAreaElement = $state()
     let inputTranslateHeight = $state("44px")
     let inputTranslateEle:HTMLTextAreaElement = $state()
-    let saveLoadShortcutAnchor = $state<HTMLElement | null>(null)
 
     // Standard theme: composer width follows the configured chat width (matches message cards).
     // Other themes: no width limit (original full-width behavior).
@@ -1060,48 +1069,48 @@ import { isMobile } from 'src/ts/platform'
 
     {#if showNewMessageButton}
         {#if (DBState.db.newMessageButtonStyle === 'bottom-center' || !DBState.db.newMessageButtonStyle)}
-            <button class="absolute bottom-16 left-1/2 -translate-x-1/2 bg-primary text-white px-4 py-2 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
+            <button class="absolute bottom-16 left-1/2 -translate-x-1/2 bg-primary text-accenttext px-4 py-2 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
                 <ArrowDown size={16} />
                 <span>{language.newMessage}</span>
             </button>
         {/if}
 
         {#if DBState.db.newMessageButtonStyle === 'bottom-right'}
-            <button class="absolute bottom-20 right-4 bg-primary text-white px-4 py-2 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
+            <button class="absolute bottom-20 right-4 bg-primary text-accenttext px-4 py-2 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
                 <ArrowDown size={16} />
                 <span>{language.newMessage}</span>
             </button>
         {/if}
 
         {#if DBState.db.newMessageButtonStyle === 'bottom-left'}
-            <button class="absolute bottom-20 left-4 bg-primary text-white px-4 py-2 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
+            <button class="absolute bottom-20 left-4 bg-primary text-accenttext px-4 py-2 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
                 <ArrowDown size={16} />
                 <span>{language.newMessage}</span>
             </button>
         {/if}
 
         {#if DBState.db.newMessageButtonStyle === 'floating-circle'}
-            <button class="absolute bottom-36 right-4 bg-primary text-white w-12 h-12 rounded-full shadow-lg z-50 flex items-center justify-center hover:bg-primary/90 transition-colors" onclick={scrollToBottom} title="4. 원형 (우하단)">
+            <button class="absolute bottom-36 right-4 bg-primary text-accenttext w-12 h-12 rounded-full shadow-lg z-50 flex items-center justify-center hover:bg-primary/90 transition-colors" onclick={scrollToBottom} title="4. 원형 (우하단)">
                 <ArrowDown size={20} />
             </button>
         {/if}
 
         {#if DBState.db.newMessageButtonStyle === 'right-center'}
-            <button class="absolute top-1/2 right-2 -translate-y-1/2 bg-primary text-white px-2 py-3 rounded-l-lg shadow-lg z-50 flex flex-col items-center gap-1 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
+            <button class="absolute top-1/2 right-2 -translate-y-1/2 bg-primary text-accenttext px-2 py-3 rounded-l-lg shadow-lg z-50 flex flex-col items-center gap-1 hover:bg-primary/90 transition-colors" onclick={scrollToBottom}>
                 <ArrowDown size={14} />
                 <span class="text-xs writing-mode-vertical">{language.newMessage}</span>
             </button>
         {/if}
 
         {#if DBState.db.newMessageButtonStyle === 'top-bar'}
-            <button class="absolute top-2 left-1/2 -translate-x-1/2 bg-primary text-white px-6 py-1.5 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors text-sm" onclick={scrollToBottom}>
+            <button class="absolute top-2 left-1/2 -translate-x-1/2 bg-primary text-accenttext px-6 py-1.5 rounded-full shadow-lg z-50 flex items-center gap-2 hover:bg-primary/90 transition-colors text-sm" onclick={scrollToBottom}>
                 <ArrowDown size={14} />
                 <span>{language.newMessage}</span>
             </button>
         {/if}
     {/if}
     {#if isScrollingToMessage}
-        <div class="absolute inset-0 z-50 flex items-center justify-center bg-black/50 text-white text-xl font-bold backdrop-blur-sm">
+        <div class="absolute inset-0 z-50 flex items-center justify-center bg-overlay/50 text-media-text text-xl font-bold backdrop-blur-sm">
             Loading...
         </div>
     {/if}
@@ -1123,11 +1132,21 @@ import { isMobile } from 'src/ts/platform'
                     class="{DBState.db.fixedChatTextarea ? 'sticky pt-2 pb-2 right-0 bottom-0 bg-bgcolor' : 'mt-2 mb-2'} w-full"
                     style="{DBState.db.fixedChatTextarea ? 'z-index:29;' : ''}"
             >
-              <div
-                    bind:this={saveLoadShortcutAnchor}
-                    data-save-load-shortcut-anchor
-                    class="mx-auto w-full {composerWidthClass} px-2"
-              >
+              <div class="mx-auto w-full {composerWidthClass} px-2">
+                {#if currentCharacter?.chaId
+                    && currentCharacter.chaId !== '§playground'
+                    && !$chatDeselected
+                    && DBState.db.showRisuBardSaveLoadShortcuts !== false}
+                    <div data-composer-save-toolbar>
+                        <RisuBardSaveLoadShortcuts
+                            saving={savingSlot}
+                            onSave={onSaveChat}
+                            onLoad={onOpenChatLoad}
+                            {onQuickSave}
+                            {onQuickLoad}
+                        />
+                    </div>
+                {/if}
                 <!-- "plugin-compat-items-stretch" is a compat hook (not a Tailwind class):
                      plugins that locate the composer via div[class*="items-stretch"] (e.g. gemini-cache-keeper)
                      relied on the pre-redesign container class. Keep it so they can still find/anchor their UI,
@@ -1182,7 +1201,7 @@ import { isMobile } from 'src/ts/platform'
                                 <BookOpenIcon /><span>{language.risuBardMemoryWiki}</span>
                             </ShDropdownMenuItem>
                             {#if DBState.db.translator !== ''}
-                                <ShDropdownMenuItem class={DBState.db.useAutoTranslateInput ? 'text-green-500' : ''} onSelect={() => { DBState.db.useAutoTranslateInput = !DBState.db.useAutoTranslateInput }}>
+                                <ShDropdownMenuItem class={DBState.db.useAutoTranslateInput ? 'text-success' : ''} onSelect={() => { DBState.db.useAutoTranslateInput = !DBState.db.useAutoTranslateInput }}>
                                     <GlobeIcon /><span>{language.autoTranslateInput}</span>
                                 </ShDropdownMenuItem>
                             {/if}
@@ -1204,7 +1223,7 @@ import { isMobile } from 'src/ts/platform'
                             }}>
                                 <ImagePlusIcon /><span>{language.postFile}</span>
                             </ShDropdownMenuItem>
-                            <ShDropdownMenuItem class={DBState.db.useAutoSuggestions ? 'text-green-500' : ''} onSelect={() => { DBState.db.useAutoSuggestions = !DBState.db.useAutoSuggestions }}>
+                            <ShDropdownMenuItem class={DBState.db.useAutoSuggestions ? 'text-success' : ''} onSelect={() => { DBState.db.useAutoSuggestions = !DBState.db.useAutoSuggestions }}>
                                 <ReplyIcon /><span>{language.autoSuggest}</span>
                             </ShDropdownMenuItem>
                             <ShDropdownMenuItem onSelect={() => {
@@ -1242,7 +1261,7 @@ import { isMobile } from 'src/ts/platform'
 
                 {#if DBState.db.useChatSticker}
                     <button type="button" aria-label={language.useChatSticker} onclick={()=>{toggleStickers = !toggleStickers}}
-                         class={"shrink-0 flex justify-center items-center w-9 h-9 rounded-full hover:bg-primary/20 transition-colors cursor-pointer "+(toggleStickers ? 'text-green-500':'text-textcolor')}>
+                         class={"shrink-0 flex justify-center items-center w-9 h-9 rounded-full hover:bg-primary/20 transition-colors cursor-pointer "+(toggleStickers ? 'text-success':'text-textcolor')}>
                         <Laugh size={20}/>
                     </button>
                 {/if}
@@ -1331,12 +1350,14 @@ import { isMobile } from 'src/ts/platform'
                 {:else}
                     <button
                             onclick={send}
-                            disabled={wikiRebootBlocksGeneration}
-                            title={wikiRebootBlocksGeneration
-                                ? language.risuBardWikiRebootChatLocked
+                            disabled={wikiBlocksGeneration}
+                            title={wikiBlocksGeneration
+                                ? ($isWikiGenerating
+                                    ? language.risuBardWikiGenerationChatLocked
+                                    : language.risuBardWikiRebootChatLocked)
                                 : undefined}
                             aria-label={willResend ? language.reroll : language.send}
-                            class="order-2 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors button-icon-send disabled:opacity-45 disabled:cursor-not-allowed"
+                            class="order-2 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-primary text-accenttext hover:bg-primary/80 transition-colors button-icon-send disabled:opacity-45 disabled:cursor-not-allowed"
                     >
                         {#if willResend}
                             <RefreshCcwIcon size={18} />
@@ -1354,7 +1375,7 @@ import { isMobile } from 'src/ts/platform'
                                 onclick={() => memoryWikiOpen = !memoryWikiOpen}
                                 aria-label={language.risuBardMemoryOpenManual}
                                 title={language.risuBardMemoryOpenManual}
-                                class="relative z-10 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-orange-500 text-white shadow-sm hover:bg-orange-400 active:bg-orange-600 transition-colors"
+                                class="relative z-10 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-warning text-on-warning shadow-sm hover:bg-warning/85 active:bg-warning/75 transition-colors"
                                 class:wiki-generating={$isWikiGenerating}
                         >
                             <BookOpenIcon size={18} strokeWidth={2.2} />
@@ -1539,7 +1560,6 @@ import { isMobile } from 'src/ts/platform'
                 onNextSwipe={nextSwipe}
                 onDeleteSwipe={deleteSwipe}
                 onConfirmMemory={confirmCurrentNarrativeMessage}
-                onUndoCanonical={undoCurrentNarrativeCanonicalReceipt}
                 unReroll={unReroll}
                 currentCharacter={currentCharacter}
                 currentUsername={currentUsername}
@@ -1601,18 +1621,6 @@ import { isMobile } from 'src/ts/platform'
         </div>
 
     {/if}
-        {#if !$MobileGUI
-            && currentCharacter?.chaId
-            && currentCharacter.chaId !== '§playground'
-            && !$chatDeselected
-            && DBState.db.showRisuBardSaveLoadShortcuts !== false}
-            <RisuBardSaveLoadShortcuts
-                anchorElement={saveLoadShortcutAnchor}
-                saving={savingSlot}
-                onSave={onSaveChat}
-                onLoad={onOpenChatLoad}
-            />
-        {/if}
         <PluginFloatingActionButtons
             buttons={additionalFloatingActionButtons}
             placements={DBState.db.pluginFabPlacements}
@@ -1655,11 +1663,13 @@ import { isMobile } from 'src/ts/platform'
             ></textarea>
             <div class="flex justify-end mt-3">
                 <button onclick={sendFullscreen} aria-label="send"
-                        disabled={wikiRebootBlocksGeneration}
-                        title={wikiRebootBlocksGeneration
-                            ? language.risuBardWikiRebootChatLocked
+                        disabled={wikiBlocksGeneration}
+                        title={wikiBlocksGeneration
+                            ? ($isWikiGenerating
+                                ? language.risuBardWikiGenerationChatLocked
+                                : language.risuBardWikiRebootChatLocked)
                             : undefined}
-                        class="flex items-center gap-1 px-4 h-10 rounded-full bg-primary text-white hover:bg-primary/80 transition-colors disabled:opacity-45 disabled:cursor-not-allowed">
+                        class="flex items-center gap-1 px-4 h-10 rounded-full bg-primary text-accenttext hover:bg-primary/80 transition-colors disabled:opacity-45 disabled:cursor-not-allowed">
                     <Send size={18} />
                     <span>{language.send}</span>
                 </button>
@@ -1680,23 +1690,23 @@ import { isMobile } from 'src/ts/platform'
     }
 
     .chat-process-stage-1{
-        border-top: 0.4rem solid #60a5fa;
-        border-left: 0.4rem solid #60a5fa;
+        border-top: 0.4rem solid var(--color-info);
+        border-left: 0.4rem solid var(--color-info);
     }
 
     .chat-process-stage-2{
-        border-top: 0.4rem solid #db2777;
-        border-left: 0.4rem solid #db2777;
+        border-top: 0.4rem solid var(--color-danger);
+        border-left: 0.4rem solid var(--color-danger);
     }
 
     .chat-process-stage-3{
-        border-top: 0.4rem solid #34d399;
-        border-left: 0.4rem solid #34d399;
+        border-top: 0.4rem solid var(--color-success);
+        border-left: 0.4rem solid var(--color-success);
     }
 
     .chat-process-stage-4{
-        border-top: 0.4rem solid #8b5cf6;
-        border-left: 0.4rem solid #8b5cf6;
+        border-top: 0.4rem solid var(--color-secondary);
+        border-left: 0.4rem solid var(--color-secondary);
     }
 
 

@@ -102,7 +102,7 @@
                 {/if}
 
                 {#key $SettingsMenuIndex}
-                    <div class="settings-page">
+                    <div class="settings-page" class:settings-page--collection={$SettingsMenuIndex === SettingsRoute.Module || $SettingsMenuIndex === SettingsRoute.Plugin}>
                         {#if $SettingsMenuIndex === SettingsRoute.Migration}
                             <MigrationSettings />
                         {:else if isAISettingsRoute($SettingsMenuIndex as SettingsRouteValue)}
@@ -168,6 +168,7 @@
             var(--risu-theme-bgcolor)
         );
         --settings-content-width: 58rem;
+        --settings-page-gutter: clamp(2rem, 4vw, 3.75rem);
         --settings-surface: color-mix(
             in srgb,
             var(--risu-theme-bgcolor) 96%,
@@ -213,7 +214,7 @@
         width: min(100%, var(--settings-content-width));
         min-height: 100%;
         margin: 0 auto;
-        padding: 4.5rem clamp(2rem, 4vw, 3.75rem) 7rem;
+        padding: 4.5rem var(--settings-page-gutter) 7rem;
     }
 
     :global(.settings-standard-page) {
@@ -357,8 +358,10 @@
     }
 
     @media (min-width: 1500px) {
+        .settings-workspace { --settings-content-width: 62rem; }
         .settings-page {
-            width: min(100%, 62rem);
+            width: min(100%, var(--settings-content-width));
         }
     }
+    .settings-page.settings-page--collection:has(:global(.settings-standard-page--resizable)) { width: 100%; }
 </style>

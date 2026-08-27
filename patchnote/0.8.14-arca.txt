@@ -1,0 +1,401 @@
+<div style="max-width:880px;margin:0 auto;background:linear-gradient(160deg,#f5f8fc,#fbfdff);border:1px solid #bbccdf;color:#29415a;font-family:'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;">
+	<div style="padding:36px 20px 26px;background:linear-gradient(125deg,#e7f0fb,#f7faff);border-top:5px solid #2d629d;border-bottom:1px solid #bbccdf;">
+		<div style="margin:0 0 14px;color:#436a92;font-size:12px;font-weight:800;letter-spacing:2px;line-height:1.6;">RELEASE NOTES / 통합 업데이트</div>
+
+		<h1 style="margin:0 0 22px;color:#173e69;font-size:23px;font-weight:800;line-height:1.5;">RisuBard (리스바드)
+			<br><span style="font-size:64px;font-weight:900;line-height:1.2;letter-spacing:-2px;color:#225992;">v0.8.14</span></h1>
+
+		<p><img src="//ac.arca.live/20260822sac/a4862b5ef30db039658d607493f0e61d644a928fe00023241d036c7a3349a916.png?expires=1787742226&key=rPDIvvXsJkh83BhfzbwaAA" class="fr-fic fr-dii" uploaded="true" idx="302007243" url="//ac.arca.live/20260822sac/a4862b5ef30db039658d607493f0e61d644a928fe00023241d036c7a3349a916.png?expires=1787742226&key=rPDIvvXsJkh83BhfzbwaAA" originalurl="//ac.arca.live/20260822sac/a4862b5ef30db039658d607493f0e61d644a928fe00023241d036c7a3349a916.png?expires=1787742226&key=rPDIvvXsJkh83BhfzbwaAA"><span style="font-size:64px;font-weight:900;line-height:1.2;letter-spacing:-2px;color:#225992;"></span></p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">이번 정리의 핵심은&nbsp;</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">&gt; 퍼스트 메시지 편집기&nbsp;</strong></p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">&gt; 프리셋&middot;모듈&middot;플러그인 폴더로 정리,</strong></p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">&gt; 로어북 편집기에 CBS 비주얼라이저 및 편집 지원,&nbsp;</strong>&nbsp;</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong>&gt;&nbsp;</strong>그리고 <strong style="color:#173e69;font-weight:800;">장기 대화를 위한 BardWiki와 세이브/로드 개선</strong>입니다.</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">1. RisuAI&middot;포켓리스 사용자가 주목할 확장 신기능</h2>
+	</div>
+	<div style="padding:4px 20px 0;">
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">기존 캐릭터&middot;로어북&middot;모듈&middot;프롬프트 프리셋을 활용하면서, 제작과 관리에 드는 수고를 줄이는 기능을 확장했습니다.</p>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">퍼스트 메시지 스튜디오</h3>
+
+		<p><img src="//ac.arca.live/20260826sac/5f97226123f0215760b6ee614256796269bf8b5fe04b0e86a0de73d940b20df6.png?expires=1787742632&key=KY-eSGohkdhkm3hA40yBYQ" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302008234" url="//ac.arca.live/20260826sac/5f97226123f0215760b6ee614256796269bf8b5fe04b0e86a0de73d940b20df6.png?expires=1787742632&key=KY-eSGohkdhkm3hA40yBYQ" originalurl="//ac.arca.live/20260826sac/5f97226123f0215760b6ee614256796269bf8b5fe04b0e86a0de73d940b20df6.png?expires=1787742632&key=KY-eSGohkdhkm3hA40yBYQ"></p>
+
+		<p>
+			<br>
+		</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">봇 만들 때 시작 변수를 UI로 정하게 해 주고 싶은데 CBS고 BBS고 KFC 고 잘 모르겠다! 하는 사람들을 위한 편집기입니다.&nbsp;</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">기본 화면과 선택지는 편집기에서 구성하고, 그 이상의&nbsp;세밀한 꾸미기가 필요할 때는 사용자 CSS와 추가 HTML을 사용할 수 있습니다.</p>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">화면과 선택지 제작</strong>: 화면&middot;선택지 추가, 삭제, 순서 변경, 다음 화면 연결, 직접 입력과 완료 조건을 설정합니다.
+					<br>등록한 변수의 값 목록으로 선택지를 바로 만들 수도 있습니다. 삽화를 지정해, 호버중인 선택지에 맞는 설명과 삽화 출력이 가능합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">변수 편집기&nbsp;</strong>: 선택 결과를 채팅 변수에 저장하고, 변수 조건에 맞는 시나리오로 연결합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">외형 편집</strong>: 강조색&middot;배경&middot;글자색, 선택지 열 수와 모서리 형태를 조정합니다.
+					<br>추가 HTML에서는 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">{{variable_name}}</span>으로 변수를 표시할 수 있으며, 실행 스크립트와 위험한 이벤트 속성은 제거합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">공유와 재편집</strong>: 프로젝트를 내보내고 다시 불러올 수 있습니다. 첫 메시지와 선택 동작을 <strong>일반 Risu의 CBS&middot;트리거 형식으로 변환</strong>해 카드로 공유하고, <strong>RisuBard에서는 카드에 보존된 원본 프로젝트를 다시 열어 편집</strong>할 수 있습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">다국어 제작</strong>: 다국어 문구 편집과 <strong>UI 문구 자동번역을 지원합니다.</strong>&nbsp;</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">미리보기</strong>: 미리보기에서 변경점을 체크하면서 빠르게 제작할 수 있습니다.&nbsp;</p>
+			</li>
+		</ul>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;">퍼스트 메시지 스튜디오는 <strong style="color:#173e69;font-weight:800;">베타 기능</strong>입니다. 주요 제작&middot;공유 기능을 사용할 수 있으며, 사용성과 호환성은 계속 다듬고 있습니다. 하지만 잘 작동합니다.</p>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/5ff109c8df33bc308d729ebd6383c2c8b1c09ead9d2ffa8e7b4bbf2bad883ab0.png?expires=1787742784&key=gLfG4hdB7DhC9mnew7yqpw" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302008660" url="//ac.arca.live/20260826sac/5ff109c8df33bc308d729ebd6383c2c8b1c09ead9d2ffa8e7b4bbf2bad883ab0.png?expires=1787742784&key=gLfG4hdB7DhC9mnew7yqpw" originalurl="//ac.arca.live/20260826sac/5ff109c8df33bc308d729ebd6383c2c8b1c09ead9d2ffa8e7b4bbf2bad883ab0.png?expires=1787742784&key=gLfG4hdB7DhC9mnew7yqpw">
+						<br>
+					</td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">창 디자인 커스터마이즈. 토큰은 더 확장할 계획.</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">프리셋&middot;모듈&middot;플러그인 폴더 정리</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong>항목이 많아져도 관리를 쉽게 해 주는 폴더식 관리자를 도입했습니다.</strong></p>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">폴더 생성, 이름 변경 / 삭제, 전체 /&nbsp;미분류 보기, 검색과 폴더별 항목 수 표시를 지원합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">다중 선택, 일괄 이동, 드래그 이동, 폴더 /&nbsp;항목의 순서 변경을 지원합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">폴더로 좁혀 본 상태에서도 프리셋 선택 / 편집 / 복제 /&nbsp;내보내기, 모듈 활성화&middot;페르소나 할당, 플러그인 업데이트&middot;권한&middot;인자 편집 등 기존 동작을 그대로 사용할 수 있습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">폴더를 지워도 안의 항목은 삭제되지 않고 미분류로 돌아갑니다. 정리 작업은 현재 활성 프리셋이나 모듈&middot;플러그인의 실행 상태를 바꾸지 않습니다.</p>
+			</li>
+		</ul>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/bf19136bad7ab649db2cedeac875daed630fafae595f277a8fa28e9aae858568.png?expires=1787746711&key=yUooJmzJh0k6DKvaY1m8tA" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302018811" url="//ac.arca.live/20260826sac/bf19136bad7ab649db2cedeac875daed630fafae595f277a8fa28e9aae858568.png?expires=1787746711&key=yUooJmzJh0k6DKvaY1m8tA" originalurl="//ac.arca.live/20260826sac/bf19136bad7ab649db2cedeac875daed630fafae595f277a8fa28e9aae858568.png?expires=1787746711&key=yUooJmzJh0k6DKvaY1m8tA"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">스크린샷 설명을 입력하세요.</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">페르소나 빌더 개선</h3>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">페르소나 빌더의 선택적 로어북 검색</strong>: 캐릭터 로어북 전체를 넣는 대신, 매 생성 요청의 사용자 입력과 현재 초안에 맞는 항목만 찾아 넣습니다. 수정한 내용은 다음 요청부터 반영됩니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">채팅과 같은 검색 엔진으로 보조 키워드&middot;단어 매칭&middot;상시 활성&middot;재귀 검색&middot;토큰 예산을 적용합니다. 실제 채팅 기록과 채팅 전용 로어북은 검색하지 않으며, 채팅의 로어북 활성 상태도 바꾸지 않습니다. 별도로 선택한 모듈 로어북의 주입 방식은 유지합니다.</p>
+			</li>
+		</ul>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/07558260d75cca739fa21e9d3a8748ca9f5011563a7df3cb44cb2c77c342cbeb.png?expires=1787746617&key=yx5NUeIWuW6tZ5rkymXVlg" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302018629" url="//ac.arca.live/20260826sac/07558260d75cca739fa21e9d3a8748ca9f5011563a7df3cb44cb2c77c342cbeb.png?expires=1787746617&key=yx5NUeIWuW6tZ5rkymXVlg" originalurl="//ac.arca.live/20260826sac/07558260d75cca739fa21e9d3a8748ca9f5011563a7df3cb44cb2c77c342cbeb.png?expires=1787746617&key=yx5NUeIWuW6tZ5rkymXVlg"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">스크린샷 설명을 입력하세요.</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">로어북 편집기 -&nbsp;CBS 조건 보기와 변수 사이드바</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">복잡하게 중첩된 CBS 구문을 읽고, 관련 변수값을 확인&middot;수정하기 쉬워졌습니다.</p>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">조건과 본문 분리</strong>: 로어북&middot;팝업 편집기에서 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">if</span>&middot;<span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">or</span>&middot;<span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">equal</span> 등의 조건식과 본문을 나누어 표시합니다. 조건을 실행해 결과만 보여 주는 방식이 아니라, 모든 분기를 펼쳐 살펴보는 편집용 보기입니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">중첩 구조 강조</strong>: 비교식과 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">OR</span>&middot;<span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">AND</span>&middot;<span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">NOT</span>을 구분하고, 중첩 조건을 테두리로 묶습니다. 좁은 화면에서는 줄바꿈합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">변수 자동 수집</strong>: 원문에 쓰인 변수와 비교&middot;대입 값 후보를 모읍니다. 검색&middot;전체 변수 보기&middot;후보 외 값 직접 입력을 지원합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">저장 대상 선택</strong>: 캐릭터&middot;채팅 정보가 있으면 현재 채팅 값 또는 캐릭터 기본값을 골라 수정합니다. </p>
+			</li>
+		</ul>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/46bbe326ad787a7b6334089a71c12a1553cf24a2f9dc8bc81ce2007b33e3fdbb.png?expires=1787746868&key=4k7wm_tkLLs8zCdIil7-PA" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302019214" url="//ac.arca.live/20260826sac/46bbe326ad787a7b6334089a71c12a1553cf24a2f9dc8bc81ce2007b33e3fdbb.png?expires=1787746868&key=4k7wm_tkLLs8zCdIil7-PA" originalurl="//ac.arca.live/20260826sac/46bbe326ad787a7b6334089a71c12a1553cf24a2f9dc8bc81ce2007b33e3fdbb.png?expires=1787746868&key=4k7wm_tkLLs8zCdIil7-PA"></td>
+				</tr>
+				<tr>
+					<td style="padding: 11px 14px; background: linear-gradient(110deg, rgb(228, 238, 249), rgb(241, 246, 252)); border: 1px solid rgb(184, 205, 227); text-align: center; color: rgb(66, 94, 123); font-size: 13px; line-height: 1.7;"><strong>&#39;조건 보기&#39; 를 껐을 때<br>vs<br>&#39;조건 보기&#39; 를 켰을 때&nbsp;</strong>
+						<br><img src="//ac.arca.live/20260826sac/b7917376f9be01cd46930711039c9e332e54e12b1581c2adcbe63ca61b2403e4.png?expires=1787746932&key=OuSoD-tlnjvBXytT5gUTbA" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302019375" url="//ac.arca.live/20260826sac/b7917376f9be01cd46930711039c9e332e54e12b1581c2adcbe63ca61b2403e4.png?expires=1787746932&key=OuSoD-tlnjvBXytT5gUTbA" originalurl="//ac.arca.live/20260826sac/b7917376f9be01cd46930711039c9e332e54e12b1581c2adcbe63ca61b2403e4.png?expires=1787746932&key=OuSoD-tlnjvBXytT5gUTbA"></td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">LLM 번역 캐시 관리자</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">LLM 번역 사용 시 언어 설정에서 번역 캐시를 직접 관리할 수 있습니다.</p>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">검색, 100개 단위 탐색, 번역값 편집&middot;복사, 개별&middot;전체 삭제, 가져오기&middot;내보내기를 지원합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">번역 요청 도중 캐시를 수정하거나 삭제해도, 늦게 끝난 요청이 이전 값을 되살리지 않도록 했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">여러 창이나 원격 접속에서 동시에 수정할 때 항목별 충돌을 감지합니다. 일부 삭제가 실패해도 실제 저장 상태와 메모리 캐시를 다시 맞춥니다.</p>
+			</li>
+		</ul>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">2. 리스바드 코어 기능 개선</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">BardWiki 리부트 기능 추가 &mdash; 기존 대화로 위키 다시 만들기</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">현재 대화의 첫 확정 AI 응답부터 최신 응답까지, 기록을 순서대로 분석해 위키를 다시 만드는 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">위키 리부트</span>를 추가했습니다. 다른 리스에서 이주했다면 리부트 기능을 쓰세요.</p>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/44df3f47934dde7d42441a8e3b22223eebf12d5f71e4fab190b3af84a09569fc.png?expires=1787747070&key=AdlJzrN7kG8_kTxL7yIevQ" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302019700" url="//ac.arca.live/20260826sac/44df3f47934dde7d42441a8e3b22223eebf12d5f71e4fab190b3af84a09569fc.png?expires=1787747070&key=AdlJzrN7kG8_kTxL7yIevQ" originalurl="//ac.arca.live/20260826sac/44df3f47934dde7d42441a8e3b22223eebf12d5f71e4fab190b3af84a09569fc.png?expires=1787747070&key=AdlJzrN7kG8_kTxL7yIevQ"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">
+						<br>
+					</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">주요 인물 기록과 과거 사건 검색 개선</h3>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">주요 인물의 첫 등록 개선</strong>: 상태 변화가 없어도 확정된 대화에서 지속적인 역할&middot;관계&middot;능력&middot;목표&middot;지식이 드러난 주요 인물은 새 문서 후보로 포함합니다. 지휘자&middot;동료&middot;대립자 등 참여자를 개별 점검하며, 다른 문서에 이름이 있다는 이유로 인물 문서를 생략하지 않습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">중요한 기록 우선</strong>: 주요 대상의 최초 등록과 중요한 지속 변화를 사소한 행적 갱신보다 우선합니다. 이름만 언급된 대상, 별칭 중복, 반복 갱신과 근거 없는 원작 설정 등록은 계속 억제합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">간접 단서 탐색 개선</strong>: 질문과 기록의 표현이 정확히 일치하지 않아도 한국어 복합어와 인물&middot;장소&middot;물건&middot;행동의 관계를 활용해 관련 사건의 근거를 찾도록 개선했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">문서 비대화 완화</strong>: 캐릭터의 연대기에 사건 근거는 유지하면서, <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">관련 문서</span>에 모든 사건 링크가 반복 나열되는 현상을 줄였습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">정본 갱신 묶음 처리</strong>: 여러 문서의 갱신을 가능한 경우 한 번에 처리하고, 설정한 분석 토큰 예산을 넘을 것으로 예상될 때 나눕니다. 나누어 처리해도 원래 사건 근거를 유지합니다.</p>
+			</li>
+		</ul>
+		<br>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/ca90ee21024673d853ffe37ee12c5de33f7ad5edada5f21a460853184a899efb.png?expires=1787747413&key=LID571cF55fWd6j9q4bclQ" class="fr-fic fr-dii" uploaded="true" idx="302020610" url="//ac.arca.live/20260826sac/ca90ee21024673d853ffe37ee12c5de33f7ad5edada5f21a460853184a899efb.png?expires=1787747413&key=LID571cF55fWd6j9q4bclQ" originalurl="//ac.arca.live/20260826sac/ca90ee21024673d853ffe37ee12c5de33f7ad5edada5f21a460853184a899efb.png?expires=1787747413&key=LID571cF55fWd6j9q4bclQ"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">스크린샷 설명을 입력하세요.</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+		<br>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">세이브/로드 &mdash; 와 이거 꼭 게임하는 것 같당</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;">세이브를 불러오면 새 채팅을 만드는 대신 <strong style="color:#173e69;font-weight:800;">현재 채팅을 저장 시점으로 되돌립니다.</strong>&nbsp;</p>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">슬롯을 골라 저장</strong>: 새 슬롯에 저장하거나 기존 슬롯을 덮어쓸 수 있습니다.&nbsp;</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">복원하는 것</strong>: 대화 기록, Memory Wiki, 스토리 진행 변수와 프롬프트 외 로컬 변수, 페르소나&middot;모델 바인딩입니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">유지하는 것</strong>: 세이브를 불러와도, 현재 프롬프트 옵션, 채팅별 토글 고정 등은 덮어쓰지 않습니다.</p>
+			</li>
+		</ul>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/b06df537930c8eb415bd6a61cca0dcdf373d3db0a4db978b18b1be1b90c9264c.png?expires=1787747349&key=5dBOnYNNiH538bHPAOzBFQ" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302020430" url="//ac.arca.live/20260826sac/b06df537930c8eb415bd6a61cca0dcdf373d3db0a4db978b18b1be1b90c9264c.png?expires=1787747349&key=5dBOnYNNiH538bHPAOzBFQ" originalurl="//ac.arca.live/20260826sac/b06df537930c8eb415bd6a61cca0dcdf373d3db0a4db978b18b1be1b90c9264c.png?expires=1787747349&key=5dBOnYNNiH538bHPAOzBFQ"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">브랜치보다 편하다고</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">채팅별 설정과 BardWiki 모델 요청 안정화</h3>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">전역 토글 값을 채팅별로 고정할 수 있습니다. 고정한 페르소나&middot;프롬프트도 파란색으로 표시해 전역 설정과 구분하고, 이미지가 없는 페르소나의 검은 핀 타일은 제거했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">실제 요청과 화면에 표시하는 모델 이름이 같은 모델 모드&middot;바인딩 규칙을 따르도록 수정했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">선택한 보조 모델 프리셋의 추론 강도를 그대로 사용합니다. 내부 구조화 요청이 추론 강도를 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">minimal</span>로 강제해 설정을 덮어쓰거나 일부 Gemini 모델에서 오류를 내던 문제를 수정했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">Ollama Cloud의 GLM 등 보조 모델 요청에 JSON 모드와 전체 응답 스키마를 함께 전달해, 필수 분석 항목 누락으로 위키 갱신이 실패하는 문제를 보완했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">서버측 요청 기능 사용 시 내부 분석 JSON이 다음 턴의 채팅 메시지로 노출될 수 있던 문제를 수정했습니다.</p>
+			</li>
+		</ul>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">3. 그 밖의 사용성&middot;호환성&middot;안정성 개선</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">가져오기&middot;내보내기와 대용량 데이터</h3>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">캐릭터 카드와 모듈을 내보내고 다시 가져올 때 확장 설정이 더 정확히 유지되도록 개선했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">대용량 로컬 백업을 복원할 때 전체 파일을 서버 메모리에 올리지 않고 디스크 기반으로 스트리밍해 메모리 급증과 서버 종료 문제를 완화했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">서버에 저장한 백업의 복원 후처리가 길어져도 연결이 끊기지 않도록 진행 응답과 연결 유지 처리를 보강했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">일반 저장소 요청에 인증 API 요청 제한이 중복 적용되어 발생하던 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">getItem</span> 오류와 429 응답 문제를 수정했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">대형 세이브, Lua 스크립트 메모리, 자산 정리, CSS 렌더링, 파일 선택과 기존 데이터 보정을 개선했습니다.</p>
+			</li>
+		</ul>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">RisuRealm&middot;홈 화면&middot;테마</h3>
+
+		<ul style="margin:14px 0 20px;padding:0 0 0 20px;color:#29415a;font-size:15px;line-height:1.85;">
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">메인 화면에서 RisuRealm 브라우저를 바로 열 수 있게 하고 Related Links 영역을 제거했습니다. 카드&middot;상세&middot;검색 화면에 테마 토큰과 한국어 UI를 적용했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">캐릭터 검색은 Enter로 실행할 수 있습니다. 태그 입력창에서는 전체 태그 목록, 공백으로 구분한 태그 자동완성, 방향키&middot;Tab&middot;Enter 선택과 중복 제외를 지원합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">캐릭터 설명의 URL을 링크로 표시하고, 설명을 드래그해 선택할 때 상세 창이 닫히지 않도록 수정했습니다. 다운로드 버튼과 설명 표시도 정리했습니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">홈 화면 상단에 RisuBard 이름과 현재 앱 버전을 표시합니다.</p>
+			</li>
+			<li style="margin:0 0 10px;padding:0 0 0 2px;color:#29415a;font-size:15px;line-height:1.85;">
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">색상 테마는 실제 팔레트를 보면서 선택할 수 있습니다.</p>
+			</li>
+		</ul>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260826sac/e989dd1732e449330c792887b51d7c5afa8139a8e6270575f1642795b6195507.png?expires=1787747620&key=pSpcPBUMWiLBLH0DK0IXYQ" class="fr-fic fr-dii" data-fr-last-image-pasted="true" uploaded="true" idx="302021291" url="//ac.arca.live/20260826sac/e989dd1732e449330c792887b51d7c5afa8139a8e6270575f1642795b6195507.png?expires=1787747620&key=pSpcPBUMWiLBLH0DK0IXYQ" originalurl="//ac.arca.live/20260826sac/e989dd1732e449330c792887b51d7c5afa8139a8e6270575f1642795b6195507.png?expires=1787747620&key=pSpcPBUMWiLBLH0DK0IXYQ"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">스크린샷 설명을 입력하세요.</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="padding:22px 20px;color:#4b6783;font-size:12px;line-height:1.7;text-align:center;background:linear-gradient(100deg,#e8f0f9,#f4f8fd);">RisuBard &middot; v0.8.14 &middot; 통합 패치노트</div></div>

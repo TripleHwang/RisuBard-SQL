@@ -50,7 +50,11 @@ describe('RisuBard mode settings', () => {
             '!resolvedRisuBardSettings(currentChat).risuBardResponseExcludeUserMessages'
         )
         expect(chatPage).toContain('min: 1')
-        expect(chatPage).toContain('max: 100')
+        expect(chatPage).not.toMatch(/max:\s*\d+/)
+        const currentChatSettings = readFileSync(
+            resolve(process.cwd(), 'src/lib/Others/RisuBardCurrentChatSettings.svelte'), 'utf8',
+        )
+        expect(currentChatSettings).not.toMatch(/\bmax="\d+"/)
         expect(memoryWiki).not.toContain('data-memory-recent-message-count')
         expect(memoryWiki).not.toContain('data-response-recent-message-count')
         expect(memoryWiki).not.toContain('data-response-include-user-messages')
@@ -94,6 +98,10 @@ describe('RisuBard mode settings', () => {
             ? readFileSync(settingsDataPath, 'utf8')
             : ''
         expect(settingsData).toContain("bindKey: 'risuBardCanonicalWritingStyle'")
+        expect(settingsData).toContain("bindKey: 'risuBardWikiWritingLanguage'")
+        expect(databaseSource).toContain('data.risuBardWikiWritingLanguage ===')
+        expect(processSource).toContain('wikiWritingLanguage: settings.risuBardWikiWritingLanguage')
+        expect(processSource).toContain("wikiWritingLanguage: job.writingLanguage ?? 'ko'")
         expect(settingsData).toContain("value: 'standard'")
         expect(settingsData).toContain("value: 'concise'")
         expect(settingsData).toContain("value: 'ultra-concise'")

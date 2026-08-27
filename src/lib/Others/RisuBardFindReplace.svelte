@@ -143,7 +143,7 @@
     label { min-width: 0; }
     .fields label { display: grid; gap: .38rem; }
     .fields label > span { display: flex; align-items: center; gap: .3rem; color: var(--risu-theme-textcolor2); font-size: .7rem; font-weight: 700; }
-    .fields input { width: 100%; min-width: 0; padding: .58rem .65rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .42rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-darkbg) 92%, black); font-size: .78rem; }
+    .fields input { width: 100%; min-width: 0; padding: .58rem .65rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .42rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-darkbg) 92%, var(--color-bgcolor)); font-size: .78rem; }
     input:focus { outline: 2px solid color-mix(in srgb, var(--risu-theme-primary) 45%, transparent); outline-offset: 1px; }
     .arrow { padding-bottom: .55rem; color: var(--risu-theme-primary); }
     .scopes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }

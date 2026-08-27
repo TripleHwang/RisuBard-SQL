@@ -1,5 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { buildWikiFileTree } from './wikiFileTree'
+import { buildWikiFileTree, getRecentlyUpdatedWikiDocumentIds } from './wikiFileTree'
+
+describe('getRecentlyUpdatedWikiDocumentIds', () => {
+    const page = (id: string, updated: string, type: 'character' | 'event' = 'character') => ({
+        id, title: id, relativePath: `${id}.md`, type, updated,
+    })
+
+    it('marks all pages updated since the latest analysis event, even when writes finish separately', () => {
+        expect([...getRecentlyUpdatedWikiDocumentIds([
+            page('old', '2026-08-27T00:00:00Z'),
+            page('event', '2026-08-27T01:00:00Z', 'event'),
+            page('character', '2026-08-27T01:00:03Z'),
+            page('scene', '2026-08-27T01:00:05Z'),
+        ])]).toEqual(['event', 'character', 'scene'])
+    })
+
+    it('ignores retracted events and invalid timestamps, falling back to the latest saved pages', () => {
+        expect([...getRecentlyUpdatedWikiDocumentIds([
+            page('old', '2026-08-27T00:00:00Z'),
+            page('first', '2026-08-27T01:00:00Z'),
+            page('second', '2026-08-27T10:00:00+09:00'),
+            page('invalid', 'now'),
+            { ...page('undone', '2026-08-27T02:00:00Z', 'event'), status: 'retracted' },
+        ])]).toEqual(['first', 'second'])
+        expect(getRecentlyUpdatedWikiDocumentIds([]).size).toBe(0)
+        expect(getRecentlyUpdatedWikiDocumentIds([page('invalid', '')]).size).toBe(0)
+    })
+})
 
 describe('buildWikiFileTree', () => {
     it('shows the newest recorded event first regardless of hashed filename', () => {
@@ -42,11 +69,11 @@ describe('buildWikiFileTree', () => {
             node.kind === 'folder' && node.children.length === 0
         )).toBe(true)
         expect(tree.find((node) => node.name === 'events')).toEqual(
-            expect.objectContaining({ readOnly: true })
+            expect.objectContaining({ readOnly: false })
         )
     })
 
-    it('groups documents by path and marks the events folder read-only', () => {
+    it('groups editable event documents under the events folder', () => {
         const tree = buildWikiFileTree([
             { id: 'scene', title: '현재 장면', relativePath: 'current-scene.md', type: 'scene' },
             { id: 'character', title: '라비안', relativePath: 'characters/라비안.md', type: 'character' },
@@ -66,8 +93,11 @@ describe('buildWikiFileTree', () => {
         expect(tree.find((node) => node.name === 'events')).toEqual(
             expect.objectContaining({
                 kind: 'folder',
-                readOnly: true,
-                children: [expect.objectContaining({ documentId: 'event' })],
+                readOnly: false,
+                children: [expect.objectContaining({
+                    documentId: 'event',
+                    readOnly: false,
+                })],
             })
         )
     })
@@ -84,7 +114,7 @@ describe('buildWikiFileTree', () => {
         expect(tree.find((node) => node.name === 'events')).toEqual(
             expect.objectContaining({
                 kind: 'folder',
-                readOnly: true,
+                readOnly: false,
                 children: [],
             })
         )

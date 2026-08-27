@@ -34,6 +34,19 @@ describe('parseSingleJsonObject', () => {
         expect(() => parseSingleJsonObject('{}\n{}')).toThrow(/exactly one/)
         expect(() => parseSingleJsonObject('not json')).toThrow(/exactly one/)
     })
+
+    it('ignores JSON drafts in leading think blocks but preserves literal document text', () => {
+        const value = { markdown: '## 인물\n<think>원문</think> <Thoughts>인용</Thoughts>' }
+        expect(parseSingleJsonObject(
+            `\n<think>{"draft":true}</think>\n\`\`\`json\n${JSON.stringify(value)}\n\`\`\``
+        )).toEqual(value)
+        expect(parseSingleJsonObject(JSON.stringify(value))).toEqual(value)
+    })
+
+    it('never executes JSON inside an unfinished reasoning block', () => {
+        expect(() => parseSingleJsonObject('<think>{"draft":true}'))
+            .toThrow(/exactly one/)
+    })
 })
 
 describe('normalizeNarrativeBaseline', () => {

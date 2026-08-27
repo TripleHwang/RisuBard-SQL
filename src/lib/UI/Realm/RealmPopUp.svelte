@@ -69,11 +69,11 @@
                 <div class="flex size-full min-h-56 items-center justify-center text-5xl text-textcolor2">?</div>
             {:else}
                 <img class="absolute inset-0 size-full object-cover object-top" alt={openedData.name} src={`${hubURL}/resource/` + openedData.img} />
-                <div class="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/55 to-transparent"></div>
+                <div class="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-media-bg/55 to-transparent"></div>
             {/if}
             <div class="absolute bottom-3 left-3 flex flex-wrap gap-1.5 pr-3">
                 {#each openedData.tags.slice(0, 4) as tag}
-                    <span class="rounded-full border border-white/15 bg-black/55 px-2 py-1 text-xs text-white backdrop-blur-sm">#{tag}</span>
+                    <span class="rounded-full border border-media-text/15 bg-media-bg/55 px-2 py-1 text-xs text-media-text backdrop-blur-sm">#{tag}</span>
                 {/each}
             </div>
         </div>
@@ -131,7 +131,7 @@
                 }}><FlagIcon size={18} /></ShButton>
 
                 {#if (DBState.db.account?.token?.split('-') ?? [])[1] === openedData.creator}
-                    <ShButton variant="ghost" size="icon" aria-label={ui.remove} className="text-red-400" onclick={async () => {
+                    <ShButton variant="ghost" size="icon" aria-label={ui.remove} className="text-danger" onclick={async () => {
                         const conf = await alertConfirm(ui.removeConfirm);
                         if (!conf) return;
                         const response = await fetch(hubURL + '/hub/remove', {

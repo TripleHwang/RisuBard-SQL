@@ -24,7 +24,7 @@
 <span class="text-textcolor text-lg">Tools</span>
 <div class="flex flex-col gap-2">
   {#each tools as tool}
-    <div class="border border-gray-300 p-2 rounded-md">
+    <div class="border border-borderc p-2 rounded-md">
       <h3 class="text-lg font-bold">{tool.name}</h3>
       <p>{tool.description}</p>
       <div class="prose prose-gray w-full">

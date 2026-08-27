@@ -22,13 +22,13 @@
 </script>
 
 {#if pluginAlertModalStore.open}
-    <dialog open class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div class="bg-orange-800 rounded-lg shadow-xl max-w-md w-full p-6">
+    <dialog open class="risu-modal-overlay fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
+        <div class="risu-modal-surface bg-warning-bg rounded-lg shadow-xl max-w-md w-full p-6">
             <h2 class="text-xl font-bold mb-4 text-textcolor">
                 {language.pluginRiskDetectedAlert}
             </h2>
             
-            <ul class="list-disc list-inside mb-4 space-y-2 text-gray-300">
+            <ul class="list-disc list-inside mb-4 space-y-2 text-textcolor">
                 {#each reasons as reason}
                     <li>{reason[0]}</li>
                     <ul>
@@ -37,21 +37,21 @@
                 {/each}
             </ul>
             
-            <details class="mb-4 text-gray-200">
+            <details class="mb-4 text-textcolor">
                 
-                <details class="mb-4 text-gray-200">
-                    <summary class="cursor-pointer text-gray-200 mb-2">
+                <details class="mb-4 text-textcolor">
+                    <summary class="cursor-pointer text-textcolor mb-2">
                         Dev Info
                     </summary>
 
                     {#each pluginAlertModalStore.errors as error}
-                        <p class="text-gray-200">{error.message}</p>
+                        <p class="text-textcolor">{error.message}</p>
                     {/each}
                     
                 </details>
 
                 <button 
-                    class="text-gray-200"
+                    class="text-textcolor"
                     onclick={() => {
                         pluginAlertModalStore.open = false
                         pluginAlertModalStore.errors = []
@@ -62,7 +62,7 @@
             </details>
             
             <button 
-                class="w-full bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold py-2 px-4 rounded-sm transition-colors"
+                class="w-full bg-darkbutton hover:bg-darkbutton text-textcolor font-semibold py-2 px-4 rounded-sm transition-colors"
                 onclick={() => pluginAlertModalStore.open = false}
             >
                 {language.doNotInstall}

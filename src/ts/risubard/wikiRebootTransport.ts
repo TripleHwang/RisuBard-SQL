@@ -1,4 +1,7 @@
-import type { CanonicalTurnReceipt } from './memoryWiki'
+import {
+    parseCanonicalTurnReceipt,
+    type CanonicalTurnReceipt,
+} from './canonicalTurnReceipt'
 import { invokeBrowserFetch } from './browserFetch'
 import type { MemoryWikiForkReceipt } from './memoryWikiFork'
 
@@ -77,19 +80,70 @@ export async function cleanupWikiRebootWorkspace(input: TransportBase & {
     return { removed: value.removed }
 }
 
-function parseReceipt(value: unknown): CanonicalTurnReceipt {
-    const receipt = record(value)
-    if (typeof receipt.snapshotId !== 'string'
-        || !Array.isArray(receipt.sourceMessageIds)
-        || !receipt.sourceMessageIds.every((id) => typeof id === 'string')
-        || !Array.isArray(receipt.eventIds)
-        || !receipt.eventIds.every((id) => typeof id === 'string')
-        || !Array.isArray(receipt.changes)
-        || !Array.isArray(receipt.warnings)
-        || typeof receipt.recordedAt !== 'string') {
-        throw new Error('Invalid BardWiki reboot batch receipt')
+interface RebootBatchTransportInput extends TransportBase {
+    stagingChatId: string
+    sourceMessageIds: string[]
+}
+
+function batchBody(input: RebootBatchTransportInput) {
+    return {
+        characterId: bounded(input.characterId, 'Character ID'),
+        chatId: bounded(input.stagingChatId, 'Staging chat ID'),
+        sourceMessageIds: input.sourceMessageIds.map((id) =>
+            bounded(id, 'Source message ID')
+        ),
     }
-    return receipt as unknown as CanonicalTurnReceipt
+}
+
+export async function beginWikiRebootBatch(
+    input: RebootBatchTransportInput & { eventSourceGroups: string[][] }
+): Promise<{ canonicalCount: number }> {
+    const value = record(await post(
+        input,
+        '/api/risubard/memory/wiki/reboot/begin',
+        {
+            ...batchBody(input),
+            eventSourceGroups: input.eventSourceGroups.map((group) =>
+                group.map((id) => bounded(id, 'Event source message ID'))
+            ),
+        }
+    ))
+    if (!Number.isSafeInteger(value.canonicalCount)
+        || (value.canonicalCount as number) < 0) {
+        throw new Error('Invalid BardWiki reboot begin receipt')
+    }
+    return { canonicalCount: value.canonicalCount as number }
+}
+
+export async function recordWikiRebootBatchReceipt(
+    input: TransportBase & {
+        stagingChatId: string
+        receipt: CanonicalTurnReceipt
+    }
+): Promise<CanonicalTurnReceipt> {
+    return parseCanonicalTurnReceipt(await post(
+        input,
+        '/api/risubard/memory/wiki/reboot/record',
+        {
+            characterId: bounded(input.characterId, 'Character ID'),
+            chatId: bounded(input.stagingChatId, 'Staging chat ID'),
+            receipt: parseCanonicalTurnReceipt(input.receipt),
+        }
+    ))
+}
+
+export async function completeWikiRebootBatch(
+    input: RebootBatchTransportInput
+): Promise<{ removed: boolean }> {
+    const value = record(await post(
+        input,
+        '/api/risubard/memory/wiki/reboot/complete',
+        batchBody(input)
+    ))
+    if (typeof value.removed !== 'boolean') {
+        throw new Error('Invalid BardWiki reboot completion receipt')
+    }
+    return { removed: value.removed }
 }
 
 export async function recoverWikiRebootBatch(input: TransportBase & {
@@ -111,5 +165,7 @@ export async function recoverWikiRebootBatch(input: TransportBase & {
             ),
         }
     ))
-    return value.receipt === null ? null : parseReceipt(value.receipt)
+    return value.receipt === null
+        ? null
+        : parseCanonicalTurnReceipt(value.receipt)
 }

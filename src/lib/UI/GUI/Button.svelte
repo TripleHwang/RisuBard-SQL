@@ -2,10 +2,10 @@
     onclick={onclick}
     {disabled}
     class="{
-        styled === 'primary' ? ((selected ? 'bg-bg-selected' : 'bg-darkbutton') + " hover:bg-selected focus:ring-selected border-darkborderc")
+        styled === 'primary' ? ((selected ? 'bg-selected' : 'bg-darkbutton') + " hover:bg-selected focus:ring-selected border-darkborderc")
         : styled === 'outlined' ? 'bg-transparent hover:bg-darkbg focus:ring-selected border-darkborderc text-textcolor2'
-        : ((selected ? 'bg-red-800' : 'bg-red-700') + ' hover:bg-red-500 focus:ring-red-600 border-red-600')
-    } border text-textcolor rounded-md shadow-xs focus:outline-hidden focus:ring-2 transition-colors duration-200{className ? (" " + className) : ""}"
+        : ((selected ? 'bg-danger/85' : 'bg-danger') + ' hover:bg-danger/75 focus:ring-danger border-danger-border')
+    } border {styled === 'danger' ? 'text-on-danger' : 'text-textcolor'} rounded-md shadow-xs focus:outline-hidden focus:ring-2 transition-colors duration-200{className ? (" " + className) : ""}"
     class:opacity-50={disabled}
     class:cursor-not-allowed={disabled}
     class:px-4 = {size == "md"}

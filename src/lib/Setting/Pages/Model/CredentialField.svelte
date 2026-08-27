@@ -81,7 +81,7 @@
     <div class="flex items-center justify-between gap-2">
         <span class="text-sm text-textcolor flex items-center gap-1">
             {schemaField.label}
-            {#if schemaField.required}<span class="text-red-400">*</span>{/if}
+            {#if schemaField.required}<span class="text-danger">*</span>{/if}
         </span>
         <SegmentedControl
             bind:value={mode}
