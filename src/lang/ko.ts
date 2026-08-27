@@ -2988,6 +2988,17 @@ export const languageKorean = {
       other: "기타 컨텍스트",
     },
   },
-  sqlCharacterRepairUnavailableNoCandidate: "이 캐릭터의 데이터를 어떤 백업에서도 찾을 수 없어 복구하지 못했습니다.",
-  sqlCharacterRepairUnavailableDecodeFailed: "이 캐릭터의 백업을 읽을 수 없어 복구하지 못했습니다.",
+  // 각 문구는 복구 실패 사유 코드 하나에 대응하며, 실제로 확인한 범위
+  // 이상을 주장하지 않는다. "어떤 백업에도 없다"고 말할 수 있는 것은
+  // ...AbsentFromAll 하나뿐이다. 실패한 복구는 저장된 데이터를 전혀
+  // 건드리지 않으므로 모든 문구가 그 사실을 함께 알린다.
+  // `{}` 는 호출부에서 `.replace("{}", value)` 로 순서대로 채운다.
+  sqlCharacterRepairUnavailableNoBackups: "이 캐릭터의 상세 데이터가 비어 있지만, 이 서버에는 복구에 사용할 백업이 없습니다. 아무것도 변경되지 않았으니 다른 곳에 보관 중인 백업 파일을 가져오면 되살릴 수 있습니다.",
+  // {} = 존재하는 백업 개수
+  sqlCharacterRepairUnavailableAllUnreadable: "백업 {}개를 모두 읽지 못해 이 캐릭터가 그 안에 있는지 확인하지 못했습니다. 아무것도 변경되지 않았으니 다시 시도하거나, 예전 백업 파일을 직접 가져와 보세요.",
+  // {} = 읽어서 확인한 백업 개수, 그 다음 {} = 확인하지 못한 백업 개수
+  sqlCharacterRepairUnavailableAbsentFromExamined: "읽을 수 있었던 백업 {}개에서는 이 캐릭터를 찾지 못했고, {}개는 확인하지 못했습니다. 아무것도 변경되지 않았으니 확인하지 못한 백업에 아직 남아 있을 수 있습니다.",
+  // {} = 전부 읽어서 확인한 백업 개수
+  sqlCharacterRepairUnavailableAbsentFromAll: "백업 {}개를 모두 확인했지만 이 캐릭터의 상세 데이터를 찾지 못했습니다. 아무것도 변경되지 않았으니 이 서버 밖에 보관해 둔 백업 파일에는 남아 있을 수 있습니다.",
+  sqlCharacterRepairUnavailableUnknown: "이 캐릭터를 복구하지 못했으며 원인을 확인하지 못했습니다. 아무것도 변경되지 않았으니 다시 시도해도 안전합니다.",
 } satisfies DeepPartial<typeof import("./en").languageEnglish>;

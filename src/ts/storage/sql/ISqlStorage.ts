@@ -79,17 +79,43 @@ export interface SqlChatHydration {
   chat: Chat;
 }
 
+/**
+ * Census of what a failed repair actually looked at. Invariant, guaranteed by
+ * the server: `total === examined + unreadable + skipped`.
+ */
+export interface SqlCharacterRepairBackupCensus {
+  /** Backup sources that exist on this installation. */
+  total: number;
+  /** Decoded successfully and searched for this character. */
+  examined: number;
+  /** Attempted but could not be decoded (corrupt, over budget, timed out). */
+  unreadable: number;
+  /** Never attempted: dropped by the candidate/byte budget or the time budget. */
+  skipped: number;
+}
+
 export interface SqlCharacterRepairResult {
   status: "repaired" | "not-needed" | "unavailable";
   revision: number;
   /**
-   * Present only when `status === "unavailable"`. Distinguishes "no backup
-   * candidate contained a usable copy of this character" (`no-candidate`)
-   * from "at least one candidate existed but none of them could be decoded
-   * at all" (`decode-failed`). See server/node/sql-character-repair.cjs
-   * `REPAIR_UNAVAILABLE_REASON` for the authoritative set of values.
+   * Present only when `status === "unavailable"`. Each code is bound to the
+   * strongest claim it is allowed to make — a reason may never assert more
+   * than was actually examined:
+   *
+   *   `no-backups`           no backup source exists; nothing was checked.
+   *   `all-unreadable`       backups exist, none could be read. Says nothing
+   *                          about whether the character is in them.
+   *   `absent-from-examined` some backups were read and lacked the character,
+   *                          but others were unreadable or never opened.
+   *   `absent-from-all`      every existing backup was read and none had it.
+   *                          The ONLY code that may claim "not in any backup".
+   *
+   * See server/node/sql-character-repair.cjs `REPAIR_UNAVAILABLE_REASON` for
+   * the authoritative set.
    */
-  reason?: "no-candidate" | "decode-failed" | string;
+  reason?: "no-backups" | "all-unreadable" | "absent-from-examined" | "absent-from-all" | string;
+  /** Present only when `status === "unavailable"`. */
+  backups?: SqlCharacterRepairBackupCensus;
 }
 
 export interface BotPresetSummary {

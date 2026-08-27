@@ -58,5 +58,13 @@ describe('bounded SQL read routes', () => {
         expect(source).toContain('MAX_REPAIR_DBBACKUP_CANDIDATES')
         expect(source).toContain('MAX_REPAIR_DBBACKUP_TOTAL_BYTES')
         expect(source).toContain("require('./sql-repair-decode.cjs')")
+        // The candidate builder must report how many backups EXIST, not just
+        // how many fit its budgets — otherwise the repair result cannot tell
+        // "checked all of them" from "checked the ones we could afford", and
+        // the user-facing message goes back to overstating the search.
+        expect(source).toContain('return { candidates, total }')
+        expect(source).toContain('const total = candidates.length + dbbackupEntries.length')
+        // A single oversized snapshot must not truncate the rest of the list.
+        expect(source).toContain('if (usedBytes + entry.size > MAX_REPAIR_DBBACKUP_TOTAL_BYTES) continue')
     })
 })

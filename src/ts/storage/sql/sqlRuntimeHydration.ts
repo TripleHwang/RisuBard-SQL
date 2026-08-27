@@ -1,5 +1,5 @@
 import type { Chat, Database, character } from "../database.svelte";
-import type { SqlBootstrapStorage } from "./ISqlStorage";
+import type { SqlBootstrapStorage, SqlCharacterRepairResult } from "./ISqlStorage";
 import { getActiveSqlStorage } from "./sqlBootstrap";
 import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
@@ -9,6 +9,43 @@ import { getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } f
 import { language } from "src/lang";
 
 export type { SqlHydrationWindow };
+
+/**
+ * Turns a failed repair into a message that claims no more than the server
+ * actually examined.
+ *
+ * The rule this enforces: only `absent-from-all` — the case where every backup
+ * that exists was decoded and searched — may tell the user the character is
+ * not in any backup. `absent-from-examined` names how many were checked AND
+ * how many were not, so an unchecked backup still reads as a live lead rather
+ * than a verdict. `all-unreadable` says nothing about presence at all, because
+ * nothing was ever looked at.
+ *
+ * A reason that needs counts but arrives without a usable census degrades to
+ * the unknown-reason message rather than quoting a number nobody measured.
+ */
+export function repairUnavailableMessage(result: SqlCharacterRepairResult): string {
+  const census = result.backups;
+  if (result.reason === "no-backups") return language.sqlCharacterRepairUnavailableNoBackups;
+  if (census) {
+    if (result.reason === "all-unreadable") {
+      return language.sqlCharacterRepairUnavailableAllUnreadable.replace("{}", String(census.total));
+    }
+    if (result.reason === "absent-from-all") {
+      return language.sqlCharacterRepairUnavailableAbsentFromAll.replace("{}", String(census.total));
+    }
+    if (result.reason === "absent-from-examined") {
+      // Everything not searched — unreadable plus never-opened — is one number
+      // to the user: backups that might still hold the character.
+      const unchecked = census.unreadable + census.skipped;
+      return language.sqlCharacterRepairUnavailableAbsentFromExamined
+        .replace("{}", String(census.examined))
+        .replace("{}", String(unchecked));
+    }
+  }
+  return language.sqlCharacterRepairUnavailableUnknown;
+}
+
 type HydratableCharacter = character & { detailsLoaded?: boolean };
 type CollapsedCharacter = character & { _sqlCharacterBodyCollapsed?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
@@ -128,20 +165,12 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
       if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
         if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
         const repaired = await storage.repairCollapsedCharacter(characterId);
-        // `unavailable` means the server walked its whole bounded backup
-        // candidate list and found nothing applicable — never re-read here,
-        // since the row on disk is guaranteed unchanged (the server only
-        // ever commits on a match). Distinguish the two reason codes so the
-        // failure at least reads differently for whoever sees the alert.
-        if (repaired.status === "unavailable") {
-          const reason = repaired.reason;
-          const message = reason === "decode-failed"
-            ? language.sqlCharacterRepairUnavailableDecodeFailed
-            : reason === "no-candidate"
-            ? language.sqlCharacterRepairUnavailableNoCandidate
-            : "SQL character repair could not recover this character (reason unknown)";
-          throw new Error(message);
-        }
+        // `unavailable` means the server finished walking the candidates it
+        // was able to open without finding an applicable match — never re-read
+        // here, since the row on disk is guaranteed unchanged (the server only
+        // ever commits on a match). The reason code plus the backup census
+        // decide how much the message is allowed to claim.
+        if (repaired.status === "unavailable") throw new Error(repairUnavailableMessage(repaired));
         const reloaded = await storage.loadCharacterHydration(characterId);
         if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
         return applyHydratedCharacter(db, characterId, reloaded);

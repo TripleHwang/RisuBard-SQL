@@ -5,6 +5,7 @@ import type {
   SqlDeferredBootstrapPayload,
   SqlBootstrapStorage,
   SqlChatHydration,
+  SqlCharacterRepairBackupCensus,
   SqlCharacterRepairResult,
   SqlCharacterSearchResult,
   SqlLoadDatabaseOptions,
@@ -52,6 +53,29 @@ interface ServerDump {
 }
 
 type Statement = { sql: string; bind: unknown[] };
+
+/**
+ * Validates the `backups` census on a repair response. Anything malformed is
+ * dropped entirely rather than partially trusted: the census exists so the UI
+ * can say "N of M backups were checked", and a half-parsed census would let it
+ * quote a number that was never measured. With the census absent the caller
+ * falls back to the reason code alone, which is always safe.
+ */
+function parseRepairBackupCensus(raw: unknown): SqlCharacterRepairBackupCensus | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const source = raw as Record<string, unknown>;
+  const counts: number[] = [];
+  for (const key of ["total", "examined", "unreadable", "skipped"] as const) {
+    const value = Number(source[key]);
+    if (!Number.isSafeInteger(value) || value < 0) return undefined;
+    counts.push(value);
+  }
+  const [total, examined, unreadable, skipped] = counts;
+  // The server guarantees this identity; if it does not hold, the payload is
+  // not one we can quote numbers from.
+  if (examined + unreadable + skipped !== total) return undefined;
+  return { total, examined, unreadable, skipped };
+}
 
 export class SqlHttpError extends Error {
   constructor(message: string, readonly status: number) {
@@ -365,12 +389,16 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   async repairCollapsedCharacter(characterId: string): Promise<SqlCharacterRepairResult> {
     const response = await this.request(`/api/sql/characters/${encodeURIComponent(characterId)}/repair`, { method: "POST" });
     if (!response.ok) throw new Error(`SQL character repair failed (${response.status})`);
-    const payload = await response.json() as { status?: unknown; revision?: unknown; reason?: unknown };
+    const payload = await response.json() as { status?: unknown; revision?: unknown; reason?: unknown; backups?: unknown };
     const revision = Number(payload.revision);
     if ((payload.status !== "repaired" && payload.status !== "not-needed" && payload.status !== "unavailable") || !Number.isSafeInteger(revision) || revision < 0) throw new Error("Invalid SQL character repair response");
     this.acceptReadRevision(revision);
     const reason = typeof payload.reason === "string" ? payload.reason : undefined;
-    return reason !== undefined ? { status: payload.status, revision, reason } : { status: payload.status, revision };
+    const backups = parseRepairBackupCensus(payload.backups);
+    const result: SqlCharacterRepairResult = { status: payload.status, revision };
+    if (reason !== undefined) result.reason = reason;
+    if (backups !== undefined) result.backups = backups;
+    return result;
   }
 
   async loadChatHydration(chatId: string): Promise<SqlChatHydration | null> {
