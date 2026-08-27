@@ -1976,6 +1976,9 @@ export const languageEnglish = {
     resetPluginPermission: "Reset permission responses",
     resetPluginPermissionConfirm: "Clear all saved permission responses (granted / denied history) for plugin \"{}\"?\n\nThe plugin will be asked again the next time it requests permission.",
     resetPluginPermissionDone: "Permission responses for \"{}\" have been reset",
+    pluginBuiltInVersionInUse: "Built-in version in use",
+    pluginRemoveLegacyBuiltInConfirm: "This removes the old \"{}\" plugin entry that duplicates the built-in version. Your settings and storage are kept. Continue?",
+    pluginRemoveLegacyBuiltInDone: "Removed the legacy \"{}\" entry. Settings and storage were kept.",
     pluginV2Warning: "Plugin V2 and V2.1 is considered unsafe and will stop working in future versions. **Please do not use these versions of plugins.**. If you are the developer of this plugin, please update to V3 as soon as possible.",
     createFolderOnBranch: "Create Folder on Branch",
     hamburgerButtonBottom: "Move Menu Button to Bottom of Sidebar",
@@ -2778,6 +2781,8 @@ export const languageEnglish = {
             other: "Other context",
         },
     },
+    sqlCharacterRepairUnavailableNoCandidate: "This character's data could not be found in any backup, so it could not be recovered.",
+    sqlCharacterRepairUnavailableDecodeFailed: "This character's backups could not be read, so it could not be recovered.",
 
 } satisfies I18nTranslation;
 

@@ -169,10 +169,9 @@
                     be a guaranteed, unexplained failure. Say so instead; the
                     row's own remove button (below) is still available as an
                     explicit, storage-preserving cleanup for this entry.
-                    TODO(i18n): add key `pluginBuiltInVersionInUse` — see report for exact EN/KO text.
                 -->
                 <span class="text-textcolor2 text-xs" title="This entry is superseded by the built-in PageFold provider.">
-                    Built-in version in use
+                    {language.pluginBuiltInVersionInUse}
                 </span>
             {:else if plugin.updateURL}
                 {#await checkPluginUpdate(plugin) then updateInfo}
@@ -238,9 +237,8 @@
                 onclick={async (e) => {
                     e.stopPropagation()
                     const isLegacyBuiltIn = isBuiltInPluginName(plugin.name)
-                    // TODO(i18n): add key `pluginRemoveLegacyBuiltInConfirm` — see report for exact EN/KO text.
                     const confirmText = isLegacyBuiltIn
-                        ? `This removes the old "${plugin.displayName ?? plugin.name}" plugin entry that duplicates the built-in version. Your settings and storage are kept. Continue?`
+                        ? language.pluginRemoveLegacyBuiltInConfirm.replace("{}", plugin.displayName ?? plugin.name)
                         : language.removeConfirm + (plugin.displayName ?? plugin.name)
                     const v = await alertConfirm(confirmText);
                     if (v) {
@@ -253,8 +251,7 @@
                         loadPlugins()
                         void requestImmediateSave()
                         if (isLegacyBuiltIn) {
-                            // TODO(i18n): add key `pluginRemoveLegacyBuiltInDone` — see report for exact EN/KO text.
-                            notifySuccess(`Removed the legacy "${plugin.displayName ?? plugin.name}" entry. Settings and storage were kept.`)
+                            notifySuccess(language.pluginRemoveLegacyBuiltInDone.replace("{}", plugin.displayName ?? plugin.name))
                         }
                     }
                 }}

@@ -2122,6 +2122,10 @@ export const languageKorean = {
   resetPluginPermissionConfirm:
     '플러그인 "{}"의 저장된 권한 응답(허용/거부 이력)을 모두 삭제하시겠습니까?\n\n다음에 플러그인이 권한을 요청할 때 다시 묻게 됩니다.',
   resetPluginPermissionDone: '"{}"의 권한 응답을 초기화했습니다',
+  pluginBuiltInVersionInUse: "내장 버전 사용 중",
+  pluginRemoveLegacyBuiltInConfirm:
+    '내장 버전과 중복되는 기존 "{}" 플러그인 항목을 제거합니다. 설정과 저장소는 유지됩니다. 계속할까요?',
+  pluginRemoveLegacyBuiltInDone: '레거시 "{}" 항목을 제거했습니다. 설정과 저장소는 유지됩니다.',
   pluginV2Warning:
     "플러그인 V2 및 V2.1은 안전하지 않다고 간주되며, 향후 버전에서는 동작이 중단됩니다. **이 버전의 플러그인을 사용하지 마세요.** 이 플러그인의 개발자라면 가능한 한 빨리 V3로 업데이트해주세요.",
   partialBackupFirstConfirm:
@@ -2984,4 +2988,6 @@ export const languageKorean = {
       other: "기타 컨텍스트",
     },
   },
+  sqlCharacterRepairUnavailableNoCandidate: "이 캐릭터의 데이터를 어떤 백업에서도 찾을 수 없어 복구하지 못했습니다.",
+  sqlCharacterRepairUnavailableDecodeFailed: "이 캐릭터의 백업을 읽을 수 없어 복구하지 못했습니다.",
 } satisfies DeepPartial<typeof import("./en").languageEnglish>;

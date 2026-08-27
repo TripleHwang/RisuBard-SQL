@@ -6,6 +6,7 @@ import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } 
 import { chatHydrationKey } from "../chatHydrationKey";
 import { validateOlderMessagePage } from "../../chatWindow";
 import { getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } from "./sqlRuntimeMeta";
+import { language } from "src/lang";
 
 export type { SqlHydrationWindow };
 type HydratableCharacter = character & { detailsLoaded?: boolean };
@@ -132,24 +133,14 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
         // since the row on disk is guaranteed unchanged (the server only
         // ever commits on a match). Distinguish the two reason codes so the
         // failure at least reads differently for whoever sees the alert.
-        //
-        // TODO(i18n): src/lang is owned by another concurrent change right
-        // now, so these stay as raw (unlocalized) Error messages, matching
-        // the existing convention on this exact throw before this patch.
-        // Once src/lang is free, prefer keys like (en.ts + counterparts):
-        //   sqlCharacterRepairUnavailableNoCandidate:
-        //     "This character's data could not be found in any backup, so it could not be recovered."
-        //   sqlCharacterRepairUnavailableDecodeFailed:
-        //     "This character's backups could not be read, so it could not be recovered."
-        // and route through `language.<key>` here instead of the literals below.
         if (repaired.status === "unavailable") {
           const reason = repaired.reason;
-          const detail = reason === "decode-failed"
-            ? "no backup could be read"
+          const message = reason === "decode-failed"
+            ? language.sqlCharacterRepairUnavailableDecodeFailed
             : reason === "no-candidate"
-            ? "no backup contained this character"
-            : "reason unknown";
-          throw new Error(`SQL character repair could not recover this character (${detail})`);
+            ? language.sqlCharacterRepairUnavailableNoCandidate
+            : "SQL character repair could not recover this character (reason unknown)";
+          throw new Error(message);
         }
         const reloaded = await storage.loadCharacterHydration(characterId);
         if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
