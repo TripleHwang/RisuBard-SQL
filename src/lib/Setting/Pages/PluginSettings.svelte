@@ -6,7 +6,7 @@
     import { TriangleAlert } from '@lucide/svelte';
 
     import { DBState, hotReloading } from "src/ts/stores.svelte";
-    import { checkPluginUpdate, createBlankPlugin, importPlugin, loadPlugins, updatePlugin } from "src/ts/plugins/plugins.svelte";
+    import { checkPluginUpdate, createBlankPlugin, importPlugin, isBuiltInPluginName, loadPlugins, updatePlugin } from "src/ts/plugins/plugins.svelte";
     import { runInstalledPluginUpdateAction } from "src/ts/plugins/pluginUpdate";
     import { requestImmediateSave } from "src/ts/globalApi.svelte";
     import { resetPluginPermission } from "src/ts/plugins/apiV3/v3.svelte";
@@ -34,6 +34,10 @@
         if (updatingPlugins.includes(plugin.name)) return
         updatingPlugins = [...updatingPlugins, plugin.name]
         try {
+            // The staged result (see src/ts/plugins/pluginUpdate.ts) already
+            // logged its stage/code/detail to the console via
+            // runInstalledPluginUpdateAction. The UI only ever shows a single
+            // safe, localized message here — never the raw detail.
             await runInstalledPluginUpdateAction(plugin, {
                 update: updatePlugin,
                 reportSuccess: () => notifySuccess(language.pluginUpdateSuccess),
@@ -43,6 +47,17 @@
             updatingPlugins = updatingPlugins.filter((name) => name !== plugin.name)
         }
     }
+
+    // Legacy `pagefold` rows can still exist in a user's database from before
+    // PageFold became a built-in provider. The built-in copy always wins at
+    // load time (see loadPlugins()/isBuiltInPluginName in plugins.svelte.ts),
+    // and importPlugin() explicitly refuses to install/update anything named
+    // "pagefold" — so offering the normal update button on this row is
+    // guaranteed to fail. It's hidden below in favor of a label. The row's
+    // remove button (further down) already deletes ONLY this database entry
+    // (db.plugins), leaving db.pluginCustomStorage — where PageFold's actual
+    // settings live — untouched; its onclick handler special-cases this row
+    // to say so explicitly instead of showing the generic delete warning.
 
     function assignPluginToFolder(pluginName: string, folderId: string | null | undefined) {
         if (typeof folderId !== 'string' || !DBState.db.collectionOrganizers) return
@@ -145,7 +160,21 @@
                 {/each}
             {/if}
 
-            {#if plugin.updateURL}
+            {#if isBuiltInPluginName(plugin.name)}
+                <!--
+                    A legacy `pagefold` row from before PageFold shipped as a
+                    built-in provider. The built-in copy always wins at load
+                    time and importPlugin() refuses to install/update anything
+                    named "pagefold", so the normal update button here would
+                    be a guaranteed, unexplained failure. Say so instead; the
+                    row's own remove button (below) is still available as an
+                    explicit, storage-preserving cleanup for this entry.
+                    TODO(i18n): add key `pluginBuiltInVersionInUse` — see report for exact EN/KO text.
+                -->
+                <span class="text-textcolor2 text-xs" title="This entry is superseded by the built-in PageFold provider.">
+                    Built-in version in use
+                </span>
+            {:else if plugin.updateURL}
                 {#await checkPluginUpdate(plugin) then updateInfo}
                     {#if updateInfo}
                         <button
@@ -208,10 +237,12 @@
                 class="textcolor2 hover:gray-200 cursor-pointer"
                 onclick={async (e) => {
                     e.stopPropagation()
-                    const v = await alertConfirm(
-                        language.removeConfirm +
-                            (plugin.displayName ?? plugin.name),
-                    );
+                    const isLegacyBuiltIn = isBuiltInPluginName(plugin.name)
+                    // TODO(i18n): add key `pluginRemoveLegacyBuiltInConfirm` — see report for exact EN/KO text.
+                    const confirmText = isLegacyBuiltIn
+                        ? `This removes the old "${plugin.displayName ?? plugin.name}" plugin entry that duplicates the built-in version. Your settings and storage are kept. Continue?`
+                        : language.removeConfirm + (plugin.displayName ?? plugin.name)
+                    const v = await alertConfirm(confirmText);
                     if (v) {
                         if (DBState.db.currentPluginProvider === plugin.name) {
                             DBState.db.currentPluginProvider = "";
@@ -221,6 +252,10 @@
                         DBState.db.plugins = plugins;
                         loadPlugins()
                         void requestImmediateSave()
+                        if (isLegacyBuiltIn) {
+                            // TODO(i18n): add key `pluginRemoveLegacyBuiltInDone` — see report for exact EN/KO text.
+                            notifySuccess(`Removed the legacy "${plugin.displayName ?? plugin.name}" entry. Settings and storage were kept.`)
+                        }
                     }
                 }}
             >

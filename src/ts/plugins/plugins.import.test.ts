@@ -26,7 +26,7 @@ vi.mock('../globalApi.svelte', () => ({
 vi.mock('../stores.svelte', () => ({
     DBState: { db: runtime.db }, hotReloading: [], pluginAlertModalStore: { open: false, errors: [] }, selectedCharID: {},
 }))
-vi.mock('./pluginSafety', () => ({ checkCodeSafety: vi.fn() }))
+vi.mock('./pluginSafety', () => ({ checkCodeSafety: vi.fn(async () => ({ isSafe: true, errors: [] })) }))
 vi.mock('./pluginSafeClass', () => ({ SafeDocument: {}, SafeIdbFactory: {}, SafeLocalStorage: class {} }))
 vi.mock('./apiV3/v3.svelte', () => ({ loadV3Plugins: runtime.loadV3Plugins }))
 vi.mock('./apiV3/transpiler', () => ({ pluginCodeTranspiler: vi.fn() }))
@@ -36,6 +36,8 @@ vi.mock('../builtin/pagefold', () => ({
 }))
 
 import { importPlugin } from './plugins.svelte'
+import { PluginUpdateRejection } from './pluginUpdate'
+import { checkCodeSafety } from './pluginSafety'
 
 const updatedSource = [
     '//@name Test Plugin',
@@ -87,5 +89,123 @@ describe('plugin import updates', () => {
         })
         expect(runtime.db.pluginCustomStorage).toEqual({ 'Test Plugin:preferences': { theme: 'dark' } })
         expect(order).toEqual(['save', 'reload'])
+    })
+
+    test('rejects a pagefold update with a PluginUpdateRejection instead of dying in a warn-and-return', async () => {
+        runtime.db.plugins = [{
+            name: 'pagefold',
+            script: 'legacy pagefold source',
+            version: '3.0',
+            versionOfPlugin: '0.1.0',
+            updateURL: 'https://example.com/pagefold.js',
+            enabled: true,
+            arguments: {},
+            realArg: {},
+            customLink: [],
+            argMeta: {},
+            allowedIPC: [],
+        }]
+        const pagefoldSource = [
+            '//@name pagefold',
+            '//@api 3.0',
+            '//@version 0.2.0',
+            '//@update-url https://example.com/pagefold.js',
+            'Risuai.log("updated")',
+        ].join('\n')
+
+        let caught: unknown
+        try {
+            await importPlugin(pagefoldSource, { isUpdate: true, originalPluginName: 'pagefold' })
+        } catch (error) {
+            caught = error
+        }
+
+        expect(caught).toBeInstanceOf(PluginUpdateRejection)
+        expect((caught as PluginUpdateRejection).stage).toBe('policy')
+        expect((caught as PluginUpdateRejection).code).toBe('pagefold-blocked')
+        expect(runtime.save).not.toHaveBeenCalled()
+    })
+
+    test('rejects a renamed update with a name-changed PluginUpdateRejection', async () => {
+        const renamedSource = [
+            '//@name Renamed Plugin',
+            '//@api 3.0',
+            '//@version 2.0.0',
+            '//@update-url https://example.com/plugin.js',
+            'Risuai.log("updated")',
+        ].join('\n')
+
+        let caught: unknown
+        try {
+            await importPlugin(renamedSource, { isUpdate: true, originalPluginName: 'Test Plugin' })
+        } catch (error) {
+            caught = error
+        }
+
+        expect(caught).toBeInstanceOf(PluginUpdateRejection)
+        expect((caught as PluginUpdateRejection).stage).toBe('policy')
+        expect((caught as PluginUpdateRejection).code).toBe('name-changed')
+        expect(runtime.save).not.toHaveBeenCalled()
+    })
+
+    test('rejects an unsafe API 2.1 update with a policy PluginUpdateRejection instead of the interactive review modal', async () => {
+        vi.mocked(checkCodeSafety).mockResolvedValueOnce({ isSafe: false, errors: ['eval() is not allowed'] } as any)
+        const unsafeSource = [
+            '//@name Test Plugin',
+            '//@api 2.1',
+            '//@version 2.0.0',
+            '//@update-url https://example.com/plugin.js',
+            'eval("danger")',
+        ].join('\n')
+
+        let caught: unknown
+        try {
+            await importPlugin(unsafeSource, { isUpdate: true, originalPluginName: 'Test Plugin' })
+        } catch (error) {
+            caught = error
+        }
+
+        expect(caught).toBeInstanceOf(PluginUpdateRejection)
+        expect((caught as PluginUpdateRejection).stage).toBe('policy')
+        expect((caught as PluginUpdateRejection).code).toBe('unsafe-code-rejected')
+        expect(runtime.save).not.toHaveBeenCalled()
+    })
+
+    test('rejects malformed version metadata with a parse-stage PluginUpdateRejection', async () => {
+        const tooLowVersionSource = [
+            '//@name Test Plugin',
+            '//@api 3.0',
+            '//@version 0.0.0',
+            '//@update-url https://example.com/plugin.js',
+            'Risuai.log("updated")',
+        ].join('\n')
+
+        let caught: unknown
+        try {
+            await importPlugin(tooLowVersionSource, { isUpdate: true, originalPluginName: 'Test Plugin' })
+        } catch (error) {
+            caught = error
+        }
+
+        expect(caught).toBeInstanceOf(PluginUpdateRejection)
+        expect((caught as PluginUpdateRejection).stage).toBe('parse')
+        expect((caught as PluginUpdateRejection).code).toBe('version-too-low')
+        expect(runtime.save).not.toHaveBeenCalled()
+    })
+
+    test('reports a durable-save failure as a save-stage PluginUpdateRejection', async () => {
+        runtime.save.mockReset().mockRejectedValueOnce(new Error('disk full'))
+
+        let caught: unknown
+        try {
+            await importPlugin(updatedSource, { isUpdate: true, originalPluginName: 'Test Plugin' })
+        } catch (error) {
+            caught = error
+        }
+
+        expect(caught).toBeInstanceOf(PluginUpdateRejection)
+        expect((caught as PluginUpdateRejection).stage).toBe('save')
+        expect((caught as PluginUpdateRejection).code).toBe('durable-save-failed')
+        expect((caught as PluginUpdateRejection).detail).toBe('disk full')
     })
 })
