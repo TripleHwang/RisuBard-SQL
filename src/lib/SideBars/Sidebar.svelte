@@ -75,7 +75,8 @@
   import { getEffectivePersona } from "src/ts/personaScopes";
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
-    import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
+  import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
+  import { isStartupMutationReady } from "src/ts/startupReadiness";
 
   let sideBarMode = $state(0);
   let editMode = $state(false);
@@ -259,6 +260,7 @@
   type DropData = { index:number, folder?:string }
 
   const moveSidebarItem = (source:DragData, target:DropData) => {
+    if (!isStartupMutationReady()) return false
     let changed = false
     if(target.folder){
       if(source.kind !== 'character') return false

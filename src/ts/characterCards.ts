@@ -22,6 +22,7 @@ import { pinCharacterVaultQuickAccess } from './characterVault'
 import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } from './firstMessageStudio'
 import { isNodeServer } from './platform'
 import { withSaverScope } from './performance/saverMode'
+import { isStartupMutationReady } from './startupReadiness'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -1770,6 +1771,7 @@ export async function downloadRisuHub(id:string, arg:{
     forceRedirect?: boolean
 } = {}) {
     try {
+        if (!isStartupMutationReady()) return
         if(!arg.forceRedirect){
             if(!(await alertTOS())){
                 return

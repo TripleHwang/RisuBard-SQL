@@ -42,6 +42,7 @@ import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
+import { scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
 let dataLoading = false
@@ -75,14 +76,7 @@ export function scheduleAfterFirstPaint(task: () => void | Promise<void>, timeou
 
 /** Deferred SQL hydration is startup-critical once the safe shell is painted. */
 export function scheduleDeferredSqlHydration(task: () => void | Promise<void>): void {
-    const run = () => {
-        void Promise.resolve().then(task).catch(console.error)
-    }
-    const requestFrame = typeof globalThis.requestAnimationFrame === 'function'
-        ? globalThis.requestAnimationFrame.bind(globalThis)
-        : (callback: FrameRequestCallback) => globalThis.setTimeout(callback, 0) as unknown as number
-
-    requestFrame(() => requestFrame(run))
+    scheduleAfterTwoAnimationFrames(task)
 }
 
 async function loadDeferredModules(): Promise<void> {

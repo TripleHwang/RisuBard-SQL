@@ -9,6 +9,7 @@
     import ShButton from '../GUI/ShButton.svelte';
     import ShDialog from '../GUI/ShDialog.svelte';
     import { tooltip } from 'src/ts/gui/tooltip';
+    import { isStartupMutationReady } from 'src/ts/startupReadiness';
 
     interface Props {
         openedData: hubType;
@@ -109,7 +110,7 @@
             <div class="mt-3"><RealmLicense license={openedData.license} /></div>
 
             <div class="mt-auto flex flex-wrap items-center gap-2 border-t border-darkborderc pt-4">
-                <ShButton variant="primary" className="grow" onclick={() => {
+                <ShButton variant="primary" className="grow" disabled={!isStartupMutationReady()} onclick={() => {
                     void downloadRisuHub(openedData.id);
                     close();
                 }}><DownloadIcon size={17} /> {ui.download}</ShButton>

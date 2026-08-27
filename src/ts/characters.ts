@@ -21,6 +21,7 @@ import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characte
 import { withSaverScope } from './performance/saverMode'
 import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
 import { runtimeMetrics } from './performance/runtimeMetrics'
+import { isStartupMutationReady } from './startupReadiness'
 
 /** Assign identities before a chat becomes visible, then mark its parent before rows. */
 function markImportedChat(characterId: string, chat: Chat): void {
@@ -830,6 +831,7 @@ export async function changeChar(index: number, arg:{
 } = {}) {
     const metric = runtimeMetrics.start('chat-selection')
     try {
+    if (!isStartupMutationReady()) return
     const reseter = arg.reseter ?? (() => {})
     if(get(doingChat)){
       return

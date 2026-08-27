@@ -9,6 +9,7 @@
     import ShDialog from '../GUI/ShDialog.svelte';
     import RealmHubIcon from './RealmHubIcon.svelte';
     import RealmPopUp from './RealmPopUp.svelte';
+    import { isStartupMutationReady } from 'src/ts/startupReadiness';
 
     let openedData: null | hubType = $state(null);
     let charas: hubType[] = $state([]);
@@ -338,7 +339,7 @@
 <ShDialog bind:open={menuOpen} size="sm" closeOnEscape={true} closeOnOutsideClick={true}>
     {#snippet title()}{ui.tools}{/snippet}
     {#snippet description()}{ui.toolsDescription}{/snippet}
-    <ShButton variant="secondary" className="w-full" onclick={async () => {
+    <ShButton variant="secondary" className="w-full" disabled={!isStartupMutationReady()} onclick={async () => {
         menuOpen = false;
         const input = await alertInput(ui.importPrompt);
         if (!input) return;

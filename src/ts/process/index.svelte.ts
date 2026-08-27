@@ -18,6 +18,7 @@ import { markSqlMessageDirty } from '../storage/sql/sqlPersistenceRuntime';
 import { StreamRenderScheduler } from '../markdown/streamRenderScheduler';
 import { saverModeStore } from '../performance/saverMode';
 import { findStreamingChat, findStreamingMessageTarget } from './streamingTarget';
+import { isStartupMutationReady } from '../startupReadiness';
 import { runTrigger } from "./triggers";
 import { HypaProcesser } from "./memory/hypamemory";
 import { additionalInformations } from "./embedding/addinfo";
@@ -824,6 +825,8 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     preview?:boolean
     previewPrompt?:boolean
 } = {}):Promise<boolean> {
+
+    if (!isStartupMutationReady()) return false
 
     const selected = DBState.db.characters[get(selectedCharID)]
     const selectedConversation = selected?.chats[selected.chatPage]
