@@ -11,7 +11,7 @@
     import RealmHubIcon from './RealmHubIcon.svelte';
     import RealmPopUp from './RealmPopUp.svelte';
     import { isStartupMutationReady } from 'src/ts/startupReadiness';
-    import { readDefaultRealmBrowseCache, writeDefaultRealmBrowseCache } from 'src/ts/realmBrowseCache';
+    import { isDefaultRealmBrowseQuery, readDefaultRealmBrowseCache, writeDefaultRealmBrowseCache } from 'src/ts/realmBrowseCache';
     import { createRealmBrowseRequestCoordinator } from 'src/ts/realmBrowseRequest';
 
     let openedData: null | hubType = $state(null);
@@ -28,6 +28,7 @@
     let isLoading = $state(false);
     let isRefreshing = $state(false);
     let browseError = $state('');
+    let hasDefaultFeed = $state(false);
     const requests = createRealmBrowseRequestCoordinator(getRisuHub, writeDefaultRealmBrowseCache);
     let isKorean = $derived(DBState.db.language === 'ko');
     let ui = $derived(isKorean ? {
@@ -117,15 +118,20 @@
             nsfw,
             sort,
         };
-        const isDefault = query.search === '' && query.page === 0 && !query.nsfw && query.sort === 'recommended';
+        const isDefault = isDefaultRealmBrowseQuery(query);
         browseError = '';
         hubAdditionalHTML = '';
-        isLoading = !isDefault || charas.length === 0;
-        isRefreshing = isDefault && charas.length > 0;
+        if (!isDefault) {
+            charas = [];
+            hasDefaultFeed = false;
+        }
+        isLoading = !isDefault || !hasDefaultFeed;
+        isRefreshing = isDefault && hasDefaultFeed;
         await requests.run(query, {
             success: (result) => {
                 charas = result.cards;
                 hubAdditionalHTML = result.additionalHTML;
+                hasDefaultFeed = isDefault;
                 isLoading = false;
                 isRefreshing = false;
             },
@@ -133,7 +139,7 @@
                 isLoading = false;
                 isRefreshing = false;
                 hubAdditionalHTML = '';
-                browseError = isDefault && charas.length > 0
+                browseError = isDefault && hasDefaultFeed
                     ? 'Showing saved RisuRealm results. Refresh failed.'
                     : 'Unable to load RisuRealm results. Please try again.';
             },
@@ -193,14 +199,12 @@
     }
 
     onMount(() => {
-        let active = true;
-        void (async () => {
-            const cached = await readDefaultRealmBrowseCache();
-            if (active && cached) charas = cached;
-            if (active) void getHub();
-        })();
+        requests.applyInitialDefaultCache(readDefaultRealmBrowseCache(), (cached) => {
+            charas = cached;
+            hasDefaultFeed = true;
+        });
+        void getHub();
         return () => {
-            active = false;
             requests.abort();
         };
     });

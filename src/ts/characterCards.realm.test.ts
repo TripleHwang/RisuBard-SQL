@@ -34,4 +34,19 @@ describe('RisuRealm browse transport', () => {
         await expect(getRisuHub({ search: '', page: 0, nsfw: false, sort: 'recommended' }, { signal: controller.signal })).rejects.toThrow('503')
         expect(fetchMock.mock.calls[0][1]).toMatchObject({ signal: controller.signal })
     })
+
+    test('projects helper image fields and caps a valid live response at 100 cards', async () => {
+        const card = (id: string) => ({
+            name: 'Character', desc: '', download: '0', id, img: 'image-id', tags: [], viewScreen: 'none',
+            hasLore: false, hasEmotion: false, hasAsset: false, hot: 0, license: '', type: 'character',
+            imageData: 'not persisted', blob: 'not persisted', additionalHTML: 'not card html',
+        })
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ cards: Array.from({ length: 101 }, (_, index) => card(String(index))) }), { status: 200 })))
+
+        const result = await getRisuHub({ search: '', page: 0, nsfw: false, sort: 'recommended' })
+        expect(result.cards).toHaveLength(100)
+        expect(result.cards[0]).not.toHaveProperty('imageData')
+        expect(result.cards[0]).not.toHaveProperty('blob')
+        expect(result.cards[0]).not.toHaveProperty('additionalHTML')
+    })
 })

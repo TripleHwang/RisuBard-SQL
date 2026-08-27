@@ -54,4 +54,45 @@ describe('RisuRealm browse request coordinator', () => {
         expect(shown).toEqual(['search'])
         expect(cache).not.toHaveBeenCalled()
     })
+
+    test('serializes default cache writes so a delayed older write cannot finish after a newer feed', async () => {
+        const fetcher = vi.fn()
+            .mockResolvedValueOnce({ cards: ['A'], additionalHTML: '' })
+            .mockResolvedValueOnce({ cards: ['B'], additionalHTML: '' })
+        let releaseA!: () => void
+        const persisted: string[] = []
+        const cache = vi.fn((cards: string[]) => {
+            persisted.push(cards[0])
+            return cards[0] === 'A' ? new Promise<void>((resolve) => { releaseA = resolve }) : Promise.resolve()
+        })
+        const coordinator = createRealmBrowseRequestCoordinator(fetcher, cache)
+
+        await coordinator.run(defaultQuery, { success: vi.fn(), failure: vi.fn() })
+        await coordinator.run(defaultQuery, { success: vi.fn(), failure: vi.fn() })
+        expect(persisted).toEqual(['A'])
+        releaseA()
+        await vi.waitFor(() => expect(persisted).toEqual(['A', 'B']))
+    })
+
+    test('does not let a late startup cache replace a user search or abort that search', async () => {
+        type Result = { cards: string[]; additionalHTML: string }
+        let resolveCache!: (cards: string[] | null) => void
+        let resolveSearch!: (result: Result) => void
+        const fetcher = vi.fn<(query: { search: string }, options?: { signal?: AbortSignal }) => Promise<Result>>((query) => query.search
+            ? new Promise<Result>((resolve) => { resolveSearch = resolve })
+            : new Promise<Result>(() => {}))
+        const coordinator = createRealmBrowseRequestCoordinator(fetcher, vi.fn())
+        const shown: string[] = []
+        coordinator.applyInitialDefaultCache(new Promise<string[] | null>((resolve) => { resolveCache = resolve }), (cards) => shown.push(...cards))
+        void coordinator.run(defaultQuery, { success: vi.fn(), failure: vi.fn() })
+        const search = coordinator.run({ ...defaultQuery, search: 'cats' }, { success: (result) => shown.push(...result.cards), failure: vi.fn() })
+
+        resolveCache(['cached'])
+        resolveSearch({ cards: ['search'], additionalHTML: '' })
+        await search
+
+        expect(shown).toEqual(['search'])
+        expect(fetcher).toHaveBeenCalledTimes(2)
+        expect(fetcher.mock.calls[1][1]?.signal?.aborted).toBe(false)
+    })
 })

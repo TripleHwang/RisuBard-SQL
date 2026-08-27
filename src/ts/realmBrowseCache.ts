@@ -37,8 +37,7 @@ function boundedNumber(value: unknown): number | null {
 export function normalizeRealmBrowseCard(value: unknown): hubType | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
     const card = value as Record<string, unknown>
-    // The Realm API may include image payload helpers. Cache only its metadata id.
-    if ('image' in card || 'imageData' in card || 'blob' in card || 'additionalHTML' in card) return null
+    // Project known metadata fields only; transport helpers such as image blobs never survive this boundary.
     const tags = Array.isArray(card.tags) && card.tags.length <= MAX_TAGS
         ? card.tags.map((tag) => boundedString(tag, MAX_TAG_LENGTH))
         : null
@@ -106,7 +105,7 @@ export async function readDefaultRealmBrowseCache(now = Date.now()): Promise<hub
 }
 
 export async function writeDefaultRealmBrowseCache(cards: hubType[], fetchedAt = Date.now()): Promise<void> {
-    const cache = normalizeCache({ version: 1, fetchedAt, cards })
+    const cache = normalizeCache({ version: 1, fetchedAt, cards: cards.slice(0, MAX_CARDS) })
     if (!cache) throw new Error('Invalid RisuRealm browse cache payload')
     await writePersistentJson(DEFAULT_REALM_BROWSE_CACHE_KEY, cache)
 }

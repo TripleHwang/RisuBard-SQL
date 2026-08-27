@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+import type { hubType } from './characterCards'
 
 const persistent = vi.hoisted(() => ({
     readPersistentJson: vi.fn(),
@@ -16,7 +17,7 @@ import {
 
 const now = 1_700_000_000_000
 
-function card(overrides: Record<string, unknown> = {}) {
+function card(overrides: Record<string, unknown> = {}): hubType {
     return {
         name: 'Cached character',
         desc: 'A safe cached description',
@@ -32,7 +33,7 @@ function card(overrides: Record<string, unknown> = {}) {
         license: 'CC-BY',
         type: 'character',
         ...overrides,
-    }
+    } as hubType
 }
 
 describe('RisuRealm default browse cache', () => {
@@ -66,7 +67,7 @@ describe('RisuRealm default browse cache', () => {
         await expect(readDefaultRealmBrowseCache(now)).resolves.toBeNull()
 
         persistent.readPersistentJson.mockResolvedValue({ version: 1, fetchedAt: now, cards: [card({ imageData: 'base64-image-bytes' })] })
-        await expect(readDefaultRealmBrowseCache(now)).resolves.toBeNull()
+        await expect(readDefaultRealmBrowseCache(now)).resolves.toEqual([card()])
     })
 
     test('writes a bounded successful feed including a legitimate empty result', async () => {
@@ -77,5 +78,14 @@ describe('RisuRealm default browse cache', () => {
             fetchedAt: now,
             cards: [],
         })
+    })
+
+    test('projects cache-safe metadata and caps a live feed at 100 cards', async () => {
+        await writeDefaultRealmBrowseCache(Array.from({ length: 101 }, (_, index) => card({ id: `id-${index}`, imageData: 'discard-me', blob: 'discard-me' })), now)
+
+        const written = persistent.writePersistentJson.mock.calls[0][1]
+        expect(written.cards).toHaveLength(100)
+        expect(written.cards[0]).not.toHaveProperty('imageData')
+        expect(written.cards[0]).not.toHaveProperty('blob')
     })
 })

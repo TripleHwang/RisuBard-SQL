@@ -1773,7 +1773,7 @@ export async function getRisuHub(
             ? (body as { cards: unknown[] }).cards
             : null
     if (!rawCards) throw new Error('RisuRealm response has an invalid card list')
-    const cards = rawCards.map(normalizeRealmBrowseCard)
+    const cards = rawCards.slice(0, 100).map(normalizeRealmBrowseCard)
     if (cards.some((card) => card === null)) throw new Error('RisuRealm response has an invalid card')
     const additionalHTML = body && !Array.isArray(body) && typeof body === 'object'
         && typeof (body as { additionalHTML?: unknown }).additionalHTML === 'string'
