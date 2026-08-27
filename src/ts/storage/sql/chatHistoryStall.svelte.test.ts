@@ -166,6 +166,121 @@ describe("older-page stall", () => {
     expect(character.chats[0].message.map((m: any) => m.chatId)).toEqual(["m0", "m1", "m2", "m3"]);
   });
 
+  // The fixtures above hand-write `nextBefore: null` on a terminal page. The
+  // real server (`server/node/relational-sqlite.cjs`) has never returned that
+  // for a NON-EMPTY page: before this fix it reported the page's own lowest
+  // position, so the final page of every chat failed the boundary check and
+  // scrolling up died in a permanent Retry. `serverStub` below reproduces the
+  // server's actual algorithm — including the older `nextBefore` convention —
+  // instead of a shape written to match the assertion.
+  const serverStub = (positions: number[], { legacyTerminalCursor = false } = {}) => {
+    const rows = positions.map((position, index) => ({ id: `s${index}`, position }));
+    const nextPosition = rows.length ? Math.max(...positions) + 1 : 0;
+    return vi.fn(async (_chatId: string, before: number | undefined, limit: number) => {
+      const normalizedBefore = before ?? nextPosition;
+      const descending = rows.filter((row) => row.position < normalizedBefore)
+        .sort((a, b) => b.position - a.position).slice(0, limit + 1);
+      const page = descending.slice(0, limit).reverse();
+      const hasMore = descending.length > limit;
+      return {
+        // Matches the other fixtures here: the chat is built inline without a
+        // body hydration, so it carries no `_sqlHydrationRevision` to compare.
+        chatId: "c1",
+        messages: page.map((row) => ({ chatId: row.id })),
+        positions: page.map((row) => row.position),
+        nextPosition, before: normalizedBefore,
+        // The whole point: what a real server puts here on a terminal page.
+        nextBefore: legacyTerminalCursor
+          ? (page.length ? page[0].position : null)
+          : (hasMore && page.length ? page[0].position : null),
+        total: rows.length, hasMore,
+      };
+    });
+  };
+
+  const walkToOldest = async (character: any, limit: number) => {
+    for (let guard = 0; getSqlWindow(character.chats[0])?.hasOlder; guard += 1) {
+      expect(guard).toBeLessThan(20);        // a cursor that never advances fails here
+      await loadOlderChatMessages(character, 0, limit);
+    }
+    return character.chats[0].message.map((m: any) => m.chatId);
+  };
+
+  it("F. scrolling to the oldest message succeeds against the server's real page shape", async () => {
+    // Sparse positions, because real ones are sparse: 0, 4, 8, 12 ...
+    const reverse = serverStub([0, 4, 8, 12, 16, 20, 24]);
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = $state({ chaId: "ch1", chats: [{ id: "c1", message: [] as any[] }] });
+
+    await ensureChatMessageWindow(character as any, 0, 3);
+    await expect(walkToOldest(character, 3)).resolves.toEqual(["s0", "s1", "s2", "s3", "s4", "s5", "s6"]);
+    expect(getSqlWindow(character.chats[0])).toMatchObject({ hasOlder: false, nextBefore: null });
+  });
+
+  it("F2. a server still using the old terminal-cursor convention is adapted to, not rejected", async () => {
+    // A cached browser bundle and a server are updated at slightly different
+    // moments, so the client must survive a terminal page that reports its own
+    // lowest position instead of null. `hasMore: false` already ends the walk;
+    // disagreeing about the spare value must never brick history browsing.
+    const reverse = serverStub([0, 4, 8, 12], { legacyTerminalCursor: true });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = $state({ chaId: "ch1", chats: [{ id: "c1", message: [] as any[] }] });
+
+    await ensureChatMessageWindow(character as any, 0, 2);
+    await expect(walkToOldest(character, 2)).resolves.toEqual(["s0", "s1", "s2", "s3"]);
+    // Normalized on the way into the window, so nothing re-requests the page.
+    expect(getSqlWindow(character.chats[0])).toMatchObject({ hasOlder: false, nextBefore: null });
+  });
+
+  it("F3. no Retry button appears while the controller autofills to the oldest message", async () => {
+    const reverse = serverStub([0, 4, 8, 12, 16], { legacyTerminalCursor: true });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = $state({ chaId: "ch1", chats: [{ id: "c1", message: [] as any[] }] });
+    await ensureChatMessageWindow(character as any, 0, 2);
+
+    const controller = createContinuousHistoryController({
+      hasOlder: () => !!getSqlWindow(character.chats[0])?.hasOlder,
+      isScrollable: () => false,
+      progress: () => character.chats[0].message.length,
+      loadOlder: async () => {
+        try { await loadOlderChatMessages(character as any, 0, 2) } catch { return false }
+        return true
+      },
+    });
+
+    await expect(controller.fillViewport()).resolves.toBe(true);
+    expect(controller.failed).toBe(false);
+    expect(character.chats[0].message.map((m: any) => m.chatId)).toEqual(["s0", "s1", "s2", "s3", "s4"]);
+  });
+
+  it("F4. tied positions inside one page are merged rather than rejected", async () => {
+    // `messages(chat_id, position)` has no UNIQUE constraint, so two rows can
+    // share a position; the server widens a page over the whole tied group
+    // rather than splitting it. A tie inside a page loses nothing, so the
+    // validator must not treat it as corruption.
+    const first = { chatId: "c1", messages: [{ chatId: "m3" }], positions: [12], nextPosition: 13, before: 13, nextBefore: 12, total: 3, hasMore: true };
+    const tied = { chatId: "c1", messages: [{ chatId: "m1" }, { chatId: "m2" }], positions: [8, 8], nextPosition: 13, before: 12, nextBefore: null, total: 3, hasMore: false };
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn().mockResolvedValueOnce(first).mockResolvedValue(tied) };
+    const character = $state({ chaId: "ch1", chats: [{ id: "c1", message: [] as any[] }] });
+
+    await ensureChatMessageWindow(character as any, 0, 1);
+    await expect(loadOlderChatMessages(character as any, 0, 1)).resolves.toBeTruthy();
+    expect(character.chats[0].message.map((m: any) => m.chatId)).toEqual(["m1", "m2", "m3"]);
+  });
+
+  it("F5. a continuing page whose cursor does not match its own lowest position is still refused", async () => {
+    // Leniency is scoped to the terminal page. A `hasMore` page whose cursor
+    // disagrees with its contents would make the NEXT request skip or repeat
+    // messages, which is real data loss, not a convention difference.
+    const first = { chatId: "c1", messages: [{ chatId: "m3" }], positions: [12], nextPosition: 13, before: 13, nextBefore: 12, total: 4, hasMore: true };
+    const skewed = { chatId: "c1", messages: [{ chatId: "m2" }], positions: [8], nextPosition: 13, before: 12, nextBefore: 4, total: 4, hasMore: true };
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn().mockResolvedValueOnce(first).mockResolvedValue(skewed) };
+    const character = $state({ chaId: "ch1", chats: [{ id: "c1", message: [] as any[] }] });
+
+    await ensureChatMessageWindow(character as any, 0, 1);
+    await expect(loadOlderChatMessages(character as any, 0, 1)).rejects.toThrow(/boundary is noncontiguous/);
+  });
+
   it("E. a sync throw from storage does not poison the in-flight map", async () => {
     activeStorage.current = {
       backendKind: "server-sql",
