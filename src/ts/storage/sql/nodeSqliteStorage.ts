@@ -591,14 +591,47 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return await this.loadCharacterHydration(characterId);
   }
 
+  /**
+   * The stitched body+page read behind `rebaseDirtyScopes` (sqlPersistenceRuntime.ts).
+   *
+   * The equality this used to demand was `system_storage_meta.revision`, one
+   * counter for the WHOLE database — so any unrelated commit landing between
+   * the two reads threw, and with no retry at all. That is strictly worse here
+   * than in the runtime hydrator, because the caller of this method is the
+   * conflict-recovery rebase, whose entire job runs *while* commits are
+   * landing, and which discards the return value: it reads only to advance the
+   * client's tracked revision before retrying the commit. A throw aborted the
+   * rebase and lost the commit for a skew that concerned another chat.
+   *
+   * The chat-scoped invariant is the same one `chatBodyMatchesPage`
+   * (sqlRuntimeHydration.ts) enforces: the body's `messageTotal` and the page's
+   * `total` count the same rows, so agreement means this chat did not change
+   * between the two snapshot-consistent reads. Disagreement re-reads the pair
+   * once; a still-skewed result is composed anyway with a warning, since the
+   * message list itself came out of a single server read transaction.
+   */
   async loadChat(chatId: string, options?: { messageLimit?: number }): Promise<Chat | null> {
-    const hydrated = await this.loadChatHydration(chatId);
+    let hydrated = await this.loadChatHydration(chatId);
     if (!hydrated) return null;
-    const chat = hydrated.chat;
-    if (!options?.messageLimit) return chat;
-    const page = await this.loadChatMessageReversePage(chatId, undefined, options.messageLimit);
-    if (page.revision !== hydrated.revision) throw new Error("SQL chat hydration revision changed");
-    return { ...chat, message: page.messages };
+    if (!options?.messageLimit) return hydrated.chat;
+    for (let attempt = 0; ; attempt += 1) {
+      const page = await this.loadChatMessageReversePage(chatId, undefined, options.messageLimit);
+      const bodyTotal = (hydrated.chat as Chat & { messageTotal?: number }).messageTotal;
+      if (page.revision === hydrated.revision ||
+        (Number.isSafeInteger(bodyTotal) && bodyTotal === page.total)) {
+        return { ...hydrated.chat, message: page.messages };
+      }
+      if (attempt >= 1) {
+        console.warn("[chat-history] composing a chat whose body read is from an older snapshot", {
+          chatId, bodyRevision: hydrated.revision, bodyMessageTotal: bodyTotal,
+          page: { revision: page.revision, total: page.total },
+        });
+        return { ...hydrated.chat, message: page.messages };
+      }
+      const reread = await this.loadChatHydration(chatId);
+      if (!reread) return null;
+      hydrated = reread;
+    }
   }
 
   async loadChatMessages(chatId: string): Promise<Message[]> {

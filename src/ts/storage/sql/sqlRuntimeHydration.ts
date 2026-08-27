@@ -6,6 +6,7 @@ import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } 
 import { chatHydrationKey } from "../chatHydrationKey";
 import { validateOlderMessagePage } from "../../chatWindow";
 import { getSqlPosition, getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } from "./sqlRuntimeMeta";
+import { reversePageCursor, validateOlderReversePage } from "./reversePageContract";
 import { language } from "src/lang";
 
 export type { SqlHydrationWindow };
@@ -66,7 +67,7 @@ export function normalizeHydratedCharacter(value: character): character {
 }
 
 const DEFAULT_MESSAGE_LIMIT = 40;
-const MAX_CHAT_HYDRATION_ATTEMPTS = 2;
+const MAX_CHAT_HYDRATION_ATTEMPTS = 3;
 const characterHydrations = new Map<string, Promise<character | null>>();
 const chatHydrations = new Map<string, Promise<Chat | null>>();
 /**
@@ -110,6 +111,49 @@ type RevisionedChat = Chat & {
   _sqlHydrationRevision?: number;
   _sqlMetadataOverrides?: Record<string, unknown>;
 };
+type CountedChat = Chat & { messageTotal?: number };
+
+/**
+ * Does the chat body we already applied describe the same chat state as this
+ * message page?
+ *
+ * The initial window is stitched from TWO server reads — `loadChatHydration`
+ * (chat row + extension nodes) then `loadChatMessageReversePage` (the newest
+ * page). Each is individually snapshot-consistent: the server wraps both in
+ * `inReadTransaction` (`BEGIN DEFERRED` … `COMMIT`, server/node/relational-sqlite.cjs),
+ * so a page's `messages`/`positions`/`total`/`nextPosition`/`nextBefore` can
+ * never disagree with one another. What is NOT guaranteed is that the two
+ * reads saw the same snapshot as each other, and that is the only thing this
+ * check exists to detect.
+ *
+ * `revision` equality used to be the whole test, and it is far too broad:
+ * `revision` is `system_storage_meta.revision`, a single counter for the WHOLE
+ * database that every commit bumps. A dirty commit for a different chat, an
+ * autosave, a plugin storage write or the 5s compatibility audit landing
+ * between the two reads moved it, and the hydration of an untouched chat was
+ * aborted — the intermittent "switching chats stops loading messages" stall.
+ *
+ * The invariant that actually matters is chat-scoped, and the two payloads
+ * overlap in exactly one observable: how many messages this chat has. The body
+ * carries `messageTotal` (the trigger-maintained `chat_message_counts` row) and
+ * the page carries `total` (`COUNT(*)` over the same rows). Agreement means the
+ * chat's message set is the same size in both snapshots, so the global skew
+ * belongs to somebody else's write and is none of this chat's business.
+ *
+ * The count is only ever an additional way to PASS, never an additional way to
+ * FAIL: if the durable counter were ever to drift from `COUNT(*)`, this simply
+ * degrades to the old revision-equality behavior rather than rejecting a chat
+ * forever. A body with no recorded revision was never read across a snapshot
+ * boundary at all (nothing to be inconsistent with), so it always passes —
+ * which is also why backends that omit `revision` entirely are unaffected.
+ */
+export function chatBodyMatchesPage(chat: Chat, page: { revision?: number; total?: number }): boolean {
+  const bodyRevision = (chat as RevisionedChat)._sqlHydrationRevision;
+  if (page.revision === bodyRevision) return true;
+  if (bodyRevision === undefined) return true;
+  const bodyTotal = (chat as CountedChat).messageTotal;
+  return Number.isSafeInteger(bodyTotal) && bodyTotal === page.total;
+}
 const CHAT_METADATA_KEYS = ["name", "note", "folderId", "lastDate"] as const;
 function metadataSnapshot(chat: Chat): Record<string, unknown> {
   return Object.fromEntries(CHAT_METADATA_KEYS.flatMap((key) => Object.prototype.hasOwnProperty.call(chat, key) ? [[key, (chat as unknown as Record<string, unknown>)[key]]] : []));
@@ -144,67 +188,6 @@ function attachCanonicalPositions(messages: Chat["message"], positions: number[]
   if (!positions || positions.length !== messages.length) return;
   for (const [index, message] of messages.entries()) {
     setSqlPosition(message, positions[index]);
-  }
-}
-
-/**
- * Reverse pages are a different contract from forward hydration: every page
- * must terminate exactly at the persisted boundary we asked for. Validate the
- * response before attaching positions or replacing either observable window.
- *
- * `total` and `nextPosition` are deliberately NOT compared against the stored
- * window. Server-side they are live chat-wide counters — `COUNT(*)` and
- * `COALESCE(MAX(position) + 1, 0)` over the whole chat, recomputed on every
- * page read — so they legitimately move the instant the chat grows or shrinks.
- * The window, by contrast, is captured once when the newest page is attached
- * and never re-established for the session. Comparing them turned "the user
- * sent one more message" into a permanent, retry-proof rejection of every
- * older page: identical inputs, identical failure, forever.
- *
- * The real contiguity invariant is the cursor echo. The server replies with
- * the exact `before` it was asked for, so `page.before === window.nextBefore`
- * still pins this page to the boundary the window ends at. Everything below —
- * position ordering, upper bound, duplicate IDs, the terminal boundary and the
- * terminal coverage cross-check — is unchanged; this is a data-integrity
- * boundary and only the two live counters were removed from it.
- *
- * `knownPersistedCount` is the number of already-loaded messages that carry a
- * canonical SQL position, which is exactly the set the server's `total`
- * counts. It is not `knownIds.size`: a locally appended message that has not
- * been through a dirty commit has no position and no row, so counting it would
- * let the terminal-coverage equality hold while older persisted messages were
- * still unfetched — concluding "we have everything" early and silently hiding
- * real history.
- */
-function validateOlderReversePage(
-  page: Awaited<ReturnType<SqlBootstrapStorage["loadChatMessageReversePage"]>>,
-  window: SqlHydrationWindow,
-  knownIds: Set<string | undefined>,
-  knownPersistedCount: number,
-): void {
-  if (page.before !== window.nextBefore) {
-    throw new Error("Reverse page metadata changed")
-  }
-  if (!Array.isArray(page.positions) || page.positions.length !== page.messages.length) {
-    throw new Error("Reverse page positions are invalid")
-  }
-  const seen = new Set<string>()
-  let previous = -Infinity
-  for (const [index, message] of page.messages.entries()) {
-    const id = message.chatId
-    const position = page.positions[index]
-    if (!id || knownIds.has(id) || seen.has(id)) throw new Error("Reverse page has duplicate message IDs")
-    if (!Number.isSafeInteger(position) || position <= previous || position >= (window.nextBefore ?? Infinity)) {
-      throw new Error("Reverse page positions are noncontiguous")
-    }
-    seen.add(id)
-    previous = position
-  }
-  if (page.hasMore ? page.nextBefore !== page.positions[0] : page.nextBefore !== null) {
-    throw new Error("Reverse page boundary is noncontiguous")
-  }
-  if (!page.hasMore && knownPersistedCount + seen.size !== page.total) {
-    throw new Error("Reverse page terminal coverage is incomplete")
   }
 }
 
@@ -338,11 +321,14 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
       beginHydration(key);
       counted = true;
       let page;
+      let unconverged = false;
       for (let attempt = 0; attempt < MAX_CHAT_HYDRATION_ATTEMPTS; attempt += 1) {
         const pageMetadata = metadataSnapshot(initial);
         page = await storage.loadChatMessageReversePage(chatId, undefined, normalizeLimit(limit));
-        if (page.revision === (initial as RevisionedChat)._sqlHydrationRevision) break;
-        if (attempt + 1 === MAX_CHAT_HYDRATION_ATTEMPTS) throw new Error("SQL chat hydration revision changed");
+        if (chatBodyMatchesPage(initial, page)) break;
+        // The chat itself changed between the body read and the page read.
+        // Re-read the body so both halves describe the same chat again.
+        if (attempt + 1 === MAX_CHAT_HYDRATION_ATTEMPTS) { unconverged = true; break; }
         const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
         const current = currentIndex === -1 ? null : character.chats[currentIndex];
         if (!current) return null;
@@ -351,6 +337,31 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
         if (!initial) return null;
       }
       if (!page) return null;
+      if (unconverged) {
+        // Every retry found the chat changed again. This used to throw — and a
+        // throw here is a TERMINAL failure: `changeChatTo` only logs it, the
+        // loading overlay is dismissed, and the chat slot keeps its empty
+        // `message` array, so the screen shows nothing but the character's
+        // first message until the user switches away and back.
+        //
+        // Applying the page is the honest outcome instead. What still holds is
+        // the invariant that matters: `page` came out of ONE server read
+        // transaction, so the message window it installs — messages, canonical
+        // positions, `total`, `hasOlder`, and the `nextBefore` cursor
+        // `loadOlderChatMessages` pages from — is internally consistent, and
+        // `validateOlderReversePage` continues to police every later page
+        // against it. What is given up is only that the chat's metadata and
+        // extension fields may be a few revisions older than its messages,
+        // which is the same staleness any open chat carries between renders and
+        // which the next body read corrects.
+        console.warn("[chat-history] applying a chat window whose body read is from an older snapshot", {
+          chatId,
+          bodyRevision: (initial as RevisionedChat)._sqlHydrationRevision,
+          bodyMessageTotal: (initial as CountedChat).messageTotal,
+          page: { revision: page.revision, total: page.total, count: page.messages.length },
+          attempts: MAX_CHAT_HYDRATION_ATTEMPTS,
+        });
+      }
       const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
@@ -361,7 +372,10 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
       setWindow(current, {
         before: page.before,
-        nextBefore: page.nextBefore,
+        // Normalized through the contract helper: a terminal page always lands
+        // as `null` however the server chose to report it, so `hasOlder` and
+        // the cursor can never disagree about whether to request again.
+        nextBefore: reversePageCursor(page),
         total: page.total,
         hasOlder: page.hasMore,
         nextPosition: page.nextPosition,
@@ -447,7 +461,9 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
       setWindow(current, {
         before: page.before,
-        nextBefore: page.nextBefore,
+        // See `ensureChatMessageWindow`: normalized so a terminal page is
+        // always stored as "nothing left to request".
+        nextBefore: reversePageCursor(page),
         // Live counter: take the server's word for it every page.
         total: page.total,
         hasOlder: page.hasMore,
