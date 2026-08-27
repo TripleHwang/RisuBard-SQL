@@ -5,7 +5,7 @@ import { get } from "svelte/store";
 import { setDatabase, setDatabaseLite, defaultSdDataFunc, getDatabase, changeToThemePreset, type Database } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, startupHydrationStore, DBState, LoadingStatusState } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, startupHydrationErrorStore, startupHydrationStore, DBState, LoadingStatusState } from "./stores.svelte";
 import { loadPlugins, pluginStateStore } from "./plugins/plugins.svelte";
 import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
 import { characterURLImport } from "./characterCards";
@@ -73,6 +73,18 @@ export function scheduleAfterFirstPaint(task: () => void | Promise<void>, timeou
     }))
 }
 
+/** Deferred SQL hydration is startup-critical once the safe shell is painted. */
+export function scheduleDeferredSqlHydration(task: () => void | Promise<void>): void {
+    const run = () => {
+        void Promise.resolve().then(task).catch(console.error)
+    }
+    const requestFrame = typeof globalThis.requestAnimationFrame === 'function'
+        ? globalThis.requestAnimationFrame.bind(globalThis)
+        : (callback: FrameRequestCallback) => globalThis.setTimeout(callback, 0) as unknown as number
+
+    requestFrame(() => requestFrame(run))
+}
+
 async function loadDeferredModules(): Promise<void> {
     try {
         await loadPlugins()
@@ -84,6 +96,7 @@ async function loadDeferredModules(): Promise<void> {
 }
 
 async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<void> {
+    markPerformance('deferred-hydration:start')
     while (true) {
         try {
             await storage.hydrateDeferredDatabase(getDatabase())
@@ -94,11 +107,14 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             setPatchSyncBaseline(safeStructuredClone(getDatabase()))
             startMetadataPersistence()
             startupHydrationStore.set(false)
-            markPerformance('first-interactive')
+            startupHydrationErrorStore.set(false)
+            markPerformance('deferred-hydration:end')
+            measurePerformance('deferred-hydration', 'deferred-hydration:start', 'deferred-hydration:end')
             break
         } catch (error) {
             console.error('Deferred SQL startup failed', error)
             pluginStateStore.set('failed')
+            startupHydrationErrorStore.set(true)
             let retry = false
             try {
                 retry = await alertConfirm('Deferred SQL startup could not complete. Retry loading it now?')
@@ -287,19 +303,20 @@ export async function loadData() {
                 MobileGUI.set(true)
             }
             startupHydrationStore.set(Boolean(deferredSqlStorage))
+            startupHydrationErrorStore.set(false)
             loadedStore.set(true)
             configureSaverModeActions({ flush: flushSqlDirtyChanges, evictChats: evictHydratedChats })
             registerRuntimeCacheOwners(clearParserRuntimeCaches, clearInlayRuntimeCache)
             installSaverModeLifecycle()
             if (deferredSqlStorage) markPerformance('first-visible-shell')
-            else markPerformance('first-interactive')
+            markPerformance('first-interactive')
             selectedCharID.set(-1)
             startObserveDom()
             if (startupMode !== 'metadata-first') assignIds()
             if (startupMode === 'metadata-first') {
                 if (!deferredSqlStorage) startMetadataPersistence()
             } else saveDb()
-            if (deferredSqlStorage) scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))
+            if (deferredSqlStorage) scheduleDeferredSqlHydration(() => hydrateDeferredSqlStartup(deferredSqlStorage!))
             else scheduleAfterFirstPaint(() => loadDeferredModules())
             // Asset URLs use the cookie session, but SQL bootstrap only needs
             // its JWT header. Establish the cookie after a paint so it cannot

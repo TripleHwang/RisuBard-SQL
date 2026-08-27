@@ -25,9 +25,13 @@ export const SizeStore = writable({
 
 export const loadedStore = writable(false)
 // Server-SQL metadata-first startup renders its shallow shell before deferred
-// settings/plugins/personas arrive. Keep that shell visible but noninteractive
-// so local edits cannot be overwritten by the deferred merge.
+// settings/plugins/personas arrive. Keep that shell visible while mutation
+// surfaces remain closed so local edits cannot be overwritten by the merge.
 export const startupHydrationStore = writable(false)
+// Deferred SQL data must fully merge before settings, plugins, personas, and
+// chat mutation surfaces can safely write. Keep a failure state so local gates
+// explain why they remain closed after the recovery prompt is dismissed.
+export const startupHydrationErrorStore = writable(false)
 export const isTouchDevice = writable(typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches)
 export const DynamicGUI = writable(false)
 export const sideBarClosing = writable(false)

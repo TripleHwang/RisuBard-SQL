@@ -4,6 +4,8 @@ export type StartupMetricMark =
     | 'bootstrap-json:end'
     | 'first-visible-shell'
     | 'first-interactive'
+    | 'deferred-hydration:start'
+    | 'deferred-hydration:end'
     | 'character-hydration:start'
     | 'character-hydration:end'
     | 'message-page-fetch:start'
@@ -56,7 +58,7 @@ export function markPerformance(name: StartupMetricMark): void {
 function reportMetric(name: string): DurationMetric | undefined {
     const metrics: readonly DurationMetric[] = [
         'bootstrap-fetch', 'bootstrap-json', 'character-hydration',
-        'message-page-fetch', 'sql-commit', 'render-batch', 'sql-auth', 'sql-open', 'bootstrap-rebuild',
+        'message-page-fetch', 'sql-commit', 'render-batch', 'sql-auth', 'sql-open', 'bootstrap-rebuild', 'deferred-hydration',
     ]
     return metrics.find((metric) => metric === name)
 }

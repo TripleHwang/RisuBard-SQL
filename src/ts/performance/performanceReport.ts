@@ -4,6 +4,7 @@ export type DurationMetric =
     | 'character-hydration' | 'message-page-fetch' | 'sql-commit'
     | 'render-batch' | 'chat-selection' | 'long-task'
     | 'sql-auth' | 'sql-open' | 'bootstrap-rebuild'
+    | 'deferred-hydration'
 
 export type ResourceSample = {
     hydratedChats: number

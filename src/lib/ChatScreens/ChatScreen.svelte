@@ -20,6 +20,8 @@
     import { pluginStateStore } from 'src/ts/plugins/plugins.svelte';
     import { createMemorySaveSlot, latestChatMessageId, prepareMemorySaveLoad, type MemorySaveSlotSummary } from 'src/ts/risubard/memorySaveSlots';
     import { resolveChatTextSurface } from 'src/ts/gui/textTheme';
+    import { startupHydrationStore } from 'src/ts/stores.svelte';
+    import DeferredStartupGate from '../Others/DeferredStartupGate.svelte';
     let openChatList = $state(false)
     let openModuleList = $state(false)
     let saveSlotsOpen = $state(false)
@@ -162,6 +164,10 @@
     });
 </script>
 
+{#if $startupHydrationStore && $selectedCharID >= 0}
+    <DeferredStartupGate />
+{:else}
+
 {#snippet chatChrome()}
     <SideBarArrow />
 {/snippet}
@@ -212,6 +218,8 @@
             <DefaultChatScreen customStyle={externalStyles} bind:openChatList bind:openModuleList onSaveChat={() => openSaveSlots('save')} onOpenChatLoad={() => openSaveSlots('load')} {savingSlot}/>
         </div>
     </div>
+{/if}
+
 {/if}
 {#if openChatList}
     <ChatList close={() => {openChatList = false}}/>
