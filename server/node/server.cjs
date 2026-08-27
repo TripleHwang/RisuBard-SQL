@@ -40,6 +40,7 @@ const { releaseToUpdateInfo } = require('./release-update.cjs');
 const { compareUpdateVersions, isAllowedGitHubReleaseUrl, validateUpdateManifest } = require('./update-manifest.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { createRelationalSqlite } = require('./relational-sqlite.cjs');
+const { createSqlLegacyMigration } = require('./sql-legacy-migration.cjs');
 const {
     normalizeSqlMessagePageQuery,
     normalizeSqlAncillaryLimitQuery,
@@ -850,6 +851,16 @@ if(!existsSync(savePath)){
     mkdirSync(savePath)
 }
 const relationalSql = createRelationalSqlite({ dataRoot: savePath })
+// Legacy database.bin is decoded only by this explicit server operation. A
+// successful relational store never touches it again during normal boot.
+const sqlLegacyMigration = createSqlLegacyMigration({
+    relationalSql,
+    readLegacy: async () => {
+        const raw = kvGet('database/database.bin');
+        if (!raw) return { characters: [], botPresets: [] };
+        return normalizeJSON(await decodeRisuSave(raw));
+    },
+})
 let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
 function persistCanonicalProjection(databaseObject) {
     const result = userDataRepository.importLegacyDatabase(databaseObject, { mode: 'sync' })
@@ -1668,6 +1679,17 @@ const sqlReadLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many SQL read requests. Please wait and try again later.' },
+    validate: { xForwardedForHeader: false }
+});
+
+// Legacy-to-SQL migration decodes and atomically replaces the canonical store.
+// Keep its admission budget separate from frequent bounded SQL reads.
+const sqlMigrationLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many SQL migration requests. Please wait and try again later.' },
     validate: { xForwardedForHeader: false }
 });
 
@@ -3731,10 +3753,51 @@ registerRisuBardMemoryRoutes(app, {
 app.get('/api/sql/bootstrap', sqlReadLimiter, async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     try {
-        res.set('Cache-Control', 'no-store').json(relationalSql.bootstrap());
+        const payload = relationalSql.bootstrap();
+        if (payload.status === 'ready') {
+            const etag = `\"sql-bootstrap-${payload.revision}-${payload.migrationState}\"`;
+            res.set('Cache-Control', 'private, no-cache').set('ETag', etag);
+            if (req.headers['if-none-match'] === etag) return res.status(304).end();
+        } else {
+            res.set('Cache-Control', 'no-store');
+        }
+        res.json(payload);
     } catch (error) {
         next(error);
     }
+});
+
+app.get('/api/sql/deferred-bootstrap', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    try { res.set('Cache-Control', 'no-store').json(relationalSql.deferredBootstrap()); }
+    catch (error) { next(error); }
+});
+
+app.post('/api/sql/migrate-legacy', sqlMigrationLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    if (!checkActiveSession(req, res)) return;
+    try {
+        const result = await queueStorageOperation(() => sqlLegacyMigration.migrate({ retry: req.query.retry === '1' }));
+        res.json(result);
+    } catch (error) {
+        if (error?.code === 'SQL_MIGRATION_IN_PROGRESS') return res.status(409).json({ error: 'SQL migration already in progress' });
+        next(error);
+    }
+});
+
+app.get('/api/sql/presets', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    try { res.set('Cache-Control', 'no-store').json({ presets: relationalSql.listBotPresets() }); }
+    catch (error) { next(error); }
+});
+
+app.get('/api/sql/presets/:presetId', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    try {
+        const preset = relationalSql.loadBotPreset(String(req.params.presetId || ''));
+        if (!preset) return res.status(404).json({ error: 'Preset not found' });
+        res.set('Cache-Control', 'no-store').json({ preset });
+    } catch (error) { next(error); }
 });
 
 app.get('/api/sql/characters/:characterId', sqlReadLimiter, async (req, res, next) => {

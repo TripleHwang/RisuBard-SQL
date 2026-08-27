@@ -5,6 +5,7 @@ import {
   getActiveSqlStorage,
   activateRecoveredSqlStorage,
   openExistingStandaloneSql,
+  retryFailedStandaloneSql,
   selectCanonicalDatabase,
   setActiveSqlStorageForTesting,
 } from "./sqlBootstrap";
@@ -24,7 +25,7 @@ describe("standalone SQL bootstrap", () => {
       ...fakeStorage([]),
       backendKind: "server-sql" as const,
       init: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (503)"), { status: 503 }); }),
-      loadBootstrap: vi.fn(),
+      loadBootstrap: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (503)"), { status: 503 }); }),
       loadRecoverySnapshot: vi.fn(),
       loadCharacterHydration: vi.fn(),
       loadChatMessageReversePage: vi.fn(),
@@ -43,7 +44,7 @@ describe("standalone SQL bootstrap", () => {
       ...fakeStorage([]),
       backendKind: "server-sql" as const,
       init: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (404)"), { status: 404 }); }),
-      loadBootstrap: vi.fn(),
+      loadBootstrap: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (404)"), { status: 404 }); }),
       loadRecoverySnapshot: vi.fn(),
       loadCharacterHydration: vi.fn(),
       loadChatMessageReversePage: vi.fn(),
@@ -61,7 +62,7 @@ describe("standalone SQL bootstrap", () => {
     const storage = {
       ...fakeStorage([]), backendKind: "server-sql" as const,
       init: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (401)"), { status: 401 }); }),
-      loadBootstrap: vi.fn(), loadRecoverySnapshot: vi.fn(), loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn(),
+      loadBootstrap: vi.fn(async () => { throw Object.assign(new Error("SQL bootstrap failed (401)"), { status: 401 }); }), loadRecoverySnapshot: vi.fn(), loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn(),
     } as unknown as SqlBootstrapStorage;
 
     const result = await openExistingStandaloneSql(storage);
@@ -74,7 +75,7 @@ describe("standalone SQL bootstrap", () => {
     const storage = {
       ...fakeStorage([]), backendKind: "server-sql" as const,
       init: vi.fn(async () => { throw new TypeError("Failed to fetch"); }),
-      loadBootstrap: vi.fn(), loadRecoverySnapshot: vi.fn(), loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn(),
+      loadBootstrap: vi.fn(async () => { throw new TypeError("Failed to fetch"); }), loadRecoverySnapshot: vi.fn(), loadCharacterHydration: vi.fn(), loadChatMessageReversePage: vi.fn(),
     } as unknown as SqlBootstrapStorage;
 
     const result = await openExistingStandaloneSql(storage);
@@ -104,6 +105,31 @@ describe("standalone SQL bootstrap", () => {
     expect(result?.mode).toBe("metadata-first");
     expect(storage.replaceDatabase).not.toHaveBeenCalled();
     setActiveSqlStorageForTesting(null);
+  });
+
+  it("fetches server bootstrap exactly once before a steady-state open", async () => {
+    const database = { characters: [] } as any;
+    const storage = {
+      ...fakeStorage([{ status: 'ready', revision: 4, database }]), backendKind: 'server-sql' as const,
+      loadBootstrap: vi.fn(async () => ({ status: 'ready', migrationState: 'ready', revision: 4, settings: {}, characters: [], selectedCharacterId: null, selectedChatId: null })),
+    } as unknown as SqlBootstrapStorage;
+    await openExistingStandaloneSql(storage);
+    expect(storage.loadBootstrap).toHaveBeenCalledOnce();
+    expect(storage.init).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-retry a durable failed migration but supports explicit retry", async () => {
+    const database = { characters: [] } as any;
+    const storage = {
+      ...fakeStorage([{ status: 'ready', revision: 2, database }]), backendKind: 'server-sql' as const,
+      loadBootstrap: vi.fn(async () => ({ status: 'empty', migrationState: 'failed', migrationError: 'safe failure', revision: 1, settings: {}, characters: [], selectedCharacterId: null, selectedChatId: null })),
+      migrateLegacy: vi.fn(async () => ({ status: 'ready', revision: 2 })),
+    } as unknown as SqlBootstrapStorage;
+    const failed = await openExistingStandaloneSql(storage);
+    expect(failed).toMatchObject({ mode: 'failed', recoveryStorage: storage });
+    expect(storage.migrateLegacy).not.toHaveBeenCalled();
+    await expect(retryFailedStandaloneSql(storage)).resolves.toMatchObject({ mode: 'metadata-first', database });
+    expect(storage.migrateLegacy).toHaveBeenCalledWith(true);
   });
 
   it("keeps an existing SQL database canonical", async () => {

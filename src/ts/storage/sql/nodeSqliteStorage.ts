@@ -2,6 +2,7 @@ import type {
   BotPresetSummary,
   SqlBotChatStats,
   SqlBootstrapPayload,
+  SqlDeferredBootstrapPayload,
   SqlBootstrapStorage,
   SqlCharacterSearchResult,
   SqlLoadDatabaseOptions,
@@ -72,6 +73,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   private enabled = false;
   private revision = 0;
   private bootstrapPayload: SqlBootstrapPayload | null = null;
+  private deferredBootstrapPayload: SqlDeferredBootstrapPayload | null = null;
 
   constructor(private readonly request: AuthenticatedRequest) {}
 
@@ -96,9 +98,10 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     const value = payload as Partial<SqlBootstrapPayload>;
     if ((value.status !== "ready" && value.status !== "empty") ||
       !Number.isSafeInteger(value.revision) || value.revision < 0 ||
+      (value.migrationState !== undefined && !["empty", "migrating", "ready", "failed"].includes(value.migrationState)) ||
       !value.settings || typeof value.settings !== "object" || Array.isArray(value.settings) ||
-      !value.pluginCustomStorage || typeof value.pluginCustomStorage !== "object" || Array.isArray(value.pluginCustomStorage) ||
-      !Array.isArray(value.botPresets) || !Array.isArray(value.characters) ||
+      (value.pluginCustomStorage !== undefined && (typeof value.pluginCustomStorage !== "object" || Array.isArray(value.pluginCustomStorage))) ||
+      (value.botPresets !== undefined && !Array.isArray(value.botPresets)) || !Array.isArray(value.characters) ||
       (value.selectedCharacterId !== null && typeof value.selectedCharacterId !== "string") ||
       (value.selectedChatId !== null && typeof value.selectedChatId !== "string")) {
       throw new Error("Invalid SQL bootstrap payload");
@@ -106,10 +109,18 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return value as SqlBootstrapPayload;
   }
 
+  private validateDeferredBootstrap(payload: unknown): SqlDeferredBootstrapPayload {
+    if (!payload || typeof payload !== 'object') throw new Error('Invalid SQL deferred bootstrap payload');
+    const value = payload as Partial<SqlDeferredBootstrapPayload>;
+    if (!Number.isSafeInteger(value.revision) || value.revision < 0 || !value.settings || typeof value.settings !== 'object' || Array.isArray(value.settings) || !value.pluginCustomStorage || typeof value.pluginCustomStorage !== 'object' || Array.isArray(value.pluginCustomStorage) || !Array.isArray(value.botPresets)) throw new Error('Invalid SQL deferred bootstrap payload');
+    return value as SqlDeferredBootstrapPayload;
+  }
+
   private acceptReadRevision(revision: number): void {
     if (this.bootstrapPayload && this.bootstrapPayload.revision !== revision) {
       this.bootstrapPayload = null;
     }
+    if (this.deferredBootstrapPayload && this.deferredBootstrapPayload.revision !== revision) this.deferredBootstrapPayload = null;
     this.revision = revision;
   }
 
@@ -117,18 +128,32 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     markPerformance("bootstrap-fetch:start");
     let response: Response;
     try {
-      response = await this.request("/api/sql/bootstrap");
+      response = await this.request("/api/sql/bootstrap", this.bootstrapPayload?.status === "ready" ? {
+        headers: { "if-none-match": `\"sql-bootstrap-${this.bootstrapPayload.revision}-${this.bootstrapPayload.migrationState ?? (this.bootstrapPayload.status === "ready" ? "ready" : "empty")}\"` },
+      } : undefined);
     } finally {
       markPerformance("bootstrap-fetch:end");
       measurePerformance("bootstrap-fetch", "bootstrap-fetch:start", "bootstrap-fetch:end");
     }
+    if (response.status === 304 && this.bootstrapPayload) return this.bootstrapPayload;
     if (!response.ok) throw new SqlHttpError(`SQL bootstrap failed (${response.status})`, response.status);
     const payload = this.validateBootstrap(await response.json());
     markPerformance("bootstrap-json:end");
     measurePerformance("bootstrap-json", "bootstrap-fetch:end", "bootstrap-json:end");
     this.revision = payload.revision;
     this.bootstrapPayload = payload;
+    if (this.deferredBootstrapPayload && this.deferredBootstrapPayload.revision !== payload.revision) this.deferredBootstrapPayload = null;
     this.enabled = true;
+    return payload;
+  }
+
+  async loadDeferredBootstrap(): Promise<SqlDeferredBootstrapPayload> {
+    if (this.deferredBootstrapPayload?.revision === this.revision) return this.deferredBootstrapPayload;
+    const response = await this.request('/api/sql/deferred-bootstrap');
+    if (!response.ok) throw new SqlHttpError(`SQL deferred bootstrap failed (${response.status})`, response.status);
+    const payload = this.validateDeferredBootstrap(await response.json());
+    if (payload.revision !== this.revision) throw new Error('SQL deferred bootstrap revision changed');
+    this.deferredBootstrapPayload = payload;
     return payload;
   }
 
@@ -139,12 +164,26 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return true;
   }
 
+  async migrateLegacy(retry = false): Promise<{ status: "ready" | "failed"; revision: number }> {
+    const response = await this.request(`/api/sql/migrate-legacy${retry ? "?retry=1" : ""}`, { method: "POST" });
+    if (!response.ok) throw new SqlHttpError(`SQL legacy migration failed (${response.status})`, response.status);
+    const result = await response.json() as { status?: unknown; revision?: unknown };
+    const revision = Number(result.revision);
+    if ((result.status !== "ready" && result.status !== "failed") || !Number.isSafeInteger(revision) || revision < 0) {
+      throw new Error("Invalid SQL legacy migration response");
+    }
+    this.bootstrapPayload = null;
+    this.deferredBootstrapPayload = null;
+    this.revision = revision;
+    return { status: result.status, revision };
+  }
+
   private rebuildBootstrap(payload: SqlBootstrapPayload): Database | null {
     if (payload.status !== "ready") return null;
     const database = {
       ...payload.settings,
-      pluginCustomStorage: payload.pluginCustomStorage,
-      botPresets: payload.botPresets,
+      pluginCustomStorage: payload.pluginCustomStorage ?? {},
+      botPresets: payload.botPresets ?? [],
       characters: payload.characters.map((character) => ({
         ...character,
         detailsLoaded: false,
@@ -168,6 +207,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   async loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null> {
     const dump = await this.fetchDump();
     this.bootstrapPayload = null;
+    this.deferredBootstrapPayload = null;
     const database = this.rebuild(dump);
     return { status: database ? "ready" : "empty", revision: dump.revision, database };
   }
@@ -280,6 +320,19 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return { status: payload.status, revision: payload.revision, database };
   }
 
+  async hydrateDeferredDatabase(database: Database): Promise<void> {
+    const payload = await this.loadDeferredBootstrap();
+    Object.assign(database as object, payload.settings, {
+      pluginCustomStorage: payload.pluginCustomStorage,
+      botPresets: payload.botPresets,
+    });
+    const activePresetId = (this.bootstrapPayload?.settings as { activeBotPresetId?: unknown } | undefined)?.activeBotPresetId;
+    database.botPresetsId = Math.max(0, payload.botPresets.findIndex(
+      (preset) => preset.id === activePresetId,
+    ));
+    delete (database as unknown as Record<string, unknown>).activeBotPresetId;
+  }
+
   async loadCharacterHydration(characterId: string): Promise<character | null> {
     const metric = runtimeMetrics.start("character-hydration");
     try {
@@ -375,12 +428,14 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       const body = await response.json();
       this.revision = Number(body.currentRevision) || 0;
       this.bootstrapPayload = null;
+      this.deferredBootstrapPayload = null;
       throw new SqlRevisionConflictError(this.revision);
     }
     if (!response.ok) throw new Error(`SQL commit failed (${response.status})`);
     const result = (await response.json()) as SqlCommitResult;
     this.revision = result.revision;
     this.bootstrapPayload = null;
+    this.deferredBootstrapPayload = null;
     return result;
   }
 
@@ -408,7 +463,9 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   }
 
   private async current(): Promise<Database> {
-    return (await this.loadDatabase({ shallow: true }))?.database ?? ({} as Database);
+    const database = (await this.loadDatabase({ shallow: true }))?.database ?? ({} as Database);
+    await this.hydrateDeferredDatabase(database);
+    return database;
   }
 
   async loadCharacter(characterId: string): Promise<character | null> {
@@ -453,20 +510,13 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
 
   async listBotPresets(): Promise<BotPresetSummary[]> {
     return ((await this.current()).botPresets ?? []).map((preset, position) => ({
-      id: preset.id!,
-      position,
-      name: preset.name ?? "",
-      image: preset.image ?? "",
-      apiType: preset.apiType ?? "",
-      aiModel: preset.aiModel ?? "",
-      hash: "",
+      id: preset.id!, position, name: preset.name ?? "", image: preset.image ?? "",
+      apiType: preset.apiType ?? "", aiModel: preset.aiModel ?? "", hash: "",
     }));
   }
 
   async loadBotPreset(id: string): Promise<StoredBotPreset | null> {
-    const preset = ((await this.current()).botPresets ?? []).find(
-      (item) => item.id === id,
-    );
+    const preset = ((await this.current()).botPresets ?? []).find((item) => item.id === id);
     return preset ? preset as StoredBotPreset : null;
   }
 

@@ -1,6 +1,6 @@
 /** Content-free, bounded diagnostics intended for manual performance gates. */
 export type DurationMetric =
-    | 'bootstrap-fetch' | 'bootstrap-json' | 'first-interactive'
+    | 'bootstrap-fetch' | 'bootstrap-json' | 'first-visible-shell' | 'first-interactive'
     | 'character-hydration' | 'message-page-fetch' | 'sql-commit'
     | 'render-batch' | 'chat-selection' | 'long-task'
     | 'sql-auth' | 'sql-open' | 'bootstrap-rebuild'

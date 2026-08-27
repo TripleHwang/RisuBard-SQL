@@ -14,7 +14,7 @@ export interface SqlBootstrapResult {
 }
 
 export type ExistingSqlOpenResult = SqlBootstrapResult & {
-  mode: "metadata-first" | "degraded" | "unsupported";
+  mode: "metadata-first" | "degraded" | "unsupported" | "failed";
   recoveryStorage?: SqlBootstrapStorage;
 };
 
@@ -124,7 +124,21 @@ export async function openExistingStandaloneSql(
 ): Promise<ExistingSqlOpenResult | null> {
   try {
     storage ??= await createDefaultSqlStorage();
-    if (!(await storage.init())) return null;
+    let serverBootstrap: Awaited<ReturnType<SqlBootstrapStorage['loadBootstrap']>> | undefined;
+    if (storage.backendKind === 'server-sql' && 'loadBootstrap' in storage) {
+      serverBootstrap = await (storage as SqlBootstrapStorage).loadBootstrap();
+    } else if (!(await storage.init())) return null;
+    if (storage.backendKind === 'server-sql' && 'loadBootstrap' in storage) {
+      const bootstrap = serverBootstrap!;
+      if (bootstrap.status !== 'ready') {
+        if (bootstrap.migrationState === 'empty') {
+          const migrated = await (storage as SqlBootstrapStorage).migrateLegacy();
+          if (migrated.status !== 'ready') throw new Error('Server legacy migration failed');
+        } else {
+          return { database: {} as Database, storage, usingSql: false, migrated: false, mode: 'failed', recoveryStorage: storage as SqlBootstrapStorage, error: new Error(bootstrap.migrationError || `SQL migration is ${bootstrap.migrationState || 'unavailable'}`) };
+        }
+      }
+    }
     const loaded = await storage.loadDatabase({ shallow: true });
     if (loaded?.status === "ready" && loaded.database) {
       pendingSqlStorage = null;
@@ -176,6 +190,16 @@ export async function openExistingStandaloneSql(
     }
     return null;
   }
+}
+
+/** Explicit user-confirmed retry for a durable server migration failure. */
+export async function retryFailedStandaloneSql(storage: SqlBootstrapStorage): Promise<ExistingSqlOpenResult> {
+  const migrated = await storage.migrateLegacy(true);
+  if (migrated.status !== 'ready') throw new Error('Server legacy migration retry failed');
+  const loaded = await storage.loadDatabase({ shallow: true });
+  if (loaded?.status !== 'ready' || !loaded.database || loaded.revision !== migrated.revision) throw new Error('Server legacy migration retry could not be verified');
+  activateSqlStorage(storage, loaded.database);
+  return { database: loaded.database, storage, usingSql: true, migrated: true, mode: 'metadata-first' };
 }
 
 export function activateRecoveredSqlStorage(storage: ISqlStorage, database: Database): void {

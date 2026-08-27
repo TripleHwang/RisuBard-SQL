@@ -2,6 +2,7 @@ export type StartupMetricMark =
     | 'bootstrap-fetch:start'
     | 'bootstrap-fetch:end'
     | 'bootstrap-json:end'
+    | 'first-visible-shell'
     | 'first-interactive'
     | 'character-hydration:start'
     | 'character-hydration:end'
@@ -47,8 +48,8 @@ export function markPerformance(name: StartupMetricMark): void {
     const markName = prefix(name)
     bestEffort(() => performance.clearMarks?.(markName))
     bestEffort(() => performance.mark(markName))
-    if (name === 'first-interactive') {
-        bestEffort(() => recordRuntimeDuration('first-interactive', performance.now()))
+    if (name === 'first-visible-shell' || name === 'first-interactive') {
+        bestEffort(() => recordRuntimeDuration(name, performance.now()))
     }
 }
 

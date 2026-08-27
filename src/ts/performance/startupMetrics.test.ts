@@ -61,6 +61,13 @@ describe('startup metrics', () => {
         expect(runtimePerformanceReport.export().durations['first-interactive']).toEqual([42])
     })
 
+    test('keeps metadata-first shell visibility distinct from true interaction', () => {
+        vi.stubGlobal('performance', { mark: vi.fn(), clearMarks: vi.fn(), now: () => 42 })
+        markPerformance('first-visible-shell')
+
+        expect(runtimePerformanceReport.export().durations).toEqual({ 'first-visible-shell': [42] })
+    })
+
     test('clears a successful measurement without consuming its marks', () => {
         const measure = vi.fn(() => ({ duration: 42 } as PerformanceMeasure))
         const clearMeasures = vi.fn()

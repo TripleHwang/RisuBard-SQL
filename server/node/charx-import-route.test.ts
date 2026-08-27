@@ -84,12 +84,18 @@ describe('createCharXImportHandler', () => {
     it.each([
         ['text/plain', 415, {}, 'wrong content type'],
         ['application/x-risu-charx-not-really', 415, {}, 'lookalike content type'],
-        ['application/x-risu-charx', 413, { 'content-length': String(256 * 1024 * 1024 + 1) }, 'known oversize'],
     ])('returns %i for %s before importing', async (contentType, status, headers) => {
         const { server, calls } = makeApp()
         const response = await request(server, '', { 'content-type': contentType, ...headers })
         expect(response.status).toBe(status)
         expect(calls).not.toContain('import')
+    })
+
+    it('does not reject direct streamed uploads using the obsolete compressed archive cap', async () => {
+        const { server, calls } = makeApp({ limits: { compressedBytes: 1, diskHeadroomBytes: 0 } })
+        const response = await request(server, 'ab')
+        expect(response.status).toBe(200)
+        expect(calls).toContain('import')
     })
 
     it('returns 409 for the shared import lock and releases the lock after a helper error without leaking paths', async () => {
@@ -109,6 +115,7 @@ describe('createCharXImportHandler', () => {
     it.each([
         ['INVALID_CHARX', 400],
         ['CHARX_LIMIT_EXCEEDED', 413],
+        ['DECOMPRESSION_SAFETY', 413],
         ['INSUFFICIENT_STORAGE', 507],
         ['ASSET_COMMIT_FAILED', 500],
     ])('includes mapped status %i in post-header NDJSON errors for %s', async (code, status) => {

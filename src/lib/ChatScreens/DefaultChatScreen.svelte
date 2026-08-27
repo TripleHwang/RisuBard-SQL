@@ -1541,7 +1541,7 @@ import { isMobile } from 'src/ts/platform'
                         data-chat-page-next
                         class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
                         disabled={chatBounds.page >= chatBounds.pageCount - 1}
-                        onclick={() => void selectChatPage(chatBounds.page + 1, chatBounds.page + 1 >= chatBounds.pageCount - 1)}
+                        onclick={() => void selectChatPage(chatBounds.page + 1)}
                     >{language.chatPageNext}</button>
                     <button
                         data-chat-page-latest

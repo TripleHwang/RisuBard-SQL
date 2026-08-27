@@ -7,6 +7,7 @@
 
     import { DBState, hotReloading } from "src/ts/stores.svelte";
     import { checkPluginUpdate, createBlankPlugin, importPlugin, loadPlugins, updatePlugin } from "src/ts/plugins/plugins.svelte";
+    import { runInstalledPluginUpdateAction } from "src/ts/plugins/pluginUpdate";
     import { requestImmediateSave } from "src/ts/globalApi.svelte";
     import { resetPluginPermission } from "src/ts/plugins/apiV3/v3.svelte";
     import TextInput from "src/lib/UI/GUI/TextInput.svelte";
@@ -33,8 +34,11 @@
         if (updatingPlugins.includes(plugin.name)) return
         updatingPlugins = [...updatingPlugins, plugin.name]
         try {
-            if (await updatePlugin(plugin)) notifySuccess(language.pluginUpdateSuccess)
-            else notifyError(language.pluginUpdateFailed)
+            await runInstalledPluginUpdateAction(plugin, {
+                update: updatePlugin,
+                reportSuccess: () => notifySuccess(language.pluginUpdateSuccess),
+                reportFailure: () => notifyError(language.pluginUpdateFailed),
+            })
         } finally {
             updatingPlugins = updatingPlugins.filter((name) => name !== plugin.name)
         }
@@ -145,6 +149,7 @@
                 {#await checkPluginUpdate(plugin) then updateInfo}
                     {#if updateInfo}
                         <button
+                            data-plugin-update
                             class="text-green-400 hover:gray-200 cursor-pointer"
                             disabled={updatingPlugins.includes(plugin.name)}
                             onclick={async (e) => {

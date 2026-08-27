@@ -42,13 +42,22 @@ export type StoredBotPreset = botPreset & { id: string };
 
 export interface SqlBootstrapPayload {
   status: "ready" | "empty";
+  migrationState?: "empty" | "migrating" | "ready" | "failed";
+  migrationError?: string | null;
+  revision: number;
+  settings: Record<string, unknown>;
+  pluginCustomStorage?: Record<string, unknown>;
+  botPresets?: StoredBotPreset[];
+  characters: character[];
+  selectedCharacterId: string | null;
+  selectedChatId: string | null;
+}
+
+export interface SqlDeferredBootstrapPayload {
   revision: number;
   settings: Record<string, unknown>;
   pluginCustomStorage: Record<string, unknown>;
   botPresets: StoredBotPreset[];
-  characters: character[];
-  selectedCharacterId: string | null;
-  selectedChatId: string | null;
 }
 
 export interface SqlReverseMessagePage {
@@ -185,6 +194,9 @@ export interface ISqlStorage {
 /** Additive bounded read contract used only by the Node SQL client. */
 export interface SqlBootstrapStorage extends ISqlStorage {
   loadBootstrap(): Promise<SqlBootstrapPayload>;
+  loadDeferredBootstrap(): Promise<SqlDeferredBootstrapPayload>;
+  hydrateDeferredDatabase(database: Database): Promise<void>;
+  migrateLegacy(retry?: boolean): Promise<{ status: "ready" | "failed"; revision: number }>;
   loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null>;
   loadCharacterHydration(characterId: string): Promise<character | null>;
   loadChatMessageReversePage(

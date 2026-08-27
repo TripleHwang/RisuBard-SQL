@@ -3,6 +3,9 @@ import { mkdtemp, open, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { createHash } from 'node:crypto'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { Zip, ZipPassThrough, strToU8 } from 'fflate'
 
 const importerPath = './risum-import.cjs'
 const rpackMapPath = './rpack-map.cjs'
@@ -147,5 +150,80 @@ describe('generated large risum import harness', () => {
     expect(metrics.archiveBytes).toBeGreaterThan(3 * GiB)
     expect(metrics.peakRssIncrease).toBeLessThanOrEqual(512 * MiB)
     console.info('large-import-harness', JSON.stringify(metrics))
+  }, 15 * 60_000)
+})
+
+async function writeGeneratedCharX(archivePath: string, assetBytes: number) {
+  const expected = createHash('sha256')
+  await new Promise<void>((resolve, reject) => {
+    const output = createWriteStream(archivePath, { flags: 'wx', mode: 0o600 })
+    const zip = new Zip((error, data, final) => {
+      if (error) { reject(error); return }
+      output.write(data)
+      if (final) output.end()
+    })
+    output.once('error', reject)
+    output.once('finish', resolve)
+    const card = new ZipPassThrough('card.json')
+    zip.add(card)
+    card.push(strToU8('{"spec":"chara_card_v3"}'), true)
+    const asset = new ZipPassThrough('generated-large.png')
+    zip.add(asset)
+    const chunk = Buffer.alloc(64 * 1024)
+    for (let index = 0; index < chunk.length; index++) chunk[index] = index & 0xff
+    let remaining = assetBytes
+    while (remaining > 0) {
+      const bytes = Math.min(remaining, chunk.length)
+      const next = bytes === chunk.length ? chunk : chunk.subarray(0, bytes)
+      expected.update(next)
+      asset.push(next, bytes === remaining)
+      remaining -= bytes
+    }
+    zip.end()
+  })
+  return expected.digest('hex')
+}
+
+const largeCharXIt = process.env.RISU_RUN_LARGE_IMPORT === '1' ? it : it.skip
+describe('generated large CharX import harness', () => {
+  largeCharXIt('streams a >256 MiB archive and >50 MiB asset without retaining either in memory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'charx-large-harness-'))
+    roots.push(root)
+    const archivePath = join(root, 'generated.charx')
+    const stagingRoot = join(root, 'stage')
+    const assetBytes = 257 * MiB
+    const expectedDigest = await writeGeneratedCharX(archivePath, assetBytes)
+    expect((await stat(archivePath)).size).toBeGreaterThan(256 * MiB)
+
+    const baselineRss = process.memoryUsage().rss
+    let peakRss = baselineRss
+    const timer = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss) }, 100)
+    timer.unref()
+    try {
+      const { importCharXStream } = require('./charx-import.cjs')
+      let publishedBytes = 0
+      let publishedDigest = ''
+      const result = await importCharXStream(createReadStream(archivePath, { highWaterMark: 64 * 1024 }), {
+        stagingRoot,
+        publishAssets: async (entries: Array<{ sourcePath: string }>) => {
+          expect(entries).toHaveLength(1)
+          const digest = createHash('sha256')
+          for await (const chunk of createReadStream(entries[0].sourcePath, { highWaterMark: 64 * 1024 })) {
+            publishedBytes += chunk.length
+            digest.update(chunk)
+          }
+          publishedDigest = digest.digest('hex')
+        },
+      })
+      peakRss = Math.max(peakRss, process.memoryUsage().rss)
+      expect(Object.keys(result.assets)).toEqual(['generated-large.png'])
+      expect(publishedBytes).toBe(assetBytes)
+      expect(publishedDigest).toBe(expectedDigest)
+      expect(peakRss - baselineRss).toBeLessThanOrEqual(512 * MiB)
+      expect(await readdir(stagingRoot)).toEqual([])
+      console.info('charx-large-import-harness', JSON.stringify({ archiveBytes: (await stat(archivePath)).size, publishedBytes, peakRssIncrease: peakRss - baselineRss }))
+    } finally {
+      clearInterval(timer)
+    }
   }, 15 * 60_000)
 })

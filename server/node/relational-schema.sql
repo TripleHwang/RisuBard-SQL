@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS system_storage_meta (
     schema_layout TEXT NOT NULL DEFAULT 'relational-schema-v3',
     revision INTEGER NOT NULL DEFAULT 0,
     initialized INTEGER NOT NULL DEFAULT 0,
+    migration_state TEXT NOT NULL DEFAULT 'empty' CHECK (migration_state IN ('empty', 'migrating', 'ready', 'failed')),
+    migration_error TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 INSERT OR IGNORE INTO system_storage_meta (singleton, schema_version, schema_layout)

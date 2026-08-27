@@ -3,16 +3,17 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(resolve(process.cwd(), 'src/ts/bootstrap.ts'), 'utf8')
+const appSource = readFileSync(resolve(process.cwd(), 'src/App.svelte'), 'utf8')
 
 describe('startup scheduling and degraded recovery', () => {
-    it('marks first interactive before noncritical startup work is scheduled', () => {
+    it('marks the visible shell before deferred startup work and true interaction after hydration', () => {
         const interactive = source.indexOf("loadedStore.set(true)")
-        const mark = source.indexOf("markPerformance('first-interactive')")
+        const startup = source.slice(interactive)
         const plugins = source.indexOf('scheduleAfterFirstPaint(() => loadDeferredModules())')
 
         expect(interactive).toBeGreaterThan(-1)
-        expect(mark).toBeGreaterThan(interactive)
-        expect(plugins).toBeGreaterThan(mark)
+        expect(startup).toMatch(/loadedStore\.set\(true\)[\s\S]*markPerformance\('first-visible-shell'\)[\s\S]*markPerformance\('first-interactive'\)/)
+        expect(plugins).toBeGreaterThan(interactive)
         expect(source).toMatch(/await loadPlugins\(\)[\s\S]*catch[\s\S]*registerModelDynamic\(\)[\s\S]*moduleUpdate\(\)/)
         expect(source).toContain('scheduleAfterFirstPaint(() => cleanChunks(), 5_000)')
         expect(source).toContain('scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))')
@@ -22,6 +23,48 @@ describe('startup scheduling and degraded recovery', () => {
     it('keeps metadata-first bootstrap from immediately serializing character summaries', () => {
         expect(source).toContain("startMetadataPersistence()")
         expect(source).not.toContain("saveDb({ metadataOnly: startupMode === 'metadata-first' })")
+    })
+
+    it('waits for deferred domains before normalizing a metadata-first database', () => {
+        const shallowInstall = source.indexOf('if (deferredSqlStorage) setDatabaseLite(existingSql.database)')
+        const scheduledHydration = source.indexOf('scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
+        const deferredFunction = source.slice(
+            source.indexOf('async function hydrateDeferredSqlStartup'),
+            source.indexOf('async function activateCanonicalDatabase'),
+        )
+
+        expect(shallowInstall).toBeGreaterThan(-1)
+        expect(scheduledHydration).toBeGreaterThan(shallowInstall)
+        expect(deferredFunction).toMatch(/await storage\.hydrateDeferredDatabase\(getDatabase\(\)\)[\s\S]*setDatabase\(getDatabase\(\)\)[\s\S]*setPatchSyncBaseline\(safeStructuredClone\(getDatabase\(\)\)\)/)
+        expect(source).toContain('setDatabaseLite(retried.database)')
+    })
+
+    it('keeps the fast metadata-first shell inert until deferred hydration is persisted', () => {
+        const gate = source.indexOf('startupHydrationStore.set(Boolean(deferredSqlStorage))')
+        const loaded = source.indexOf('loadedStore.set(true)')
+        const scheduledHydration = source.indexOf('scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
+        const deferredFunction = source.slice(
+            source.indexOf('async function hydrateDeferredSqlStartup'),
+            source.indexOf('async function activateCanonicalDatabase'),
+        )
+
+        expect(gate).toBeGreaterThan(-1)
+        expect(gate).toBeLessThan(loaded)
+        expect(scheduledHydration).toBeGreaterThan(loaded)
+        expect(deferredFunction).toMatch(/startMetadataPersistence\(\)[\s\S]*startupHydrationStore\.set\(false\)[\s\S]*markPerformance\('first-interactive'\)/)
+        expect(deferredFunction).toMatch(/while \(true\)[\s\S]*await storage\.hydrateDeferredDatabase\(getDatabase\(\)\)[\s\S]*startMetadataPersistence\(\)[\s\S]*startupHydrationStore\.set\(false\)/)
+        const failurePath = deferredFunction.slice(deferredFunction.indexOf('catch (error)'))
+        const failed = failurePath.indexOf("pluginStateStore.set('failed')")
+        const prompt = failurePath.indexOf('await alertConfirm(')
+        const continueRetry = failurePath.indexOf('continue')
+        expect(failed).toBeGreaterThan(-1)
+        expect(prompt).toBeGreaterThan(failed)
+        expect(continueRetry).toBeGreaterThan(prompt)
+        expect(failurePath).not.toContain('startupHydrationStore.set(false)')
+        expect((deferredFunction.match(/hydrateDeferredDatabase/g) ?? [])).toHaveLength(1)
+        expect(source).toContain("markPerformance('first-visible-shell')")
+        expect(appSource).toContain('inert={$startupHydrationStore}')
+        expect(appSource).toContain('if ($startupHydrationStore) {')
     })
 
     it('labels snapshot recovery as degraded instead of silently loading a local snapshot', () => {
