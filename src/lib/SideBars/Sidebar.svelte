@@ -94,6 +94,12 @@
     return getEffectivePersona(DBState.db, character, character?.chats?.[character.chatPage])
   })
 
+  // Icons that already 404'd (e.g. an already-deleted asset — see
+  // getUncleanables/cleanChunks). Keyed by icon path so a real load
+  // failure falls back to a placeholder instead of a broken-image icon,
+  // without hiding an icon that simply hasn't loaded yet.
+  let brokenPersonaIcons = $state(new Set<string>())
+
   function reseter() {
     menuMode = 0;
     sideBarMode = 0;
@@ -685,11 +691,20 @@
       title={language.persona}
       onclick={() => openPersonaManager.set(true)}
     >
-      {#if effectivePersona?.persona.icon}
+      {#if effectivePersona?.persona.icon && !brokenPersonaIcons.has(effectivePersona.persona.icon)}
         {#await getCharImage(effectivePersona.persona.icon, 'plain')}
           <User2Icon size={22} />
         {:then personaImage}
-          <img src={personaImage} alt="" class="h-full w-full object-cover object-top" />
+          {#if personaImage}
+            <img
+              src={personaImage}
+              alt=""
+              class="h-full w-full object-cover object-top"
+              onerror={() => brokenPersonaIcons.add(effectivePersona.persona.icon)}
+            />
+          {:else}
+            <User2Icon size={22} />
+          {/if}
         {/await}
       {:else}
         <User2Icon size={22} />
