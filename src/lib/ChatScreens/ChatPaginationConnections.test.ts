@@ -5,15 +5,14 @@ const chats = () => readFileSync('src/lib/ChatScreens/Chats.svelte', 'utf8')
 const screen = () => readFileSync('src/lib/ChatScreens/DefaultChatScreen.svelte', 'utf8')
 const chat = () => readFileSync('src/lib/ChatScreens/Chat.svelte', 'utf8')
 
-describe('bounded chat-page UI connections', () => {
-    it('caps mounted DOM rows independently from user chat-page pagination', () => {
+describe('bounded continuous chat UI connections', () => {
+    it('caps mounted DOM rows across the whole locally loaded history', () => {
         const source = chats()
-        expect(source).toContain('pageStart')
-        expect(source).toContain('pageEnd')
         expect(source).toContain('return saverMode ? 40 : 60')
-        expect(source).toContain('getChatPageWindow')
-        expect(source).toContain('Pagination owns messages outside this page')
+        expect(source).toContain('getChatWindow')
         expect(source).toContain('revealOlderMessages')
+        expect(source).toContain('revealNewerMessages')
+        expect(source).toContain('showLatestMessage')
         expect(source).toContain('const loadStart = domWindow.end - 1')
         expect(source).toContain('const loadEnd = domWindow.start')
         expect(source).toContain('data-chat-spacer="after"')
@@ -25,7 +24,7 @@ describe('bounded chat-page UI connections', () => {
         expect(source).not.toContain('messages.length - loadPages')
     })
 
-    it('uses stable ID anchoring and cancels stale page fetch DOM restoration', () => {
+    it('uses stable ID anchoring and cancels stale reverse fetch DOM restoration', () => {
         const source = screen()
         expect(source).toContain('chatWindowVersion')
         expect(source).toContain('isCurrentChatWindowRequest')
@@ -33,10 +32,9 @@ describe('bounded chat-page UI connections', () => {
         expect(source).toContain('container.scrollTop += restored.getBoundingClientRect().top - anchor.top')
     })
 
-    it('invalidates an older-page anchor request when the user changes pages', () => {
+    it('invalidates an older anchor request when the active chat changes', () => {
         const source = screen()
-        const selectPage = source.slice(source.indexOf('async function selectChatPage'), source.indexOf('async function selectPreviousChatPage'))
-        expect(selectPage).toContain('chatWindowVersion += 1')
+        expect(source).toContain('chatWindowVersion += 1')
     })
 
     it('resolves a mounted row index by stable message ID before actions', () => {
@@ -47,22 +45,19 @@ describe('bounded chat-page UI connections', () => {
         expect(source).toContain('$ReloadChatPointer[messageId]')
     })
 
-    it('uses explicit bounded navigation instead of cumulative scroll loading', () => {
+    it('uses continuous scroll loading without visible pagination controls', () => {
         const source = screen()
-        expect(source).toContain('data-chat-pagination')
-        expect(source).toContain('data-chat-page-previous')
-        expect(source).toContain('data-chat-page-next')
-        expect(source).toContain('data-chat-page-latest')
-        expect(source).toContain('getChatPageBounds')
-        expect(source).toContain('getChatPageForMessage')
+        expect(source).not.toContain('data-chat-pagination')
+        expect(source).not.toContain('getChatPageBounds')
         expect(source).toContain('isNearReverseScrollTop')
         expect(source).toContain('loadPreviousWindowOnScroll')
+        expect(source).toContain('loadOlderUntilScrollable')
         expect(source).not.toMatch(/loadPages\s*\+=/)
     })
 
     it('never expands the mounted chat to infinity for screenshots', () => {
         const source = screen()
         expect(source).not.toContain('loadPages = Infinity')
-        expect(source).toContain('chat-page-${chatBounds.page + 1}')
+        expect(source).toContain('chat-history-')
     })
 })

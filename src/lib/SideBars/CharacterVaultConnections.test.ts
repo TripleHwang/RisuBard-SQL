@@ -165,7 +165,14 @@ describe('Character Vault sidebar integration', () => {
 
     test('resolves quick folder context actions by stable folder id', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
-        expect(sidebar).toContain('const folderIndex = getFolderIndex(char.id)')
+        const helperStart = sidebar.indexOf('const getWritableFolder =')
+        const helper = sidebar.slice(helperStart, sidebar.indexOf('const avatarDragStart', helperStart))
+
+        expect(helperStart).toBeGreaterThan(-1)
+        expect(helper).toContain('runStartupMutation')
+        expect(helper).toContain('const folderIndex = getFolderIndex(id)')
+        expect(sidebar).toContain('getWritableFolder(char.id)')
+        expect(sidebar).not.toContain('const folderIndex = getFolderIndex(char.id)')
     })
 
     test('supports Escape dismissal and a true mobile fullscreen Vault', () => {

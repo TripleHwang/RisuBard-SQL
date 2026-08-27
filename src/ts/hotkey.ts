@@ -9,6 +9,8 @@ import { doingChat, previewBody, sendChat } from "./process/index.svelte"
 import { endAllGenerations } from "./process/generationState"
 import { RISU_SIDEBAR_DRAG_TYPE } from "./dragTypes"
 import { openSettings, SettingsRoute, SystemTab } from "./routing"
+import { changeChar } from './characters'
+import { isStartupMutationReady } from './startupReadiness'
 
 export function initHotkey(){
     document.addEventListener('keydown', async (ev) => {
@@ -104,7 +106,7 @@ export function initHotkey(){
                     if(currentIndex <= 0){
                         return
                     }
-                    selectedCharID.set(sorted[currentIndex - 1].i)
+                    await changeChar(sorted[currentIndex - 1].i)
                     PlaygroundStore.set(0)
                     OpenRealmStore.set(false)
                     break
@@ -119,7 +121,7 @@ export function initHotkey(){
                     }
                     // currentIndex === -1 (nothing selected) intentionally falls through
                     // to sorted[0], matching the previous behaviour.
-                    selectedCharID.set(sorted[currentIndex + 1].i)
+                    await changeChar(sorted[currentIndex + 1].i)
                     PlaygroundStore.set(0)
                     OpenRealmStore.set(false)
                     break
@@ -129,6 +131,7 @@ export function initHotkey(){
                     break
                 }
                 case 'previewRequest':{
+                    if (!isStartupMutationReady()) return false
                     if(get(doingChat) && get(selectedCharID) !== -1){
                         return false
                     }
@@ -163,6 +166,7 @@ export function initHotkey(){
                     break
                 }
                 case 'quickSettings':{
+                    if (!isStartupMutationReady()) return false
                     QuickSettings.open = !QuickSettings.open
                     QuickSettings.index = 0
                     break

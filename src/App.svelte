@@ -39,6 +39,7 @@
     import LoadingOverlay from './lib/Others/LoadingOverlay.svelte';
     import Toaster from './lib/UI/GUI/Toaster.svelte';
     import RequestStatusToaster from './lib/UI/GUI/RequestStatusToaster.svelte';
+    import DeferredStartupGate from './lib/Others/DeferredStartupGate.svelte';
     import sendSound from './etc/send.mp3'
     import { RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes';
 
@@ -215,9 +216,9 @@
             <span class="text-sm mt-2 text-textcolor2">{LoadingStatusState.text}</span>
         </div>
     {:else}
-        <div class="contents" inert={$startupHydrationStore}>
+        <div class="contents">
             {#if $settingsOpen}
-                <Settings />
+                <DeferredStartupGate><Settings /></DeferredStartupGate>
             {:else if $MobileGUI}
                 <div class="w-full h-full flex flex-col">
                     <MobileHeader />
@@ -247,32 +248,36 @@
     {#if $showRealmInfoStore}
         <RealmPopUp bind:openedData={$showRealmInfoStore} />
     {/if}
-    {#if $openPresetList}
-        <Botpreset close={() => {$openPresetList = false}} />
-    {/if}
-    {#if $openModelPresetList}
-        <Modelpreset close={() => {$openModelPresetList = false}} />
-    {/if}
-    {#if $openModelProfileBrowser}
-        <ModelProfileBrowser close={() => {$openModelProfileBrowser = false}} />
-    {/if}
-    {#if $openThemePresetList}
-        <Themepreset close={() => {$openThemePresetList = false}} />
-    {/if}
-    {#if $openPersonaList}
-        <ListedPersona close={() => {$openPersonaList = false; $personaSelectCallback = null}} onSelect={$personaSelectCallback} />
-    {/if}
-    {#if $openPersonaManager}
-        <PersonaManager />
-    {/if}
-    {#if $openHypaV3PresetList}
-        <ListedHypaV3Preset close={() => {$openHypaV3PresetList = false}} />
+    {#if $startupHydrationStore && ($openPresetList || $openModelPresetList || $openModelProfileBrowser || $openThemePresetList || $openPersonaList || $openPersonaManager || $openHypaV3PresetList)}
+        <DeferredStartupGate />
+    {:else}
+        {#if $openPresetList}
+            <Botpreset close={() => {$openPresetList = false}} />
+        {/if}
+        {#if $openModelPresetList}
+            <Modelpreset close={() => {$openModelPresetList = false}} />
+        {/if}
+        {#if $openModelProfileBrowser}
+            <ModelProfileBrowser close={() => {$openModelProfileBrowser = false}} />
+        {/if}
+        {#if $openThemePresetList}
+            <Themepreset close={() => {$openThemePresetList = false}} />
+        {/if}
+        {#if $openPersonaList}
+            <ListedPersona close={() => {$openPersonaList = false; $personaSelectCallback = null}} onSelect={$personaSelectCallback} />
+        {/if}
+        {#if $openPersonaManager}
+            <PersonaManager />
+        {/if}
+        {#if $openHypaV3PresetList}
+            <ListedHypaV3Preset close={() => {$openHypaV3PresetList = false}} />
+        {/if}
     {/if}
     {#if $bookmarkListOpen}
-        <BookmarkList />
+        <DeferredStartupGate><BookmarkList /></DeferredStartupGate>
     {/if}
     {#if $hypaV3ModalOpen}
-        <HypaV3Modal />
+        <DeferredStartupGate><HypaV3Modal /></DeferredStartupGate>
     {/if}
     <SavePopupIconComp />
     {#if $hypaV3ProgressStore.open}
@@ -283,10 +288,10 @@
     <UpdatePopup />
     <BootBackupPrompt />
     {#if popupStore.children}
-        <PopupList />
+        <DeferredStartupGate><PopupList /></DeferredStartupGate>
     {/if}
     {#if popUpEditorStore.open}
-        <PopupEditor />
+        <DeferredStartupGate><PopupEditor /></DeferredStartupGate>
     {/if}
     {#if assetViewerStore.open}
         <AssetViewer />

@@ -68,6 +68,18 @@ describe('startup metrics', () => {
         expect(runtimePerformanceReport.export().durations).toEqual({ 'first-visible-shell': [42] })
     })
 
+    test('records deferred hydration as its own duration', () => {
+        const mark = vi.fn()
+        const measure = vi.fn(() => ({ duration: 24 } as PerformanceMeasure))
+        vi.stubGlobal('performance', { mark, measure, clearMarks: vi.fn(), clearMeasures: vi.fn() })
+
+        markPerformance('deferred-hydration:start')
+        markPerformance('deferred-hydration:end')
+        measurePerformance('deferred-hydration', 'deferred-hydration:start', 'deferred-hydration:end')
+
+        expect(runtimePerformanceReport.export().durations['deferred-hydration']).toEqual([24])
+    })
+
     test('clears a successful measurement without consuming its marks', () => {
         const measure = vi.fn(() => ({ duration: 42 } as PerformanceMeasure))
         const clearMeasures = vi.fn()

@@ -6,7 +6,7 @@
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
-    import { estimateSpacerHeight, getChatPageWindow, restoreMessageAnchor } from 'src/ts/chatWindow';
+    import { estimateSpacerHeight, getChatWindow, latestMessageScrollOptions, restoreMessageAnchor } from 'src/ts/chatWindow';
     import { updateRuntimeResources } from 'src/ts/performance/performanceReport';
     
     const getCurrentChatRoomId = () => {
@@ -28,12 +28,13 @@
         onUndoCanonical = async () => false,
         currentUsername,
         userIcon,
-        pageStart,
-        pageEnd,
+        pageStart = 0,
+        pageEnd = messages.length,
         // Task 8's SaverModeCoordinator owns the reactive source and will pass
         // this hook; no saver store exists yet, so normal mode is the default.
         saverMode = false,
         userIconPortrait,
+        isOldestMounted = $bindable(false),
         hasNewUnreadMessage = $bindable(false)
     }:{
         messages: Message[]
@@ -49,10 +50,12 @@
         ) => Promise<boolean>
         currentUsername: string
         userIcon: string
-        pageStart: number
-        pageEnd: number
+        // These define the locally loaded range, not a user-visible page.
+        pageStart?: number
+        pageEnd?: number
         saverMode?: boolean
         userIconPortrait?: boolean
+        isOldestMounted?: boolean
         hasNewUnreadMessage?: boolean
     } = $props();
 
@@ -76,15 +79,9 @@
     }
 
     function getBoundedDomWindow() {
-        const start = Math.max(0, Math.min(messages.length, pageStart));
-        const end = Math.max(start, Math.min(messages.length, pageEnd));
-        const anchor = Math.max(start, Math.min(end - 1, windowAnchor < 0 ? end - 1 : windowAnchor));
-        // Pagination owns messages outside this page. Spacers represent only
-        // the unmounted portion of the currently selected page.
-        return getChatPageWindow({
+        const anchor = Math.max(0, Math.min(messages.length - 1, windowAnchor < 0 ? messages.length - 1 : windowAnchor));
+        return getChatWindow({
             total: messages.length,
-            pageStart: start,
-            pageEnd: end,
             anchorIndex: anchor,
             limit: getDomLimit(),
         });
@@ -93,8 +90,7 @@
     export const revealOlderMessages = async (): Promise<boolean> => {
         if (!chatBody || !messageHost) return false;
         const currentWindow = getBoundedDomWindow();
-        const pageFloor = Math.max(0, Math.min(messages.length, pageStart));
-        if (currentWindow.start <= pageFloor) return false;
+        if (currentWindow.start <= 0) return false;
 
         const scroller = chatBody.parentElement as HTMLElement | null;
         const scrollerRect = scroller?.getBoundingClientRect();
@@ -116,6 +112,22 @@
             const restored = messageHost.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(anchor.id)}"]`);
             restoreMessageAnchor(scroller, anchor, restored);
         }
+        return true;
+    }
+
+    export const revealNewerMessages = async (): Promise<boolean> => {
+        if (!chatBody || !messageHost) return false;
+        const currentWindow = getBoundedDomWindow();
+        if (currentWindow.end >= messages.length) return false;
+        windowAnchor = Math.min(messages.length - 1, currentWindow.end);
+        await tick();
+        return true;
+    }
+
+    export const revealMessage = async (index: number): Promise<boolean> => {
+        if (!chatBody || index < 0 || index >= messages.length) return false;
+        windowAnchor = index;
+        await tick();
         return true;
     }
 
@@ -153,6 +165,7 @@
             const start = Math.max(0, end - domLimit);
             domWindow = { start, end, beforeCount: start, afterCount: 0 };
         }
+        isOldestMounted = domWindow.start === 0;
         const loadStart = domWindow.end - 1
         const loadEnd = domWindow.start
         measuredRowHeights = Array.from(messageHost.querySelectorAll('[data-chat-row]'))
@@ -286,18 +299,23 @@
         return rect.top <= scRect.bottom + 100;
     }
 
-    function scrollLatestIntoChatScreen() {
+    export const showLatestMessage = async (): Promise<void> => {
         if(!chatBody || !messageHost) return;
-        const element = messageHost.firstElementChild as HTMLElement | null;
+        windowAnchor = Math.max(0, messages.length - 1);
+        await tick();
+        const latestId = messages.at(-1) ? stableMessageId(messages.at(-1)!) : '';
+        const element = latestId
+            ? messageHost.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(latestId)}"]`)
+            : null;
         const chatScreen = chatBody.parentElement;
         if(!element || !chatScreen) return;
-        scrollWithinContainer(element, chatScreen, { block: 'start', behavior: 'instant' });
+        scrollWithinContainer(element, chatScreen, latestMessageScrollOptions);
     }
 
     export const scrollToLatestMessage = () => {
         if(!chatBody) return;
         hasNewUnreadMessage = false;
-        scrollLatestIntoChatScreen();
+        void showLatestMessage();
     }
 
     let previousLength = 0;
@@ -305,10 +323,10 @@
 
     $effect(() => {
         void $ReloadChatPointer; // Make $effect track ReloadChatPointer changes
-        const nextWindowKey = `${getCurrentChatRoomId() ?? ''}/${pageStart}/${pageEnd}/${getDomLimit()}`;
+        const nextWindowKey = `${getCurrentChatRoomId() ?? ''}/${getDomLimit()}`;
         if (nextWindowKey !== windowKey) {
             windowKey = nextWindowKey;
-            windowAnchor = Math.max(pageStart, pageEnd - 1);
+            windowAnchor = Math.max(0, messages.length - 1);
         }
         const wasAtBottom = checkIfAtBottom();
         updateChatBody()
@@ -322,7 +340,7 @@
             if(lastMsg && lastMsg.role === 'char' && DBState.db.autoScrollToNewMessage){
                 if(wasAtBottom || DBState.db.alwaysScrollToNewMessage){
                     setTimeout(() => {
-                        scrollLatestIntoChatScreen();
+                        void showLatestMessage();
                     }, 700);
                 } else {
                     hasNewUnreadMessage = true;

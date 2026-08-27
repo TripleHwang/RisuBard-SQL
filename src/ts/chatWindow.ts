@@ -33,6 +33,80 @@ export type ReverseScrollMetrics = {
     clientHeight: number
 }
 
+export const latestMessageScrollOptions = {
+    block: 'end',
+    behavior: 'instant',
+} as const
+
+export type ContinuousHistoryControllerOptions = {
+    hasOlder: () => boolean
+    isScrollable: () => boolean
+    progress: () => number
+    loadOlder: () => Promise<boolean>
+}
+
+/** Serializes reverse loads so a short initial window fills without races. */
+export function createContinuousHistoryController(options: ContinuousHistoryControllerOptions) {
+    let failed = false
+    let inFlight: Promise<boolean> | null = null
+
+    const loadOne = (): Promise<boolean> => {
+        if (inFlight) return inFlight
+        inFlight = (async () => {
+            try {
+                const loaded = await options.loadOlder()
+                failed = !loaded
+                return loaded
+            } catch {
+                failed = true
+                return false
+            } finally {
+                inFlight = null
+            }
+        })()
+        return inFlight
+    }
+
+    return {
+        get failed() { return failed },
+        get loading() { return inFlight !== null },
+        async fillViewport(): Promise<boolean> {
+            while (!options.isScrollable() && options.hasOlder()) {
+                const progress = options.progress()
+                if (!await loadOne()) return false
+                if (!options.isScrollable() && options.hasOlder() && options.progress() <= progress) {
+                    failed = true
+                    return false
+                }
+            }
+            return true
+        },
+        async retry(): Promise<boolean> {
+            if (!options.hasOlder()) {
+                failed = false
+                return false
+            }
+            // A retry originates from an explicit failed reverse request. It
+            // must make one request even if the old viewport already overflows.
+            if (!await loadOne()) return false
+            return await this.fillViewport()
+        },
+        reset() { failed = false },
+    }
+}
+
+/** Swaps controller state when history ownership changes, isolating in-flight loads. */
+export function createContinuousHistoryControllerSlot(create: () => ReturnType<typeof createContinuousHistoryController>) {
+    let current = create()
+    return {
+        get current() { return current },
+        replace() {
+            current = create()
+            return current
+        },
+    }
+}
+
 /** Keeps virtual spacers inside the selected user-visible page. */
 export function getChatPageWindow({ total, pageStart, pageEnd, anchorIndex, limit }: {
     total: number

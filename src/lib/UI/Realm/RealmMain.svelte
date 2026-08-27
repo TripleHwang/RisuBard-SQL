@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { downloadRisuHub, getRisuHub, hubAdditionalHTML, type hubType } from 'src/ts/characterCards';
+    import { onMount } from 'svelte';
+    import { downloadRisuHub, getRisuHub, type hubType } from 'src/ts/characterCards';
     import { ArrowLeft, ArrowRight, HashIcon, MenuIcon, SearchIcon, SparklesIcon } from '@lucide/svelte';
     import { alertInput } from 'src/ts/alert';
     import { language } from 'src/lang';
@@ -9,6 +10,10 @@
     import ShDialog from '../GUI/ShDialog.svelte';
     import RealmHubIcon from './RealmHubIcon.svelte';
     import RealmPopUp from './RealmPopUp.svelte';
+    import { isStartupMutationReady } from 'src/ts/startupReadiness';
+    import { isDefaultRealmBrowseQuery, readDefaultRealmBrowseCache, writeDefaultRealmBrowseCache } from 'src/ts/realmBrowseCache';
+    import { createRealmBrowseRequestCoordinator } from 'src/ts/realmBrowseRequest';
+    import { applyInitialDefaultCache, defaultRefreshFailedMessage } from 'src/ts/realmBrowseInitialState';
 
     let openedData: null | hubType = $state(null);
     let charas: hubType[] = $state([]);
@@ -20,6 +25,13 @@
     let highlightedTagIndex = $state(0);
     let menuOpen = $state(false);
     let nsfw = $state(false);
+    let hubAdditionalHTML = $state('');
+    let isLoading = $state(false);
+    let isRefreshing = $state(false);
+    let browseError = $state('');
+    let hasDefaultFeed = $state(false);
+    let initialRefreshPending = $state(false);
+    const requests = createRealmBrowseRequestCoordinator(getRisuHub, writeDefaultRealmBrowseCache);
     let isKorean = $derived(DBState.db.language === 'ko');
     let ui = $derived(isKorean ? {
         title: 'RisuRealm 둘러보기',
@@ -101,12 +113,41 @@
             .join(' ');
     }
 
-    async function getHub() {
-        charas = await getRisuHub({
+    async function getHub(isInitialDefaultRefresh = false) {
+        const query = {
             search: currentSearch(),
             page,
             nsfw,
             sort,
+        };
+        const isDefault = isDefaultRealmBrowseQuery(query);
+        browseError = '';
+        hubAdditionalHTML = '';
+        if (!isDefault) {
+            charas = [];
+            hasDefaultFeed = false;
+            initialRefreshPending = false;
+        }
+        isLoading = !isDefault || !hasDefaultFeed;
+        isRefreshing = isDefault && hasDefaultFeed;
+        await requests.run(query, {
+            success: (result) => {
+                if (isInitialDefaultRefresh) initialRefreshPending = false;
+                charas = result.cards;
+                hubAdditionalHTML = result.additionalHTML;
+                hasDefaultFeed = isDefault;
+                isLoading = false;
+                isRefreshing = false;
+            },
+            failure: () => {
+                if (isInitialDefaultRefresh) initialRefreshPending = false;
+                isLoading = false;
+                isRefreshing = false;
+                hubAdditionalHTML = '';
+                browseError = isDefault && hasDefaultFeed
+                    ? defaultRefreshFailedMessage
+                    : 'Unable to load RisuRealm results. Please try again.';
+            },
         });
     }
 
@@ -162,7 +203,21 @@
         }
     }
 
-    void getHub();
+    onMount(() => {
+        initialRefreshPending = true;
+        requests.applyInitialDefaultCache(readDefaultRealmBrowseCache(), (cached) => {
+            charas = cached;
+            const state = applyInitialDefaultCache({ hasDefaultFeed, isLoading, isRefreshing, browseError }, initialRefreshPending);
+            hasDefaultFeed = state.hasDefaultFeed;
+            isLoading = state.isLoading;
+            isRefreshing = state.isRefreshing;
+            browseError = state.browseError;
+        });
+        void getHub(true);
+        return () => {
+            requests.abort();
+        };
+    });
 
     $effect(() => {
         if ($RealmInitialOpenChar) {
@@ -298,13 +353,21 @@
 
 {@html hubAdditionalHTML}
 
+{#if isRefreshing}
+    <p class="px-4 pt-3 text-sm text-textcolor2" role="status">Refreshing RisuRealm…</p>
+{/if}
+
+{#if browseError}
+    <p class="px-4 pt-3 text-sm text-textcolor2" role="alert">{browseError}</p>
+{/if}
+
 <div class="grid w-full grid-cols-1 gap-3 py-4 lg:grid-cols-2">
     {#each charas as chara (chara.id)}
         <RealmHubIcon onClick={() => openedData = chara} {chara} />
     {/each}
 </div>
 
-{#if charas.length === 0}
+{#if charas.length === 0 && !isLoading}
     <div class="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-darkborderc text-sm text-textcolor2">
         {ui.noResults}
     </div>
@@ -338,7 +401,7 @@
 <ShDialog bind:open={menuOpen} size="sm" closeOnEscape={true} closeOnOutsideClick={true}>
     {#snippet title()}{ui.tools}{/snippet}
     {#snippet description()}{ui.toolsDescription}{/snippet}
-    <ShButton variant="secondary" className="w-full" onclick={async () => {
+    <ShButton variant="secondary" className="w-full" disabled={!isStartupMutationReady()} onclick={async () => {
         menuOpen = false;
         const input = await alertInput(ui.importPrompt);
         if (!input) return;

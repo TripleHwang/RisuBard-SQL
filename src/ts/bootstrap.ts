@@ -5,7 +5,7 @@ import { get } from "svelte/store";
 import { setDatabase, setDatabaseLite, defaultSdDataFunc, getDatabase, changeToThemePreset, type Database } from "./storage/database.svelte";
 import { chatDraftKey, sweepOrphanDrafts } from "./storage/chatDraft";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, startupHydrationStore, DBState, LoadingStatusState } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, startupHydrationErrorStore, startupHydrationStore, DBState, LoadingStatusState } from "./stores.svelte";
 import { loadPlugins, pluginStateStore } from "./plugins/plugins.svelte";
 import { alertError, alertMd, alertTOS, waitAlert, alertConfirm, alertInput } from "./alert";
 import { characterURLImport } from "./characterCards";
@@ -16,7 +16,7 @@ import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { applyEarlyLanguage, changeLanguage, language } from "src/lang";
 import { startObserveDom } from "./observer.svelte";
 import { updateGuisize } from "./gui/guisize";
-import { updateLorebooks } from "./characters";
+import { resumeDeferredCharacterSelection, updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
@@ -38,10 +38,11 @@ import type { SqlBootstrapStorage } from './storage/sql/ISqlStorage'
 import { markPerformance, measurePerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
-import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
+import { flushSqlDirtyChanges, markSqlRootDirty } from './storage/sql/sqlPersistenceRuntime'
 import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
+import { dispatchStartupURLImport, persistDeferredStartupDefaults, scheduleAfterTwoAnimationFrames } from './startupReadiness'
 
 const SQL_MIGRATION_BACKUP_PATH = 'database/pre-sql-migration-v1.bin'
 let dataLoading = false
@@ -73,6 +74,11 @@ export function scheduleAfterFirstPaint(task: () => void | Promise<void>, timeou
     }))
 }
 
+/** Deferred SQL hydration is startup-critical once the safe shell is painted. */
+export function scheduleDeferredSqlHydration(task: () => void | Promise<void>): void {
+    scheduleAfterTwoAnimationFrames(task)
+}
+
 async function loadDeferredModules(): Promise<void> {
     try {
         await loadPlugins()
@@ -84,6 +90,7 @@ async function loadDeferredModules(): Promise<void> {
 }
 
 async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<void> {
+    markPerformance('deferred-hydration:start')
     while (true) {
         try {
             await storage.hydrateDeferredDatabase(getDatabase())
@@ -92,13 +99,17 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             // replace valid selections with empty-domain defaults.
             setDatabase(getDatabase())
             setPatchSyncBaseline(safeStructuredClone(getDatabase()))
-            startMetadataPersistence()
+            await startMetadataPersistence()
+            await persistDeferredStartupDefaults(getDatabase(), markSqlRootDirty, flushSqlDirtyChanges)
             startupHydrationStore.set(false)
-            markPerformance('first-interactive')
+            startupHydrationErrorStore.set(false)
+            markPerformance('deferred-hydration:end')
+            measurePerformance('deferred-hydration', 'deferred-hydration:start', 'deferred-hydration:end')
             break
         } catch (error) {
             console.error('Deferred SQL startup failed', error)
             pluginStateStore.set('failed')
+            startupHydrationErrorStore.set(true)
             let retry = false
             try {
                 retry = await alertConfirm('Deferred SQL startup could not complete. Retry loading it now?')
@@ -112,7 +123,9 @@ async function hydrateDeferredSqlStartup(storage: SqlBootstrapStorage): Promise<
             continue
         }
     }
+    await resumeDeferredCharacterSelection()
     await loadDeferredModules()
+    await dispatchStartupURLImport(characterURLImport)
 }
 
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
@@ -275,7 +288,7 @@ export async function loadData() {
             }
             updateErrorHandling()
             updateGuisize()
-            if (!db.didFirstSetup) {
+            if (!db.didFirstSetup && !deferredSqlStorage) {
                 // Node-only build skips the onboarding screen and lands on the main UI directly.
                 db.didFirstSetup = true
             }
@@ -287,19 +300,20 @@ export async function loadData() {
                 MobileGUI.set(true)
             }
             startupHydrationStore.set(Boolean(deferredSqlStorage))
+            startupHydrationErrorStore.set(false)
             loadedStore.set(true)
             configureSaverModeActions({ flush: flushSqlDirtyChanges, evictChats: evictHydratedChats })
             registerRuntimeCacheOwners(clearParserRuntimeCaches, clearInlayRuntimeCache)
             installSaverModeLifecycle()
             if (deferredSqlStorage) markPerformance('first-visible-shell')
-            else markPerformance('first-interactive')
+            markPerformance('first-interactive')
             selectedCharID.set(-1)
             startObserveDom()
             if (startupMode !== 'metadata-first') assignIds()
             if (startupMode === 'metadata-first') {
                 if (!deferredSqlStorage) startMetadataPersistence()
             } else saveDb()
-            if (deferredSqlStorage) scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))
+            if (deferredSqlStorage) scheduleDeferredSqlHydration(() => hydrateDeferredSqlStartup(deferredSqlStorage!))
             else scheduleAfterFirstPaint(() => loadDeferredModules())
             // Asset URLs use the cookie session, but SQL bootstrap only needs
             // its JWT header. Establish the cookie after a paint so it cannot
@@ -308,8 +322,8 @@ export async function loadData() {
             scheduleAfterFirstPaint(() => cleanChunks(), 5_000)
             scheduleAfterFirstPaint(() => checkRisuUpdate().then(() => undefined))
             scheduleAfterFirstPaint(() => initModelJobRecovery())
-            scheduleAfterFirstPaint(() => {
-                if (getDatabase().didFirstSetup) characterURLImport()
+            if (!deferredSqlStorage) scheduleAfterFirstPaint(() => {
+                if (getDatabase().didFirstSetup) void dispatchStartupURLImport(characterURLImport)
             })
             if (import.meta.env.VITE_RISU_TOS === 'TRUE') {
                 alertTOS().then((a) => {

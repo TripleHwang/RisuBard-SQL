@@ -17,7 +17,9 @@
     leftBarCollapsed,
     openPersonaManager,
     characterVaultOpen,
-    CharConfigSubMenu
+    CharConfigSubMenu,
+    startupHydrationStore,
+    startupHydrationErrorStore
 
 
   } from "../../ts/stores.svelte";
@@ -75,7 +77,9 @@
   import { getEffectivePersona } from "src/ts/personaScopes";
   const isTouchDevice = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
   const touchDragEnabled = $derived(isTouchDevice && !DBState.db.disableMobileDragDrop);
-    import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
+  import { RISU_SIDEBAR_DRAG_TYPE } from "src/ts/dragTypes";
+  import { isStartupMutationReady, runStartupMutation } from "src/ts/startupReadiness";
+  import DeferredStartupGate from '../Others/DeferredStartupGate.svelte';
 
   let sideBarMode = $state(0);
   let editMode = $state(false);
@@ -259,6 +263,7 @@
   type DropData = { index:number, folder?:string }
 
   const moveSidebarItem = (source:DragData, target:DropData) => {
+    if (!isStartupMutationReady()) return false
     let changed = false
     if(target.folder){
       if(source.kind !== 'character') return false
@@ -293,6 +298,15 @@
       void requestImmediateSave()
     }
     return changed
+  }
+
+  const getWritableFolder = (id:string) => {
+    return runStartupMutation(() => {
+      const folderIndex = getFolderIndex(id)
+      if (folderIndex === -1) return null
+      const folder = DBState.db.characterOrder[folderIndex]
+      return typeof folder === 'string' ? null : { folderIndex, folder }
+    }) ?? null
   }
 
   const avatarDragStart = (data:DragData, e:DragEv) => {
@@ -707,7 +721,8 @@
       aria-label="Character Vault 열기"
       title="캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."
       use:tooltip={"캐릭터 저장소 · 고정한 캐릭터만 사이드바에 표시됩니다."}
-      onclick={() => characterVaultOpen.set(true)}
+      disabled={$startupHydrationStore || $startupHydrationErrorStore}
+      onclick={() => { if (isStartupMutationReady()) characterVaultOpen.set(true) }}
     >
       <img
         src={characterVaultIdle}
@@ -801,44 +816,34 @@
               <SidebarAvatar src="slot" size="56" rounded={IconRounded} bordered name={char.name} color={char.color} backgroundimg={char.img ? getCharImage(char.img, "plain") : ""}
               oncontextmenu={async (e) => {
                 e.preventDefault()
-                const folderIndex = getFolderIndex(char.id)
-                if(folderIndex === -1) return
+                if (!isStartupMutationReady()) return
                 const sel = parseInt(await alertSelect([language.renameFolder,language.changeFolderColor,language.changeFolderImage,language.cancel]))
                 if(sel === 0){
                   const v = await alertInput(language.changeFolderName, [], char.name)
-                  const db = DBState.db
-                  if(v){
-                    const oder = db.characterOrder[folderIndex]
-                    if(typeof(oder) === 'string'){
-                      return
-                    }
-                    oder.name = v
-                    db.characterOrder[folderIndex] = oder
+                  const target = getWritableFolder(char.id)
+                  if(v && target){
+                    target.folder.name = v
+                    DBState.db.characterOrder[target.folderIndex] = target.folder
                   }
                 }
                 else if(sel === 1){
                   const colors = ["red","green","blue","yellow","indigo","purple","pink","default"]
                   const sel = parseInt(await alertSelect(colors))
-                  const db = DBState.db
-                  const oder = db.characterOrder[folderIndex]
-                  if(typeof(oder) === 'string'){
-                    return
-                  }
-                  oder.color = colors[sel].toLocaleLowerCase()
-                  db.characterOrder[folderIndex] = oder
+                  const target = getWritableFolder(char.id)
+                  if (!target) return
+                  target.folder.color = colors[sel].toLocaleLowerCase()
+                  DBState.db.characterOrder[target.folderIndex] = target.folder
                 }
                 else if(sel === 2) {
                   const sel = parseInt(await alertSelect(['Reset to Default Image', 'Select Image File']))
-                  const db = DBState.db
-                  const oder = db.characterOrder[folderIndex]
-                  if(typeof(oder) === 'string'){
-                    return
-                  }
 
                   switch (sel) {
                     case 0:
-                      oder.imgFile = null
-                      oder.img = ''
+                      const resetTarget = getWritableFolder(char.id)
+                      if (!resetTarget) return
+                      resetTarget.folder.imgFile = null
+                      resetTarget.folder.img = ''
+                      DBState.db.characterOrder[resetTarget.folderIndex] = resetTarget.folder
                       break;
                   
                     case 1:
@@ -852,11 +857,15 @@
                         return
                       }
 
-                      const folderImageData = await saveAsset(folderImage.data)
+                      if (!isStartupMutationReady()) return
 
-                      oder.imgFile = folderImageData
-                      oder.img = await getFileSrc(folderImageData)
-                      db.characterOrder[folderIndex] = oder
+                      const folderImageData = await saveAsset(folderImage.data)
+                      const folderImageSrc = await getFileSrc(folderImageData)
+                      const imageTarget = getWritableFolder(char.id)
+                      if (!imageTarget) return
+                      imageTarget.folder.imgFile = folderImageData
+                      imageTarget.folder.img = folderImageSrc
+                      DBState.db.characterOrder[imageTarget.folderIndex] = imageTarget.folder
                       break;
                   }
                 }
@@ -1030,6 +1039,7 @@
         aria-label="새 캐릭터"
         title="새 캐릭터"
         use:tooltip={"새 캐릭터"}
+        disabled={$startupHydrationStore || $startupHydrationErrorStore}
         onclick={async () => {
           addCharacter({reseter}) 
         }}
@@ -1272,7 +1282,7 @@
         </nav>
       {/if}
       {#if QuickSettings.open}
-        <QuickSettingsGui />
+        <DeferredStartupGate><QuickSettingsGui /></DeferredStartupGate>
       {:else if devTool}
         <DevTool />
       {:else if $botMakerMode}
@@ -1306,11 +1316,13 @@
 
 {/if}
 
-<CharacterVaultDialog
-  open={$characterVaultOpen}
-  onOpenChange={(open) => characterVaultOpen.set(open)}
-  onSelectCharacter={selectCharacter}
-/>
+<DeferredStartupGate>
+  <CharacterVaultDialog
+    open={$characterVaultOpen}
+    onOpenChange={(open) => { if (open && !isStartupMutationReady()) return; characterVaultOpen.set(open) }}
+    onSelectCharacter={selectCharacter}
+  />
+</DeferredStartupGate>
 
 <ShDialog
   bind:open={characterManageOpen}

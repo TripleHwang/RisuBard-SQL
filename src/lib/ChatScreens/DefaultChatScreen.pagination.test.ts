@@ -1,20 +1,156 @@
-import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import {
+    createContinuousHistoryController,
+    createContinuousHistoryControllerSlot,
+    getChatWindow,
+    latestMessageScrollOptions,
+    restoreMessageAnchor,
+} from 'src/ts/chatWindow'
 
-const screen = () => readFileSync('src/lib/ChatScreens/DefaultChatScreen.svelte', 'utf8')
+describe('continuous bounded chat history', () => {
+    test('serially fills a nonoverflowing viewport and retains retry after a reverse failure', async () => {
+        let remaining = 2
+        let scrollable = false
+        const controller = createContinuousHistoryController({
+            hasOlder: () => remaining > 0,
+            isScrollable: () => scrollable,
+            progress: () => 2 - remaining,
+            loadOlder: async () => {
+                remaining -= 1
+                if (remaining === 0) scrollable = true
+                return true
+            },
+        })
 
-describe('chat-page navigation destinations', () => {
-    test('moves Next to the next page top while Latest remains bottom-directed', () => {
-        const source = screen()
-        const pagination = source.slice(source.indexOf('data-chat-pagination'), source.indexOf('</nav>', source.indexOf('data-chat-pagination')))
+        await controller.fillViewport()
+        expect(controller.failed).toBe(false)
+        expect(remaining).toBe(0)
 
-        expect(pagination).toContain('data-chat-page-next')
-        expect(pagination).toContain('onclick={() => void selectChatPage(chatBounds.page + 1)}')
-        expect(pagination).toContain('data-chat-page-latest')
-        expect(pagination).toContain('onclick={() => void selectChatPage(chatBounds.pageCount - 1, true)}')
+        const failing = createContinuousHistoryController({
+            hasOlder: () => true,
+            isScrollable: () => false,
+            progress: () => 0,
+            loadOlder: async () => { throw new Error('offline') },
+        })
+        await failing.fillViewport()
+        expect(failing.failed).toBe(true)
+        await expect(failing.retry()).resolves.toBe(false)
+        expect(failing.failed).toBe(true)
+        failing.reset()
+        expect(failing.failed).toBe(false)
+    })
 
-        const selectPage = source.slice(source.indexOf('async function selectChatPage'), source.indexOf('async function selectPreviousChatPage'))
-        expect(selectPage).toContain('else scrollToLoadedTop()')
-        expect(selectPage).toContain('if (scrollToLatest) chatsInstance?.scrollToLatestMessage()')
+    test('stops automatic fill when a backend reports older history without making forward progress', async () => {
+        let attempts = 0
+        const controller = createContinuousHistoryController({
+            hasOlder: () => true,
+            isScrollable: () => false,
+            progress: () => 40,
+            loadOlder: async () => {
+                attempts += 1
+                return true
+            },
+        })
+
+        await expect(controller.fillViewport()).resolves.toBe(false)
+        expect(attempts).toBe(1)
+        expect(controller.failed).toBe(true)
+    })
+
+    test('replaces an in-flight controller on chat selection instead of joining its request', async () => {
+        let resolveOld!: (value: boolean) => void
+        const oldRequest = new Promise<boolean>((resolve) => { resolveOld = resolve })
+        let calls = 0
+        const slot = createContinuousHistoryControllerSlot(() => createContinuousHistoryController({
+            hasOlder: () => calls < 2,
+            isScrollable: () => calls >= 2,
+            progress: () => calls,
+            loadOlder: () => ++calls === 1 ? oldRequest : Promise.resolve(true),
+        }))
+
+        const old = slot.current
+        const pending = old.retry()
+        const fresh = slot.replace()
+        await expect(fresh.retry()).resolves.toBe(true)
+        expect(calls).toBe(2)
+        resolveOld(false)
+        await expect(pending).resolves.toBe(false)
+        expect(fresh.failed).toBe(false)
+    })
+
+    test('does not request or fail at the true oldest boundary', async () => {
+        let requests = 0
+        const controller = createContinuousHistoryController({
+            hasOlder: () => false,
+            isScrollable: () => false,
+            progress: () => 81,
+            loadOlder: async () => {
+                requests += 1
+                throw new Error('must not run')
+            },
+        })
+
+        await expect(controller.retry()).resolves.toBe(false)
+        expect(requests).toBe(0)
+        expect(controller.failed).toBe(false)
+    })
+
+    test('retry resumes filling until the viewport overflows or history is exhausted', async () => {
+        let remaining = 2
+        let scrollable = false
+        const controller = createContinuousHistoryController({
+            hasOlder: () => remaining > 0,
+            isScrollable: () => scrollable,
+            progress: () => 2 - remaining,
+            loadOlder: async () => {
+                remaining -= 1
+                if (remaining === 0) scrollable = true
+                return true
+            },
+        })
+
+        await expect(controller.retry()).resolves.toBe(true)
+        expect(remaining).toBe(0)
+        expect(controller.failed).toBe(false)
+    })
+
+    test('retry issues a reverse request even when the existing viewport already scrolls', async () => {
+        let attempts = 0
+        const controller = createContinuousHistoryController({
+            hasOlder: () => true,
+            isScrollable: () => true,
+            progress: () => attempts,
+            loadOlder: async () => {
+                attempts += 1
+                if (attempts === 1) throw new Error('offline')
+                return true
+            },
+        })
+
+        await expect(controller.retry()).resolves.toBe(false)
+        expect(controller.failed).toBe(true)
+        await expect(controller.retry()).resolves.toBe(true)
+        expect(attempts).toBe(2)
+        expect(controller.failed).toBe(false)
+    })
+
+    test('uses the global Latest action for the down-chevron', () => {
+        const screen = readFileSync('src/lib/ChatScreens/DefaultChatScreen.svelte', 'utf8')
+        const icon = screen.indexOf('<ChevronsDownIcon')
+        const downChevron = screen.slice(screen.lastIndexOf('<button', icon), screen.indexOf('</button>', icon))
+        expect(downChevron).toContain('scrollToBottom()')
+        expect(downChevron).not.toContain('scrollToLoadedBottom()')
+    })
+
+    test('keeps normal and saver DOM windows bounded, restores a prepend anchor, and bottoms Latest', () => {
+        expect(getChatWindow({ total: 81, anchorIndex: 80, limit: 60 })).toMatchObject({ start: 21, end: 81 })
+        expect(getChatWindow({ total: 81, anchorIndex: 80, limit: 40 })).toMatchObject({ start: 41, end: 81 })
+        const scroller = { scrollTop: 25 } as HTMLElement
+        expect(restoreMessageAnchor(scroller, { id: 'm41', top: 80 }, {
+            getBoundingClientRect: () => ({ top: 112 }),
+        } as unknown as HTMLElement)).toBe(true)
+        expect(scroller.scrollTop).toBe(57)
+        expect(latestMessageScrollOptions).toEqual({ block: 'end', behavior: 'instant' })
     })
 })

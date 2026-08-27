@@ -22,6 +22,8 @@ import { pinCharacterVaultQuickAccess } from './characterVault'
 import { normalizeFirstMessageStudioProject, type FirstMessageStudioProject } from './firstMessageStudio'
 import { isNodeServer } from './platform'
 import { withSaverScope } from './performance/saverMode'
+import { isStartupMutationReady, runStartupMutation } from './startupReadiness'
+import { normalizeRealmBrowseCard } from './realmBrowseCache'
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -425,7 +427,7 @@ export const getRealmInfo = async (realmPath:string) => {
 
 export const showRealmInfoStore:Writable<null|hubType> = writable(null)
 
-export async function characterURLImport() {
+async function characterURLImportWhenReady() {
     const realmPath = (new URLSearchParams(location.search)).get('realm')
     try {
         if(realmPath){
@@ -615,6 +617,10 @@ export async function characterURLImport() {
             }
         }
     }
+}
+
+export async function characterURLImport() {
+    return runStartupMutation(() => characterURLImportWhenReady())
 }
 
 
@@ -1735,41 +1741,52 @@ export type hubType = {
     hidden?:boolean
 }
 
-export let hubAdditionalHTML = ''
+export type RealmBrowseQuery = {
+    search: string
+    page: number
+    nsfw: boolean
+    sort: string
+}
 
-export async function getRisuHub(arg:{
-    search:string,
-    page:number,
-    nsfw:boolean
-    sort:string
-}):Promise<hubType[]> {
-    try {
-        arg.search += ' __shared'
-        const stringArg = `search==${arg.search}&&page==${arg.page}&&nsfw==${arg.nsfw}&&sort==${arg.sort}&&web==other`
+export type RealmBrowseResult = {
+    cards: hubType[]
+    additionalHTML: string
+}
 
-        const da = await fetch(hubURL + '/realm/' + encodeURIComponent(stringArg), {
-            headers: {
-                "x-risuai-info": appVer + ';node'
-            }
-        })
-        if(da.status !== 200){
-            return []
-        }
-        const jso = await da.json()
-        if(Array.isArray(jso)){
-            return jso
-        }
-        hubAdditionalHTML = jso.additionalHTML || hubAdditionalHTML
-        return jso.cards
-    } catch (error) {
-        return[]
-    }
+export async function getRisuHub(
+    query: RealmBrowseQuery,
+    options: { signal?: AbortSignal } = {},
+): Promise<RealmBrowseResult> {
+    const sharedSearch = `${query.search} __shared`.trim()
+    const stringArg = `search==${sharedSearch}&&page==${query.page}&&nsfw==${query.nsfw}&&sort==${query.sort}&&web==other`
+    const response = await fetch(hubURL + '/realm/' + encodeURIComponent(stringArg), {
+        headers: {
+            "x-risuai-info": appVer + ';node'
+        },
+        signal: options.signal,
+    })
+    if (response.status !== 200) throw new Error(`RisuRealm request failed (${response.status})`)
+    const body: unknown = await response.json()
+    const rawCards = Array.isArray(body)
+        ? body
+        : body && typeof body === 'object' && Array.isArray((body as { cards?: unknown }).cards)
+            ? (body as { cards: unknown[] }).cards
+            : null
+    if (!rawCards) throw new Error('RisuRealm response has an invalid card list')
+    const cards = rawCards.slice(0, 100).map(normalizeRealmBrowseCard)
+    if (cards.some((card) => card === null)) throw new Error('RisuRealm response has an invalid card')
+    const additionalHTML = body && !Array.isArray(body) && typeof body === 'object'
+        && typeof (body as { additionalHTML?: unknown }).additionalHTML === 'string'
+        ? (body as { additionalHTML: string }).additionalHTML
+        : ''
+    return { cards: cards as hubType[], additionalHTML }
 }
 
 export async function downloadRisuHub(id:string, arg:{
     forceRedirect?: boolean
 } = {}) {
     try {
+        if (!isStartupMutationReady()) return
         if(!arg.forceRedirect){
             if(!(await alertTOS())){
                 return

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { type character } from "src/ts/storage/database.svelte";
-    import { DBState } from 'src/ts/stores.svelte';
+    import { DBState, startupHydrationErrorStore, startupHydrationStore } from 'src/ts/stores.svelte';
     import BarIcon from "../SideBars/BarIcon.svelte";
     import { addCharacter, changeChar, getCharImage } from "src/ts/characters";
     import { makeAgoText } from "src/ts/util";
@@ -80,7 +80,7 @@
 </div>
 
 {#if gridMode}
-    <button class="p-4 rounded-full absolute bottom-2 right-2 bg-borderc" onclick={() => {
+    <button class="p-4 rounded-full absolute bottom-2 right-2 bg-borderc disabled:opacity-50" disabled={$startupHydrationStore || $startupHydrationErrorStore} onclick={() => {
         addCharacter()
     }}>
         <PlusIcon size={24} />

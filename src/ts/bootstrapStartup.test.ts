@@ -27,7 +27,7 @@ describe('startup scheduling and degraded recovery', () => {
 
     it('waits for deferred domains before normalizing a metadata-first database', () => {
         const shallowInstall = source.indexOf('if (deferredSqlStorage) setDatabaseLite(existingSql.database)')
-        const scheduledHydration = source.indexOf('scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
+        const scheduledHydration = source.indexOf('scheduleDeferredSqlHydration(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
         const deferredFunction = source.slice(
             source.indexOf('async function hydrateDeferredSqlStartup'),
             source.indexOf('async function activateCanonicalDatabase'),
@@ -39,10 +39,10 @@ describe('startup scheduling and degraded recovery', () => {
         expect(source).toContain('setDatabaseLite(retried.database)')
     })
 
-    it('keeps the fast metadata-first shell inert until deferred hydration is persisted', () => {
+    it('keeps only mutation surfaces gated while the metadata-first shell remains usable', () => {
         const gate = source.indexOf('startupHydrationStore.set(Boolean(deferredSqlStorage))')
         const loaded = source.indexOf('loadedStore.set(true)')
-        const scheduledHydration = source.indexOf('scheduleAfterFirstPaint(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
+        const scheduledHydration = source.indexOf('scheduleDeferredSqlHydration(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
         const deferredFunction = source.slice(
             source.indexOf('async function hydrateDeferredSqlStartup'),
             source.indexOf('async function activateCanonicalDatabase'),
@@ -51,7 +51,7 @@ describe('startup scheduling and degraded recovery', () => {
         expect(gate).toBeGreaterThan(-1)
         expect(gate).toBeLessThan(loaded)
         expect(scheduledHydration).toBeGreaterThan(loaded)
-        expect(deferredFunction).toMatch(/startMetadataPersistence\(\)[\s\S]*startupHydrationStore\.set\(false\)[\s\S]*markPerformance\('first-interactive'\)/)
+        expect(deferredFunction).toMatch(/startMetadataPersistence\(\)[\s\S]*startupHydrationStore\.set\(false\)[\s\S]*markPerformance\('deferred-hydration:end'\)/)
         expect(deferredFunction).toMatch(/while \(true\)[\s\S]*await storage\.hydrateDeferredDatabase\(getDatabase\(\)\)[\s\S]*startMetadataPersistence\(\)[\s\S]*startupHydrationStore\.set\(false\)/)
         const failurePath = deferredFunction.slice(deferredFunction.indexOf('catch (error)'))
         const failed = failurePath.indexOf("pluginStateStore.set('failed')")
@@ -63,8 +63,9 @@ describe('startup scheduling and degraded recovery', () => {
         expect(failurePath).not.toContain('startupHydrationStore.set(false)')
         expect((deferredFunction.match(/hydrateDeferredDatabase/g) ?? [])).toHaveLength(1)
         expect(source).toContain("markPerformance('first-visible-shell')")
-        expect(appSource).toContain('inert={$startupHydrationStore}')
-        expect(appSource).toContain('if ($startupHydrationStore) {')
+        expect(appSource).not.toContain('inert={$startupHydrationStore}')
+        expect(appSource).toContain('<DeferredStartupGate>')
+        expect(appSource).toContain('<MobileBody />')
     })
 
     it('labels snapshot recovery as degraded instead of silently loading a local snapshot', () => {
@@ -74,11 +75,18 @@ describe('startup scheduling and degraded recovery', () => {
         expect(source).toContain('Update the server to restore fast startup')
     })
 
-    it('uses a double-animation-frame scheduler with idle and timeout fallbacks', () => {
+    it('schedules SQL hydration immediately after two animation frames while keeping other work idle', () => {
         expect(source).toContain('export function scheduleAfterFirstPaint')
         expect(source).toMatch(/requestFrame\(\(\) => requestFrame\(/)
         expect(source).toContain('requestIdleCallback')
         expect(source).toMatch(/Promise\.resolve\(\)\.then\(task\)\.catch\(console\.error\)/)
+        expect(source).toContain('export function scheduleDeferredSqlHydration')
+        const hydrationScheduler = source.slice(
+            source.indexOf('export function scheduleDeferredSqlHydration'),
+            source.indexOf('async function loadDeferredModules'),
+        )
+        expect(hydrationScheduler).not.toContain('requestIdleCallback')
+        expect(source).toContain('scheduleDeferredSqlHydration(() => hydrateDeferredSqlStartup(deferredSqlStorage!))')
     })
 
     it('does not run character-only format mutation for metadata summaries', () => {
