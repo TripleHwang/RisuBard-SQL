@@ -1946,6 +1946,17 @@ export const languageEnglish = {
     pluginUpdateFoundInstallIt: "Plugin update found. do you want to install the update?",
     pluginUpdateSuccess: "Plugin updated successfully.",
     pluginUpdateFailed: "Plugin update failed. Check the update URL or plugin source and try again.",
+    // `{}` is replaced with one of the pluginUpdateStage* hints below, so the
+    // user learns WHICH step failed without having to open devtools. The
+    // machine-readable code and the diagnostic detail stay in the console.
+    pluginUpdateFailedAt: "Plugin update failed: {}",
+    pluginUpdateStageDownload: "the update could not be downloaded.",
+    pluginUpdateStageParse: "the downloaded plugin could not be read.",
+    pluginUpdateStagePolicy: "the update was blocked by a plugin safety policy.",
+    pluginUpdateStageSave: "the update could not be saved.",
+    pluginUpdateStageVerify: "the update could not be verified after installing.",
+    // `{}` is replaced with the new update URL the plugin now declares.
+    pluginUpdateSourceMoved: "This plugin's update source moved to {}",
     goToChat: "Go to Chat",
     bookmark: "Bookmark",
     translate: "Translate",

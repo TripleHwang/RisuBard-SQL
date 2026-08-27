@@ -20,6 +20,13 @@ export type PluginUpdateFailureStage = 'download' | 'parse' | 'policy' | 'save' 
 export interface PluginUpdateSuccessResult {
     ok: true
     version: string
+    /**
+     * Set when the upstream source legitimately moved itself to a new
+     * `//@update-url`. The install is accepted (see the verification notes in
+     * `runPluginUpdate`), but the user is told the update source changed
+     * because from now on this plugin is fetched from somewhere else.
+     */
+    updateURLChanged?: { from: string, to: string }
 }
 
 export interface PluginUpdateFailureResult {
@@ -104,25 +111,84 @@ export async function runInstalledPluginUpdateAction(
     }
 }
 
-const declaredVersionPattern = /\/\/@version\s+([^\s]+)/
+// Anchored at the START OF A LINE, unlike the original unanchored pattern: an
+// unanchored `\/\/@version\s+(\S+)` also matches the tail of an unrelated line
+// (a commented-out example, a string inside the plugin body).
+const declaredVersionPattern = /^\/\/@version[ \t]+([^\s]+)[ \t]*$/m
+const declaredUpdateURLPattern = /^\/\/@update-url[ \t]+([^\s]+)[ \t]*$/m
+// Same line, but the match must be TERMINATED by a real newline. Used for the
+// update CHECK, which reads only the first few hundred bytes of the file (a
+// Range request) and therefore can see a line cut in half: without this,
+// a truncated `//@version 1.2.3` matched as `1.2`, which either hides a real
+// update or puts a bogus update badge up.
+const terminatedVersionPattern = /^\/\/@version[ \t]+([^\s]+)[ \t]*\r?\n/m
 
-/** Reads the `//@version` metadata line out of downloaded plugin source. */
+/** Reads the `//@version` metadata line out of a COMPLETE plugin source. */
 export function parseDeclaredPluginVersion(source: string): string | undefined {
     return source.match(declaredVersionPattern)?.[1]?.trim()
 }
 
-function compareVersionStrings(a: string, b: string): 0 | 1 | -1 {
-    const aParts = a.split('.').map(Number)
-    const bParts = b.split('.').map(Number)
-    const len = Math.max(aParts.length, bParts.length)
+/**
+ * Reads the `//@version` line out of a possibly TRUNCATED read (the ranged
+ * update probe). Returns undefined unless the line is complete, so the caller
+ * can retry with a full GET instead of trusting half a version token.
+ */
+export function parseDeclaredPluginVersionFromPartial(source: string): string | undefined {
+    return source.match(terminatedVersionPattern)?.[1]?.trim()
+}
+
+/** Reads the `//@update-url` metadata line out of a COMPLETE plugin source. */
+export function parseDeclaredPluginUpdateURL(source: string): string | undefined {
+    return source.match(declaredUpdateURLPattern)?.[1]?.trim()
+}
+
+interface ParsedVersion {
+    release: number[]
+    /** Everything after the first `-`; empty means "not a prerelease". */
+    prerelease: string
+}
+
+function parseVersion(value: string): ParsedVersion {
+    // Strip a leading `v`/`V` ("v1.2.3" is an extremely common tag form and
+    // used to collapse to 0.2.3 because Number('v1') is NaN) and any build
+    // metadata, which never participates in precedence.
+    const cleaned = value.trim().replace(/^[vV](?=\d)/, '').split('+')[0]
+    const dashAt = cleaned.indexOf('-')
+    const releasePart = dashAt === -1 ? cleaned : cleaned.slice(0, dashAt)
+    const prerelease = dashAt === -1 ? '' : cleaned.slice(dashAt + 1)
+    const release = releasePart.split('.').map((part) => {
+        // Take the leading digits only, so "3beta" still counts as 3 instead
+        // of silently becoming 0 and dragging the whole comparison down.
+        const digits = /^\d+/.exec(part.trim())?.[0]
+        const parsed = digits === undefined ? Number.NaN : Number.parseInt(digits, 10)
+        return Number.isFinite(parsed) ? parsed : 0
+    })
+    return { release, prerelease }
+}
+
+/**
+ * Compares two plugin version strings. Tolerates a `v` prefix, build metadata
+ * and prerelease tags; a prerelease sorts BELOW the same release version
+ * (1.2.3-beta < 1.2.3), matching semver precedence, so a prerelease upstream
+ * build never looks like an upgrade over the matching stable release.
+ */
+export function comparePluginVersions(a: string, b: string): 0 | 1 | -1 {
+    const left = parseVersion(a)
+    const right = parseVersion(b)
+    const len = Math.max(left.release.length, right.release.length)
     for (let i = 0; i < len; i++) {
-        const av = aParts[i] || 0
-        const bv = bParts[i] || 0
+        const av = left.release[i] ?? 0
+        const bv = right.release[i] ?? 0
         if (av > bv) return 1
         if (av < bv) return -1
     }
-    return 0
+    if (left.prerelease === right.prerelease) return 0
+    if (left.prerelease === '') return 1
+    if (right.prerelease === '') return -1
+    return left.prerelease > right.prerelease ? 1 : -1
 }
+
+const compareVersionStrings = comparePluginVersions
 
 export async function runPluginUpdate(
     plugin: PluginUpdateTarget,
@@ -136,6 +202,12 @@ export async function runPluginUpdate(
     try {
         response = await dependencies.fetcher(plugin.updateURL)
     } catch (error) {
+        // The fetcher can refuse a URL outright (see the transport's
+        // https/private-host guard); that carries its own stage/code and must
+        // not be flattened into a generic network error.
+        if (error instanceof PluginUpdateRejection) {
+            return { ok: false, stage: error.stage, code: error.code, detail: error.detail }
+        }
         // A thrown fetch means the request never got a server response at
         // all: DNS/connection failure, timeout, or a CORS rejection the
         // proxy-aware fetcher could not recover from.
@@ -197,8 +269,33 @@ export async function runPluginUpdate(
         return { ok: false, stage: 'verify', code: 'not-installed-after-import' }
     }
 
-    if (installed.updateURL !== plugin.updateURL) {
-        return { ok: false, stage: 'verify', code: 'update-url-mismatch' }
+    // What this check is actually for: making sure the row we just wrote still
+    // describes THE THING WE DOWNLOADED, and did not get pointed at some third
+    // URL by the install. It is NOT a "the updateURL must never change" rule --
+    // upstream is allowed to move its own source, and `mergePluginUpdateUserState`
+    // deliberately spreads the downloaded metadata, so after a legitimate move
+    // the row already holds the NEW url. Comparing it against the url we
+    // started from therefore failed every genuine relocation ("the version DID
+    // change" -- the install had succeeded and been saved), and the retry then
+    // came back as verify/no-change-detected.
+    //
+    // "The download installs itself as a DIFFERENT plugin" -- the case worth
+    // blocking -- is already caught upstream by policy/name-changed, which
+    // refuses any update whose `//@name` differs from the row being updated.
+    // So a new updateURL is accepted only when the downloaded source is the one
+    // that declared it; anything else still fails as a mismatch.
+    const declaredUpdateURL = parseDeclaredPluginUpdateURL(source)
+    const updateURLUnchanged = installed.updateURL === plugin.updateURL
+    const updateURLMovedByUpstream = !!declaredUpdateURL && installed.updateURL === declaredUpdateURL
+    if (!updateURLUnchanged && !updateURLMovedByUpstream) {
+        return {
+            ok: false,
+            stage: 'verify',
+            code: 'update-url-mismatch',
+            detail: declaredUpdateURL
+                ? `downloaded source declares ${declaredUpdateURL}, row holds ${installed.updateURL ?? '(none)'}`
+                : `downloaded source declares no update URL, row holds ${installed.updateURL ?? '(none)'}`,
+        }
     }
 
     const noChange = !!previous
@@ -224,5 +321,15 @@ export async function runPluginUpdate(
         }
     }
 
-    return { ok: true, version: installed.versionOfPlugin ?? declaredVersion }
+    const success: PluginUpdateSuccessResult = {
+        ok: true,
+        version: installed.versionOfPlugin ?? declaredVersion,
+    }
+    if (!updateURLUnchanged && installed.updateURL) {
+        // Accepted, but the plugin is fetched from somewhere else from now on.
+        // That is exactly the kind of change a user should hear about rather
+        // than discover later, so it rides back on the success result.
+        success.updateURLChanged = { from: plugin.updateURL, to: installed.updateURL }
+    }
+    return success
 }

@@ -73,7 +73,7 @@ describe('inline collection organizer list', () => {
         expect(page).toContain('{#snippet itemContent(pluginName)}')
         expect(page).toContain('runInstalledPluginUpdateAction(plugin')
         expect(page).toContain('update: updatePlugin')
-        expect(page).toContain('notifyError(language.pluginUpdateFailed)')
+        expect(page).toContain('notifyError(pluginUpdateFailureMessage(result))')
         expect(page).toContain('assignPluginToFolder')
         expect(page).not.toContain('CollectionOrganizerDialog')
         expect(page).not.toContain('organizerOpen')

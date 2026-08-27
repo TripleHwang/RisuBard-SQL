@@ -2,12 +2,12 @@
     import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, ShieldIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import SettingPage from "src/lib/UI/GUI/SettingPage.svelte";
-    import { alertConfirm, alertMd, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
+    import { alertConfirm, alertMd, alertSelect, notifyError, notifyInfo, notifySuccess } from "src/ts/alert";
     import { TriangleAlert } from '@lucide/svelte';
 
     import { DBState, hotReloading } from "src/ts/stores.svelte";
     import { checkPluginUpdate, createBlankPlugin, importPlugin, isBuiltInPluginName, loadPlugins, updatePlugin } from "src/ts/plugins/plugins.svelte";
-    import { runInstalledPluginUpdateAction } from "src/ts/plugins/pluginUpdate";
+    import { runInstalledPluginUpdateAction, type PluginUpdateFailureResult } from "src/ts/plugins/pluginUpdate";
     import { requestImmediateSave } from "src/ts/globalApi.svelte";
     import { resetPluginPermission } from "src/ts/plugins/apiV3/v3.svelte";
     import TextInput from "src/lib/UI/GUI/TextInput.svelte";
@@ -30,6 +30,22 @@
         detail: plugin.versionOfPlugin ?? (plugin.version ? String(plugin.version) : ''),
     })))
 
+    // Maps the staged failure onto a localized, per-stage hint. Only the STAGE
+    // is translated: `code` and `detail` are diagnostic strings that can carry
+    // URLs and importer messages, so they stay in the console where
+    // runInstalledPluginUpdateAction already logs them.
+    function pluginUpdateFailureMessage(failure: PluginUpdateFailureResult): string {
+        const hint = {
+            download: language.pluginUpdateStageDownload,
+            parse: language.pluginUpdateStageParse,
+            policy: language.pluginUpdateStagePolicy,
+            save: language.pluginUpdateStageSave,
+            verify: language.pluginUpdateStageVerify,
+        }[failure.stage]
+        if (!hint) return language.pluginUpdateFailed
+        return language.pluginUpdateFailedAt.replace("{}", hint)
+    }
+
     async function installPluginUpdate(plugin: (typeof DBState.db.plugins)[number]) {
         if (updatingPlugins.includes(plugin.name)) return
         updatingPlugins = [...updatingPlugins, plugin.name]
@@ -40,8 +56,17 @@
             // safe, localized message here — never the raw detail.
             await runInstalledPluginUpdateAction(plugin, {
                 update: updatePlugin,
-                reportSuccess: () => notifySuccess(language.pluginUpdateSuccess),
-                reportFailure: () => notifyError(language.pluginUpdateFailed),
+                reportSuccess: (result) => {
+                    notifySuccess(language.pluginUpdateSuccess)
+                    // A legitimate upstream relocation is accepted (see the
+                    // verification notes in pluginUpdate.ts), but the user
+                    // should know this plugin is fetched from somewhere else
+                    // from now on.
+                    if (result.updateURLChanged) {
+                        notifyInfo(language.pluginUpdateSourceMoved.replace("{}", result.updateURLChanged.to))
+                    }
+                },
+                reportFailure: (result) => notifyError(pluginUpdateFailureMessage(result)),
             })
         } finally {
             updatingPlugins = updatingPlugins.filter((name) => name !== plugin.name)

@@ -11,7 +11,16 @@ import { checkCodeSafety } from "./pluginSafety";
 import { SafeDocument, SafeIdbFactory, SafeLocalStorage } from "./pluginSafeClass";
 import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
-import { PluginUpdateRejection, runPluginUpdate, type PluginUpdateResult } from "./pluginUpdate";
+import {
+    comparePluginVersions,
+    parseDeclaredPluginVersion,
+    parseDeclaredPluginVersionFromPartial,
+    PluginUpdateRejection,
+    runPluginUpdate,
+    type PluginUpdateResult,
+} from "./pluginUpdate";
+import { isLocalNetworkUrl } from "../network/localNetwork";
+import { isDeferredRootHydrationReady } from "../storage/sql/rootWritePolicy";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 import { getSqlWindow } from "../storage/sql/sqlRuntimeMeta";
 import { isStartupMutationReady } from "../startupReadiness";
@@ -93,33 +102,93 @@ Risuai.log("Hello from New Plugin!");
     )
 }
 
-const compareVersions = (v1: string, v2: string): 0|1|-1 => {
-    const v1parts = v1.split('.').map(Number);
-    const v2parts = v2.split('.').map(Number);
-    const len = Math.max(v1parts.length, v2parts.length);
-    for (let i = 0; i < len; i++) {
-        const part1 = v1parts[i] || 0;
-        const part2 = v2parts[i] || 0;
-        if (part1 > part2) return 1;
-        if (part1 < part2) return -1;
-    }
-    return 0;
+// Single implementation, shared with the post-install verification in
+// pluginUpdate.ts. The old local copy was `.split('.').map(Number)` with a
+// `NaN || 0` collapse, which turned "v1.2.3" into 0.2.3 and dropped every
+// prerelease tag; see comparePluginVersions for what it tolerates now.
+const compareVersions = comparePluginVersions
+
+/** How long a "an update is available" answer may be reused without re-asking. */
+const UPDATE_CACHE_TTL_MS = 5 * 60 * 1000
+
+interface UpdateCacheEntry {
+    version: string
+    updateURL: string
+    checkedAt: number
 }
 
-const updateCache = new Map<string, { version: string, updateURL: string } | undefined>();
+const updateCache = new Map<string, UpdateCacheEntry>();
+
+/** Drops a plugin's cached update answer so the next check re-fetches. */
+function invalidatePluginUpdateCache(name: string) {
+    updateCache.delete(name)
+}
+
+/**
+ * Refuses a URL we must not fetch on the user's behalf.
+ *
+ * `updateURL` comes out of a plugin file's `//@update-url` line, i.e. it is
+ * attacker-influenced content, and the transport below can hand it to the
+ * SERVER to fetch. `/proxy2` itself is only gated by `checkAuth` because it
+ * exists to relay model endpoints the user typed in; a plugin's self-declared
+ * update URL is not that, so it gets the stricter treatment the codebase
+ * already uses to recognise a private target (isLocalNetworkUrl, the same
+ * helper /proxy-stream-jobs uses server-side) -- otherwise a plugin could use
+ * the server as a confused deputy to reach 127.0.0.1, a LAN box, or
+ * 169.254.169.254 cloud metadata. https-only mirrors the check importPlugin
+ * already applies at parse time; it is repeated here because rows saved by
+ * older builds predate that check.
+ */
+function assertFetchablePluginUpdateURL(url: string): void {
+    let parsed: URL
+    try {
+        parsed = new URL(url)
+    } catch {
+        throw new PluginUpdateRejection('download', 'update-url-invalid', 'plugin update URL is not a valid URL')
+    }
+    if (parsed.protocol !== 'https:') {
+        throw new PluginUpdateRejection('download', 'update-url-not-https', 'plugin update URL must use https')
+    }
+    if (isLocalNetworkUrl(url)) {
+        throw new PluginUpdateRejection('download', 'update-url-private-host', 'plugin update URL points at a private or loopback host')
+    }
+}
 
 // Shared transport for both the update CHECK and the actual DOWNLOAD, so the
-// two never diverge in proxy-awareness again. Goes through fetchNative
-// (direct fetch, falling back to the CORS/network proxy) instead of a raw
-// `fetch`. `range: true` asks for just the metadata header; some servers
-// reject or ignore Range requests, so callers that get a non-2xx back should
-// retry with `range: false` for a plain full GET.
+// two never diverge in proxy-awareness again.
+//
+// HEADERS: this must stay a SIMPLE cross-origin request. Only CORS-safelisted
+// request-headers may be set (Accept, Accept-Language, Content-Language,
+// Content-Type with a form/text value, and Range restricted to a "simple range
+// header value" like `bytes=0-511`); anything else makes the browser send an
+// `OPTIONS` preflight first. The previous version sent `Cache-Control: no-cache`,
+// which is NOT safelisted -- raw.githubusercontent.com does not answer OPTIONS
+// at all ("preflight ... does not have HTTP ok status") and other hosts reject
+// it with "request header field cache-control is not allowed by
+// Access-Control-Allow-Headers", so the real request never happened. Freshness
+// is now requested via `cache: 'no-cache'`, a fetch() option handled by the
+// browser's own cache layer, which adds no author header and no preflight.
+//
+// ROUTE: `preferServerProxy` asks fetchNative for the server relay first when
+// running on the Node build. The server has no CORS restriction, so the ranged
+// probe and the download both work against hosts that send no CORS headers at
+// all -- and no preflight is wasted. fetchNative still falls back to a direct
+// browser fetch when the relay is unavailable.
 async function fetchPluginUpdateSource(url: string, opts: { range: boolean }): Promise<Response> {
-    const headers: { [key: string]: string } = { 'Cache-Control': 'no-cache' }
+    assertFetchablePluginUpdateURL(url)
+    const headers: { [key: string]: string } = {}
     if (opts.range) {
-        headers['Range'] = 'bytes=0-512'
+        // A simple range header value, therefore CORS-safelisted. Even so the
+        // callers below degrade to a plain GET if a host refuses it or a
+        // browser preflights it anyway.
+        headers['Range'] = 'bytes=0-511'
     }
-    return fetchNative(url, { method: 'GET', headers })
+    return fetchNative(url, {
+        method: 'GET',
+        headers,
+        cache: 'no-cache',
+        preferServerProxy: true,
+    })
 }
 
 export const checkPluginUpdate = async (plugin: RisuPlugin) => {
@@ -128,39 +197,57 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
             return
         }
 
-        if(updateCache.has(plugin.name)){
-            const cached = updateCache.get(plugin.name)
-            if(cached
-                && cached.updateURL === plugin.updateURL
-                && compareVersions(cached.version, plugin.versionOfPlugin || '0.0.0') === 1){
-                return cached
-            }
+        const cached = updateCache.get(plugin.name)
+        if(cached
+            && Date.now() - cached.checkedAt < UPDATE_CACHE_TTL_MS
+            && cached.updateURL === plugin.updateURL
+            && compareVersions(cached.version, plugin.versionOfPlugin || '0.0.0') === 1){
+            return { version: cached.version, updateURL: cached.updateURL }
         }
+        // Anything stale, superseded, or no longer newer than what is
+        // installed stops being an answer right now, so a one-off result
+        // cannot keep an update badge up for the lifetime of the page.
+        invalidatePluginUpdateCache(plugin.name)
 
-        let response = await fetchPluginUpdateSource(plugin.updateURL, { range: true })
-        if(!(response.status >= 200 && response.status < 300)){
-            // The server rejected or ignored the Range request (some hosts
-            // respond 4xx to a Range header instead of just serving the full
-            // body). Retry once with a plain GET before giving up.
-            response = await fetchPluginUpdateSource(plugin.updateURL, { range: false })
-        }
-
-        if(response.status >= 200 && response.status < 300){
-            const text = await response.text()
-            const versioRegex = /\/\/@version\s+([^\s]+)/;
-            const match = text.match(versioRegex);
-            if(match && match[1]){
-                const latestVersion = match[1].trim()
-                if(compareVersions(latestVersion, plugin.versionOfPlugin || '0.0.0') === 1){
-                    updateCache.set(plugin.name, {
-                        version: latestVersion,
-                        updateURL: plugin.updateURL
-                    })
-                    return {
-                        version: latestVersion,
-                        updateURL: plugin.updateURL
-                    }
+        // The ranged probe is an optimisation (read `//@version` without
+        // pulling the whole plugin), never a requirement. A host that refuses
+        // Range, ignores it, or that a browser insists on preflighting must
+        // still produce a working update check, so every failure mode below
+        // degrades to a plain full GET.
+        let text: string | undefined
+        try {
+            const ranged = await fetchPluginUpdateSource(plugin.updateURL, { range: true })
+            if(ranged.status >= 200 && ranged.status < 300){
+                const partial = await ranged.text()
+                // Only trust a version line that is complete in what we
+                // received; a half-read token would compare as a bogus version.
+                if(parseDeclaredPluginVersionFromPartial(partial)){
+                    text = partial
                 }
+            }
+        } catch (error) {
+            if (error instanceof PluginUpdateRejection) throw error
+            console.warn('Plugin update probe (ranged) failed, retrying without Range:', error)
+        }
+
+        if(text === undefined){
+            const full = await fetchPluginUpdateSource(plugin.updateURL, { range: false })
+            if(!(full.status >= 200 && full.status < 300)){
+                return
+            }
+            text = await full.text()
+        }
+
+        const latestVersion = parseDeclaredPluginVersion(text)
+        if(latestVersion && compareVersions(latestVersion, plugin.versionOfPlugin || '0.0.0') === 1){
+            updateCache.set(plugin.name, {
+                version: latestVersion,
+                updateURL: plugin.updateURL,
+                checkedAt: Date.now(),
+            })
+            return {
+                version: latestVersion,
+                updateURL: plugin.updateURL
             }
         }
     } catch (error) {
@@ -188,9 +275,11 @@ export async function updatePlugin(plugin: RisuPlugin): Promise<PluginUpdateResu
             }
         },
     })
-    if (result.ok) {
-        updateCache.delete(plugin.name)
-    }
+    // Cleared on EVERY outcome, not just success. Keeping the entry after a
+    // failure left a sticky `+` that reappeared and re-failed for the whole
+    // lifetime of the page, because the cached "update available" answer was
+    // returned before any new request was made.
+    invalidatePluginUpdateCache(plugin.name)
     return result
 }
 
@@ -510,6 +599,16 @@ export async function importPlugin(code:string|null = null, argu:{
         // here would publish an empty list the user never asked for. Refuse
         // the import instead of writing over the not-yet-loaded value.
         if (db.plugins === undefined && !isStartupMutationReady()) {
+            rejectImport('save', 'plugins-not-hydrated', 'The installed plugin list has not finished loading yet. Wait for startup to complete and try again.')
+            return
+        }
+        // Same key, the other half of the rule: while the deferred-root write
+        // gate is closed, buildSqlDirtyCommit SKIPS `plugins` entirely (see
+        // planRootWrite). The skip is silent -- the dirty mark is acknowledged
+        // as committed -- so an install here would look like it worked and be
+        // gone on the next reload. Refuse instead of reporting a success the
+        // database never received.
+        if (!isDeferredRootHydrationReady()) {
             rejectImport('save', 'plugins-not-hydrated', 'The installed plugin list has not finished loading yet. Wait for startup to complete and try again.')
             return
         }

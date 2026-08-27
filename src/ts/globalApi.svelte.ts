@@ -17,7 +17,7 @@ import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { getSqlWindow } from "./storage/sql/sqlRuntimeMeta";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
-import { supportsPatchSync } from "./platform"
+import { isNodeServer, supportsPatchSync } from "./platform"
 // @ts-ignore - plain CJS module shared verbatim with server/node/server.cjs; see that file's
 // buildUncleanableSet() for the other consumer of this exact logic. Lives under
 // server/node/ (not a top-level shared/) so every packaging path that ships the
@@ -298,10 +298,28 @@ export let requiresFullEncoderReload = $state({
     state: false
 })
 
+// Assigned by whichever persistence runtime this build actually starts:
+// saveDb() (the reactive encoder loop) or startMetadataPersistence() (the
+// metadata-first/SQL path used by the standalone Node build). Until one of
+// them runs there is no way to force a write.
+//
+// The default is deliberately NOT a silent no-op for `rejectOnFailure`
+// callers. A caller passing that flag is asking "make this durable NOW and
+// tell me if you couldn't" -- resolving without writing anything answered
+// "yes, it's on disk" for a build where nothing had been installed, which is
+// how a plugin update could report success and then vanish on reload. A
+// fire-and-forget `void requestImmediateSave()` (there are many, some of them
+// during startup before any runtime exists) still no-ops.
 let requestImmediateSaveImpl: ((options?: {
     forceFullWrite?: boolean
     rejectOnFailure?: boolean
-}) => Promise<void> | void) = () => {}
+}) => Promise<void> | void) = (options) => {
+    if (options?.rejectOnFailure) {
+        return Promise.reject(new Error(
+            'No persistence runtime is active, so the state could not be saved immediately'
+        ))
+    }
+}
 let patchSyncBaseline: Database | null = null
 
 // Surfaces server-side persist failures (Stage 1 visibility — see issues.md).
@@ -1268,6 +1286,31 @@ export async function startMetadataPersistence() {
         auditSqlCompatibilityDatabase(db)
     }
     startSqlCompatibilityAuditLoop(audit)
+
+    // This build never calls saveDb(), so without this assignment
+    // requestImmediateSave() had no implementation at all and every caller
+    // that awaited it -- the plugin updater's durable-save step among them --
+    // was awaiting nothing. Mutations reached disk only when the idle audit
+    // loop happened to notice them, which is up to ~10s later (a
+    // requestIdleCallback with a 5s timeout, re-armed every 5s) plus the
+    // registry's 350ms debounce. Reloading inside that window lost the write,
+    // which is exactly the "the version changed, then came back" report.
+    //
+    // The forced path is the same machinery the loop uses, just run now:
+    // re-fingerprint the database so the mutation is marked dirty, then commit
+    // the dirty set and surface a failure instead of swallowing it. The
+    // deferred-root write gate (rootWritePolicy.ts) still applies -- a write
+    // before hydration is still skipped, on purpose.
+    requestImmediateSaveImpl = async (options) => {
+        await tick()
+        try {
+            auditSqlCompatibilityDatabase(getDatabase())
+            await flushSqlDirtyChanges()
+        } catch (error) {
+            if (options?.rejectOnFailure) throw error
+            console.error('Immediate metadata save failed', error)
+        }
+    }
 }
 
 /**
@@ -2069,6 +2112,28 @@ export interface FetchNativeArgs {
     interceptor?: string
     requestTimeoutMs?: number
     networkRoute?: 'auto' | 'local_network'
+    /**
+     * Browser HTTP-cache mode for the DIRECT branch, forwarded verbatim to
+     * `fetch(..., { cache })`. Use this instead of sending a `Cache-Control`
+     * request header: `Cache-Control` is not a CORS-safelisted request-header,
+     * so adding it turns a simple cross-origin GET into a preflighted one, and
+     * a host that does not answer `OPTIONS` (or does not list `cache-control`
+     * in `Access-Control-Allow-Headers`) then fails the request outright.
+     * `cache: 'no-cache'` gets the same revalidation from the browser's own
+     * cache machinery without adding an author header.
+     */
+    cache?: RequestCache
+    /**
+     * Ask for the server-side `/proxy2` relay BEFORE trying a direct browser
+     * fetch, instead of only as a fallback. Only honoured on the Node server
+     * build (where `/proxy2` is known to exist); everywhere else this is
+     * ignored and the normal direct-first path runs. Intended for call sites
+     * that fetch third-party URLs the app does not control, where a direct
+     * fetch is likely to be refused by CORS and the wasted preflight is pure
+     * cost. The relay is authenticated (`risu-auth`), so callers are
+     * responsible for validating the URL before handing it over.
+     */
+    preferServerProxy?: boolean
     /** Request-log classification; see GlobalFetchArgs for the same fields. */
     logCategory?: RequestLogCategory
     logSource?: RequestLogSource
@@ -2216,6 +2281,28 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
             })
         }
 
+        // Proxy-first for call sites that opted in. The server relay has no
+        // CORS restriction and never sends a preflight, so for a third-party
+        // URL the app does not control this avoids a round trip that is
+        // *expected* to fail. Gated on the Node build because `/proxy2` only
+        // exists there -- anywhere else the request would hit the SPA fallback
+        // and come back as a 200 full of HTML.
+        if (arg.preferServerProxy && isNodeServer) {
+            try {
+                const res = await fetchViaProxy2(url, headers, realBody, {
+                    ...arg,
+                    signal: requestSignal
+                })
+                hooks?.onRoute?.('proxy')
+                return res
+            } catch (e) {
+                if (requestSignal?.aborted) throw e
+                // The relay itself is unreachable (server down, auth refused).
+                // Fall through to the direct attempt rather than failing.
+                console.warn('[fetchNative] server proxy unavailable, falling back to direct fetch:', e)
+            }
+        }
+
         // Try direct fetch first (upstream behavior), fall back to proxy on CORS/network error
         try {
             const res = await fetch(url, {
@@ -2223,6 +2310,7 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
                 headers: headers,
                 method: arg.method,
                 signal: requestSignal,
+                ...(arg.cache ? { cache: arg.cache } : {}),
             })
             hooks?.onRoute?.('direct')
             return res
