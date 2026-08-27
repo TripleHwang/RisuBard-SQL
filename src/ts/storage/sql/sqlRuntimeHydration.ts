@@ -5,7 +5,7 @@ import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
 import { chatHydrationKey } from "../chatHydrationKey";
 import { validateOlderMessagePage } from "../../chatWindow";
-import { getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } from "./sqlRuntimeMeta";
+import { getSqlPosition, getSqlWindow, setSqlPosition, setSqlWindow, type SqlHydrationWindow } from "./sqlRuntimeMeta";
 import { language } from "src/lang";
 
 export type { SqlHydrationWindow };
@@ -69,7 +69,43 @@ const DEFAULT_MESSAGE_LIMIT = 40;
 const MAX_CHAT_HYDRATION_ATTEMPTS = 2;
 const characterHydrations = new Map<string, Promise<character | null>>();
 const chatHydrations = new Map<string, Promise<Chat | null>>();
+/**
+ * Older-page loads are tracked separately from initial window hydration even
+ * though both are keyed by the same chat. Sharing one map let a `loadOlder`
+ * that arrived during initial hydration be handed the hydration's promise:
+ * it fetched nothing, resolved truthy, and left the message count unchanged —
+ * which the viewport autofill reads as a stalled load and reports as a failed
+ * page with a Retry button that had nothing to retry.
+ */
+const chatOlderHydrations = new Map<string, Promise<Chat | null>>();
 const chatBodyHydrations = new Map<string, Promise<Chat | null>>();
+
+/**
+ * Publishes the in-flight entry BEFORE its body can run, and retires it only
+ * if it is still the entry we published.
+ *
+ * A body that fails synchronously — a storage backend that throws before its
+ * first `await` — otherwise runs its own cleanup during the same synchronous
+ * turn that creates the promise, i.e. before `set` ever happened. The `delete`
+ * no-ops, `set` then caches an already-rejected promise, and every later
+ * attempt is served that same stale rejection forever, so the operation can
+ * never recover even once the backend is healthy again.
+ *
+ * Cleanup therefore lives here, on a `.finally` whose callback is guaranteed
+ * to run as a microtask — never synchronously, not even for an already
+ * rejected promise — so `set` always precedes `delete`. The body still starts
+ * synchronously, so callers that depend on a request being issued before the
+ * next microtask are unaffected.
+ */
+function trackInFlight<T>(pending: Map<string, Promise<T>>, key: string, body: () => Promise<T>): Promise<T> {
+  let running: Promise<T>;
+  try { running = body(); } catch (error) { running = Promise.reject(error); }
+  const started: Promise<T> = running.finally(() => {
+    if (pending.get(key) === started) pending.delete(key);
+  });
+  pending.set(key, started);
+  return started;
+}
 type RevisionedChat = Chat & {
   _sqlHydrationRevision?: number;
   _sqlMetadataOverrides?: Record<string, unknown>;
@@ -115,13 +151,38 @@ function attachCanonicalPositions(messages: Chat["message"], positions: number[]
  * Reverse pages are a different contract from forward hydration: every page
  * must terminate exactly at the persisted boundary we asked for. Validate the
  * response before attaching positions or replacing either observable window.
+ *
+ * `total` and `nextPosition` are deliberately NOT compared against the stored
+ * window. Server-side they are live chat-wide counters — `COUNT(*)` and
+ * `COALESCE(MAX(position) + 1, 0)` over the whole chat, recomputed on every
+ * page read — so they legitimately move the instant the chat grows or shrinks.
+ * The window, by contrast, is captured once when the newest page is attached
+ * and never re-established for the session. Comparing them turned "the user
+ * sent one more message" into a permanent, retry-proof rejection of every
+ * older page: identical inputs, identical failure, forever.
+ *
+ * The real contiguity invariant is the cursor echo. The server replies with
+ * the exact `before` it was asked for, so `page.before === window.nextBefore`
+ * still pins this page to the boundary the window ends at. Everything below —
+ * position ordering, upper bound, duplicate IDs, the terminal boundary and the
+ * terminal coverage cross-check — is unchanged; this is a data-integrity
+ * boundary and only the two live counters were removed from it.
+ *
+ * `knownPersistedCount` is the number of already-loaded messages that carry a
+ * canonical SQL position, which is exactly the set the server's `total`
+ * counts. It is not `knownIds.size`: a locally appended message that has not
+ * been through a dirty commit has no position and no row, so counting it would
+ * let the terminal-coverage equality hold while older persisted messages were
+ * still unfetched — concluding "we have everything" early and silently hiding
+ * real history.
  */
 function validateOlderReversePage(
   page: Awaited<ReturnType<SqlBootstrapStorage["loadChatMessageReversePage"]>>,
   window: SqlHydrationWindow,
   knownIds: Set<string | undefined>,
+  knownPersistedCount: number,
 ): void {
-  if (page.total !== window.total || page.before !== window.nextBefore || page.nextPosition !== window.nextPosition) {
+  if (page.before !== window.nextBefore) {
     throw new Error("Reverse page metadata changed")
   }
   if (!Array.isArray(page.positions) || page.positions.length !== page.messages.length) {
@@ -142,9 +203,14 @@ function validateOlderReversePage(
   if (page.hasMore ? page.nextBefore !== page.positions[0] : page.nextBefore !== null) {
     throw new Error("Reverse page boundary is noncontiguous")
   }
-  if (!page.hasMore && knownIds.size + seen.size !== page.total) {
+  if (!page.hasMore && knownPersistedCount + seen.size !== page.total) {
     throw new Error("Reverse page terminal coverage is incomplete")
   }
+}
+
+/** Messages the server's `COUNT(*)` can already see: those with a canonical position. */
+function countPersistedMessages(messages: Chat["message"]): number {
+  return messages.reduce((count, message) => count + (Number.isSafeInteger(getSqlPosition(message)) ? 1 : 0), 0);
 }
 
 export async function ensureCharacterHydrated(db: Database, characterIndex: number): Promise<character | null> {
@@ -158,30 +224,24 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
   const existing = characterHydrations.get(characterId);
   if (existing) return existing;
 
-  const hydration = (async () => {
-    try {
-      const full = await storage.loadCharacterHydration(characterId);
-      if (!full) return null;
-      if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
-        if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
-        const repaired = await storage.repairCollapsedCharacter(characterId);
-        // `unavailable` means the server finished walking the candidates it
-        // was able to open without finding an applicable match — never re-read
-        // here, since the row on disk is guaranteed unchanged (the server only
-        // ever commits on a match). The reason code plus the backup census
-        // decide how much the message is allowed to claim.
-        if (repaired.status === "unavailable") throw new Error(repairUnavailableMessage(repaired));
-        const reloaded = await storage.loadCharacterHydration(characterId);
-        if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
-        return applyHydratedCharacter(db, characterId, reloaded);
-      }
-      return applyHydratedCharacter(db, characterId, full);
-    } finally {
-      characterHydrations.delete(characterId);
+  return trackInFlight(characterHydrations, characterId, async () => {
+    const full = await storage.loadCharacterHydration(characterId);
+    if (!full) return null;
+    if ((full as CollapsedCharacter)._sqlCharacterBodyCollapsed) {
+      if (typeof (storage as Partial<SqlBootstrapStorage>).repairCollapsedCharacter !== "function") throw new Error("SQL character repair is unavailable");
+      const repaired = await storage.repairCollapsedCharacter(characterId);
+      // `unavailable` means the server finished walking the candidates it
+      // was able to open without finding an applicable match — never re-read
+      // here, since the row on disk is guaranteed unchanged (the server only
+      // ever commits on a match). The reason code plus the backup census
+      // decide how much the message is allowed to claim.
+      if (repaired.status === "unavailable") throw new Error(repairUnavailableMessage(repaired));
+      const reloaded = await storage.loadCharacterHydration(characterId);
+      if (!reloaded || (reloaded as CollapsedCharacter)._sqlCharacterBodyCollapsed) throw new Error("SQL character repair did not restore the character body");
+      return applyHydratedCharacter(db, characterId, reloaded);
     }
-  })();
-  characterHydrations.set(characterId, hydration);
-  return hydration;
+    return applyHydratedCharacter(db, characterId, full);
+  });
 }
 
 function applyHydratedCharacter(db: Database, characterId: string, full: character): character | null {
@@ -209,8 +269,7 @@ async function ensureChatBodyHydrated(
   if (existing) return existing;
   const initialMetadata = metadataSnapshot(summary);
 
-  const hydration = (async () => {
-    try {
+  return trackInFlight(chatBodyHydrations, key, async () => {
       const response = await storage.loadChatHydration(chatId);
       if (!response) return null;
       const full = response.chat;
@@ -247,12 +306,7 @@ async function ensureChatBodyHydrated(
       (merged as HydratableChat & { detailsLoaded?: boolean }).detailsLoaded = true;
       character.chats[currentIndex] = merged;
       return merged;
-    } finally {
-      chatBodyHydrations.delete(key);
-    }
-  })();
-  chatBodyHydrations.set(key, hydration);
-  return hydration;
+  });
 }
 
 /** Hydrate a chat body before attaching its newest bounded message page. */
@@ -273,9 +327,16 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
   const existing = chatHydrations.get(key);
   if (existing) return existing;
 
-  const hydration = (async () => {
-    beginHydration(key);
+  return trackInFlight(chatHydrations, key, async () => {
+    // `beginHydration` is inside the guarded region so no path can reach the
+    // body without its `endHydration` being scheduled. The flag keeps the pair
+    // balanced: `endHydration` must not decrement a counter this call never
+    // incremented, because that would retire a *concurrent* hydration's entry
+    // and unblock LRU eviction (`hasLiveChatWork`) while work is still live.
+    let counted = false;
     try {
+      beginHydration(key);
+      counted = true;
       let page;
       for (let attempt = 0; attempt < MAX_CHAT_HYDRATION_ATTEMPTS; attempt += 1) {
         const pageMetadata = metadataSnapshot(initial);
@@ -310,15 +371,24 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
       endHydrationApply(key);
       return current;
     } finally {
-      endHydration(key);
-      chatHydrations.delete(key);
+      if (counted) endHydration(key);
     }
-  })();
-  chatHydrations.set(key, hydration);
-  return hydration;
+  });
 }
 
 export async function loadOlderChatMessages(character: character, chatIndex: number, limit?: number): Promise<Chat | null> {
+  const pendingChat = character.chats[chatIndex];
+  if (!pendingChat) return null;
+  // An initial window hydration *replaces* `chat.message` and installs the
+  // window this call needs to read. Chain onto it rather than impersonating
+  // it: while the two shared one in-flight entry, a `loadOlder` arriving mid
+  // hydration was handed the hydration's promise, fetched nothing, and
+  // resolved truthy with the message count unchanged — which the viewport
+  // autofill's no-progress detector reports as a failed page, showing a Retry
+  // button for a request that was never made.
+  const pendingInitial = pendingChat.id ? chatHydrations.get(chatHydrationKey(character.chaId, pendingChat.id)) : undefined;
+  if (pendingInitial) await pendingInitial.catch(() => null);
+
   const chat = character.chats[chatIndex];
   const window = chat && getWindow(chat);
   if (!chat || !window || !window.hasOlder || window.nextBefore === null) return chat ?? null;
@@ -326,52 +396,82 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
   if (!storage) return chat;
   const chatId = chat.id;
   const key = chatHydrationKey(character.chaId, chatId);
-  const existing = chatHydrations.get(key);
+  const existing = chatOlderHydrations.get(key);
   if (existing) return existing;
 
-  const hydration = (async () => {
-    beginHydration(key);
+  return trackInFlight(chatOlderHydrations, key, async () => {
+    // See `ensureChatMessageWindow` for why the begin/end pair is guarded.
+    let counted = false;
     try {
+      beginHydration(key);
+      counted = true;
       const page = await storage.loadChatMessageReversePage(chatId, window.nextBefore ?? undefined, normalizeLimit(limit));
       const currentIndex = character.chats.findIndex((value) => value?.id === chatId);
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
       const known = new Set(current.message.map((message) => message.chatId));
-      // Use the common ID/total guard at the merge boundary; persisted SQL
-      // boundaries and positions are validated below by this backend contract.
-      validateOlderMessagePage(
-        { offset: 0, total: page.total, messages: page.messages },
-        { offset: page.messages.length, total: window.total, ids: [...known].filter((id): id is string => !!id) },
-      );
-      validateOlderReversePage(page, window, known);
-      const olderPairs = page.messages.flatMap((message, index) =>
-        !known.has(message.chatId) ? [{ message, position: page.positions?.[index] }] : [],
-      );
-      const older = olderPairs.map(({ message }) => message);
-      if (older.length === 0 && page.hasMore && page.nextBefore === window.nextBefore) {
-        setWindow(current, { ...window, hasOlder: false });
-        return current;
+      const knownPersistedCount = countPersistedMessages(current.message);
+      try {
+        // Use the common ID/total guard at the merge boundary; persisted SQL
+        // boundaries and positions are validated below by this backend contract.
+        // Both sides read `page.total` so the shared guard checks IDs only —
+        // the window's captured copy is stale by construction (see
+        // `validateOlderReversePage`), and the live counter cannot disagree
+        // with itself.
+        validateOlderMessagePage(
+          { offset: 0, total: page.total, messages: page.messages },
+          { offset: page.messages.length, total: page.total, ids: [...known].filter((id): id is string => !!id) },
+        );
+        validateOlderReversePage(page, window, known, knownPersistedCount);
+      } catch (error) {
+        // A rejected page leaves a Retry button whose cause is otherwise
+        // invisible. Log the counters that decide it — never message content.
+        console.error("[chat-history] rejected an older reverse page", {
+          chatId,
+          window: { before: window.before, nextBefore: window.nextBefore, total: window.total, nextPosition: window.nextPosition },
+          page: { before: page.before, nextBefore: page.nextBefore, total: page.total, nextPosition: page.nextPosition, hasMore: page.hasMore, count: page.messages.length },
+          loaded: { messages: current.message.length, persisted: knownPersistedCount },
+        }, error);
+        throw error;
       }
-      attachCanonicalPositions(older, olderPairs.map(({ position }) => position));
-      current.message = [...older, ...current.message];
+      // Both validators reject a page carrying any already-loaded ID, so every
+      // message in it is new. (The former "the server returned only messages we
+      // already have, so stop paginating" branch lived here and was
+      // unreachable behind those checks; it is gone rather than reachable —
+      // reaching it would have meant weakening duplicate detection, and its
+      // "recovery" silently declared the history complete, hiding real
+      // messages. A distinguishable error is the honest outcome.)
+      attachCanonicalPositions(page.messages, page.positions);
+      current.message = [...page.messages, ...current.message];
       (current as HydratableChat).messagesLoaded = true;
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
       setWindow(current, {
         before: page.before,
         nextBefore: page.nextBefore,
+        // Live counter: take the server's word for it every page.
         total: page.total,
         hasOlder: page.hasMore,
-        nextPosition: Math.max(window.nextPosition, page.nextPosition),
+        // `nextPosition` keeps a monotonic floor even though it is no longer a
+        // validation input, because it is the allocator watermark
+        // `allocateAppendedPositions` (sqlDirtyCommit.ts) mints positions for
+        // appended messages from. The server value is `MAX(position) + 1` over
+        // *committed* rows, so it legitimately sits below positions this
+        // session already handed to appended-but-uncommitted messages, and
+        // drops outright when the newest message is deleted. Writing it
+        // straight through would re-mint a position already in use, and
+        // `messages(chat_id, position)` has no UNIQUE constraint, so the
+        // collision would only surface much later as tied positions. The floor
+        // cannot go stale in a harmful direction: it only ever rises, and an
+        // over-estimate merely leaves a gap — reverse paging orders by
+        // position and never requires them to be dense.
+        nextPosition: Math.max(window.nextPosition ?? page.nextPosition, page.nextPosition),
       });
       beginHydrationApply(key);
       await tick();
       endHydrationApply(key);
       return current;
     } finally {
-      endHydration(key);
-      chatHydrations.delete(key);
+      if (counted) endHydration(key);
     }
-  })();
-  chatHydrations.set(key, hydration);
-  return hydration;
+  });
 }

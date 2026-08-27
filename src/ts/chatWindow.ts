@@ -43,6 +43,12 @@ export type ContinuousHistoryControllerOptions = {
     isScrollable: () => boolean
     progress: () => number
     loadOlder: () => Promise<boolean>
+    /**
+     * Identifying context for the console lines below — chat id, cursor,
+     * counters. Never message content. Optional so tests and non-SQL callers
+     * can omit it.
+     */
+    describe?: () => unknown
 }
 
 /** Serializes reverse loads so a short initial window fills without races. */
@@ -55,10 +61,18 @@ export function createContinuousHistoryController(options: ContinuousHistoryCont
         inFlight = (async () => {
             try {
                 const loaded = await options.loadOlder()
+                // A `false` return without a throw is a deliberate refusal the
+                // caller already accounted for (guard not met, chat switched
+                // mid-fetch); it logs at its own site if it is worth logging.
                 failed = !loaded
                 return loaded
-            } catch {
+            } catch (error) {
                 failed = true
+                // `console.error` survives the production build; `console.log`
+                // and friends are stripped (see vite.config.ts). A Retry button
+                // whose cause is unobservable is why this class of bug costs a
+                // full investigation instead of one console line.
+                console.error('[chat-history] older page load threw', options.describe?.(), error)
                 return false
             } finally {
                 inFlight = null
@@ -75,7 +89,19 @@ export function createContinuousHistoryController(options: ContinuousHistoryCont
                 const progress = options.progress()
                 if (!await loadOne()) return false
                 if (!options.isScrollable() && options.hasOlder() && options.progress() <= progress) {
+                    // Distinct from the throw above: nothing failed and the
+                    // load reported success, yet the message count did not
+                    // move. That is a load which did no work — historically a
+                    // reverse fetch that was deduplicated onto an unrelated
+                    // in-flight request — and it surfaces the same Retry
+                    // button as a genuine failure, so it must be separable in
+                    // the console.
                     failed = true
+                    console.error(
+                        '[chat-history] older page load made no progress; the viewport still wants older messages but the loaded count is unchanged',
+                        { loaded: progress, hasOlder: options.hasOlder() },
+                        options.describe?.(),
+                    )
                     return false
                 }
             }

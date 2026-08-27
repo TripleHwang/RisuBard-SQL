@@ -115,6 +115,20 @@ import { isMobile } from 'src/ts/platform'
     let previousScrollLoadArmed = true
     let historyLoadFailed = $state(false)
     let oldestHistoryMessageMounted = $state(false)
+    /** Console context for reverse-history failures: identity and counters, never message content. */
+    const describeHistoryWindow = () => {
+        const window = getSqlWindow(currentChatSlot)
+        return {
+            chatId: currentChatSlot?.id,
+            chatPage: currentCharacter?.chatPage,
+            loaded: currentChat.length,
+            nextBefore: window?.nextBefore,
+            before: window?.before,
+            total: window?.total,
+            nextPosition: window?.nextPosition,
+            hasOlder: window?.hasOlder,
+        }
+    }
     const createHistoryController = () => createContinuousHistoryController({
         hasOlder: () => !!getSqlWindow(currentChatSlot)?.hasOlder,
         isScrollable: () => {
@@ -123,6 +137,7 @@ import { isMobile } from 'src/ts/platform'
         },
         progress: () => currentChat.length,
         loadOlder: loadOlderHistory,
+        describe: describeHistoryWindow,
     })
     const historyControllers = createContinuousHistoryControllerSlot(createHistoryController)
     let doingChatInputTranslate = false
@@ -291,7 +306,13 @@ import { isMobile } from 'src/ts/platform'
         const requestVersion = chatWindowVersion
         try {
             await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
-        } catch {
+        } catch (error) {
+            // The three reverse-page failures ("Reverse page metadata
+            // changed", "Reverse message page would split tied SQL positions",
+            // "Reverse page has duplicate message IDs") each pin a different
+            // cause. Swallowing them left the user with a Retry button and an
+            // empty console. Identity and counters only — no message content.
+            console.error('[chat-history] older page fetch failed', describeHistoryWindow(), error)
             if (isCurrentChatWindowRequest(
                 { key: requestKey, version: requestVersion },
                 { key: historyKey, version: chatWindowVersion },
