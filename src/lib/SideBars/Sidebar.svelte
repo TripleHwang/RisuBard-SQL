@@ -1316,13 +1316,17 @@
 
 {/if}
 
-<DeferredStartupGate>
-  <CharacterVaultDialog
-    open={$characterVaultOpen}
-    onOpenChange={(open) => { if (open && !isStartupMutationReady()) return; characterVaultOpen.set(open) }}
-    onSelectCharacter={selectCharacter}
-  />
-</DeferredStartupGate>
+{#if $characterVaultOpen}
+  <div class="relative">
+    <DeferredStartupGate>
+      <CharacterVaultDialog
+        open={$characterVaultOpen}
+        onOpenChange={(open) => { if (open && !isStartupMutationReady()) return; characterVaultOpen.set(open) }}
+        onSelectCharacter={selectCharacter}
+      />
+    </DeferredStartupGate>
+  </div>
+{/if}
 
 <ShDialog
   bind:open={characterManageOpen}

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { MobileGUIStack, MobileSearch, MobileSideBar, selectedCharID, startupHydrationStore } from "src/ts/stores.svelte";
+    import { MobileGUIStack, MobileSearch, MobileSideBar, selectedCharID } from "src/ts/stores.svelte";
     import Settings from "../Setting/Settings.svelte";
     import RealmMain from "../UI/Realm/RealmMain.svelte";
     import MobileCharacters from "./MobileCharacters.svelte";
@@ -34,9 +34,7 @@
 </div>
 {/if}
 <div class="w-full flex-1 overflow-y-auto bg-bgcolor relative">
-    {#if $startupHydrationStore && ($MobileSideBar > 0 || $selectedCharID !== -1 || $MobileGUIStack === 2)}
-        <DeferredStartupGate />
-    {:else if $MobileSideBar > 0}
+    {#if $MobileSideBar > 0}
         <div class="w-full flex flex-col p-2 mt-2 h-full">
             {#if $MobileSideBar === 1}
                 <SideChatList bind:chara={DBState.db.characters[$selectedCharID]} />
@@ -53,6 +51,8 @@
     {:else if $MobileGUIStack === 1}
         <MobileCharacters search={$MobileSearch} />
     {:else if $MobileGUIStack === 2}
-        <Settings />
+        <div class="relative h-full">
+            <DeferredStartupGate><Settings /></DeferredStartupGate>
+        </div>
     {/if}
 </div>
