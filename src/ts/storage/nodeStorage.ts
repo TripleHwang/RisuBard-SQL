@@ -13,6 +13,7 @@ import {
     assembleChatContentPages,
     type ChatContentPageEnvelope,
 } from './chatContentPage'
+import { isCanonicalFilesChangedResponse } from './canonicalConflict'
 
 const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 200
 
@@ -36,10 +37,12 @@ function isUserActive(): boolean {
 // Custom error class for database conflict detection
 export class ConflictError extends Error {
     currentEtag: string | null
-    constructor(message: string, currentEtag: string | null) {
+    canonicalFilesChanged: boolean
+    constructor(message: string, currentEtag: string | null, canonicalFilesChanged = false) {
         super(message)
         this.name = 'ConflictError'
         this.currentEtag = currentEtag
+        this.canonicalFilesChanged = canonicalFilesChanged
     }
 }
 
@@ -58,6 +61,8 @@ export interface PatchItemResult {
     persistWarning?: PersistWarning
     /** Set when the server's chat-internal-field guard rejected the patch. */
     chatGuardRejected?: boolean
+    /** Set when file-native canonical entities changed outside RisuBard. */
+    canonicalFilesChanged?: boolean
 }
 
 export interface ExportBackupOptions {
@@ -256,7 +261,11 @@ export class NodeStorage{
         })
         if(da.status === 409){
             const data = await da.json()
-            throw new ConflictError(data.error, data.currentEtag ?? null)
+            throw new ConflictError(
+                data.error,
+                data.currentEtag ?? null,
+                isCanonicalFilesChangedResponse(data),
+            )
         }
         if(da.status < 200 || da.status >= 300){
             throw "setItem Error"
@@ -333,7 +342,11 @@ export class NodeStorage{
         })
         if(da.status === 409){
             const data = await da.json()
-            throw new ConflictError(data.error, data.currentEtag ?? null)
+            throw new ConflictError(
+                data.error,
+                data.currentEtag ?? null,
+                isCanonicalFilesChangedResponse(data),
+            )
         }
         if(da.status < 200 || da.status >= 300){
             throw "removeItem Error"
@@ -432,7 +445,12 @@ export class NodeStorage{
             const rejectedByChatGuard = data.chatGuardRejected === true
                 || data.code === 'CHAT_GUARD_REJECTED'
                 || (typeof data.error === 'string' && data.error.includes('chat-internal field ops'))
-            return { success: false, etag: currentEtag, chatGuardRejected: rejectedByChatGuard }
+            return {
+                success: false,
+                etag: currentEtag,
+                chatGuardRejected: rejectedByChatGuard,
+                canonicalFilesChanged: isCanonicalFilesChangedResponse(data),
+            }
         }
         if (da.status < 200 || da.status >= 300) {
             return { success: false }

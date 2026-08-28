@@ -44,3 +44,12 @@ describe('searchSettings — module binding tab', () => {
         expect(moduleTabHits('persona')).toEqual([])
     })
 })
+
+describe('searchSettings — unified RisuBard common settings', () => {
+    test('routes legacy chat-mode searches to common settings', () => {
+        const hits = searchSettings('채팅 모드', ctx)
+
+        expect(hits.some((result) => result.route === SettingsRoute.RisuBardCommon)).toBe(true)
+        expect(hits.every((result) => result.route !== SettingsRoute.RisuBardChat)).toBe(true)
+    })
+})

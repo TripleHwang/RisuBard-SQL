@@ -738,7 +738,7 @@ export async function retractWikiEventsBySourceMessages(input: {
         chatId: requiredMutationString(input.chatId, 'Chat ID', 1_024),
         sourceMessageIds: [...new Set(input.sourceMessageIds.map((id) =>
             requiredMutationString(id, 'Source message ID', 1_024)
-        ))].slice(0, 100),
+        ))],
     }
     if (body.sourceMessageIds.length === 0) {
         throw new Error('At least one source message ID is required')

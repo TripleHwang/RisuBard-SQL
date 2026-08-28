@@ -63,6 +63,22 @@ describe('crash-safe canonical writes', () => {
         })).toThrow(/validation/i)
         expect(readVerifiedJson(root, 'settings/app.json')).toEqual({ schemaVersion: 1, value: 'safe' })
     })
+
+    it('adopts a valid external JSON edit only through the explicit external-change path', () => {
+        const root = tempRoot()
+        const relativePath = 'settings/app.json'
+        const target = path.join(root, relativePath)
+        atomicWriteJson(root, relativePath, { schemaVersion: 1, value: 'safe' })
+        fs.writeFileSync(target, `${JSON.stringify({ schemaVersion: 1, value: 'external' }, null, 2)}\n`)
+
+        expect(() => readVerifiedJson(root, relativePath)).toThrow(/checksum mismatch/i)
+        expect(readVerifiedJson(root, relativePath, { acceptExternalChanges: true }))
+            .toEqual({ schemaVersion: 1, value: 'external' })
+        expect(readVerifiedJson(root, relativePath)).toEqual({ schemaVersion: 1, value: 'external' })
+
+        fs.writeFileSync(target, '{ invalid json')
+        expect(() => readVerifiedJson(root, relativePath, { acceptExternalChanges: true })).toThrow()
+    })
 })
 
 describe('journal recovery and trash', () => {

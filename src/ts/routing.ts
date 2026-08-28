@@ -16,7 +16,7 @@
 // src/ts/setting/searchIndex.ts (declarativeSources), hardcoded pages in
 // src/ts/setting/searchManifestData.ts. Otherwise it won't be findable.
 
-import { settingsOpen, SettingsMenuIndex, SystemSubmenuIndex, AccessibilitySubmenuIndex, ModelPresetListTabIndex } from "./stores.svelte";
+import { settingsOpen, SettingsMenuIndex, SystemSubmenuIndex, AccessibilitySubmenuIndex, ModelPresetListTabIndex, openPersonaManager } from "./stores.svelte";
 
 export const SettingsRoute = {
     None: -1 as const,
@@ -92,6 +92,11 @@ export function openSettings(
     accessibilityTab?: AccessibilityTabValue,
     modelPresetTab?: ModelPresetTabValue,
 ) {
+    settingsOpen.set(true);
+    if (route === SettingsRoute.Persona) {
+        openPersonaManager.set(true);
+        return;
+    }
     SettingsMenuIndex.set(route);
     if (systemTab !== undefined) {
         SystemSubmenuIndex.set(systemTab);
@@ -102,5 +107,4 @@ export function openSettings(
     if (modelPresetTab !== undefined) {
         ModelPresetListTabIndex.set(modelPresetTab);
     }
-    settingsOpen.set(true);
 }

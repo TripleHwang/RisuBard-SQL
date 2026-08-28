@@ -15,6 +15,8 @@ const legacyTokens = [
         contentExceptions: new Set([
             'README.en.md',
             'README.md',
+            'patchnote/0.8.14-arca.txt',
+            'patchnote/0.9.3-arca.txt',
         ]),
     },
 ]

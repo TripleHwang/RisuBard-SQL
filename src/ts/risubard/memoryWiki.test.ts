@@ -143,19 +143,30 @@ describe('loadNarrativeMemoryWiki', () => {
     })
 
     it('retracts events linked to confirmed messages before chat deletion', async () => {
-        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+        const fetchMock = vi.fn(async (
+            _input: RequestInfo | URL,
+            _init?: RequestInit,
+        ) => new Response(JSON.stringify({
             retractedIds: ['event.turn-1'],
-        }))) as unknown as typeof fetch
+        })))
+        const fetchImpl = fetchMock as unknown as typeof fetch
+        const sourceMessageIds = Array.from(
+            { length: 101 },
+            (_, index) => `message-${index}`
+        )
 
         await expect(retractWikiEventsBySourceMessages({
             characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['assistant-1'], fetchImpl,
+            sourceMessageIds, fetchImpl,
             createAuth: async () => 'token',
         })).resolves.toEqual({ retractedIds: ['event.turn-1'] })
-        expect(fetchImpl).toHaveBeenCalledWith(
+        expect(fetchMock).toHaveBeenCalledWith(
             '/api/risubard/memory/wiki/event/retract-sources',
             expect.objectContaining({ method: 'POST' })
         )
+        const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+        expect(JSON.parse(String(request.body)).sourceMessageIds)
+            .toEqual(sourceMessageIds)
     })
 
     it('accepts or reverts a canonical review through an authenticated request', async () => {

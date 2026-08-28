@@ -135,7 +135,7 @@ describe('RisuBard Markdown wiki full-stack smoke', () => {
                 expect(providerInput).toMatchObject({
                     model: 'memory',
                     request: {
-                        maxTokens: 4_096,
+                        maxTokens: 8_192,
                         temperature: 0,
                     },
                 })

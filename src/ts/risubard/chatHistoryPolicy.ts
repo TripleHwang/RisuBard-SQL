@@ -17,19 +17,6 @@ export function getBardWikiEvidenceMessageIds(
     return protectedIds
 }
 
-export function deletionTouchesBardWikiEvidence(
-    messages: readonly BardWikiHistoryMessage[],
-    index: number,
-    deleteFollowing: boolean,
-): boolean {
-    if (!Number.isInteger(index) || index < 0 || index >= messages.length) return false
-    const protectedIds = getBardWikiEvidenceMessageIds(messages)
-    const removedMessages = deleteFollowing ? messages.slice(index) : [messages[index]]
-    return removedMessages.some((message) =>
-        typeof message.chatId === 'string' && protectedIds.has(message.chatId)
-    )
-}
-
 export function canBranchFromMessage(
     messages: readonly BardWikiHistoryMessage[],
     index: number,

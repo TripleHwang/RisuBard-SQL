@@ -7,6 +7,7 @@ import {
 } from './routing'
 import {
     ModelPresetListTabIndex,
+    openPersonaManager,
     SettingsMenuIndex,
     settingsOpen,
 } from './stores.svelte'
@@ -15,6 +16,7 @@ describe('settings routing', () => {
     beforeEach(() => {
         SettingsMenuIndex.set(SettingsRoute.None)
         ModelPresetListTabIndex.set(ModelPresetTab.Presets)
+        openPersonaManager.set(false)
         settingsOpen.set(false)
     })
 
@@ -23,6 +25,16 @@ describe('settings routing', () => {
 
         expect(get(SettingsMenuIndex)).toBe(SettingsRoute.ModelPreset)
         expect(get(ModelPresetListTabIndex)).toBe(ModelPresetTab.Options)
+        expect(get(settingsOpen)).toBe(true)
+    })
+
+    test('opens persona management without navigating to the removed settings page', () => {
+        SettingsMenuIndex.set(SettingsRoute.Advanced)
+
+        openSettings(SettingsRoute.Persona)
+
+        expect(get(openPersonaManager)).toBe(true)
+        expect(get(SettingsMenuIndex)).toBe(SettingsRoute.Advanced)
         expect(get(settingsOpen)).toBe(true)
     })
 })

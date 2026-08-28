@@ -131,17 +131,24 @@ function atomicWriteJson(root, relativePath, value, options = {}) {
     });
 }
 
-function readVerifiedJson(root, relativePath) {
+function readVerifiedJson(root, relativePath, options = {}) {
     const target = resolveInside(root, relativePath);
     const bytes = fs.readFileSync(target);
+    const parsed = JSON.parse(bytes.toString('utf8'));
+    if (options.validate && options.validate(parsed) !== true) {
+        throw new Error(`Canonical file validation failed: ${relativePath}`);
+    }
     const checksumPath = `${target}.sha256`;
     if (fs.existsSync(checksumPath)) {
         const expected = fs.readFileSync(checksumPath, 'utf8').trim();
         if (expected && checksum(bytes) !== expected) {
-            throw new Error(`Canonical file checksum mismatch: ${relativePath}`);
+            if (!options.acceptExternalChanges) {
+                throw new Error(`Canonical file checksum mismatch: ${relativePath}`);
+            }
+            replaceAtomic(checksumPath, Buffer.from(`${checksum(bytes)}\n`, 'utf8'));
         }
     }
-    return JSON.parse(bytes.toString('utf8'));
+    return parsed;
 }
 
 function writeJournal(journalPath, value) {

@@ -16,7 +16,6 @@
         LocateFixedIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
-    import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
     import { v4 } from 'uuid'
     import { forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte'
     import { DBState } from 'src/ts/stores.svelte'
@@ -48,7 +47,6 @@
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
         onFocusModeChange?: (focused: boolean) => void
-        onOpenFindReplace?: () => void
         onNavigateSource?: (source: StorySourceRef) => void
     }
 
@@ -62,7 +60,6 @@
         onChanged,
         onSelected,
         onFocusModeChange,
-        onOpenFindReplace,
         onNavigateSource,
     }: Props = $props()
     let creating = $state(false)
@@ -98,6 +95,9 @@
 
     let tree = $derived(buildWikiFileTree(documents))
     let recentlyUpdatedIds = $derived(getRecentlyUpdatedWikiDocumentIds(documents))
+    let danglingSourceIds = $derived(new Set(
+        health.danglingLinks.map((link) => link.sourceId)
+    ))
     let selected = $derived(
         documents.find((document) => document.id === selectedId) ?? null
     )
@@ -513,40 +513,53 @@
                     <div class="folder-children">
                         {#each node.children as child (child.path)}
                             {#if child.kind === 'file'}
-                                <button
-                                    type="button"
-                                    class:active={selectedId === child.documentId}
-                                    onclick={() => {
-                                        const document = documents.find((item) => item.id === child.documentId)
-                                        if (document) selectDocument(document)
-                                    }}
-                                    oncontextmenu={(event) => openContextMenu(event, child.documentId)}
-                                    aria-label={`${child.title} ${child.readOnly ? '읽기 전용' : ''}`}
+                                <div
+                                    class="file-row"
+                                    class:dangling-link={danglingSourceIds.has(child.documentId)}
+                                    data-wiki-dangling-document={danglingSourceIds.has(child.documentId) ? child.documentId : undefined}
                                 >
-                                    {#if child.readOnly}<FileLock2Icon size={13} />
-                                    {:else}<FileIcon size={13} />{/if}
-                                    <span class="document-title">{child.title}</span>
-                                    {@render recentUpdateBadge(child.documentId)}
-                                </button>
+                                    <button
+                                        type="button"
+                                        class="file-select"
+                                        class:active={selectedId === child.documentId}
+                                        onclick={() => {
+                                            const document = documents.find((item) => item.id === child.documentId)
+                                            if (document) selectDocument(document)
+                                        }}
+                                        oncontextmenu={(event) => openContextMenu(event, child.documentId)}
+                                        aria-label={`${child.title} ${child.readOnly ? '읽기 전용' : ''}`}
+                                    >
+                                        {#if child.readOnly}<FileLock2Icon size={13} />
+                                        {:else}<FileIcon size={13} />{/if}
+                                        <span class="document-title">{child.title}</span>
+                                        {@render recentUpdateBadge(child.documentId)}
+                                    </button>
+                                </div>
                             {/if}
                         {/each}
                     </div>
                 </details>
             {:else}
-                <button
-                    type="button"
-                    class="root-file"
-                    class:active={selectedId === node.documentId}
-                    onclick={() => {
-                        const document = documents.find((item) => item.id === node.documentId)
-                        if (document) selectDocument(document)
-                    }}
-                    oncontextmenu={(event) => openContextMenu(event, node.documentId)}
-                    aria-label={node.title}
+                <div
+                    class="file-row"
+                    class:dangling-link={danglingSourceIds.has(node.documentId)}
+                    data-wiki-dangling-document={danglingSourceIds.has(node.documentId) ? node.documentId : undefined}
                 >
-                    <FileIcon size={13} /><span class="document-title">{node.title}</span>
-                    {@render recentUpdateBadge(node.documentId)}
-                </button>
+                    <button
+                        type="button"
+                        class="root-file file-select"
+                        class:active={selectedId === node.documentId}
+                        onclick={() => {
+                            const document = documents.find((item) => item.id === node.documentId)
+                            if (document) selectDocument(document)
+                        }}
+                        oncontextmenu={(event) => openContextMenu(event, node.documentId)}
+                        aria-label={node.title}
+                    >
+                        <FileIcon size={13} /><span class="document-title">{node.title}</span>
+                        {@render recentUpdateBadge(node.documentId)}
+                    </button>
+                </div>
             {/if}
         {/each}
     </nav>
@@ -635,10 +648,10 @@
                     </span>
                 {/if}
                 <ShButton size="sm" variant="success" aria-label="저장" title="저장" onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
-                    <SaveIcon size={14} /> <span data-wiki-action-label>저장</span>
+                    <SaveIcon size={14} />
                 </ShButton>
                 <ShButton size="sm" variant="ghost" aria-label="되돌리기" title="되돌리기" onclick={revert} disabled={!dirty || saving}>
-                    <RotateCcwIcon size={14} /> <span data-wiki-action-label>되돌리기</span>
+                    <RotateCcwIcon size={14} />
                 </ShButton>
                 <ShButton
                     size="sm"
@@ -652,25 +665,13 @@
                 </ShButton>
                 {#if selected?.type === 'event' && selected.status === 'active'}
                     <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={retractEvent} disabled={saving}>
-                        <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
+                        <Trash2Icon size={14} />
                     </ShButton>
                 {:else}
                     <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={trash} disabled={!selected || creating || readOnly || saving}>
-                        <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
+                        <Trash2Icon size={14} />
                     </ShButton>
                 {/if}
-                <ShButton
-                    size="sm"
-                    variant="ghost"
-                    aria-label="모두 바꾸기"
-                    title="모두 바꾸기"
-                    data-wiki-open-find-replace
-                    onclick={() => onOpenFindReplace?.()}
-                    disabled={locked}
-                >
-                    <SolarBoldIcon name="magnifier" size={14} />
-                    <span data-wiki-action-label>모두 바꾸기</span>
-                </ShButton>
                 <label class="markdown-preview-toggle" title="마크다운 미리보기">
                     <input
                         type="checkbox"
@@ -749,12 +750,16 @@
     .wiki-health { display: flex; flex-wrap: wrap; gap: .3rem; padding: 0 .25rem .55rem; color: var(--risu-theme-textcolor2); font-size: .65rem; }
     .wiki-health span { border: 1px solid var(--risu-theme-darkborderc); border-radius: 999px; padding: .16rem .38rem; }
     .tree-toolbar strong { color: var(--risu-theme-textcolor2); font: 700 .65rem/1 ui-monospace, monospace; letter-spacing: .16em; }
-    .folder-row, .root-file, .folder-children button { width: 100%; display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .38rem .45rem; border-radius: .32rem; color: var(--risu-theme-textcolor); text-align: left; font-size: .74rem; }
+    .folder-row, .root-file, .folder-children .file-select { width: 100%; display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .38rem .45rem; border-radius: .32rem; color: var(--risu-theme-textcolor); text-align: left; font-size: .74rem; }
     .folder-row { color: var(--risu-theme-textcolor2); font-weight: 700; }
     .folder-row { cursor: pointer; list-style: none; }
     .folder-row.locked { opacity: .72; }
     .folder-children { margin-left: .7rem; padding-left: .35rem; border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, var(--risu-theme-darkborderc)); }
-    .root-file:hover, .folder-children button:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
+    .file-row { display: flex; min-width: 0; align-items: center; gap: .25rem; border-radius: .32rem; }
+    .file-row .file-select { flex: 1 1 auto; }
+    .root-file:hover, .folder-children .file-select:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
+    .file-row.dangling-link { background: color-mix(in srgb, var(--risu-theme-draculared) 10%, transparent); }
+    .file-row.dangling-link .file-select { color: var(--risu-theme-draculared); }
     .document-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .recent-update-badge { flex: 0 0 auto; margin-left: auto; padding: .12rem .32rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 45%, transparent); border-radius: .25rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 18%, transparent); font-size: .6rem; font-weight: 700; line-height: 1.2; white-space: nowrap; }
     .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, var(--color-bgcolor)); }

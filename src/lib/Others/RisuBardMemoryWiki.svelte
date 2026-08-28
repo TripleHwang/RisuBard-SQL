@@ -168,6 +168,18 @@
         }
         return language.risuBardWikiRebootStop
     })
+    let rebootProgress = $derived.by(() => {
+        if (!rebootJob) return undefined
+        const total = rebootJob.targetAssistantMessageIds.length
+        const completed = Math.min(
+            rebootJob.completedAssistantMessageIds.length,
+            total
+        )
+        const percent = total > 0
+            ? Math.round((completed / total) * 100)
+            : 0
+        return { completed, total, percent }
+    })
 
     async function handleRebootAction() {
         if (rebootActionBusy) return
@@ -547,6 +559,18 @@
                 </button>
                 <button
                     type="button"
+                    class="find-replace-button"
+                    data-wiki-open-find-replace
+                    title="찾기/바꾸기"
+                    aria-label="찾기/바꾸기"
+                    onclick={() => findReplaceOpen = true}
+                    disabled={Boolean(rebootJob)}
+                >
+                    <SolarBoldIcon name="magnifier" size={16} />
+                    <span>찾기/바꾸기</span>
+                </button>
+                <button
+                    type="button"
                     class="reboot-button"
                     class:active={Boolean(rebootJob)}
                     data-risubard-wiki-reboot
@@ -615,6 +639,39 @@
                     </details>
                 {/if}
             </div>
+            {#if rebootJob && rebootProgress}
+                <div
+                    class="reboot-progress"
+                    class:running={rebootJob.status === 'running'}
+                    data-risubard-wiki-reboot-progress
+                    role="progressbar"
+                    aria-live="polite"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={rebootProgress.percent}
+                    aria-valuetext={language.risuBardWikiRebootProgress(
+                        rebootProgress.completed,
+                        rebootProgress.total,
+                        rebootProgress.percent
+                    )}
+                >
+                    <div class="reboot-progress-copy">
+                        <span>{language.risuBardWikiReboot}</span>
+                        <strong>{language.risuBardWikiRebootProgress(
+                            rebootProgress.completed,
+                            rebootProgress.total,
+                            rebootProgress.percent
+                        )}</strong>
+                    </div>
+                    <div class="reboot-progress-track" aria-hidden="true">
+                        <span
+                            class="reboot-progress-fill"
+                            data-risubard-wiki-reboot-progress-fill
+                            style:width={`${rebootProgress.percent}%`}
+                        ></span>
+                    </div>
+                </div>
+            {/if}
         </nav>
     </header>
 
@@ -731,7 +788,6 @@
                             bind:selectedId={selectedMarkdownId}
                             onChanged={loadWiki}
                             onFocusModeChange={(focused) => editorFocus = focused}
-                            onOpenFindReplace={() => findReplaceOpen = true}
                             onNavigateSource={onNavigateStorySource}
                         />
                     </div>
@@ -887,7 +943,7 @@
                 data-find-replace-dialog
                 role="dialog"
                 aria-modal="true"
-                aria-label="모두 바꾸기"
+                aria-label="찾기/바꾸기"
             >
                 <RisuBardFindReplace
                     documents={wiki.documents}
@@ -1077,6 +1133,61 @@
     }
     .dock-views { display: flex; flex-wrap: wrap; width: 100%; min-height: 52px; align-items: center; gap: .45rem; padding: .45rem .48rem; border-radius: .58rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
     .dock-view-actions { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; margin-left: auto; }
+    .reboot-progress {
+        flex: 1 0 100%;
+        display: grid;
+        gap: .28rem;
+        padding: .38rem .18rem .08rem;
+        border-top: 1px solid color-mix(in srgb, var(--risu-theme-primary) 18%, var(--risu-theme-darkborderc));
+    }
+    .reboot-progress-copy {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: .75rem;
+        color: var(--risu-theme-textcolor2);
+        font-size: .68rem;
+        line-height: 1;
+    }
+    .reboot-progress-copy strong {
+        color: var(--risu-theme-textcolor);
+        font-size: .7rem;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: .015em;
+    }
+    .reboot-progress-track {
+        height: .34rem;
+        overflow: hidden;
+        border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, transparent);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 82%, var(--risu-theme-textcolor2) 8%);
+    }
+    .reboot-progress-fill {
+        position: relative;
+        display: block;
+        height: 100%;
+        overflow: hidden;
+        border-radius: inherit;
+        background: var(--risu-theme-primary);
+        transition: width 280ms ease-out;
+    }
+    .reboot-progress.running .reboot-progress-fill::after {
+        position: absolute;
+        inset: 0;
+        content: '';
+        background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accenttext) 38%, transparent) 50%, transparent 100%);
+        transform: translateX(-100%);
+        animation: reboot-progress-sheen 1.4s ease-in-out infinite;
+    }
+    @keyframes reboot-progress-sheen {
+        to { transform: translateX(100%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .reboot-progress-fill { transition: none; }
+        .reboot-progress.running .reboot-progress-fill::after {
+            animation: none;
+        }
+    }
     .dock-views button, .dock-views summary, .dock-close {
         display: inline-flex;
         align-items: center;
@@ -1095,6 +1206,7 @@
     }
     .dock-views button, .dock-views summary { width: 2.35rem; min-height: 2.25rem; padding: .35rem; }
     .dock-views .force-update-button,
+    .dock-views .find-replace-button,
     .dock-views .reboot-button,
     .dock-views .reboot-cancel-button {
         flex: 0 0 auto;
@@ -1119,6 +1231,7 @@
     .dock-view-actions svg { display: block; width: 22px; height: 22px; fill: currentColor; }
     .dock-views button span, .dock-views summary span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .dock-views .force-update-button span,
+    .dock-views .find-replace-button span,
     .dock-views .reboot-button span,
     .dock-views .reboot-cancel-button span {
         position: static;

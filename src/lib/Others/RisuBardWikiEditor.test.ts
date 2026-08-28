@@ -98,7 +98,7 @@ describe('RisuBardWikiEditor', () => {
             .toBe('현재 장면')
     })
 
-    it('collapses action labels instead of wrapping the toolbar at narrow widths', async () => {
+    it('keeps save, revert, and delete icon-only in the editor toolbar', async () => {
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
             target,
@@ -113,11 +113,11 @@ describe('RisuBardWikiEditor', () => {
         expect(toolbar).not.toBeNull()
         expect([...toolbar!.querySelectorAll('button')].map((button) =>
             button.textContent?.trim()
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
-        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(5)
+        )).toEqual(['', '', '로어북에 복사', ''])
+        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(1)
         expect([...toolbar!.querySelectorAll('button')].map((button) =>
             button.getAttribute('aria-label')
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
 
         const source = readFileSync(
             'src/lib/Others/RisuBardWikiEditor.svelte',
@@ -144,24 +144,33 @@ describe('RisuBardWikiEditor', () => {
         )
     })
 
-    it('opens find and replace from the editor toolbar with the bold magnifier', async () => {
-        const onOpenFindReplace = vi.fn()
+    it('marks dangling-link files red without offering automatic repair', async () => {
+        const brokenDocuments = [{
+            ...documents[0],
+            content: '# 라비안\n\n[[사라진 도시#성문|그곳]]으로 향했다.',
+            links: ['사라진 도시#성문|그곳'],
+        }, documents[1]]
         mounted = mount(RisuBardWikiEditor, {
             target: document.body,
             props: {
-                characterId: 'character', chatId: 'chat', documents,
-                onOpenFindReplace,
+                characterId: 'character', chatId: 'chat',
+                documents: brokenDocuments,
+                health: {
+                    danglingLinks: [{
+                        sourceId: 'character.lavian', target: '사라진 도시',
+                    }],
+                    unlinkedDocumentIds: [],
+                },
             },
         })
         await tick()
 
-        const button = document.querySelector<HTMLButtonElement>(
-            '[data-wiki-open-find-replace]'
+        const row = document.querySelector<HTMLElement>(
+            '[data-wiki-dangling-document="character.lavian"]'
         )!
-        expect(button).not.toBeNull()
-        expect(button.querySelector('[data-solar-icon="magnifier"]')).not.toBeNull()
-        button.click()
-        expect(onOpenFindReplace).toHaveBeenCalledOnce()
+        expect(row).not.toBeNull()
+        expect(row.classList.contains('dangling-link')).toBe(true)
+        expect(row.querySelector('[data-wiki-repair-link]')).toBeNull()
     })
 
     it('toggles a live, safe Markdown preview from the editor toolbar', async () => {
@@ -357,8 +366,9 @@ describe('RisuBardWikiEditor', () => {
         markdown.value = '# 전투\n\n패배했다.'
         markdown.dispatchEvent(new Event('input', { bubbles: true }))
         await tick()
-        const save = [...document.querySelectorAll('button')]
-            .find((button) => button.textContent?.trim() === '저장')!
+        const save = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-action-toolbar] [aria-label="저장"]'
+        )!
         save.click()
 
         await vi.waitFor(() => {
@@ -431,9 +441,10 @@ describe('RisuBardWikiEditor', () => {
         const toolbar = document.querySelector('[data-wiki-action-toolbar]')!
         expect([...toolbar.querySelectorAll('button')].map((button) =>
             button.textContent?.trim()
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
-        const deleteButton = [...toolbar.querySelectorAll('button')]
-            .find((button) => button.textContent?.trim() === '삭제')!
+        )).toEqual(['', '', '로어북에 복사', ''])
+        const deleteButton = toolbar.querySelector<HTMLButtonElement>(
+            '[aria-label="삭제"]'
+        )!
         deleteButton.click()
 
         await vi.waitFor(() => {
@@ -470,7 +481,8 @@ describe('RisuBardWikiEditor', () => {
         await tick()
 
         const button = (label: string) => [...document.querySelectorAll('button')]
-            .find((item) => item.textContent?.trim() === label)!
+            .find((item) => item.getAttribute('aria-label') === label
+                || item.textContent?.trim() === label)!
         button('새 문서').click()
         await tick()
         const type = document.querySelector<HTMLSelectElement>('[aria-label="항목 유형"]')!

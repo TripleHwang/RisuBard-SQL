@@ -503,8 +503,9 @@ describe('RisuBardMemoryWiki', () => {
         markdown.value = savedSecond.content
         markdown.dispatchEvent(new Event('input', { bubbles: true }))
         await tick()
-        const save = [...document.querySelectorAll('button')]
-            .find((button) => button.textContent?.trim() === '저장')!
+        const save = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-action-toolbar] [aria-label="저장"]'
+        )!
         save.click()
 
         await vi.waitFor(() => expect(
@@ -641,9 +642,18 @@ describe('RisuBardMemoryWiki', () => {
         expect(settings.querySelector('[data-solar-icon="settings"]')).not.toBeNull()
         expect(forceUpdate.querySelector('span')?.textContent?.trim())
             .toBe(forceUpdate.getAttribute('aria-label'))
-        expect(source).toMatch(/\.dock-views \.force-update-button,\s*\.dock-views \.reboot-button,\s*\.dock-views \.reboot-cancel-button\s*\{[^}]*height:\s*2\.25rem/s)
+        const findReplace = document.body.querySelector<HTMLButtonElement>(
+            '[data-wiki-open-find-replace]'
+        )!
+        expect(findReplace.textContent?.trim()).toBe('찾기/바꾸기')
+        expect(findReplace.previousElementSibling).toBe(forceUpdate)
+        expect(findReplace.querySelector('[data-solar-icon="magnifier"]')).not.toBeNull()
+        expect(document.body.querySelector(
+            '[data-wiki-action-toolbar] [data-wiki-open-find-replace]'
+        )).toBeNull()
+        expect(source).toMatch(/\.dock-views \.force-update-button,\s*\.dock-views \.find-replace-button,\s*\.dock-views \.reboot-button,\s*\.dock-views \.reboot-cancel-button\s*\{[^}]*height:\s*2\.25rem/s)
         expect(source).toMatch(/\.force-update-button img\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s)
-        expect(source).toMatch(/\.dock-views \.force-update-button span,\s*\.dock-views \.reboot-button span/)
+        expect(source).toMatch(/\.dock-views \.force-update-button span,\s*\.dock-views \.find-replace-button span,\s*\.dock-views \.reboot-button span/)
         expect(source).toMatch(/\.dock-views\s*\{[^}]*min-height:\s*52px[^}]*padding:\s*\.45rem\s+\.48rem/s)
         expect(source).toMatch(/\.dock-identity strong\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
         expect(source).toMatch(/\.settings-popover\s*\{[^}]*background:\s*var\(--risu-theme-bgcolor\)/s)
@@ -656,6 +666,60 @@ describe('RisuBardMemoryWiki', () => {
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
         expect(log.compareDocumentPosition(settings)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    })
+
+    test('shows exact reboot turn and percentage progress below the toolbar', async () => {
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown',
+            wikiPath: 'C:\\wiki',
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+            documents: [],
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: {
+                open: true,
+                characterId: 'character',
+                chatId: 'chat',
+                rebootJob: {
+                    version: 1,
+                    jobId: 'job',
+                    stagingChatId: 'reboot-job',
+                    batchSize: 2,
+                    status: 'running',
+                    targetAssistantMessageIds: Array.from(
+                        { length: 10 },
+                        (_, index) => `assistant-${index + 1}`
+                    ),
+                    completedAssistantMessageIds: ['assistant-1', 'assistant-2'],
+                    receipts: {},
+                    startedAt: 1,
+                    updatedAt: 2,
+                    inFlightAssistantMessageIds: ['assistant-3', 'assistant-4'],
+                },
+            },
+        })
+
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-risubard-wiki-reboot-progress]'
+        )).not.toBeNull())
+        const progress = document.querySelector<HTMLElement>(
+            '[data-risubard-wiki-reboot-progress]'
+        )!
+        expect(progress.parentElement?.classList.contains('dock-views')).toBe(true)
+        expect(progress.previousElementSibling?.classList.contains(
+            'dock-view-actions'
+        )).toBe(true)
+        expect(progress.getAttribute('role')).toBe('progressbar')
+        expect(progress.getAttribute('aria-valuemin')).toBe('0')
+        expect(progress.getAttribute('aria-valuemax')).toBe('100')
+        expect(progress.getAttribute('aria-valuenow')).toBe('20')
+        expect(progress.textContent).toMatch(/2\s*\/\s*10/)
+        expect(progress.textContent).toContain('20%')
+        expect(progress.querySelector<HTMLElement>(
+            '[data-risubard-wiki-reboot-progress-fill]'
+        )?.style.width).toBe('20%')
+        expect(progress.classList.contains('running')).toBe(true)
     })
 
     test('shows the current v2 graph instead of the v1 ledger', async () => {

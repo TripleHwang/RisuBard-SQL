@@ -5,7 +5,7 @@
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
-    import { canBranchFromMessage, deletionTouchesBardWikiEvidence } from "src/ts/risubard/chatHistoryPolicy"
+    import { canBranchFromMessage } from "src/ts/risubard/chatHistoryPolicy"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { getModelInfo } from "src/ts/model/modellist"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
@@ -125,9 +125,15 @@
     async function rm(){
         const messages = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message
         const cascadeCount = messages.length - idx
+        const singleDeleteLabel = language.removeMessageOnly.includes('{}')
+            ? language.removeMessageOnly.replace('{}', '1')
+            : `${language.removeMessageOnly} (1)`
 
         const actions: AlertAction[] = [
-            { label: language.removeMessageOnly, variant: 'destructive' },
+            {
+                label: singleDeleteLabel,
+                variant: 'destructive',
+            },
         ]
         if(cascadeCount > 1){
             actions.push({
@@ -135,19 +141,14 @@
                 variant: 'destructive',
             })
         }
-        const sel = await alertConfirmMulti(language.removeChat, actions)
+        const sel = await alertConfirmMulti(language.bardWikiDeleteWarning, actions)
         if(sel < 0) return
-        if(deletionTouchesBardWikiEvidence(messages, idx, sel === 1)){
-            notifyInfo(language.bardWikiDeleteBlocked)
-            return
-        }
         const currentCharacter = DBState.db.characters[selIdState.selId]
         const currentChat = currentCharacter.chats[currentCharacter.chatPage]
         let msg = currentChat.message
         const removedMessages = sel === 1 ? msg.slice(idx) : [msg[idx]]
         const sourceMessageIds = removedMessages.filter((message) =>
-            message?.risubardMemoryConfirmed === true
-            && typeof message.chatId === 'string'
+            typeof message?.chatId === 'string'
             && message.chatId.length > 0
         ).map((message) => message.chatId as string)
         if(sourceMessageIds.length > 0 && currentCharacter.chaId && currentChat.id){

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
     canBranchFromMessage,
-    deletionTouchesBardWikiEvidence,
     getBardWikiEvidenceMessageIds,
 } from './chatHistoryPolicy'
 
@@ -30,21 +29,6 @@ describe('BardWiki chat history policy', () => {
             'user-1',
             'char-1',
         ])
-    })
-
-    it('protects a single message referenced as BardWiki evidence', () => {
-        expect(deletionTouchesBardWikiEvidence(messages, 0, false)).toBe(true)
-        expect(deletionTouchesBardWikiEvidence(messages, 1, false)).toBe(true)
-    })
-
-    it('protects a cascade when any removed message is BardWiki evidence', () => {
-        expect(deletionTouchesBardWikiEvidence(messages, 0, true)).toBe(true)
-        expect(deletionTouchesBardWikiEvidence(messages, 1, true)).toBe(true)
-    })
-
-    it('allows deleting unrelated messages', () => {
-        expect(deletionTouchesBardWikiEvidence(messages, 2, false)).toBe(false)
-        expect(deletionTouchesBardWikiEvidence(messages, 2, true)).toBe(false)
     })
 
     it('allows branching only from the current final message', () => {

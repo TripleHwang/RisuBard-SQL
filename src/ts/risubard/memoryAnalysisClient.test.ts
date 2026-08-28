@@ -1312,6 +1312,7 @@ describe('stored response memory analysis', () => {
         expect(modelCalls[1].schema).toContain('candidateIndex')
         expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
         expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
+        expect(modelCalls[0].maxTokens).toBe(analysisTokenLimit)
         expect(modelCalls[1].maxTokens).toBe(analysisTokenLimit)
         const tokenizer = get_encoding('cl100k_base')
         try {

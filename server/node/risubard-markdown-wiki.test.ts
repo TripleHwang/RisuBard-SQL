@@ -798,6 +798,12 @@ describe('Markdown narrative wiki', () => {
             sourceMessageIds: ['user-2', 'assistant-2'],
             markdown: '# 유지할 사건\n\n라비안이 출발했다.',
         })
+        const canonical = await wiki.saveCanonicalDocument({
+            characterId: 'character', chatId: 'chat',
+            sourceMessageIds: ['user-1', 'assistant-1'],
+            type: 'character', title: '히사시',
+            markdown: `# 히사시\n\n## 관련 문서\n\n- [[${removed.title}]]`,
+        })
 
         await expect(wiki.retractEventsBySourceMessages({
             characterId: 'character', chatId: 'chat',
@@ -809,6 +815,8 @@ describe('Markdown narrative wiki', () => {
         const view = await wiki.loadView('character', 'chat')
         expect(view.documents.some((item) => item.id === removed.id)).toBe(false)
         expect(view.documents.find((item) => item.id === kept.id)?.status)
+            .toBe('active')
+        expect(view.documents.find((item) => item.id === canonical.id)?.status)
             .toBe('active')
     })
 

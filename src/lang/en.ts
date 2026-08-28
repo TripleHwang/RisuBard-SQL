@@ -567,8 +567,12 @@ export const languageEnglish = {
     risuBardArcaChatTitleImageOval: "Large oval",
     risuBardArcaChatTitleImageSquare: "Square",
     risuBardArcaChatTitleImageThumbnailTitle: "Thumbnail + title",
+    risuBardChatResponseSettings: "Chat responses",
+    risuBardWikiAnalysisSettings: "BardWiki analysis",
+    risuBardWikiWritingSettings: "BardWiki writing",
+    risuBardSaveAndLoadSettings: "Save and load",
     removeChat: "Remove this message?",
-    bardWikiDeleteBlocked: "This message is already used as BardWiki evidence and cannot be deleted safely. Use Save and Load to return to an earlier point. If this chat is already inconsistent, run Wiki Reboot.",
+    bardWikiDeleteWarning: "Choose what to delete. Linked event summaries are deleted together when BardWiki evidence is included. Other canonical documents are not rolled back to their past state. Run Wiki Reboot after deletion if you need an exact historical state.",
     loreBook: "Lorebook",
     lorebookWorkspace: {
         open: "Open lorebook workspace",
@@ -814,7 +818,7 @@ export const languageEnglish = {
     currentImageGeneration: "Current Image Generation Data",
     promptPreprocess: "Use Prompt Preprocess",
     SwipeRegenerate: "Use Swipe for Regeneration",
-    removeMessageOnly: "Remove this message only",
+    removeMessageOnly: "Remove this message only ({} message)",
     removeMessageAndAfter: "Remove this and following messages ({})",
     messageRemoved: "Message removed",
     messagesRemoved: "{} messages removed",
@@ -1325,6 +1329,7 @@ export const languageEnglish = {
     antiClaudeOverload: "Anti-Claude Overload",
     activeTabChange: "Current tab is inactivated since other tab is active. to activate this tab, click OK",
     sessionHandoffReload: "Refreshed to the latest state because another device was in use.",
+    canonicalFilesChangedReload: "External file edits were detected. RisuBard kept the newer files and refreshed them.",
     addCharacter: "Add Character",
     importFromRealm: "Choose from RisuRealm",
     importFromRealmDesc: "Choose over 1000 characters in RisuRealm",
@@ -2576,11 +2581,7 @@ export const languageEnglish = {
     risuBardSettings: {
         common: {
             title: "Common settings",
-            description: "Configure canonical-page and event-summary writing used by chat mode.",
-        },
-        chat: {
-            title: "Chat mode",
-            description: "Set separate recent-conversation windows for wiki analysis and new response generation. The default is 12 messages.",
+            description: "Configure chat responses, BardWiki analysis and writing, saves, and external exports in one place.",
         },
     },
     risuBardWikiPrompt: {
@@ -2706,6 +2707,7 @@ export const languageEnglish = {
     risuBardWikiRebootStopping: "Stopping…",
     risuBardWikiRebootResume: "Resume reboot",
     risuBardWikiRebootFinalizing: "Replacing…",
+    risuBardWikiRebootProgress: (completed: number, total: number, percent: number) => `${completed.toLocaleString()}/${total.toLocaleString()} turns · ${percent.toLocaleString()}%`,
     risuBardWikiRebootCancel: "Cancel reboot",
     risuBardWikiRebootCancelDescription: "Discard the staging wiki and keep the existing wiki.",
     risuBardWikiRebootWarning: "BardWiki will be rebuilt from the selected chat index. New responses are unavailable until it finishes, and the existing wiki remains in place until the final replacement. Continue?",

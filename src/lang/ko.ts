@@ -634,8 +634,12 @@ export const languageKorean = {
   risuBardArcaChatTitleImageOval: "큰 타원형",
   risuBardArcaChatTitleImageSquare: "정사각형",
   risuBardArcaChatTitleImageThumbnailTitle: "썸네일 + 타이틀",
+  risuBardChatResponseSettings: "채팅 응답",
+  risuBardWikiAnalysisSettings: "BardWiki 분석",
+  risuBardWikiWritingSettings: "BardWiki 집필",
+  risuBardSaveAndLoadSettings: "저장 및 불러오기",
   removeChat: "이 메시지를 삭제하시겠습니까?",
-  bardWikiDeleteBlocked: "이 메시지는 이미 BardWiki의 근거로 사용되어 안전하게 삭제할 수 없습니다. 이전 시점으로 돌아가려면 저장 및 불러오기를 사용하세요. 이미 대화와 위키가 어긋난 경우 위키 리부트를 실행하세요.",
+  bardWikiDeleteWarning: "삭제할 범위를 선택하세요. BardWiki 근거가 포함된 메시지를 삭제하면 연결된 사건 요약은 함께 삭제됩니다. 인물·장소·물건 등 기타 정본은 과거 상태로 자동 복원되지 않습니다. 정확한 과거 상태가 필요하면 삭제 후 위키 리부트를 실행하세요.",
   loreBook: "로어북",
   lorebookWorkspace: {
     open: "로어북 작업공간 열기",
@@ -889,7 +893,7 @@ export const languageKorean = {
   currentImageGeneration: "현재 이미지 생성 데이터",
   promptPreprocess: "프롬프트 선보정 사용",
   SwipeRegenerate: "스와이프 리롤 사용",
-  removeMessageOnly: "이 메시지만 삭제",
+  removeMessageOnly: "이 메시지만 삭제 ({}개)",
   removeMessageAndAfter: "이후 메시지까지 삭제 ({}개)",
   messageRemoved: "메시지 삭제됨",
   messagesRemoved: "메시지 {}개 삭제됨",
@@ -1419,6 +1423,8 @@ export const languageKorean = {
     "현재 탭이 비활성화되었습니다. OK를 누르면 탭이 다시 활성화됩니다.",
   sessionHandoffReload:
     "다른 기기에서 사용되어 최신 상태로 새로고침했어요.",
+  canonicalFilesChangedReload:
+    "외부 파일 편집을 감지해 더 최신인 파일을 유지하고 새로고침했어요.",
   addCharacter: "캐릭터 추가",
   importFromRealm: "RisuRealm에서 고르기",
   importFromRealmDesc:
@@ -2782,11 +2788,7 @@ export const languageKorean = {
   risuBardSettings: {
     common: {
       title: "공통 설정",
-      description: "채팅 모드에서 사용하는 정본 및 사건 요약 집필 방식을 설정합니다.",
-    },
-    chat: {
-      title: "채팅 모드",
-      description: "위키 분석 범위와 새 답변 생성에 참조할 최근 대화 범위를 각각 설정합니다. 기본값은 12개입니다.",
+      description: "채팅 응답, BardWiki 분석·집필, 저장과 외부 추출 방식을 한곳에서 설정합니다.",
     },
   },
   risuBardWikiPrompt: {
@@ -2912,6 +2914,7 @@ export const languageKorean = {
   risuBardWikiRebootStopping: "정지 대기 중…",
   risuBardWikiRebootResume: "리부트 계속",
   risuBardWikiRebootFinalizing: "교체 중…",
+  risuBardWikiRebootProgress: (completed: number, total: number, percent: number) => `${completed.toLocaleString()}/${total.toLocaleString()}턴 · ${percent.toLocaleString()}%`,
   risuBardWikiRebootCancel: "리부트 취소",
   risuBardWikiRebootCancelDescription: "임시 위키를 버리고 기존 위키를 유지합니다.",
   risuBardWikiRebootWarning: "선택한 챗 인덱스부터 BardWiki를 새로 생성합니다. 완성되기 전까지 새 응답을 생성할 수 없으며, 기존 위키는 마지막 교체 전까지 유지됩니다. 계속할까요?",

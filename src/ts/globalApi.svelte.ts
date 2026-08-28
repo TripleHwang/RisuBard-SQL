@@ -440,6 +440,10 @@ export async function saveDb() {
             sessionStorage.removeItem('risu-session-handoff-reload')
             setTimeout(() => notifyInfo(language.sessionHandoffReload), 1500)
         }
+        if (sessionStorage.getItem('risu-canonical-files-reload')) {
+            sessionStorage.removeItem('risu-canonical-files-reload')
+            setTimeout(() => notifyInfo(language.canonicalFilesChangedReload), 1500)
+        }
     } catch { /* storage unavailable — skip the notice */ }
 
     const changeTracker: toSaveType = {
@@ -820,6 +824,13 @@ export async function saveDb() {
         changed = true
     }
 
+    function reloadAfterExternalCanonicalChange(currentEtag: string | null) {
+        forageStorage.setDbEtag(currentEtag)
+        gotChannel = true
+        try { sessionStorage.setItem('risu-canonical-files-reload', '1') } catch {}
+        location.reload()
+    }
+
     async function persistTrackedChanges(
         toSave: toSaveType,
         options?: {
@@ -1038,6 +1049,11 @@ export async function saveDb() {
                 // Leave saved=false so the full-write path below kicks in.
             } else {
                 const patchResult = await forageStorage.patchItem('database/database.bin', patchData)
+                if (patchResult.canonicalFilesChanged) {
+                    console.warn('[Save] Canonical entity files changed externally; discarding stale in-memory save and reloading')
+                    reloadAfterExternalCanonicalChange(patchResult.etag ?? null)
+                    return 'noop'
+                }
                 saved = patchResult.success
                 if (patchResult.etag) {
                     newEtag = patchResult.etag
@@ -1064,6 +1080,11 @@ export async function saveDb() {
                 await forageStorage.setItem('database/database.bin', dbData, currentEtag ?? undefined)
             } catch (conflictErr) {
                 if (conflictErr instanceof ConflictError) {
+                    if (conflictErr.canonicalFilesChanged) {
+                        console.warn('[Save] Canonical entity files changed externally; discarding stale in-memory save and reloading')
+                        reloadAfterExternalCanonicalChange(conflictErr.currentEtag)
+                        return 'noop'
+                    }
                     console.warn('[Save] Full-write conflict detected, rebasing tracked local changes on latest server DB...')
                     await rebaseTrackedLocalChangesOnLatestServerDb(conflictErr.currentEtag ?? null, db, toSave)
                     await sleep(Math.min(500 * (savetrys + 1), 3000))

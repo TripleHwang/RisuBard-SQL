@@ -38,6 +38,7 @@ const { openServerBrowser } = require('./open-server-browser.cjs');
 const { releaseToUpdateInfo } = require('./release-update.cjs');
 const { createChatContentPage } = require('./chat-content-page.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
+const { createCanonicalProjectionSync } = require('./canonical-projection-sync.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -70,6 +71,7 @@ let fullChatStore = null; // Map<chaId, Map<chatId, chatObject>> — lazy-initia
 
 // ETag for database.bin
 let dbEtag = null;
+let externallyAdoptedDbEtag = null;
 
 function computeBufferEtag(buffer) {
     return nodeCrypto.createHash('md5').update(buffer).digest('hex');
@@ -224,6 +226,7 @@ function maybeCollectUnreferencedObjects() {
 }
 
 async function flushPendingDb() {
+    if (adoptExternallyChangedCanonicalProjection()) return;
     if (saveTimers[DB_HEX_KEY]) {
         clearTimeout(saveTimers[DB_HEX_KEY]);
         delete saveTimers[DB_HEX_KEY];
@@ -797,11 +800,50 @@ const savePath = resolveDataRoot()
 if(!existsSync(savePath)){
     mkdirSync(savePath)
 }
+const CANONICAL_PROJECTION_REVISION_KEY = 'database/canonical-projection-revision'
+const canonicalProjectionSync = createCanonicalProjectionSync({
+    repository: userDataRepository,
+    readAcceptedRevision: () => {
+        const value = kvGet(CANONICAL_PROJECTION_REVISION_KEY)
+        return value ? Buffer.from(value).toString('utf8').trim() || null : null
+    },
+    writeAcceptedRevision: revision => {
+        kvSet(CANONICAL_PROJECTION_REVISION_KEY, Buffer.from(`${revision}\n`, 'utf8'))
+    },
+})
 let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
 function persistCanonicalProjection(databaseObject) {
+    if (canonicalProjectionSync.hasExternalChanges()) {
+        const error = new Error('Canonical entity files changed outside RisuBard before projection save')
+        error.code = 'CANONICAL_FILES_CHANGED'
+        throw error
+    }
     const result = userDataRepository.importLegacyDatabase(databaseObject, { mode: 'sync' })
+    canonicalProjectionSync.accept()
     canonicalProjectionReady = true
     return result
+}
+
+function adoptExternallyChangedCanonicalProjection() {
+    if (!canonicalProjectionReady) return null
+    const changed = canonicalProjectionSync.loadExternalChanges()
+    if (!changed) return null
+
+    if (saveTimers[DB_HEX_KEY]) {
+        clearTimeout(saveTimers[DB_HEX_KEY])
+        delete saveTimers[DB_HEX_KEY]
+    }
+    const fullDb = normalizeJSON(changed.database)
+    const encoded = Buffer.from(encodeRisuSaveLegacy(fullDb))
+    kvSet('database/database.bin', encoded)
+    initChatStore(fullDb)
+    const stripped = normalizeJSON(stripChatsFromDb(fullDb))
+    dbCache[DB_HEX_KEY] = stripped
+    dbEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(stripped)))
+    externallyAdoptedDbEtag = dbEtag
+    canonicalProjectionSync.accept(changed.revision)
+    logger.info('[CanonicalProjection] Adopted externally edited canonical entity files')
+    return { etag: dbEtag, revision: changed.revision }
 }
 
 // Server-side backup directory (outside save/ to avoid bloating updater copies).
@@ -2419,6 +2461,10 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     }
 
     invalidateDbCache();
+    if (canonicalEntriesRestored > 0) {
+        canonicalProjectionSync.accept();
+        canonicalProjectionReady = true;
+    }
 
     // Trigger cold storage migration now so import result includes failure count.
     const dbRaw = kvGet('database/database.bin');
@@ -3305,9 +3351,22 @@ async function readStorageItemPayload(key) {
 }
 
 function sendStorageEtagConflict(res, currentEtag) {
+    if (currentEtag && currentEtag === externallyAdoptedDbEtag) {
+        sendCanonicalProjectionConflict(res, { etag: currentEtag });
+        return;
+    }
     res.status(409).send({
         error: 'ETag mismatch - concurrent modification detected',
         currentEtag
+    });
+}
+
+function sendCanonicalProjectionConflict(res, adopted) {
+    res.status(409).send({
+        error: 'Canonical entity files changed outside RisuBard; reload the latest files before saving',
+        code: 'CANONICAL_FILES_CHANGED',
+        canonicalFilesChanged: true,
+        currentEtag: adopted?.etag ?? dbEtag ?? undefined,
     });
 }
 
@@ -3546,6 +3605,14 @@ app.post('/api/write', async (req, res, next) => {
         await queueStorageOperation(async () => {
             const key = Buffer.from(filePath, 'hex').toString('utf-8');
 
+            if (key === 'database/database.bin') {
+                const adopted = adoptExternallyChangedCanonicalProjection();
+                if (adopted) {
+                    sendCanonicalProjectionConflict(res, adopted);
+                    return;
+                }
+            }
+
             const ifMatch = req.headers['x-if-match'];
             if (ifMatch) {
                 let currentEtag = null;
@@ -3706,6 +3773,14 @@ app.post('/api/patch', async (req, res, next) => {
         await queueStorageOperation(async () => {
             const decodedKey = Buffer.from(filePath, 'hex').toString('utf-8');
 
+            if (decodedKey === 'database/database.bin') {
+                const adopted = adoptExternallyChangedCanonicalProjection();
+                if (adopted) {
+                    sendCanonicalProjectionConflict(res, adopted);
+                    return;
+                }
+            }
+
             // Load database into memory if not already cached
             // For database.bin, cache holds the STRIPPED version (stubs only)
             if (!dbCache[filePath]) {
@@ -3766,6 +3841,10 @@ app.post('/api/patch', async (req, res, next) => {
                 if (decodedKey === 'database/database.bin') {
                     currentEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(dbCache[filePath])));
                     dbEtag = currentEtag;
+                }
+                if (currentEtag && currentEtag === externallyAdoptedDbEtag) {
+                    sendCanonicalProjectionConflict(res, { etag: currentEtag });
+                    return;
                 }
                 res.status(409).send({
                     error: 'Hash mismatch - data out of sync',

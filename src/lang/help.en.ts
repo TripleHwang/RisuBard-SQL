@@ -438,7 +438,7 @@ export const helpEn = {
         risuBardCanonicalCustomStyle:
             "Controls style and expression only. Fact selection, evidence, structure, and safety rules take priority. Limited to 1,000 characters.",
         risuBardAnalysisTokenLimit:
-            "Input token budget for each memory analysis and canonical writing request. Long input is fitted before sending. Also used as the canonical output budget. There is no fixed app maximum; choose a value within your model's context and output limits.",
+            "Input and output token limit for each memory analysis, reboot, and canonical writing request. Long input is fitted before sending, and the same value is applied to model output. The default is 8,192. There is no fixed app maximum; choose a value within your model's context and output limits.",
         risuBardInquiryTargetTokenBudget:
             "Target number of tokens for related documents in an ordinary wiki inquiry. It is not filled when fewer documents are relevant.",
         risuBardInquiryMaximumTokenBudget:

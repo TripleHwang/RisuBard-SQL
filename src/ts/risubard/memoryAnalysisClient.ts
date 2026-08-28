@@ -32,6 +32,7 @@ import {
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
 import { saveCanonicalWikiDocument } from './markdownWikiWriter'
 import type { WikiWritingLanguage } from './wikiWritingLanguage'
+import { RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT } from './risuBardSettings'
 import {
     announceRisuBardMemoryUpdated,
 } from './memoryEvents'
@@ -783,9 +784,8 @@ export function createStoredResponseMemoryAnalysis(
                 useStreaming: false,
                 noMultiGen: true,
                 tools: [],
-                maxTokens: request.format === 'canonical-batch'
-                    ? request.inputTokenLimit ?? 12_000
-                    : 4_096,
+                maxTokens: request.inputTokenLimit
+                    ?? RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT,
                 temperature: 0,
                 bias: {},
                 extractJson: '',
