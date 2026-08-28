@@ -31,6 +31,15 @@ const MAX_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
 const MAX_SQL_READ_KEY_LENGTH = 256;
 const MAX_SQL_READ_LIMIT = 100;
+const MAX_DEFERRED_ROOT_KEYS = 512;
+// Root keys the client Database exposes as ordinary properties but that are not
+// stored in `system_settings`; each has its own table. Their probe answers one
+// question only: does this root exist in storage at all?
+const COLLECTION_ROOT_PROBES = new Map([
+    ['characters', 'SELECT 1 FROM characters LIMIT 1'],
+    ['pluginCustomStorage', 'SELECT 1 FROM plugin_custom_storage LIMIT 1'],
+    ['botPresets', 'SELECT 1 FROM bot_presets LIMIT 1'],
+]);
 // `messages` has no timestamp index in schema v3. rowid DESC is an implicit
 // SQLite primary-key traversal, so this candidate cap cannot trigger a full
 // table sort before the limit; final relevance ordering happens afterward.
@@ -232,57 +241,176 @@ function createRelationalSqlite(options) {
         };
     }
 
-    function bootstrap() {
-        return inReadTransaction(() => {
-            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
-            const settings = Object.fromEntries(settingRows.map((row) => [
-                row.key, readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]),
-            ]));
-            const botPresets = database.prepare(
-                'SELECT preset_id, data FROM bot_presets ORDER BY position',
-            ).all().map((row) => {
-                const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
-                if (!preset || typeof preset !== 'object' || Array.isArray(preset)) {
-                    throw new Error(`Invalid canonical bot preset data for ${row.preset_id}`);
-                }
-                return { ...preset, id: row.preset_id };
+    function readBotPresets() {
+        return database.prepare(
+            'SELECT preset_id, data FROM bot_presets ORDER BY position',
+        ).all().map((row) => {
+            const preset = parseCanonicalJson(row.data, `bot preset ${row.preset_id}`);
+            if (!preset || typeof preset !== 'object' || Array.isArray(preset)) {
+                throw new Error(`Invalid canonical bot preset data for ${row.preset_id}`);
+            }
+            return { ...preset, id: row.preset_id };
+        });
+    }
+
+    function readPluginCustomStorage() {
+        const pluginCustomStorage = Object.create(null);
+        for (const row of database.prepare(
+            'SELECT key, value FROM plugin_custom_storage ORDER BY key',
+        ).all()) {
+            Object.defineProperty(pluginCustomStorage, row.key, {
+                value: parseCanonicalJson(row.value, `plugin custom storage ${row.key}`),
+                enumerable: true,
+                configurable: true,
+                writable: true,
             });
-            const pluginCustomStorage = Object.create(null);
-            for (const row of database.prepare(
-                'SELECT key, value FROM plugin_custom_storage ORDER BY key',
-            ).all()) {
-                Object.defineProperty(pluginCustomStorage, row.key, {
-                    value: parseCanonicalJson(row.value, `plugin custom storage ${row.key}`),
-                    enumerable: true,
-                    configurable: true,
-                    writable: true,
-                });
+        }
+        return pluginCustomStorage;
+    }
+
+    function readCharacterSummaries() {
+        const chatsByCharacter = new Map();
+        for (const row of loadChatSummaryRows()) {
+            const chats = chatsByCharacter.get(row.character_id) || [];
+            chats.push(summaryChat(row, false));
+            chatsByCharacter.set(row.character_id, chats);
+        }
+        return database.prepare('SELECT * FROM characters ORDER BY position').all().map((row) => ({
+            chaId: row.id,
+            type: row.kind,
+            name: row.name,
+            image: row.image ?? '',
+            trashTime: row.trash_time ?? undefined,
+            creationDate: row.creation_time ?? undefined,
+            modificationDate: row.modification_time ?? undefined,
+            lastInteraction: row.last_interaction_time ?? undefined,
+            detailsLoaded: false,
+            chats: chatsByCharacter.get(row.id) || [],
+            chatPage: 0,
+        }));
+    }
+
+    function normalizeDeferredRootKeys(requested) {
+        if (requested === undefined || requested === null) return new Set();
+        if (typeof requested === 'string' || typeof requested?.[Symbol.iterator] !== 'function') {
+            throw new Error('Invalid deferred root key list');
+        }
+        const keys = new Set();
+        for (const entry of requested) {
+            if (typeof entry !== 'string') throw new Error('Invalid deferred root key');
+            // The deferral registry ignores empty keys; nothing can be deferred
+            // under a name that is not a name.
+            if (entry.trim().length === 0) continue;
+            requireBoundedReadKey(entry, 'deferred root key');
+            keys.add(entry);
+        }
+        if (keys.size > MAX_DEFERRED_ROOT_KEYS) throw new Error('Too many deferred root keys');
+        return keys;
+    }
+
+    /** Does this root key exist in storage? Never reads or rebuilds its value. */
+    function rootKeyExists(key) {
+        const probe = COLLECTION_ROOT_PROBES.get(key);
+        if (probe !== undefined) return Boolean(database.prepare(probe).get());
+        return Boolean(database.prepare('SELECT 1 FROM system_settings WHERE key = ?').get(key));
+    }
+
+    /**
+     * `options.deferRootKeys` names root keys the caller will hydrate later
+     * through `loadRootKey`. A deferred key's value is never read or
+     * reassembled — skipping that work is the point — and the payload says so.
+     *
+     * The invariant every consumer depends on: a key listed in
+     * `deferredRootKeys` EXISTS in storage. A requested key that is not stored
+     * is reported in `absentDeferredRootKeys` and is deliberately NOT deferred,
+     * so "missing from the payload and missing from `deferredRootKeys`" is the
+     * only shape that means "genuinely not stored". Partial knowledge never
+     * leaves this function dressed up as a definite negative.
+     *
+     * `unreadableRootKeys` carries the third state: registered in
+     * `system_settings` but rebuilding to no value. That is a storage fault, not
+     * a deletion, and it stays visible instead of vanishing into JSON.
+     */
+    function bootstrap(options) {
+        const requestedDeferrals = normalizeDeferredRootKeys(options?.deferRootKeys);
+        return inReadTransaction(() => {
+            const deferred = new Set();
+            const absentDeferredRootKeys = [];
+            for (const key of requestedDeferrals) {
+                if (rootKeyExists(key)) deferred.add(key);
+                else absentDeferredRootKeys.push(key);
             }
-            const chatsByCharacter = new Map();
-            for (const row of loadChatSummaryRows()) {
-                const chats = chatsByCharacter.get(row.character_id) || [];
-                chats.push(summaryChat(row, false));
-                chatsByCharacter.set(row.character_id, chats);
+            const deferredRootKeys = [...deferred].sort();
+            absentDeferredRootKeys.sort();
+
+            const unreadableRootKeys = [];
+            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
+            const settings = Object.fromEntries(settingRows
+                .filter((row) => !deferred.has(row.key))
+                .map((row) => {
+                    const value = readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]);
+                    if (value === undefined) unreadableRootKeys.push(row.key);
+                    return [row.key, value];
+                }));
+            if (unreadableRootKeys.length) {
+                console.error(
+                    '[SQL bootstrap] root keys are registered but hold no relational nodes:',
+                    unreadableRootKeys.join(', '),
+                );
             }
-            const characters = database.prepare('SELECT * FROM characters ORDER BY position').all().map((row) => ({
-                chaId: row.id,
-                type: row.kind,
-                name: row.name,
-                image: row.image ?? '',
-                trashTime: row.trash_time ?? undefined,
-                creationDate: row.creation_time ?? undefined,
-                modificationDate: row.modification_time ?? undefined,
-                lastInteraction: row.last_interaction_time ?? undefined,
-                detailsLoaded: false,
-                chats: chatsByCharacter.get(row.id) || [],
-                chatPage: 0,
-            }));
+
             const initialized = database.prepare('SELECT initialized FROM system_storage_meta WHERE singleton = 1').get();
-            return {
+            const payload = {
                 status: Number(initialized?.initialized) === 1 ? 'ready' : 'empty',
-                revision: revision(), settings, pluginCustomStorage, botPresets, characters,
-                selectedCharacterId: null, selectedChatId: null,
+                revision: revision(),
+                settings,
+                selectedCharacterId: null,
+                selectedChatId: null,
+                deferredRootKeys,
+                absentDeferredRootKeys,
+                unreadableRootKeys,
             };
+            if (!deferred.has('pluginCustomStorage')) payload.pluginCustomStorage = readPluginCustomStorage();
+            if (!deferred.has('botPresets')) payload.botPresets = readBotPresets();
+            if (!deferred.has('characters')) payload.characters = readCharacterSummaries();
+            return payload;
+        });
+    }
+
+    /**
+     * Hydrate one root key on demand. Existence and value are reported as
+     * separate facts: `present: true` with `value: null` is a stored null, and
+     * `present: false` is the only answer that means the key is not stored. A
+     * key that is registered but cannot be rebuilt throws rather than reporting
+     * either one.
+     */
+    function loadRootKey(key) {
+        return inReadTransaction(() => {
+            const rootKey = requireBoundedReadKey(key, 'root key');
+            const currentRevision = revision();
+            if (COLLECTION_ROOT_PROBES.has(rootKey)) {
+                if (!rootKeyExists(rootKey)) {
+                    return { revision: currentRevision, key: rootKey, present: false };
+                }
+                const value = rootKey === 'characters'
+                    ? readCharacterSummaries()
+                    : rootKey === 'botPresets' ? readBotPresets() : readPluginCustomStorage();
+                return { revision: currentRevision, key: rootKey, present: true, value };
+            }
+            if (!database.prepare('SELECT 1 FROM system_settings WHERE key = ?').get(rootKey)) {
+                return { revision: currentRevision, key: rootKey, present: false };
+            }
+            const rows = database.prepare(
+                'SELECT * FROM setting_extension_nodes WHERE setting_key = ? ORDER BY node_id',
+            ).all(rootKey);
+            if (!rows.length) {
+                throw new Error(`Root key ${rootKey} is registered in system_settings without relational nodes`);
+            }
+            const value = rebuildRelationalValue(rows);
+            if (value === undefined) {
+                throw new Error(`Root key ${rootKey} rebuilt to undefined, which is not a storable root value`);
+            }
+            return { revision: currentRevision, key: rootKey, present: true, value };
         });
     }
 
@@ -534,7 +662,7 @@ function createRelationalSqlite(options) {
     }
 
     return {
-        databasePath, revision, dump, bootstrap, loadCharacter, loadChat, loadChatMessages,
+        databasePath, revision, dump, bootstrap, loadRootKey, loadCharacter, loadChat, loadChatMessages,
         getChatDraft, listChatDraftKeys, getColdStorageItem, listColdStorageItems, listRevisions,
         searchMessages, searchCharactersByName, searchCharactersByTag,
         commit, checkpoint, reset, close,
@@ -543,6 +671,7 @@ function createRelationalSqlite(options) {
 
 module.exports = {
     TABLES,
+    COLLECTION_ROOT_KEYS: Object.freeze([...COLLECTION_ROOT_PROBES.keys()]),
     createRelationalSqlite,
     statementTable,
 };

@@ -29,7 +29,8 @@ describe('route rate limiting', () => {
         expect(server).toContain('const sqlReadLimiter = rateLimit({')
         expect(server).toContain('const chatContentWriteLimiter = rateLimit({')
         for (const route of [
-            '/api/sql/bootstrap', '/api/sql/characters/:characterId', '/api/sql/chats/:chatId/messages',
+            '/api/sql/bootstrap', '/api/sql/root-keys/:rootKey',
+            '/api/sql/characters/:characterId', '/api/sql/chats/:chatId/messages',
             '/api/sql/chat-drafts', '/api/sql/chat-drafts/:draftKey', '/api/sql/cold-storage',
             '/api/sql/cold-storage/:archiveId', '/api/sql/revisions', '/api/sql/search/messages',
             '/api/sql/search/characters',

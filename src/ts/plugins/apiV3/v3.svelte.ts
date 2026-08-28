@@ -1,4 +1,4 @@
-import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, hasMetadataOnlyCharacters, isPluginCharacterComplete, isPluginChatComplete, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
+import { allowedDbKeys, assertPluginStorageResident, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, hasMetadataOnlyCharacters, isPluginCharacterComplete, isPluginChatComplete, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
 import { SandboxHost } from "./factory";
 import { getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
 import { SafeLocalPluginStorage, tagWhitelist } from "../pluginSafeClass";
@@ -967,6 +967,13 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             }
             const db = DBState.db
             let liteDB = {}
+            // `pluginCustomStorage` is one of `allowedDbKeys`, so a withheld map
+            // would be snapshotted as `undefined` and handed to the plugin as
+            // "you have no stored data". Refuse instead; `loadPlugins` hydrates
+            // it before plugin code runs, so this only fires when that failed.
+            if (includeOnly === 'all' || includeOnly.includes('pluginCustomStorage')) {
+                assertPluginStorageResident('getDatabase()')
+            }
             for(const key of allowedDbKeys){
                 if (key === 'characters' && hasMetadataOnlyCharacters(db)) continue
                 if(includeOnly !== 'all' && !includeOnly.includes(key)){

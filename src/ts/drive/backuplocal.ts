@@ -3,6 +3,8 @@ import { downloadFile, LocalWriter, forageStorage } from "../globalApi.svelte";
 import { encodeRisuSaveLegacy } from "../storage/risuSave";
 import { getDatabase, type Chat } from "../storage/database.svelte";
 import { fetchChatFromServer } from "../storage/chatStorage";
+import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
+import { ensureRootKeyHydrated } from "../storage/sql/sqlRuntimeHydration";
 import { language } from "src/lang";
 import { withSaverScope } from '../performance/saverMode';
 
@@ -175,6 +177,22 @@ export async function SavePartialLocalBackup(){
     }
 
     const db = getDatabase()
+    // A backup written from a deferred plugin storage map would encode it as
+    // absent, so restoring that file would wipe every plugin's stored data.
+    // This function already refuses to back up partially-loaded chats for the
+    // same reason; plugin storage gets the same treatment.
+    if (isRootKeyDeferred('pluginCustomStorage')) {
+        alertWait('Saving partial local backup... (Loading plugin storage)')
+        try {
+            await ensureRootKeyHydrated(db, 'pluginCustomStorage')
+        } catch (error) {
+            alertError(
+                'Plugin storage could not be loaded, so this backup would record it as empty and '
+                + `restoring the file would erase it. Backup aborted to prevent data loss.\n\n${error}`
+            )
+            return
+        }
+    }
     const assetMap = new Map<string, { charName: string, assetName: string }>()
     
     // Only collect main profile images for both characters and groups

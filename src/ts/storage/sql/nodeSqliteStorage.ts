@@ -36,6 +36,11 @@ import {
   type SqlCommit,
   type SqlCommitResult,
 } from "./sqlCommit";
+import {
+  clearDeferredRootKey,
+  deferredRootKeySnapshot,
+  markRootKeysDeferred,
+} from "./deferredRootKeys";
 
 type AuthenticatedRequest = (
   input: RequestInfo | URL,
@@ -66,14 +71,146 @@ function sorted(rows: Record<string, unknown>[], key = "position") {
   return [...rows].sort((left, right) => Number(left[key]) - Number(right[key]));
 }
 
+/**
+ * Root keys this client asks the server to withhold from the bootstrap payload.
+ *
+ * Adding a key here is the entire opt-in: bootstrap stops shipping it, it
+ * becomes undeletable until loaded, and `ensureRootKeyHydrated` fetches it on
+ * first use.
+ *
+ * `pluginCustomStorage` is the first: hundreds of rows on real databases, read
+ * from a small enumerable set of places (the plugin runtime, the plugin storage
+ * settings page, the lorebook workspace's legacy backups, local backup export),
+ * every one of which either awaits the load or refuses to answer from partial
+ * knowledge.
+ */
+export const DEFERRED_BOOTSTRAP_ROOT_KEYS: readonly string[] = ["pluginCustomStorage"];
+
+/**
+ * Keys `rebuildBootstrap` populates itself from dedicated payload fields *and*
+ * cannot omit. They are always resident, so the server can never meaningfully
+ * defer them; honouring such a request would mark a key deferred that we then
+ * immediately overwrite.
+ *
+ * `pluginCustomStorage` is deliberately NOT in this set: `rebuildBootstrap`
+ * knows how to leave its property off the object entirely when the server
+ * withholds it.
+ */
+const STRUCTURAL_BOOTSTRAP_KEYS = new Set([
+  "botPresets",
+  "botPresetsId",
+  "characters",
+  "selectedCharacterId",
+  "selectedChatId",
+  "activeBotPresetId",
+]);
+
+/*
+ * ---------------------------------------------------------------------------
+ * TRANSPORT SHIM -- the only place that encodes the deferral wire format.
+ *
+ * Matched against the server routes in server/node/sql-root-key-route.cjs and
+ * server/node/relational-sqlite.cjs:
+ *
+ *   GET /api/sql/bootstrap?defer=a,b
+ *       -> the usual payload, plus deferredRootKeys / absentDeferredRootKeys /
+ *          unreadableRootKeys. Only `deferredRootKeys` means "exists, withheld".
+ *   GET /api/sql/root-keys/<key>
+ *       -> 200 { revision, key, present: true, value }   (value may be null)
+ *          404 { error, key, present: false }            (not stored at all)
+ *          400 { error }                                 (key out of bounds)
+ *
+ * If the wire format changes again, these three helpers plus the optional
+ * fields on `SqlBootstrapPayload` are the whole surface to adjust.
+ * ---------------------------------------------------------------------------
+ */
+
+function bootstrapRequestPath(deferKeys: readonly string[]): string {
+  const requested: string[] = [];
+  for (const key of deferKeys) {
+    if (!key) continue;
+    // Never ask for a key we could not accept the answer for: the client
+    // rebuilds these from dedicated payload fields, and `validateBootstrap`
+    // requires them, so a withheld one would fail the whole bootstrap.
+    if (STRUCTURAL_BOOTSTRAP_KEYS.has(key)) {
+      console.error(
+        `[SQL deferred bootstrap] not requesting deferral of "${key}": the client rebuilds it ` +
+        "from a dedicated bootstrap field, so it cannot be withheld. Remove it from " +
+        "DEFERRED_BOOTSTRAP_ROOT_KEYS.",
+      );
+      continue;
+    }
+    requested.push(key);
+  }
+  if (requested.length === 0) return "/api/sql/bootstrap";
+  return `/api/sql/bootstrap?${new URLSearchParams({ defer: requested.join(",") })}`;
+}
+
+function rootKeyRequestPath(key: string): string {
+  return `/api/sql/root-keys/${encodeURIComponent(key)}`;
+}
+
+/**
+ * Reads a single-root-key response. Rejects on anything ambiguous.
+ *
+ * `present` and `value` are separate facts on purpose: `present: true` with
+ * `value: null` is a stored null and is accepted. A 404 -- whether it carries
+ * `present: false` or is a plain routing failure -- is never a value, so it
+ * rejects and the caller leaves the key deferred.
+ */
+async function readRootKeyResponse(
+  key: string,
+  response: Response,
+): Promise<{ revision: number; value: unknown }> {
+  if (!response.ok) {
+    const detail = response.status === 404
+      ? "the server reports it is not stored, but a routing failure looks identical, " +
+        "so the key stays deferred rather than being treated as deleted"
+      : "the key stays deferred";
+    throw new SqlHttpError(
+      `SQL root key "${key}" load failed (${response.status}); ${detail}`,
+      response.status,
+    );
+  }
+  const payload = await response.json() as Record<string, unknown> | null;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+    !Number.isSafeInteger(payload.revision) || (payload.revision as number) < 0 ||
+    payload.present !== true ||
+    (payload.key !== undefined && payload.key !== key) ||
+    !Object.prototype.hasOwnProperty.call(payload, "value") ||
+    payload.value === undefined) {
+    throw new Error(`Invalid SQL root key payload for "${key}"`);
+  }
+  return { revision: payload.revision as number, value: payload.value };
+}
+
+function isKeyList(value: unknown): boolean {
+  return value === undefined ||
+    (Array.isArray(value) && value.every((key) => typeof key === "string" && !!key));
+}
+
 /** Browser client for the standalone Node server's native SQLite database. */
 export class NodeSqliteStorage implements SqlBootstrapStorage {
   readonly backendKind = "server-sql" as const;
   private enabled = false;
   private revision = 0;
   private bootstrapPayload: SqlBootstrapPayload | null = null;
+  /**
+   * Root keys this client has already loaded on demand during this session.
+   *
+   * The bootstrap payload is refetched whenever a commit invalidates it, and the
+   * server will keep reporting the same keys as withheld. The live `Database`
+   * outlives those refetches, so re-marking an already-hydrated key as deferred
+   * would make the compatibility audit ignore the user's later edits to it --
+   * silent non-persistence, the same failure class in a different shape.
+   */
+  private readonly residentRootKeys = new Set<string>();
 
-  constructor(private readonly request: AuthenticatedRequest) {}
+  constructor(
+    private readonly request: AuthenticatedRequest,
+    /** Root keys to ask the server to withhold. Empty by default -- see the constant. */
+    private readonly deferRootKeys: readonly string[] = DEFERRED_BOOTSTRAP_ROOT_KEYS,
+  ) {}
 
   isEnabled(): boolean {
     return this.enabled;
@@ -97,10 +234,35 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     if ((value.status !== "ready" && value.status !== "empty") ||
       !Number.isSafeInteger(value.revision) || value.revision < 0 ||
       !value.settings || typeof value.settings !== "object" || Array.isArray(value.settings) ||
-      !value.pluginCustomStorage || typeof value.pluginCustomStorage !== "object" || Array.isArray(value.pluginCustomStorage) ||
       !Array.isArray(value.botPresets) || !Array.isArray(value.characters) ||
       (value.selectedCharacterId !== null && typeof value.selectedCharacterId !== "string") ||
       (value.selectedChatId !== null && typeof value.selectedChatId !== "string")) {
+      throw new Error("Invalid SQL bootstrap payload");
+    }
+    // A malformed defer report is not something to shrug off: it decides which
+    // keys are protected from deletion, so a bad one must fail the bootstrap
+    // rather than silently degrade to "nothing was deferred".
+    if (!isKeyList(value.deferredRootKeys) ||
+      !isKeyList(value.absentDeferredRootKeys) ||
+      !isKeyList(value.unreadableRootKeys)) {
+      throw new Error("Invalid SQL bootstrap deferred root key report");
+    }
+    // `pluginCustomStorage` may be withheld, but ONLY when the payload says so.
+    // A silently missing map would otherwise reach the client as "the user has
+    // no plugin storage", which is the exact reading this whole mechanism
+    // exists to prevent.
+    const pluginStorageWithheld = (value.deferredRootKeys ?? []).includes("pluginCustomStorage");
+    if (pluginStorageWithheld) {
+      if (value.pluginCustomStorage !== undefined) {
+        // Contradictory, but not fatal: `rebuildBootstrap` drops the value and
+        // keeps the key deferred, and logs that it did.
+        if (typeof value.pluginCustomStorage !== "object" || Array.isArray(value.pluginCustomStorage)) {
+          throw new Error("Invalid SQL bootstrap payload");
+        }
+      }
+    } else if (!value.pluginCustomStorage ||
+      typeof value.pluginCustomStorage !== "object" ||
+      Array.isArray(value.pluginCustomStorage)) {
       throw new Error("Invalid SQL bootstrap payload");
     }
     return value as SqlBootstrapPayload;
@@ -117,7 +279,13 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     markPerformance("bootstrap-fetch:start");
     let response: Response;
     try {
-      response = await this.request("/api/sql/bootstrap");
+      // A key already loaded on demand stops being worth deferring: the point
+      // of deferral is to skip work at startup, and the startup is over. Asking
+      // for it again would only make every later refetch rebuild a database
+      // that is missing a map this client already has.
+      response = await this.request(bootstrapRequestPath(
+        this.deferRootKeys.filter((key) => !this.residentRootKeys.has(key)),
+      ));
     } finally {
       markPerformance("bootstrap-fetch:end");
       measurePerformance("bootstrap-fetch", "bootstrap-fetch:start", "bootstrap-fetch:end");
@@ -139,11 +307,124 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return true;
   }
 
+  /**
+   * Reconciles the deferral registry with what this bootstrap actually shipped,
+   * and returns the honoured defer set.
+   *
+   * Keys the payload sent are resident, so any stale deferred mark on them is
+   * cleared. Keys the payload withheld are marked deferred, which makes them
+   * undeletable and invisible to the compatibility audit's root diff until
+   * `ensureRootKeyHydrated` installs the real value.
+   *
+   * `resetDeferredRootKeys()` is deliberately not used here: it would also wipe
+   * the refusal log, which is the evidence trail for upstream diff bugs.
+   */
+  private syncDeferredRootKeys(payload: SqlBootstrapPayload): Set<string> {
+    const deferred = new Set<string>();
+    // Unreadable keys are registered in storage but rebuilt to no value. Since
+    // `undefined` does not survive JSON, they reach us looking exactly like keys
+    // that were never stored -- and a dirty mark on one would become a DELETE of
+    // a row that still exists. They exist, so they are deferred: undeletable,
+    // and loadable on demand (that load will fail loudly, which is the truth).
+    const unreadable = (payload.unreadableRootKeys ?? []).filter((key) => !!key);
+    if (unreadable.length) {
+      console.error(
+        "[SQL deferred bootstrap] the server could not rebuild values for root keys that are " +
+        `registered in storage: ${unreadable.join(", ")}. Treating them as deferred so nothing ` +
+        "mistakes them for deleted keys. Their values are unknown, not empty.",
+      );
+    }
+    for (const key of [...(payload.deferredRootKeys ?? []), ...unreadable]) {
+      if (!key) continue;
+      // Already loaded once this session: the live database holds the real
+      // value, so it is resident no matter what a later payload withholds.
+      if (this.residentRootKeys.has(key)) continue;
+      if (STRUCTURAL_BOOTSTRAP_KEYS.has(key)) {
+        console.error(
+          `[SQL deferred bootstrap] server reported "${key}" as deferred, but the client ` +
+          "always rebuilds that key from a dedicated payload field. Ignoring the deferral; " +
+          "the key is resident.",
+        );
+        continue;
+      }
+      deferred.add(key);
+    }
+    for (const key of deferredRootKeySnapshot()) {
+      // A key we fetched is the installer's to clear, not ours: it may have
+      // been fetched but not yet written into the database.
+      if (deferred.has(key) || this.residentRootKeys.has(key)) continue;
+      clearDeferredRootKey(key);
+    }
+    markRootKeysDeferred(deferred);
+    return deferred;
+  }
+
+  /**
+   * `pluginCustomStorage` is the one dedicated bootstrap field the server is
+   * allowed to withhold, so it is the one field whose absence has to be read
+   * carefully.
+   *
+   * Withheld and deferred -> the property is left OFF the object entirely. Not
+   * `{}`, not an own `undefined`: every read site distinguishes "the property
+   * is missing" from "the map is empty", and only the second is a fact about
+   * the user's data.
+   *
+   * Withheld while already resident this session is the odd case. The live
+   * `Database` holds the real map, but this rebuild is a different object and
+   * genuinely has nothing to put in it, so the property stays off and the
+   * mismatch is reported rather than papered over with an empty map.
+   */
+  private installPluginCustomStorage(
+    database: Database,
+    payload: SqlBootstrapPayload,
+    deferred: ReadonlySet<string>,
+  ): void {
+    const shipped = payload.pluginCustomStorage;
+    if (deferred.has("pluginCustomStorage")) {
+      if (shipped !== undefined) {
+        console.error(
+          '[SQL deferred bootstrap] "pluginCustomStorage" was reported deferred but a value for ' +
+          "it was also sent. Omitting that value and keeping the key deferred; it will be " +
+          "loaded on demand.",
+        );
+      }
+      return;
+    }
+    if (shipped !== undefined) {
+      database.pluginCustomStorage = shipped as Database["pluginCustomStorage"];
+      // Resident by a route other than an on-demand load. Record it, or a later
+      // bootstrap that withholds the key would mark it deferred while the live
+      // value is right here — and a stuck deferral silently drops every write.
+      this.residentRootKeys.add("pluginCustomStorage");
+      return;
+    }
+    console.error(
+      '[SQL deferred bootstrap] the bootstrap payload withheld "pluginCustomStorage" without ' +
+      "deferring it (it was already loaded on demand earlier in this session). This rebuilt " +
+      "database is left without the property rather than being given an empty map; its value " +
+      "is unknown here, not empty.",
+    );
+  }
+
   private rebuildBootstrap(payload: SqlBootstrapPayload): Database | null {
+    const deferred = this.syncDeferredRootKeys(payload);
     if (payload.status !== "ready") return null;
+    const settings: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(payload.settings)) {
+      if (!deferred.has(key)) {
+        settings[key] = value;
+        continue;
+      }
+      // The payload contradicted itself. Trust the deferral, not the value:
+      // a withheld key's stand-in is exactly the "user has no plugins" reading
+      // that this whole mechanism exists to prevent. Drop it and load on demand.
+      console.error(
+        `[SQL deferred bootstrap] "${key}" was reported deferred but a value for it was also ` +
+        "sent. Omitting that value and keeping the key deferred; it will be loaded on demand.",
+      );
+    }
     const database = {
-      ...payload.settings,
-      pluginCustomStorage: payload.pluginCustomStorage,
+      ...settings,
       botPresets: payload.botPresets,
       characters: payload.characters.map((character) => ({
         ...character,
@@ -156,6 +437,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
         })),
       })),
     } as unknown as Database;
+    this.installPluginCustomStorage(database, payload, deferred);
     database.botPresetsId = Math.max(0, database.botPresets.findIndex(
       (preset) => preset.id === (payload.settings as { activeBotPresetId?: unknown }).activeBotPresetId,
     ));
@@ -200,6 +482,14 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   }
 
   private rebuild(dump: ServerDump): Database | null {
+    // A full dump is complete knowledge of every root key, so nothing is
+    // "known to exist but not loaded" any more. Record them as resident too:
+    // a later bootstrap that withholds one must not be able to re-defer a key
+    // whose real value is already in the live database.
+    for (const key of deferredRootKeySnapshot()) {
+      clearDeferredRootKey(key);
+      this.residentRootKeys.add(key);
+    }
     if (dump.status !== "ready") return null;
     const database = {} as Database;
     for (const row of dump.tables.system_settings ?? []) {
@@ -289,6 +579,29 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     } finally {
       runtimeMetrics.end(metric);
     }
+  }
+
+  /**
+   * Fetches one deferred root key's real value.
+   *
+   * Every failure path rejects. Nothing here returns a fallback, and nothing
+   * here clears the deferred mark -- that is the caller's job, and only after
+   * the value is actually resident in the database.
+   */
+  async loadRootKeyHydration(key: string): Promise<unknown> {
+    if (!key) throw new Error("SQL root key load requires a non-empty key");
+    const response = await this.request(rootKeyRequestPath(key));
+    const { revision, value } = await readRootKeyResponse(key, response);
+    this.acceptReadRevision(revision);
+    // Only reached when the value is trustworthy; a rejection above leaves the
+    // key deferred and still eligible to be re-marked by a later bootstrap.
+    this.residentRootKeys.add(key);
+    // The cached payload was built from a request that asked for this key to be
+    // withheld, so it no longer describes what this client can serve. Dropping
+    // it makes the next rebuild refetch without the deferral and come back
+    // complete, instead of reproducing a projection that is missing the key.
+    this.bootstrapPayload = null;
+    return value;
   }
 
   async loadChatMessageReversePage(

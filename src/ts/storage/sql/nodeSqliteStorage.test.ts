@@ -4,11 +4,27 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { NodeSqliteStorage } from "./nodeSqliteStorage";
+import { resetDeferredRootKeys } from "./deferredRootKeys";
 
 const { createRelationalSqlite } = require("../../../../server/node/relational-sqlite.cjs");
 
+/**
+ * The client asks the server to withhold its deferred bootstrap keys, so these
+ * doubles honour `?defer=` exactly like the real route does. `BOOTSTRAP_PATH`
+ * is what the client actually requests with the current defer set.
+ */
+const BOOTSTRAP_PATH = "/api/sql/bootstrap?defer=pluginCustomStorage";
+
+function bootstrapFor(server: { bootstrap(options?: unknown): unknown }, path: string) {
+  const defer = new URL(path, "https://risu.invalid").searchParams.get("defer");
+  return server.bootstrap({ deferRootKeys: defer ? defer.split(",") : [] });
+}
+
 const roots: string[] = [];
 afterEach(() => {
+  // The deferral registry is module-level state shared by every test in this
+  // file; a mark left behind would silently change the next test's semantics.
+  resetDeferredRootKeys();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -17,8 +33,8 @@ function createClient() {
   roots.push(root);
   const server = createRelationalSqlite({ dataRoot: root });
   const request = async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === "/api/sql/bootstrap") {
-      return Response.json(server.bootstrap());
+    if (String(input).startsWith("/api/sql/bootstrap")) {
+      return Response.json(bootstrapFor(server, String(input)));
     }
     if (String(input) === "/api/sql/snapshot") {
       return Response.json(server.dump());
@@ -46,7 +62,7 @@ function createClientWithBootstrap() {
   const request = async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     requests.push(path);
-    if (path === "/api/sql/bootstrap") return Response.json(server.bootstrap());
+    if (path.startsWith("/api/sql/bootstrap")) return Response.json(bootstrapFor(server, path));
     if (path === "/api/sql/snapshot") return Response.json(server.dump());
     if (path === "/api/sql/commit") return Response.json(server.commit(JSON.parse(String(init?.body))));
     if (path.startsWith("/api/sql/characters/")) {
@@ -114,7 +130,7 @@ describe("Node server SQLite client", () => {
 
     expect(performance.getEntriesByName("risu:bootstrap-fetch:start", "mark")).toHaveLength(1);
     expect(performance.getEntriesByName("risu:bootstrap-fetch:end", "mark")).toHaveLength(1);
-    expect(requests).toEqual(["/api/sql/bootstrap"]);
+    expect(requests).toEqual([BOOTSTRAP_PATH]);
   });
 
   it("migrates and round-trips a compatible Database graph", async () => {
@@ -189,7 +205,7 @@ describe("Node server SQLite client", () => {
       chats: [{ id: "chat-1", message: [], messagesLoaded: false }],
     });
     expect(loadedWithDefaultOptions?.database).toEqual(loaded?.database);
-    expect(requests).toEqual(["/api/sql/bootstrap"]);
+    expect(requests).toEqual([BOOTSTRAP_PATH]);
     server.close();
   });
 
@@ -206,7 +222,7 @@ describe("Node server SQLite client", () => {
     const presets = await client.listBotPresets();
 
     expect(presets).toEqual([expect.objectContaining({ id: "preset-1", name: "Default" })]);
-    expect(requests).toEqual(["/api/sql/bootstrap"]);
+    expect(requests).toEqual([BOOTSTRAP_PATH]);
     server.close();
   });
 
@@ -221,9 +237,9 @@ describe("Node server SQLite client", () => {
     expect(loaded?.revision).toBe(1);
     expect(client.getRevision()).toBe(1);
     expect(requests).toEqual([
-      "/api/sql/bootstrap",
+      BOOTSTRAP_PATH,
       "/api/sql/commit",
-      "/api/sql/bootstrap",
+      BOOTSTRAP_PATH,
     ]);
     server.close();
   });
@@ -236,7 +252,7 @@ describe("Node server SQLite client", () => {
 
     expect(loaded).toEqual({ status: "empty", revision: 0, database: null });
     expect(client.getRevision()).toBe(0);
-    expect(requests).toEqual(["/api/sql/bootstrap"]);
+    expect(requests).toEqual([BOOTSTRAP_PATH]);
     server.close();
   });
 

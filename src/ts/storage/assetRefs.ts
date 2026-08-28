@@ -1,3 +1,5 @@
+import { isRootKeyDeferred } from './sql/deferredRootKeys'
+
 type RecordValue = Record<string, unknown>
 
 function asRecord(value: unknown): RecordValue | null {
@@ -132,4 +134,18 @@ export function shouldDeleteUnreferencedAsset(
 export function characterAssetReferencesComplete(characters: readonly unknown[] | undefined): boolean {
     if (!characters) return false
     return characters.every((character) => asRecord(character)?.detailsLoaded !== false)
+}
+
+/**
+ * `collectDatabaseAssetReferences` walks `pluginCustomStorage` for asset paths,
+ * and the SQL bootstrap withholds that map until something asks for it. A
+ * withheld map contributes no references, and "no reference found" is what
+ * marks an asset for deletion — so a plugin's images would be deleted while the
+ * rows pointing at them sat unread in storage.
+ *
+ * Same rule as an unloaded character: unknown references are not absent ones.
+ */
+export function pluginStorageAssetReferencesComplete(db: unknown): boolean {
+    return !isRootKeyDeferred('pluginCustomStorage') &&
+        asRecord(db)?.pluginCustomStorage !== undefined
 }

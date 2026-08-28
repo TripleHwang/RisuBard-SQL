@@ -1,4 +1,5 @@
 import type { Chat, Database, Message, character } from "../database.svelte";
+import { isRootKeyDeferred, refuseDeferredRootDelete } from "./deferredRootKeys";
 import type { DirtySnapshot } from "./dirtyRegistry";
 import {
   createEmptySqlCommit,
@@ -101,7 +102,15 @@ export function buildSqlDirtyCommit(
   for (const key of dirty.rootKeys) {
     if (ROOT_EXCLUSIONS.has(key)) continue;
     const value = (database as unknown as Record<string, unknown>)[key];
-    if (value === undefined || typeof value === "function") commit.root.deletes.push(key);
+    const missing = value === undefined || typeof value === "function";
+    // "not loaded" and "not present" are different states. Only the second may
+    // become a DELETE; a deferred key that got this far was marked dirty by a
+    // diff that mistook partial knowledge for a deletion.
+    if (missing && isRootKeyDeferred(key)) {
+      refuseDeferredRootDelete(key, "buildSqlDirtyCommit");
+      continue;
+    }
+    if (missing) commit.root.deletes.push(key);
     else commit.root.upserts.push({ key, value });
   }
 
@@ -177,11 +186,28 @@ export function buildSqlDirtyCommit(
   }
 
   if (dirty.pluginStorageKeys.length) {
+    // `pluginCustomStorage` never travels as a root key (see ROOT_EXCLUSIONS);
+    // its rows are their own scope, and a dirty key that is not in the map
+    // becomes a row DELETE. While the map is deferred it is not in memory at
+    // all, so every dirty key would look absent -- partial knowledge read as a
+    // definite negative, on the exact scope that lost a user's plugin list.
+    const pluginStorageDeferred = isRootKeyDeferred("pluginCustomStorage");
     const storage = database.pluginCustomStorage ?? {};
-    const upserts = dirty.pluginStorageKeys.flatMap((key) =>
-      Object.prototype.hasOwnProperty.call(storage, key) ? [{ key, value: storage[key] }] : [],
-    );
-    const deletes = dirty.pluginStorageKeys.filter((key) => !Object.prototype.hasOwnProperty.call(storage, key));
+    const upserts: Array<{ key: string; value: unknown }> = [];
+    const deletes: string[] = [];
+    for (const key of dirty.pluginStorageKeys) {
+      // A value we can actually see is committed either way: a write that
+      // landed while the map was deferred is still the user's own edit.
+      if (Object.prototype.hasOwnProperty.call(storage, key)) {
+        upserts.push({ key, value: storage[key] });
+        continue;
+      }
+      if (pluginStorageDeferred) {
+        refuseDeferredRootDelete(`pluginCustomStorage[${key}]`, "buildSqlDirtyCommit:pluginStorage");
+        continue;
+      }
+      deletes.push(key);
+    }
     commit.pluginStorage = { upserts, deletes };
   }
 

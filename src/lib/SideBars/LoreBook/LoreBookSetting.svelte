@@ -23,6 +23,9 @@
         resolveCharacterGlobalLoreLabel,
     } from './loreBookWorkspaceConnections';
     import { v4 as createUuid } from 'uuid';
+    import { notifyError } from 'src/ts/alert';
+    import { isRootKeyDeferred } from 'src/ts/storage/sql/deferredRootKeys';
+    import { ensureRootKeyHydrated } from 'src/ts/storage/sql/sqlRuntimeHydration';
 
     let submenu = $state(0)
     let workspaceOpen = $state(false)
@@ -64,6 +67,31 @@
             localActivation: undefined,
         }
     })
+    /**
+     * `activeLoremasterBackups` reads `DBState.db.pluginCustomStorage` during
+     * render, and the SQL bootstrap withholds that map until something asks for
+     * it. A withheld map would make every Loremaster backup look absent, and
+     * the workspace's restore action reads that as "there is nothing to
+     * restore" — a definite negative drawn from a map nobody loaded.
+     *
+     * Render cannot await, so the wait happens at the only door into the
+     * workspace: the dialog does not open until the map is resident. A failed
+     * load says so and keeps the dialog shut, rather than opening it onto a
+     * false empty.
+     */
+    async function openWorkspace() {
+        if (isRootKeyDeferred('pluginCustomStorage')) {
+            try {
+                await ensureRootKeyHydrated(DBState.db, 'pluginCustomStorage')
+            } catch (error) {
+                console.error('[Lorebook] plugin storage could not be loaded', error)
+                notifyError(language.pluginStorageLoadError)
+                return
+            }
+        }
+        workspaceOpen = true
+    }
+
     let activeLoremasterBackups = $derived.by(() => {
         const character = DBState.db.characters[$selectedCharID]
         const key = submenu === 0
@@ -147,7 +175,7 @@
         class="mt-2 mb-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-info px-4 py-2.5 font-semibold text-on-info shadow-sm transition-colors hover:bg-info/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-info active:bg-info/75"
         aria-label={language.lorebookWorkspace.openScope(activeBinding.scopeLabel)}
         title={language.lorebookWorkspace.open}
-        onclick={() => { workspaceOpen = true }}
+        onclick={openWorkspace}
     >
         <SolarBoldIcon name="notebook" size={20} />
         <span>{language.lorebookWorkspace.editor}</span>

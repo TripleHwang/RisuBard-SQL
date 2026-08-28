@@ -1,5 +1,10 @@
 'use strict';
 
+const MAX_SQL_READ_KEY_LENGTH = 256;
+const MAX_DEFERRED_ROOT_KEYS = 512;
+// Keeps the deferral list well inside Node's default request-header budget.
+const MAX_DEFER_QUERY_LENGTH = 8192;
+
 function parseSingleFiniteNumber(value) {
     if (typeof value !== 'string' || value.trim().length === 0) return null;
     const parsed = Number(value);
@@ -62,7 +67,35 @@ function normalizeSqlAncillaryPageQuery(query) {
     return limitQuery.error ? limitQuery : { after, limit: limitQuery.limit };
 }
 
+/**
+ * `?defer=` names root keys the client already intends to hydrate later, either
+ * as one comma separated list or as a repeated parameter. Nothing here decides
+ * whether a key exists — only the storage layer may do that — so an unknown key
+ * is passed through and comes back reported as absent rather than deferred.
+ */
+function normalizeSqlBootstrapQuery(query) {
+    const raw = query.defer;
+    if (raw === undefined) return { deferRootKeys: [] };
+    const values = Array.isArray(raw) ? raw : [raw];
+    const deferRootKeys = [];
+    let queryLength = 0;
+    for (const entry of values) {
+        if (typeof entry !== 'string') return { error: 'Invalid deferred root key' };
+        queryLength += entry.length;
+        if (queryLength > MAX_DEFER_QUERY_LENGTH) return { error: 'Deferred root key list is too large' };
+        for (const part of entry.split(',')) {
+            const key = part.trim();
+            if (key.length === 0) continue;
+            if (key.length > MAX_SQL_READ_KEY_LENGTH) return { error: 'Invalid deferred root key' };
+            deferRootKeys.push(key);
+        }
+    }
+    if (deferRootKeys.length > MAX_DEFERRED_ROOT_KEYS) return { error: 'Too many deferred root keys' };
+    return { deferRootKeys };
+}
+
 module.exports = {
+    normalizeSqlBootstrapQuery,
     normalizeSqlMessagePageQuery,
     normalizeSqlAncillaryLimitQuery,
     normalizeSqlSearchQuery,

@@ -32,13 +32,15 @@ import { registerModelDynamic } from "./model/modellist";
 import { initModelJobRecovery } from "./process/request/jobRecovery";
 import { convertStubsToPlaceholders } from "./storage/chatStorage";
 import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
-import { canDeleteAssetsAfterPluginStorageScan, characterAssetReferencesComplete, collectNestedAssetReferences, isAutoAssetCleanupEnabled, shouldDeleteUnreferencedAsset } from './storage/assetRefs'
+import { canDeleteAssetsAfterPluginStorageScan, characterAssetReferencesComplete, collectNestedAssetReferences, isAutoAssetCleanupEnabled, pluginStorageAssetReferencesComplete, shouldDeleteUnreferencedAsset } from './storage/assetRefs'
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
 import { markPerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
 import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
+import { isRootKeyDeferred } from './storage/sql/deferredRootKeys'
+import { ensureRootKeyHydrated } from './storage/sql/sqlRuntimeHydration'
 import { evictHydratedChats } from './storage/chatStorage'
 import { clearParserRuntimeCaches } from './parser/parser.svelte'
 import { clearInlayRuntimeCache } from './process/files/inlays'
@@ -542,8 +544,24 @@ async function cleanChunks() {
     const db = getDatabase()
     const indexes = await forageStorage.keys()
     const assetCleanupRequested = isAutoAssetCleanupEnabled(db)
+    // `getUncleanables` walks db.pluginCustomStorage for asset references. A
+    // deferred map contributes none, and "no reference found" would then be
+    // read as "this asset is unreferenced" — deleting files a plugin still
+    // points at. Load it before scanning; if the load fails the references stay
+    // unknown, which gates deletion exactly like a failed plugin-storage scan.
+    if (assetCleanupRequested && isRootKeyDeferred('pluginCustomStorage')) {
+        try {
+            await ensureRootKeyHydrated(db, 'pluginCustomStorage')
+        } catch (error) {
+            console.error(
+                '[Asset cleanup] could not load pluginCustomStorage; its asset references are '
+                + 'unknown, so unreferenced-asset deletion is skipped this run.',
+                error,
+            )
+        }
+    }
     const uncleanable = assetCleanupRequested ? new Set(getUncleanables(db)) : new Set<string>()
-    let pluginStorageScanSucceeded = true
+    let pluginStorageScanSucceeded = pluginStorageAssetReferencesComplete(db)
     if (assetCleanupRequested) {
         for (const key of indexes) {
             if (!key.startsWith('cache/plugin-storage/') || !key.endsWith('.json')) continue

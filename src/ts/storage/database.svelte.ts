@@ -18,6 +18,7 @@ import { type HypaV3Settings, type HypaV3Preset, createHypaV3Preset } from '../p
 import { normalizeTranslatorPresetState, type TranslatorPreset } from '../translator/presets'
 import { safeStructuredClone } from '../polyfill';
 import { v4 as uuidv4 } from 'uuid';
+import { isRootKeyDeferred } from './sql/deferredRootKeys';
 import { applyModelPresetDefaults } from '../preset/dbDefaults';
 import type { ApiKeyPoolEntry, ModelBindingFields, ModelBindingSet, ModelPreset, ModelPresetMigrationSummary, RegistryCache } from '../preset/types';
 import { emptyModelBinding } from '../preset/types';
@@ -840,7 +841,12 @@ export function setDatabase(data:Database){
     if (typeof data.localNetworkMode !== 'boolean') data.localNetworkMode = false
     data.localNetworkTimeoutSec ??= 600
     if (typeof data.localNetworkTimeoutSec !== 'number' || Number.isNaN(data.localNetworkTimeoutSec)) data.localNetworkTimeoutSec = 600
-    data.pluginCustomStorage ??= {}
+    // Every other default here fills in a key that genuinely has no value yet.
+    // A deferred `pluginCustomStorage` is different: it HAS a value, sitting in
+    // storage unread, and defaulting it to `{}` would state on the database
+    // object that the user has no plugin storage. Leave it absent; the deferral
+    // registry keeps it undeletable and `ensureRootKeyHydrated` fills it in.
+    if (!isRootKeyDeferred('pluginCustomStorage')) data.pluginCustomStorage ??= {}
     data.longPressToPopupEditor ??= false
     data.showInputActionBar ??= true
     data.moveInsteadOfCopyOnCMPConvert ??= false

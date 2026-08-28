@@ -3,7 +3,9 @@ import type { SqlBootstrapStorage } from "./ISqlStorage";
 import { getActiveSqlStorage } from "./sqlBootstrap";
 import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
+import { rebaselineHydratedRootKey } from "./sqlPersistenceRuntime";
 import { validateOlderMessagePage } from "../../chatWindow";
+import { clearDeferredRootKey, isRootKeyDeferred } from "./deferredRootKeys";
 
 export type SqlHydrationWindow = {
   before: number | null;
@@ -33,6 +35,7 @@ export function normalizeHydratedCharacter(value: character): character {
 const DEFAULT_MESSAGE_LIMIT = 40;
 const characterHydrations = new Map<string, Promise<character | null>>();
 const chatHydrations = new Map<string, Promise<Chat | null>>();
+const rootKeyHydrations = new Map<string, Promise<unknown>>();
 
 function getNodeBootstrapStorage(): SqlBootstrapStorage | null {
   const storage = getActiveSqlStorage();
@@ -42,6 +45,76 @@ function getNodeBootstrapStorage(): SqlBootstrapStorage | null {
     return null;
   }
   return storage as SqlBootstrapStorage;
+}
+
+function getRootKeyStorage(): SqlBootstrapStorage | null {
+  const storage = getActiveSqlStorage();
+  if (storage?.backendKind !== "server-sql" ||
+      typeof (storage as Partial<SqlBootstrapStorage>).loadRootKeyHydration !== "function") {
+    return null;
+  }
+  return storage as SqlBootstrapStorage;
+}
+
+/**
+ * Loads one deferred root key on demand, installs the real value into `db`, and
+ * only then clears its deferred mark.
+ *
+ * Ordering is the whole point. The mark is what stops `buildSqlDirtyCommit`
+ * from turning the key's absence into a DELETE, so it is released strictly
+ * after the value is resident. Every failure -- no backend, a transport error,
+ * a payload that cannot be trusted -- rejects and leaves the key deferred.
+ * There is no path from "could not load" to "known empty".
+ *
+ * Concurrent callers for the same key share one in-flight request, matching
+ * `ensureCharacterHydrated` / `ensureChatMessageWindow`; a rejection is shared
+ * too, and the slot is freed so a later call can retry.
+ */
+export async function ensureRootKeyHydrated(db: Database, key: string): Promise<unknown> {
+  if (!key) throw new Error("Cannot hydrate an empty root key");
+  const record = db as unknown as Record<string, unknown>;
+  // Not deferred means fully known: either it was never withheld, or it has
+  // already been loaded. Either way the in-memory value is the truth.
+  if (!isRootKeyDeferred(key)) return record[key];
+
+  const existing = rootKeyHydrations.get(key);
+  if (existing) return existing;
+
+  const storage = getRootKeyStorage();
+  if (!storage) {
+    throw new Error(
+      `Root key "${key}" is deferred but no SQL backend can load it. ` +
+      "It stays deferred; its value is unknown, not empty.",
+    );
+  }
+
+  const hydration = (async () => {
+    const value = await storage.loadRootKeyHydration(key);
+    if (value === undefined) {
+      throw new Error(
+        `SQL backend returned no value for deferred root key "${key}". ` +
+        "Keeping it deferred rather than treating it as empty.",
+      );
+    }
+    record[key] = value;
+    clearDeferredRootKey(key);
+    // Same synchronous step as the install: the audit baseline must adopt what
+    // storage returned, before any caller can mutate it. Left to the next idle
+    // audit instead, the unknown -> known transition would adopt the mutated
+    // value as the baseline and drop those writes.
+    rebaselineHydratedRootKey(db, key);
+    return value;
+  })();
+  rootKeyHydrations.set(key, hydration);
+  // Freed on settle, not in a `finally` inside the body: a synchronous throw
+  // would otherwise run the cleanup before this `set` and strand a permanently
+  // rejected promise in the map, turning one transport failure into a
+  // never-retryable key.
+  const release = () => {
+    if (rootKeyHydrations.get(key) === hydration) rootKeyHydrations.delete(key);
+  };
+  hydration.then(release, release);
+  return hydration;
 }
 
 function normalizeLimit(limit?: number): number {

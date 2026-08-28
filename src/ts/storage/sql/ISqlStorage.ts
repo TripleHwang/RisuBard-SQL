@@ -44,11 +44,35 @@ export interface SqlBootstrapPayload {
   status: "ready" | "empty";
   revision: number;
   settings: Record<string, unknown>;
-  pluginCustomStorage: Record<string, unknown>;
+  /**
+   * Absent when the client asked for `pluginCustomStorage` to be deferred and
+   * the server honoured it (the key is then named in `deferredRootKeys`).
+   * Absence here is "not loaded", never "the user has no plugin storage".
+   */
+  pluginCustomStorage?: Record<string, unknown>;
   botPresets: StoredBotPreset[];
   characters: character[];
   selectedCharacterId: string | null;
   selectedChatId: string | null;
+  /**
+   * Root keys the server withheld from `settings` because the client asked it
+   * to. These keys EXIST in storage; their absence from `settings` is "not
+   * loaded", never "not present". Absent or empty means nothing was deferred.
+   */
+  deferredRootKeys?: string[];
+  /**
+   * Keys the client asked to defer that are not stored at all. Reported so the
+   * client can tell them apart from `deferredRootKeys`; they are genuinely
+   * absent and must NOT be treated as deferred.
+   */
+  absentDeferredRootKeys?: string[];
+  /**
+   * Keys registered in storage that rebuilt to no value -- a storage fault, not
+   * a deletion. `undefined` does not survive JSON, so these arrive
+   * indistinguishable from absent unless the server names them. They exist, so
+   * the client must treat them as deferred rather than as deletable.
+   */
+  unreadableRootKeys?: string[];
 }
 
 export interface SqlReverseMessagePage {
@@ -192,4 +216,10 @@ export interface SqlBootstrapStorage extends ISqlStorage {
     before: number | undefined,
     limit: number,
   ): Promise<SqlReverseMessagePage>;
+  /**
+   * Fetch one deferred root key's real value. Rejects rather than resolving to
+   * `undefined`: a deferred key is known to exist, so "could not determine" must
+   * never collapse into a value that reads as empty.
+   */
+  loadRootKeyHydration(key: string): Promise<unknown>;
 }

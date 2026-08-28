@@ -1,5 +1,6 @@
 import type { Chat, Database, character } from '../database.svelte'
 import { isChatHydrationActive, isHydrationActive } from '../hydrationState'
+import { isRootKeyDeferred } from './deferredRootKeys'
 import type { ISqlStorage } from './ISqlStorage'
 import { DirtyRegistry, type DirtySnapshot } from './dirtyRegistry'
 import { buildSqlDirtyCommit } from './sqlDirtyCommit'
@@ -15,7 +16,15 @@ let compatibilityRecurrenceTimer: ReturnType<typeof setTimeout> | undefined
 let dirtyRetryTimer: ReturnType<typeof setTimeout> | undefined
 let metadataRuntimeStarted = false
 type CompatibilityBaseline = {
-    roots: Map<string, string>; plugins: Map<string, string>; presets: Map<string, string>
+    roots: Map<string, string>
+    /**
+     * False while `pluginCustomStorage` is deferred: the map is not in memory,
+     * so this snapshot knows nothing about its keys. An empty `plugins` map on
+     * such a baseline means "unknown", never "the user has none", and any diff
+     * against it would read every row as deleted.
+     */
+    pluginsKnown: boolean
+    plugins: Map<string, string>; presets: Map<string, string>
     characters: Map<string, string>; chats: Map<string, { characterId: string; signature: string }>
     messages: Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>
     characterOrder: string[]; presetOrder: string[]; activePreset: number; chatOrders: Map<string, string[]>
@@ -203,10 +212,22 @@ function fingerprint(value: unknown): string {
     catch { return String(value) }
 }
 
+/** Roots carried by their own baseline scope, never by the generic root map. */
+const STRUCTURAL_COMPATIBILITY_ROOTS = ['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId']
+
 function snapshotCompatibility(database: Database): CompatibilityBaseline {
     const roots = new Map<string, string>()
-    for (const key of Object.keys(database)) if (!['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId'].includes(key)) roots.set(key, fingerprint((database as any)[key]))
-    const plugins = new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
+    // A deferred key is not fingerprinted at all: its in-memory value is a
+    // placeholder for "unknown", and baselining that would let a later diff
+    // read the placeholder as real content.
+    for (const key of Object.keys(database)) if (!STRUCTURAL_COMPATIBILITY_ROOTS.includes(key) && !isRootKeyDeferred(key)) roots.set(key, fingerprint((database as any)[key]))
+    // A deferred plugin storage map is fingerprinted as nothing at all and
+    // flagged as unknown, so `auditSqlCompatibilityDatabase` skips the diff
+    // instead of reading the absence as hundreds of deleted rows.
+    const pluginsKnown = !isRootKeyDeferred('pluginCustomStorage')
+    const plugins = pluginsKnown
+        ? new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
+        : new Map<string, string>()
     for (const preset of database.botPresets ?? []) preset.id ||= uuidv4()
     const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, fingerprint(preset)]))
     const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>(); const chatOrders = new Map<string, string[]>(); const messages = new Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>()
@@ -222,11 +243,52 @@ function snapshotCompatibility(database: Database): CompatibilityBaseline {
             messages.set(chat.id, { order: rows.map(message => message.chatId!), values: new Map(rows.map(message => [message.chatId!, fingerprint(message)])), complete: (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false })
         } }
     }
-    return { roots, plugins, presets, characters, chats, messages, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
+    return { roots, pluginsKnown, plugins, presets, characters, chats, messages, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
 }
 
 function changedKeys(before: Map<string, string>, after: Map<string, string>): Set<string> {
     return new Set([...before.keys(), ...after.keys()].filter(key => before.get(key) !== after.get(key)))
+}
+
+/**
+ * Root-key diff. A deferred key is absent from the in-memory database because
+ * it has not been loaded, not because it changed, so it must never enter this
+ * set: doing so marks it dirty, and a dirty absent root key becomes a DELETE.
+ */
+function changedRootKeys(before: Map<string, string>, after: Map<string, string>): Set<string> {
+    const changed = changedKeys(before, after)
+    for (const key of changed) if (isRootKeyDeferred(key)) changed.delete(key)
+    return changed
+}
+
+/**
+ * Fold a just-loaded deferred root key into the standing baseline.
+ *
+ * `auditSqlCompatibilityDatabase` installs `next` as the new baseline before it
+ * decides what to diff, and it deliberately skips a scope whose two snapshots
+ * disagree about whether the value was known. On the unknown -> known
+ * transition those two facts combine badly: the newly-loaded value is adopted
+ * as the baseline without ever being diffed, so any write made between the load
+ * and the next audit is absorbed and never persisted. Silent write loss is the
+ * same failure this guard exists to prevent, only moved from deleted rows to
+ * changes that never leave memory.
+ *
+ * The caller runs this in the same synchronous step that installs the value, so
+ * what is fingerprinted here is what storage returned, not a mutated copy.
+ * Every other scope is left alone: their pending changes must still be audited.
+ */
+export function rebaselineHydratedRootKey(database: Database, key: string): void {
+    if (!compatibilityBaseline) return
+    const record = database as unknown as Record<string, unknown>
+    if (key === 'pluginCustomStorage') {
+        compatibilityBaseline.pluginsKnown = true
+        compatibilityBaseline.plugins = new Map(
+            Object.entries(database.pluginCustomStorage ?? {}).map(([entry, value]) => [entry, fingerprint(value)]),
+        )
+        return
+    }
+    if (STRUCTURAL_COMPATIBILITY_ROOTS.includes(key)) return
+    compatibilityBaseline.roots.set(key, fingerprint(record[key]))
 }
 
 /** Idle compatibility audit: baseline first, then only explicitly changed scopes. */
@@ -235,8 +297,14 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
     const previous = compatibilityBaseline
     compatibilityBaseline = next
     if (!previous) return
-    for (const key of changedKeys(previous.roots, next.roots)) markSqlRootDirty(key)
-    for (const key of changedKeys(previous.plugins, next.plugins)) markSqlPluginStorageDirty(key)
+    for (const key of changedRootKeys(previous.roots, next.roots)) markSqlRootDirty(key)
+    // Only diff plugin storage when BOTH snapshots actually knew its contents.
+    // A load (unknown -> known) is not an edit, and a deferral (known ->
+    // unknown) is not a deletion; treating either as a change would mark every
+    // row dirty, which for the "unknown" side means marking them for deletion.
+    if (previous.pluginsKnown && next.pluginsKnown) {
+        for (const key of changedKeys(previous.plugins, next.plugins)) markSqlPluginStorageDirty(key)
+    }
     for (const id of changedKeys(previous.presets, next.presets)) markSqlPresetDirty(id)
     if (previous.presetOrder.join('\u0000') !== next.presetOrder.join('\u0000')) markSqlRootDirty('botPresets')
     if (previous.activePreset !== next.activePreset) markSqlRootDirty('botPresetsId')

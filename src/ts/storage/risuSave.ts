@@ -3,6 +3,22 @@ import * as fflate from "fflate";
 import { createBotPresetTemplate, getDatabase, type Database } from "./database.svelte";
 import { forageStorage } from "../globalApi.svelte";
 import { chatToStub } from "./chatStorage";
+import { isRootKeyDeferred } from "./sql/deferredRootKeys";
+
+/**
+ * `database.bin` stores plugin storage as one whole block, so encoding a
+ * deferred map would write "no plugin storage at all" over the real thing and
+ * a later restore would apply that. The legacy encoder only runs when SQL
+ * persistence is off, where nothing is ever deferred, so this is a backstop
+ * that must be loud rather than lenient.
+ */
+function assertPluginStorageEncodable(): void {
+    if (!isRootKeyDeferred('pluginCustomStorage')) return
+    throw new Error(
+        'Refusing to encode a save block for pluginCustomStorage while it is deferred: its rows '
+        + 'exist in storage but are not loaded, so the block would record them as absent.',
+    )
+}
 
 const packr = new Packr({
     useRecords:false
@@ -161,6 +177,7 @@ export class RisuSaveEncoder {
             type: RisuSaveType.PLUGINS,
             name: 'plugins'
         });
+        assertPluginStorageEncodable();
         this.blocks['pluginStorage'] = await this.encodeBlock({
             compression,
             data: JSON.stringify(data.pluginCustomStorage),
@@ -281,6 +298,7 @@ export class RisuSaveEncoder {
         }
 
         if(toSave.pluginCustomStorage){
+            assertPluginStorageEncodable();
             this.blocks['pluginStorage'] = await this.encodeBlock({
                 compression: this.compression,
                 data: JSON.stringify(data.pluginCustomStorage),

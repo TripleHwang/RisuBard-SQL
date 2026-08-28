@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const activeStorage = { current: null as any };
 
@@ -9,8 +9,14 @@ vi.mock("./sqlBootstrap", () => ({
 import {
   ensureCharacterHydrated,
   ensureChatMessageWindow,
+  ensureRootKeyHydrated,
   loadOlderChatMessages,
 } from "./sqlRuntimeHydration";
+import {
+  isRootKeyDeferred,
+  markRootKeyDeferred,
+  resetDeferredRootKeys,
+} from "./deferredRootKeys";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -149,5 +155,100 @@ describe("Node SQL runtime hydration", () => {
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
     expect(reverse).toHaveBeenCalledOnce();
+  });
+});
+
+describe("deferred root key hydration", () => {
+  beforeEach(() => {
+    activeStorage.current = null;
+    resetDeferredRootKeys();
+  });
+
+  afterEach(() => {
+    resetDeferredRootKeys();
+  });
+
+  it("shares one in-flight request, installs the value, then clears the deferred mark", async () => {
+    const pending = deferred<unknown>();
+    const loadRootKeyHydration = vi.fn(() => pending.promise);
+    activeStorage.current = { backendKind: "server-sql", loadRootKeyHydration };
+    markRootKeyDeferred("plugins");
+    const db = {} as any;
+
+    const first = ensureRootKeyHydrated(db, "plugins");
+    const second = ensureRootKeyHydrated(db, "plugins");
+    expect(isRootKeyDeferred("plugins")).toBe(true);
+    pending.resolve([{ name: "real" }]);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      [{ name: "real" }],
+      [{ name: "real" }],
+    ]);
+    expect(loadRootKeyHydration).toHaveBeenCalledOnce();
+    expect(db.plugins).toEqual([{ name: "real" }]);
+    expect(isRootKeyDeferred("plugins")).toBe(false);
+  });
+
+  it("leaves the key deferred and installs nothing when the load fails", async () => {
+    const loadRootKeyHydration = vi.fn(async () => { throw new Error("transport exploded"); });
+    activeStorage.current = { backendKind: "server-sql", loadRootKeyHydration };
+    markRootKeyDeferred("plugins");
+    const db = {} as any;
+
+    await expect(ensureRootKeyHydrated(db, "plugins")).rejects.toThrow("transport exploded");
+    expect(Object.prototype.hasOwnProperty.call(db, "plugins")).toBe(false);
+    expect(isRootKeyDeferred("plugins")).toBe(true);
+  });
+
+  it("can retry after a failure instead of stranding the rejected request", async () => {
+    const loadRootKeyHydration = vi.fn()
+      .mockRejectedValueOnce(new Error("transport exploded"))
+      .mockResolvedValueOnce([{ name: "real" }]);
+    activeStorage.current = { backendKind: "server-sql", loadRootKeyHydration };
+    markRootKeyDeferred("plugins");
+    const db = {} as any;
+
+    await expect(ensureRootKeyHydrated(db, "plugins")).rejects.toThrow("transport exploded");
+    await expect(ensureRootKeyHydrated(db, "plugins")).resolves.toEqual([{ name: "real" }]);
+    expect(loadRootKeyHydration).toHaveBeenCalledTimes(2);
+    expect(isRootKeyDeferred("plugins")).toBe(false);
+  });
+
+  it("refuses to treat an undefined backend result as an empty value", async () => {
+    const loadRootKeyHydration = vi.fn(async () => undefined);
+    activeStorage.current = { backendKind: "server-sql", loadRootKeyHydration };
+    markRootKeyDeferred("plugins");
+    const db = {} as any;
+
+    await expect(ensureRootKeyHydrated(db, "plugins")).rejects.toThrow(/Keeping it deferred/);
+    expect(Object.prototype.hasOwnProperty.call(db, "plugins")).toBe(false);
+    expect(isRootKeyDeferred("plugins")).toBe(true);
+  });
+
+  it("rejects loudly when no backend can load a deferred key", async () => {
+    markRootKeyDeferred("plugins");
+    const db = {} as any;
+
+    await expect(ensureRootKeyHydrated(db, "plugins")).rejects.toThrow(/unknown, not empty/);
+    expect(isRootKeyDeferred("plugins")).toBe(true);
+  });
+
+  it("returns the resident value without a request when the key is not deferred", async () => {
+    const loadRootKeyHydration = vi.fn();
+    activeStorage.current = { backendKind: "server-sql", loadRootKeyHydration };
+    const db = { plugins: [{ name: "resident" }] } as any;
+
+    await expect(ensureRootKeyHydrated(db, "plugins")).resolves.toEqual([{ name: "resident" }]);
+    expect(loadRootKeyHydration).not.toHaveBeenCalled();
+  });
+
+  it("installs a legitimately empty array only when the backend actually returns one", async () => {
+    activeStorage.current = { backendKind: "server-sql", loadRootKeyHydration: vi.fn(async () => []) };
+    markRootKeyDeferred("plugins");
+    const db = {} as any;
+
+    await expect(ensureRootKeyHydrated(db, "plugins")).resolves.toEqual([]);
+    expect(db.plugins).toEqual([]);
+    expect(isRootKeyDeferred("plugins")).toBe(false);
   });
 });

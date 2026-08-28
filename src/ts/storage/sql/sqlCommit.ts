@@ -7,6 +7,7 @@ import type {
   Database,
   Message,
 } from "../database.svelte";
+import { isRootKeyDeferred } from "./deferredRootKeys";
 
 export interface SqlSettingUpsert {
   key: string;
@@ -163,6 +164,17 @@ export function buildSqlReplaceCommit(
   commit.replaceAll = true;
   commit.characterIds = [];
 
+  // A replace-all clears `plugin_custom_storage` and rewrites it from this map.
+  // Building it from a map that was never loaded would delete every row and
+  // replace them with nothing. Throwing keeps the caller on its old source:
+  // `selectCanonicalDatabase` catches this and preserves the legacy database.
+  if (isRootKeyDeferred("pluginCustomStorage")) {
+    throw new Error(
+      "Refusing to build a replace-all SQL commit while pluginCustomStorage is deferred: " +
+      "its rows exist in storage but are not loaded, so this commit would clear them. " +
+      "Load the key first (ensureRootKeyHydrated) and retry.",
+    );
+  }
   database.pluginCustomStorage ??= {};
   commit.pluginStorage = {
     upserts: Object.entries(database.pluginCustomStorage).map(([key, value]) => ({

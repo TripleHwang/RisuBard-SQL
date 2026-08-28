@@ -14,6 +14,7 @@ import { pluginCodeTranspiler } from "./apiV3/transpiler";
 import { runPluginUpdate } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 import { PluginChatOutputListeners, V2_CHAT_OUTPUT_OWNER, createV2ChatOutputApi } from "./pluginChatOutput";
+import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -22,6 +23,25 @@ export const pluginStateStore = writable<'idle' | 'loading' | 'ready' | 'failed'
 
 export function hasMetadataOnlyCharacters(db: { characters?: any[] }): boolean {
     return (db.characters ?? []).some((character) => character?.detailsLoaded === false)
+}
+
+/**
+ * The plugin storage APIs below are synchronous, so they cannot wait for a
+ * deferred `pluginCustomStorage` to arrive. Answering anyway would mean
+ * reporting "no such key" / "no keys at all" from a map that was never read,
+ * and a plugin acting on that answer (re-initialising its config, clearing a
+ * cache, writing a fresh empty state) destroys the very rows it could not see.
+ *
+ * `loadPlugins` hydrates the map before any plugin code runs, so in practice
+ * this only fires when that load failed. Then a loud throw is the honest
+ * answer: unknown, not empty.
+ */
+export function assertPluginStorageResident(action: string): void {
+    if (!isRootKeyDeferred('pluginCustomStorage')) return
+    throw new Error(
+        `Plugin storage is not loaded, so ${action} cannot be answered. Its rows exist in ` +
+        'storage but are not in memory; treating them as absent would destroy them.',
+    )
 }
 
 export function isPluginChatComplete(chat: any): boolean {
@@ -476,6 +496,31 @@ export async function loadPlugins() {
     console.log('Loading plugins...')
     let db = getDatabase()
 
+    // Plugin storage is withheld from the SQL bootstrap and loaded here, before
+    // a single line of plugin code runs. The plugin storage APIs are
+    // synchronous and cannot wait, so this is the one place that can.
+    //
+    // A failure is not smoothed over: the key stays deferred, so every storage
+    // read a plugin attempts throws instead of reporting an empty map. Plugins
+    // that never touch storage still load.
+    //
+    // Dynamically imported: this module is pulled in by `bootstrap`, which the
+    // SQL hydration path reaches back into, and a static edge here closes that
+    // cycle.
+    if (isRootKeyDeferred('pluginCustomStorage')) {
+        try {
+            const { ensureRootKeyHydrated } = await import('../storage/sql/sqlRuntimeHydration')
+            await ensureRootKeyHydrated(db, 'pluginCustomStorage')
+        } catch (error) {
+            console.error(
+                '[Plugin] could not load pluginCustomStorage. It stays marked as unloaded, so '
+                + 'plugin storage reads will throw rather than report the user\'s stored keys as '
+                + 'missing. Plugins that use storage will fail until it loads.',
+                error,
+            )
+        }
+    }
+
     // Built-ins are code assets, not mutable rows in the user database. This
     // keeps PageFold available in every model selector (main, sub/aux and
     // module-bound plugin requests) without duplicating a 2 MB bundle in every
@@ -752,10 +797,15 @@ export const getV2PluginAPIs = () => {
             return new Proxy(db, {
                 get(target, prop) {
                     if (prop === 'characters' && hasMetadataOnlyCharacters(target)) return undefined
+                    if (prop === 'pluginCustomStorage') assertPluginStorageResident('reading db.pluginCustomStorage')
                     if (typeof prop === 'string' && allowedDbKeys.includes(prop)) {
                         return (target as any)[prop];
                     }
-                    else if(target.pluginCustomStorage){
+                    // Anything outside `allowedDbKeys` resolves against plugin
+                    // storage, so an unloaded map would answer every custom
+                    // property with `undefined` — "you never stored this".
+                    assertPluginStorageResident(`reading db.${prop.toString()}`)
+                    if(target.pluginCustomStorage){
                         console.log('Getting custom db property', prop.toString());
                         return target.pluginCustomStorage[prop.toString()];
                     }
@@ -763,11 +813,16 @@ export const getV2PluginAPIs = () => {
                 },
                 set(target, prop, value) {
                     if (prop === 'characters' && hasMetadataOnlyCharacters(target)) throw new Error('Character details are still loading')
+                    if (prop === 'pluginCustomStorage') assertPluginStorageResident('replacing db.pluginCustomStorage')
                     if (typeof prop === 'string' && allowedDbKeys.includes(prop)) {
                         (target as any)[prop] = value;
                         return true;
                     }
                     else{
+                        // Writing into a map that is still being withheld would
+                        // be overwritten by the pending load, silently losing
+                        // the write.
+                        assertPluginStorageResident(`writing db.${prop.toString()}`)
                         console.log('Setting custom db property', prop.toString(), value);
                         target.pluginCustomStorage ??= {}
                         target.pluginCustomStorage[prop.toString()] = value;
@@ -775,6 +830,9 @@ export const getV2PluginAPIs = () => {
                     }
                 },
                 ownKeys(target) {
+                    // Enumeration must be complete or refused: a short key list
+                    // reads as "these are all the keys there are".
+                    assertPluginStorageResident('enumerating db keys')
                     const keys = Reflect.ownKeys(target).filter(key => typeof key === 'string' && allowedDbKeys.includes(key) && !(key === 'characters' && hasMetadataOnlyCharacters(target)));
                     if(target.pluginCustomStorage){
                         keys.push(...Object.keys(target.pluginCustomStorage));
@@ -792,36 +850,43 @@ export const getV2PluginAPIs = () => {
         },
         pluginStorage: {
             getItem: (key: string) => {
+                assertPluginStorageResident(`pluginStorage.getItem(${JSON.stringify(key)})`);
                 const db = getDatabase({ snapshot: true });
                 db.pluginCustomStorage ??= {}
                 return db.pluginCustomStorage[key] || null;
             },
             setItem: (key: string, value: string) => {
+                assertPluginStorageResident(`pluginStorage.setItem(${JSON.stringify(key)})`);
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 db.pluginCustomStorage[key] = value;
             },
             removeItem: (key: string) => {
+                assertPluginStorageResident(`pluginStorage.removeItem(${JSON.stringify(key)})`);
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 delete db.pluginCustomStorage[key];
             },
             clear: () => {
+                assertPluginStorageResident('pluginStorage.clear()');
                 const db = getDatabase();
                 db.pluginCustomStorage = {};
             },
             key: (index: number) => {
+                assertPluginStorageResident(`pluginStorage.key(${index})`);
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 const keys = Object.keys(db.pluginCustomStorage);
                 return keys[index] || null;
             },
             keys: () => {
+                assertPluginStorageResident('pluginStorage.keys()');
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 return Object.keys(db.pluginCustomStorage);
             },
             length: () => {
+                assertPluginStorageResident('pluginStorage.length()');
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 return Object.keys(db.pluginCustomStorage).length;
@@ -830,6 +895,7 @@ export const getV2PluginAPIs = () => {
         setDatabaseLite: (newDb: any) => {
             const db = getDatabase();
             if ('characters' in newDb && hasMetadataOnlyCharacters(db)) throw new Error('Character details are still loading')
+            assertPluginStorageResident('setDatabaseLite');
             db.pluginCustomStorage ??= {}
             for (const key of Object.keys(newDb)) {
                 if (allowedDbKeys.includes(key)) {
@@ -844,6 +910,7 @@ export const getV2PluginAPIs = () => {
         setDatabase: async (newDb: any) => {
             const db = getDatabase();
             if ('characters' in newDb && hasMetadataOnlyCharacters(db)) throw new Error('Character details are still loading')
+            assertPluginStorageResident('setDatabase');
             db.pluginCustomStorage ??= {}
             for (const key of Object.keys(newDb)) {
                 if (key === 'plugins') {

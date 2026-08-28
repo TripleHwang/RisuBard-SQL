@@ -23,6 +23,8 @@
     } from '@lucide/svelte'
     import { alertConfirm, notifyError, notifySuccess } from 'src/ts/alert'
     import { getDatabase } from 'src/ts/storage/database.svelte'
+    import { ensureRootKeyHydrated } from 'src/ts/storage/sql/sqlRuntimeHydration'
+    import { isRootKeyDeferred } from 'src/ts/storage/sql/deferredRootKeys'
     import { SafeLocalStorage, SafeLocalPluginStorage } from 'src/ts/plugins/pluginSafeClass'
     import { getOwners, removeOwner } from 'src/ts/plugins/pluginStorageMeta'
     import { language } from 'src/lang'
@@ -135,8 +137,22 @@
     }
 
     // ── backend access ───────────────────────────────────────────────────────
+    /**
+     * The `save` backend is `db.pluginCustomStorage`, which the SQL bootstrap
+     * withholds until something asks for it. This page is that "something": it
+     * loads the map on open and shows its own loading state, never a global
+     * overlay, and a failed load surfaces as this page's error rather than as
+     * an empty key list. An empty list here would read as "you have no plugin
+     * data", and the delete buttons act on exactly that list.
+     */
+    async function requireSaveBackend(): Promise<void> {
+        if (backend !== 'save' || !isRootKeyDeferred('pluginCustomStorage')) return
+        await ensureRootKeyHydrated(getDatabase(), 'pluginCustomStorage')
+    }
+
     async function backendSet(key: string, value: unknown): Promise<void> {
         if (backend === 'save') {
+            await requireSaveBackend()
             const db = getDatabase()
             db.pluginCustomStorage ??= {}
             db.pluginCustomStorage[key] = value
@@ -154,6 +170,7 @@
         // dangling entry. (The idb instance here has no owner, so its own
         // removeItem won't touch meta — we clean it explicitly.)
         if (backend === 'save') {
+            await requireSaveBackend()
             const db = getDatabase()
             db.pluginCustomStorage ??= {}
             delete db.pluginCustomStorage[key]
@@ -180,6 +197,10 @@
             let keys: string[]
             let read: (key: string) => unknown | Promise<unknown>
             if (backend === 'save') {
+                // Awaited before anything is enumerated: an unloaded map would
+                // produce zero keys and this page would render "no entries".
+                await requireSaveBackend()
+                if (token !== loadToken) return
                 const store = $state.snapshot(getDatabase().pluginCustomStorage ?? {}) as Record<string, unknown>
                 keys = Object.keys(store)
                 read = (k) => store[k] ?? null
@@ -314,6 +335,7 @@
             if (backend === 'save') {
                 // Drop all values in one pass to avoid re-resolving the reactive
                 // DB per key, then clean up the origin records.
+                await requireSaveBackend()
                 const db = getDatabase()
                 db.pluginCustomStorage ??= {}
                 for (const e of targets) delete db.pluginCustomStorage[e.key]

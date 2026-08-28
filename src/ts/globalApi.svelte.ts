@@ -35,6 +35,7 @@ import {
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
 import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 import { collectDatabaseAssetReferences } from './storage/assetRefs'
+import { isRootKeyDeferred } from './storage/sql/deferredRootKeys'
 
 export const forageStorage = new AutoStorage()
 
@@ -608,6 +609,14 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
         })
         $effect(() => {
             deepTouch(DBState.db.pluginCustomStorage)
+            // While the map is deferred there is nothing here to baseline and
+            // nothing to report: its absence is "not loaded", not an edit, and
+            // marking it changed would queue a save of a map we never read.
+            // The run right after hydration installs the value establishes the
+            // baseline instead, so loading never reads as a user change.
+            if (isRootKeyDeferred('pluginCustomStorage')) {
+                return
+            }
             if (!didInitPluginStorageEffect) {
                 didInitPluginStorageEffect = true
                 return
