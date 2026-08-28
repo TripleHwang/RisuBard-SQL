@@ -17,6 +17,10 @@ const legacyTokens = [
             'NOTICE.md',
             'README.en.md',
             'README.md',
+            // Upstream release announcements, carried in verbatim. Their header
+            // credits the project RisuBard itself forked from, which is the same
+            // attribution the files above are excepted for.
+            'patchnote/0.9.3-arca.txt',
         ]),
     },
 ]
