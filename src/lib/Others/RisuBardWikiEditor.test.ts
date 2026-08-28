@@ -374,6 +374,40 @@ describe('RisuBardWikiEditor', () => {
         })
     })
 
+    it('navigates to the selected document source from the left toolbar action', async () => {
+        const onNavigateSource = vi.fn()
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: {
+                characterId: 'character', chatId: 'chat', documents,
+                onNavigateSource,
+            },
+        })
+        await tick()
+
+        const eventButton = [...document.querySelectorAll('button')]
+            .find((button) => button.textContent?.includes('전투'))!
+        eventButton.click()
+        await tick()
+
+        const toolbar = document.querySelector('[data-wiki-action-toolbar]')!
+        const sourceButton = toolbar.querySelector<HTMLButtonElement>(
+            '[data-wiki-source]'
+        )
+        expect(sourceButton?.textContent).toContain('원문으로 이동')
+        expect(sourceButton?.querySelector('[data-wiki-source-label]'))
+            .not.toBeNull()
+        expect(toolbar.firstElementChild).toBe(
+            sourceButton?.closest('[data-wiki-source-action]')
+        )
+
+        sourceButton?.click()
+        expect(onNavigateSource).toHaveBeenCalledWith({
+            kind: 'chat',
+            messageIds: ['assistant-1'],
+        })
+    })
+
     it('permanently deletes an active event after explicit confirmation', async () => {
         mocks.retractWikiEvent.mockResolvedValue({
             ...documents[1], status: 'retracted', contentHash: 'hash-retracted',

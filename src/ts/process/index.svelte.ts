@@ -550,12 +550,15 @@ async function runWikiReboot(
 }
 
 export async function startCurrentWikiReboot(
-    batchSize: WikiRebootBatchSize
+    batchSize: WikiRebootBatchSize,
+    startChatIndex: number = 0
 ): Promise<boolean> {
     const current = currentRisuBardConversation()
     if (!current || current.chat.risuBardWikiReboot) return false
+    if (!Number.isInteger(startChatIndex) || startChatIndex < 0
+        || startChatIndex >= current.chat.message.length) return false
     const chatId = ensureNarrativeSessionChatId(current.chat, v4)
-    const turns = projectWikiRebootTurns(current.chat.message)
+    const turns = projectWikiRebootTurns(current.chat.message, startChatIndex)
     if (turns.length === 0) return false
     const jobId = v4()
     current.chat.risuBardWikiReboot = createWikiRebootJob({

@@ -417,6 +417,16 @@ export const helpEn = {
             "Choose how many turns pass between autosaves. An interval of 5 saves turns 1, 6, 11, and so on.",
         risuBardAutosaveRetention:
             "Maximum rotating autosave files kept per chat. After the limit, the oldest autosave slot is overwritten.",
+        risuBardArcaChatImageWidthPercent:
+            "Image width as a percentage of the exported chat frame. This global value applies to every character and chat.",
+        risuBardArcaChatFontSizePx:
+            "Base font size of the exported Arca chat frame in pixels. This global value applies to every character and chat.",
+        risuBardArcaChatParagraphSpacingPercent:
+            "Vertical spacing between exported paragraph and image blocks, relative to the font height. 100% equals 1em. This global value applies to every character and chat.",
+        risuBardArcaChatShowTitleImage:
+            "Show the current bot's title image at the top of exported Arca chats. This global value applies to every character and chat.",
+        risuBardArcaChatTitleImageStyle:
+            "Choose a large oval, a square crop, or a compact thumbnail placed beside the title.",
         risuBardRecentMessages:
             "Maximum number of recent user and assistant messages sent to wiki analysis after a response completes.",
         risuBardResponseRecentMessages:

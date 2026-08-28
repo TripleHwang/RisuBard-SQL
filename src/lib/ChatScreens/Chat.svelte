@@ -1,5 +1,7 @@
 <script lang="ts">
     import { ArrowLeft, ArrowLeftRightIcon, ArrowRight, BookmarkIcon, BotIcon, BookOpenCheck, CopyIcon, PowerOff, GitBranch, HamburgerIcon, LanguagesIcon, MenuIcon, PencilIcon, RefreshCcwIcon, SplitIcon, TrashIcon, UserIcon, Volume2Icon, Scissors, EyeOff } from "@lucide/svelte"
+    import ClipboardCopyIcon from '@lucide/svelte/icons/clipboard-copy'
+    import { buildArcaClipboardHtml, exportArcaHtml, resolveArcaImageSource } from 'src/ts/arcaExport'
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
@@ -874,6 +876,92 @@
             <span class="ml-1">{language.copy}</span>
         {/if}
     </button>    
+    <button
+        class="flex items-center hover:text-primary transition-colors button-icon-copy-arca"
+        title={language.copyForArca}
+        aria-label={language.copyForArca}
+        onclick={async () => {
+            if (!bodyRoot || !window.navigator.clipboard.write || typeof ClipboardItem === 'undefined') {
+                notifyError(language.copyForArcaFailed)
+                return
+            }
+
+            alertWait(language.loading)
+            try {
+                const bodyHtml = await exportArcaHtml(bodyRoot, {
+                    imageWidthPercent: DBState.db.risuBardArcaChatImageWidthPercent,
+                    paragraphSpacingPercent: DBState.db.risuBardArcaChatParagraphSpacingPercent,
+                    semanticPalette: $ColorSchemeTypeStore,
+                })
+                const isUserMessage = role === 'user'
+                const displayName = isUserMessage ? getUserName() : name
+                const modelInfo = messageGenerationInfo
+                    ? capitalize(getModelInfo(messageGenerationInfo.model).shortName)
+                    : (isUserMessage ? 'User' : 'AI')
+
+                let iconDataUrl = ''
+                try {
+                    const iconReference = isUserMessage
+                        ? getUserIcon()
+                        : DBState.db.characters[selIdState.selId]?.image
+                    if (iconReference) {
+                        const iconSource = await getFileSrc(iconReference)
+                        if (iconSource) {
+                            iconDataUrl = await resolveArcaImageSource(iconSource)
+                        }
+                    }
+                }
+                catch (error) {
+                    console.warn('Arca copy profile image skipped:', error)
+                }
+
+                const themeRoot = document.documentElement
+                const themeStyle = getComputedStyle(themeRoot)
+                const themeColor = (property: string, fallback: string) =>
+                    themeStyle.getPropertyValue(property).trim()
+                    || themeRoot.style.getPropertyValue(property).trim()
+                    || fallback
+                const html = buildArcaClipboardHtml({
+                    bodyHtml,
+                    displayName,
+                    badge: isUserMessage ? undefined : modelInfo,
+                    iconDataUrl,
+                    fontSizePx: DBState.db.risuBardArcaChatFontSizePx,
+                    showTitleImage: DBState.db.risuBardArcaChatShowTitleImage,
+                    titleImageStyle: DBState.db.risuBardArcaChatTitleImageStyle,
+                    colors: {
+                        background: themeColor('--risu-theme-bgcolor', '#292d3e'),
+                        panel: themeColor('--risu-theme-darkbg', '#202331'),
+                        text: themeColor('--risu-theme-textcolor', '#f7f8fc'),
+                        mutedText: themeColor('--risu-theme-textcolor2', '#aeb6cc'),
+                        border: themeColor('--risu-theme-darkborderc', '#454b61'),
+                    },
+                })
+                const plainTextContainer = document.createElement('div')
+                plainTextContainer.innerHTML = bodyHtml
+                const plainText = plainTextContainer.innerText.trim() || plainTextContainer.textContent?.trim() || msgDisplay
+
+                await window.navigator.clipboard.write([
+                    new ClipboardItem({
+                        'text/html': new Blob([html], { type: 'text/html' }),
+                        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+                    }),
+                ])
+                alertClear()
+                notifyInfo(language.copyForArcaDone)
+            }
+            catch (error) {
+                alertClear()
+                console.error('Arca copy failed:', error)
+                notifyError(`${language.copyForArcaFailed}: ${error instanceof Error ? error.message : String(error)}`)
+            }
+        }}
+    >
+        <ClipboardCopyIcon size={20}/>
+        {#if showNames}
+            <span class="ml-1">{language.copyForArca}</span>
+        {/if}
+    </button>
 {/if}
 {#if idx > -1}
     {#if DBState.db.characters[selIdState.selId].ttsMode !== 'none' && (DBState.db.characters[selIdState.selId].ttsMode)}
@@ -909,7 +997,6 @@
     {/if}
     {#if idx > -1
         && !isOptimizedStreamingMessage
-        && !memoryConfirmed
         && !memoryConfirming}
         <button class={"flex items-center hover:text-primary transition-colors button-icon-edit "+(editMode?'text-info':'')} onclick={() => {
             if(!editMode){

@@ -56,6 +56,15 @@ describe('bounded chat-page UI connections', () => {
         expect(source).not.toMatch(/loadPages\s*\+=/)
     })
 
+    it('restores the per-chat page and scroll position after the chat screen remounts', () => {
+        const source = screen()
+        expect(source).toContain("from 'src/ts/chatViewSession'")
+        expect(source).toContain('loadChatViewSession(nextKey)')
+        expect(source).toContain('saveChatViewSession(paginationKey')
+        expect(source).toContain('bind:this={chatScrollContainer}')
+        expect(source).toContain('chatScrollContainer.scrollTop = savedView.scrollTop')
+    })
+
     it('never expands the mounted chat to infinity for screenshots', () => {
         const source = screen()
         expect(source).not.toContain('loadPages = Infinity')
