@@ -168,8 +168,9 @@ export async function readModule(buf:Buffer):Promise<RisuModule> {
 
     let module = main.module
 
-    // Bulk writes use JSON/base64 under the server's 100 MB body limit.
-    const maxAssetBatchSize = 50
+    // Keep decoded results bounded to the worker-pool size so mobile browsers do
+    // not retain dozens of expanded assets while waiting for one large batch.
+    const maxAssetBatchSize = 8
     const maxAssetBatchBytes = 32 * 1024 * 1024
     const retryDelayMs = 5000
     const maxRetries = 3
