@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   NodeSqliteStorage,
+  SQL_MIGRATION_CHUNK_BYTES,
   SQL_MIGRATION_CHUNK_STATEMENTS,
   SQL_MIGRATION_MARKER_KEY,
+  planSqlMigrationChunks,
 } from "./nodeSqliteStorage";
 import { selectCanonicalDatabase } from "./sqlBootstrap";
 import { buildSqlReplaceCommit, createEmptySqlCommit } from "./sqlCommit";
@@ -518,5 +520,52 @@ describe("recovering from an abandoned migration", () => {
     })).toThrow(/chunk total changed mid-sequence/);
 
     expect(migrationOf(harness)).not.toBeNull();
+  });
+});
+
+describe("chunks are bounded by bytes, not only by statement count", () => {
+  /**
+   * The field failure this exists for: a migration split purely by statement
+   * count sent a body over express.json's 100mb limit and died with 413 at
+   * part 15 of 24. Twenty thousand statements carrying long Korean chat
+   * messages is a far larger request than twenty thousand carrying short
+   * English ones, and `String.length` counts UTF-16 units, so a length-based
+   * estimate is three times short exactly where histories are largest.
+   */
+  const KOREAN_MESSAGE = "그날 밤의 이야기를 다시 꺼내는 건 쉬운 일이 아니었다. ".repeat(60);
+
+  function longFormDatabase(characters: number, chats: number, messages: number): Database {
+    const database = buildLegacyDatabase(characters, chats, messages);
+    for (const character of database.characters) {
+      for (const chat of character.chats ?? []) {
+        for (const message of chat.message ?? []) message.data = KOREAN_MESSAGE;
+      }
+    }
+    return database;
+  }
+
+  it("keeps every request under the byte budget when messages are long", async () => {
+    const harness = createHarness("byte-bounded");
+    // Far below the statement cap, so only the byte bound can split this.
+    const database = longFormDatabase(3, 3, 120);
+
+    await expect(harness.newClient().replaceDatabase(database)).resolves.toBe(true);
+
+    expect(harness.commits.length).toBeGreaterThan(1);
+    for (const commit of harness.commits) {
+      expect(commit.statements.length).toBeLessThan(SQL_MIGRATION_CHUNK_STATEMENTS);
+      const bytes = Buffer.byteLength(JSON.stringify(commit), "utf8");
+      expect(bytes).toBeLessThan(SQL_MIGRATION_CHUNK_BYTES);
+    }
+  });
+
+  it("plans a chunk per statement when one statement alone fills the budget", () => {
+    const enormous = "가".repeat(SQL_MIGRATION_CHUNK_BYTES);
+    const starts = planSqlMigrationChunks([
+      { sql: "INSERT INTO messages (data) VALUES (?)", bind: [enormous] },
+      { sql: "INSERT INTO messages (data) VALUES (?)", bind: [enormous] },
+    ]);
+    // Never merged into one oversized request, never dropped.
+    expect(starts).toEqual([0, 1]);
   });
 });

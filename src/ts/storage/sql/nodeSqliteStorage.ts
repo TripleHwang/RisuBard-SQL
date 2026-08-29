@@ -210,6 +210,60 @@ export const DEFERRED_BOOTSTRAP_ROOT_KEYS: readonly string[] = ["pluginCustomSto
 export const SQL_MIGRATION_CHUNK_STATEMENTS = 20_000;
 
 /**
+ * Second bound on a migration chunk, in bytes.
+ *
+ * Statement count alone does not bound a request: 20,000 statements carrying
+ * long chat messages is a far larger body than 20,000 carrying short ones, and
+ * the server's express.json limit is 100mb. A user with ordinary long histories
+ * hit `413 request entity too large` partway through a migration that measured
+ * fine against short synthetic fixtures.
+ *
+ * The margin below that limit is deliberate. The estimate is approximate, the
+ * server holds the parsed body in memory, and a chunk too big fails the whole
+ * migration while a chunk too small costs one more round trip.
+ */
+export const SQL_MIGRATION_CHUNK_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Conservative serialized size of one statement.
+ *
+ * `String.length` counts UTF-16 code units, and Korean text is three UTF-8
+ * bytes per unit -- so a length-based estimate is three times short exactly
+ * where chat histories are largest, which is the shape of the bug this guards.
+ * JSON escaping can grow it further. Overestimating only makes chunks smaller.
+ */
+function estimateStatementBytes(statement: Statement): number {
+  let bytes = statement.sql.length * 3 + 32;
+  for (const value of statement.bind ?? []) {
+    bytes += typeof value === "string" ? value.length * 3 + 8 : 16;
+  }
+  return bytes;
+}
+
+/**
+ * Start index of each chunk, honouring both bounds. A single statement larger
+ * than the byte budget still gets its own chunk rather than being dropped or
+ * merged: it is one row, and the server either accepts it or reports why.
+ */
+export function planSqlMigrationChunks(statements: readonly Statement[]): number[] {
+  if (statements.length === 0) return [0];
+  const starts: number[] = [0];
+  let count = 0;
+  let bytes = 0;
+  for (let index = 0; index < statements.length; index++) {
+    const size = estimateStatementBytes(statements[index]);
+    if (count > 0 && (count >= SQL_MIGRATION_CHUNK_STATEMENTS || bytes + size > SQL_MIGRATION_CHUNK_BYTES)) {
+      starts.push(index);
+      count = 0;
+      bytes = 0;
+    }
+    count += 1;
+    bytes += size;
+  }
+  return starts;
+}
+
+/**
  * The root setting that says "a migration started here and has not finished".
  *
  * A chunked migration cannot be one transaction, so between its first and last
@@ -1017,20 +1071,23 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   ): Promise<SqlCommitResult> {
     const total = prelude.length + body.length;
     const id = uuidv4();
-    const statements = total <= SQL_MIGRATION_CHUNK_STATEMENTS
-      ? [...prelude, ...body]
+    const single = [...prelude, ...body];
+    const statements = planSqlMigrationChunks(single).length === 1
+      ? single
       : [
         ...prelude,
         ...await migrationMarkerStatements(`${id} started ${new Date().toISOString()}`),
         ...body,
         ...await migrationMarkerStatements(null),
       ];
-    const chunkCount = Math.max(1, Math.ceil(statements.length / SQL_MIGRATION_CHUNK_STATEMENTS));
+    const starts = planSqlMigrationChunks(statements);
+    const chunkCount = starts.length;
 
     let revision = baseRevision;
     let result: SqlCommitResult = { revision: baseRevision };
     for (let index = 0; index < chunkCount; index++) {
-      const start = index * SQL_MIGRATION_CHUNK_STATEMENTS;
+      const start = starts[index];
+      const end = index + 1 < chunkCount ? starts[index + 1] : statements.length;
       const final = index === chunkCount - 1;
       reportSqlMigrationProgress({
         phase: "uploading",
@@ -1041,7 +1098,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       });
       try {
         result = await this.sendStatements(
-          statements.slice(start, start + SQL_MIGRATION_CHUNK_STATEMENTS),
+          statements.slice(start, end),
           // The last slice carries the caller's action, so a server that keys
           // off "replace-all" still sees it, and sees it last.
           final ? action : `${action}-chunk-${index + 1}-of-${chunkCount}`,
