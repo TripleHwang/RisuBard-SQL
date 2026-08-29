@@ -456,6 +456,11 @@ describe("chunked legacy-to-SQL migration", () => {
   }, 300_000);
 });
 
+/** The server's own migration report, which is `unknown` across the require(). */
+type MigrationReport = { id: string; chunksApplied: number; totalChunks: number | null } | null
+const migrationOf = (harness: Harness): MigrationReport =>
+  (harness.server.bootstrap() as { migration?: MigrationReport }).migration ?? null
+
 describe("recovering from an abandoned migration", () => {
   /**
    * A migration that dies midway leaves a session row on the server. Only a
@@ -473,9 +478,9 @@ describe("recovering from an abandoned migration", () => {
     harness.failCommit(2, "network died mid-migration");
     await expect(harness.newClient().replaceDatabase(big)).rejects.toThrow();
 
-    const abandoned = harness.server.bootstrap().migration;
+    const abandoned = migrationOf(harness);
     expect(abandoned).not.toBeNull();
-    expect(Number(abandoned.chunksApplied)).toBeGreaterThan(0);
+    expect(Number(abandoned?.chunksApplied)).toBeGreaterThan(0);
 
     // The user trims their data and retries; the replace-all now fits in one
     // request. Before the fix this raised SQL_MIGRATION_IN_PROGRESS.
@@ -486,7 +491,7 @@ describe("recovering from an abandoned migration", () => {
     const small = buildLegacyDatabase(1, 1, 3);
     await expect(retry.replaceDatabase(small)).resolves.toBe(true);
 
-    expect(harness.server.bootstrap().migration).toBeNull();
+    expect(migrationOf(harness)).toBeNull();
     const reopened = await harness.newClient().loadDatabase();
     expect(reopened?.status).toBe("ready");
     expect(reopened?.database?.characters).toHaveLength(1);
@@ -512,6 +517,6 @@ describe("recovering from an abandoned migration", () => {
       migration: { id: "m", chunk: 1, totalChunks: 2, final: true },
     })).toThrow(/chunk total changed mid-sequence/);
 
-    expect(harness.server.bootstrap().migration).not.toBeNull();
+    expect(migrationOf(harness)).not.toBeNull();
   });
 });
