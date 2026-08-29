@@ -1791,6 +1791,15 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
                     await reader.cancel(reason)
                 }
             })
+
+            if(arg.useStreaming === false){
+                const text = await collectStreamingText(statusStream)
+                return {
+                    type: 'success',
+                    result: text,
+                    model: responseModel
+                }
+            }
     
             return {
                 type: 'streaming',

@@ -36,6 +36,17 @@ describe('BardWiki memory writer skill', () => {
         expect(memoryWriterSystemPrompt).toContain('독립적인 이야기 요약')
     })
 
+    test('describes every required canonical candidate field without contradicting the schema', () => {
+        const candidateContract = memoryWriterSystemPrompt
+            .split('- `canonicalUpdateCandidates`:')[1]
+            ?.split('\n\n')[0] ?? ''
+        for (const field of [
+            'type', 'title', 'reason', 'action', 'targetDocumentId', 'confidence',
+        ]) {
+            expect(candidateContract).toContain(`\`${field}\``)
+        }
+    })
+
     test('teaches general narrative value and omission-cost judgment', () => {
         expect(memoryWriterSystemPrompt).toContain('향후 서사')
         expect(memoryWriterSystemPrompt).toContain('누락 비용')
