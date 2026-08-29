@@ -927,6 +927,8 @@ const inlayMigrationMarker = path.join(inlayDir, '.migrated_to_fs')
 const hexRegex = /^[0-9a-fA-F]+$/;
 const BACKUP_IMPORT_MAX_BYTES = Number(process.env.RISU_BACKUP_IMPORT_MAX_BYTES ?? '0');
 const BACKUP_ENTRY_NAME_MAX_BYTES = 1024;
+const ACCOUNT_BACKUP_KEY_ENDPOINT = process.env.RISUBARD_ACCOUNT_BACKUP_KEY_ENDPOINT
+    || `${hubURL}/cryptokey`;
 // Minimum free disk space headroom multiplier: require 2× the backup size to be free
 const BACKUP_DISK_HEADROOM = 2;
 // Heartbeat interval for NDJSON import progress stream. 5 s by default —
@@ -2221,10 +2223,63 @@ function resolveBackupStorageKey(name) {
     return `assets/${name}`;
 }
 
+async function decryptAccountBackupDatabase(databasePath, metadataPath) {
+    let metadata;
+    try {
+        metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+    } catch {
+        throw new Error('Invalid account backup encryption metadata');
+    }
+    const time = Number(metadata?.time);
+    if (metadata?.type !== 'account' || !Number.isSafeInteger(time) || time <= 0) {
+        throw new Error('Invalid account backup encryption metadata');
+    }
+
+    const keyUrl = new URL(ACCOUNT_BACKUP_KEY_ENDPOINT);
+    keyUrl.searchParams.set('key', String(time));
+    const keyResponse = await fetch(keyUrl);
+    if (!keyResponse.ok) {
+        throw new Error(`Failed to fetch account backup key (${keyResponse.status})`);
+    }
+    const keyPayload = await keyResponse.json();
+    if (typeof keyPayload?.key !== 'string' || keyPayload.key.length === 0) {
+        throw new Error('Account backup key response is invalid');
+    }
+
+    const encrypted = await fs.readFile(databasePath);
+    if (encrypted.length <= 16) {
+        throw new Error('Encrypted account backup database is invalid');
+    }
+    try {
+        const decipher = nodeCrypto.createDecipheriv(
+            'aes-256-gcm',
+            nodeCrypto.createHash('sha256').update(keyPayload.key).digest(),
+            Buffer.alloc(12),
+        );
+        decipher.setAuthTag(encrypted.subarray(encrypted.length - 16));
+        const decrypted = Buffer.concat([
+            decipher.update(encrypted.subarray(0, encrypted.length - 16)),
+            decipher.final(),
+        ]);
+        await fs.writeFile(databasePath, decrypted);
+    } catch {
+        throw new Error('Failed to decrypt account backup database');
+    }
+}
+
+async function validateStagedBackupDatabase(databasePath) {
+    const database = await decodeRisuSave(await fs.readFile(databasePath));
+    if (!database || typeof database !== 'object' || Array.isArray(database)) {
+        throw new Error('Backup database is invalid');
+    }
+}
+
 // ─── Shared backup import logic ─────────────────────────────────────────────
 // Accepts any async iterable of Buffer chunks (HTTP request body, file stream, etc.)
 async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0, onProgress = null } = {}) {
     let hasDatabase = false;
+    let databaseEntryPath = null;
+    let encryptionMetadataPath = null;
     let assetsRestored = 0;
     let bytesReceived = 0;
     const stagedKvEntries = [];
@@ -2300,7 +2355,9 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 const inlayRaw = parseInlayBackupName(name);
                 const inlaySidecar = parseInlaySidecarBackupName(name);
 
-                if (name.startsWith(CANONICAL_BACKUP_PREFIX)) {
+                if (name === 'encryption.risudat') {
+                    encryptionMetadataPath = sourcePath;
+                } else if (name.startsWith(CANONICAL_BACKUP_PREFIX)) {
                     const portable = name.slice(CANONICAL_BACKUP_PREFIX.length);
                     if (!portable || portable.includes('\\') || portable.startsWith('/')
                         || portable.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
@@ -2392,6 +2449,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     stagedKvEntries.push({ key: storageKey, sourcePath });
                     if (storageKey === 'database/database.bin') {
                         hasDatabase = true;
+                        databaseEntryPath = sourcePath;
                     } else {
                         assetsRestored += 1;
                     }
@@ -2403,6 +2461,10 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
         if (!hasDatabase) {
             throw new Error('Backup does not contain database.risudat');
         }
+        if (encryptionMetadataPath) {
+            await decryptAccountBackupDatabase(databaseEntryPath, encryptionMetadataPath);
+        }
+        await validateStagedBackupDatabase(databaseEntryPath);
         for (const [id, info] of legacyInlayInfoMap.entries()) {
             if (importedInlayIds.has(id) && !importedSidecarIds.has(id)) {
                 writeStagingSidecarSync(id, info);

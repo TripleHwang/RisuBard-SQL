@@ -5,6 +5,7 @@ import skillInstructions from '../../src/ts/risubard/skills/bardwiki-memory-writ
 import eventSchemaReference from '../../src/ts/risubard/skills/bardwiki-memory-writer/references/event-schema.md?raw'
 import englishContract from '../../src/ts/risubard/skills/bardwiki-memory-writer/references/english-contract.md?raw'
 import { normalizeWikiWritingLanguage, wikiWritingHeadings, type WikiWritingLanguage } from '../../src/ts/risubard/wikiWritingLanguage'
+import { normalizeCanonicalSectionHeading } from './risubard-markdown-section-patch'
 
 const itemString = { type: 'string', minLength: 1, maxLength: 500 }
 const canonicalTypes = [
@@ -151,13 +152,29 @@ export const canonicalBatchSchema = JSON.stringify({
             items: {
                 type: 'object',
                 additionalProperties: false,
-                required: ['candidateIndex', 'markdown'],
+                required: ['candidateIndex', 'sections'],
                 properties: {
                     candidateIndex: {
                         type: 'integer', minimum: 0,
                     },
-                    markdown: {
-                        type: 'string', minLength: 1, maxLength: 12_000,
+                    sections: {
+                        type: 'array', minItems: 0, maxItems: 24,
+                        items: {
+                            type: 'object',
+                            additionalProperties: false,
+                            required: ['heading', 'operation', 'content'],
+                            properties: {
+                                heading: {
+                                    type: 'string', maxLength: 160,
+                                },
+                                operation: {
+                                    type: 'string', enum: ['upsert', 'delete'],
+                                },
+                                content: {
+                                    type: 'string', maxLength: 4_000,
+                                },
+                            },
+                        },
                     },
                 },
             },
@@ -204,11 +221,17 @@ export interface MemoryWriterDraft {
     }>
 }
 
+export interface CanonicalSectionPatch {
+    heading: string
+    operation: 'upsert' | 'delete'
+    content: string
+}
+
 export interface CanonicalBatch {
     schemaVersion: 1
     documents: Array<{
         candidateIndex: number
-        markdown: string
+        sections: CanonicalSectionPatch[]
     }>
 }
 
@@ -483,7 +506,7 @@ export function parseCanonicalBatch(
         }
         exactKeys(
             item,
-            ['candidateIndex', 'markdown'],
+            ['candidateIndex', 'sections'],
             `canonical batch documents[${index}]`
         )
         if (!Number.isSafeInteger(item.candidateIndex)
@@ -494,17 +517,74 @@ export function parseCanonicalBatch(
                 `canonical batch documents[${index}].candidateIndex is invalid`
             )
         }
-        if (typeof item.markdown !== 'string'
-            || item.markdown.trim().length === 0
-            || item.markdown.length > 12_000) {
-            throw new Error(
-                `canonical batch documents[${index}].markdown is invalid`
+        const headings = new Set<string>()
+        let totalLength = 0
+        const sections = boundedArray(
+            item.sections,
+            `canonical batch documents[${index}].sections`,
+            24
+        ).map<CanonicalSectionPatch>((section, sectionIndex) => {
+            if (!isRecord(section)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}] must be an object`
+                )
+            }
+            exactKeys(
+                section,
+                ['heading', 'operation', 'content'],
+                `canonical batch documents[${index}].sections[${sectionIndex}]`
             )
-        }
+            if (typeof section.heading !== 'string'
+                || section.heading.length > 160
+                || /[\r\n]/u.test(section.heading)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].heading is invalid`
+                )
+            }
+            const heading = section.heading.trim()
+            const headingKey = normalizeCanonicalSectionHeading(heading)
+            if (headings.has(headingKey)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].heading is duplicated`
+                )
+            }
+            headings.add(headingKey)
+            const operation = section.operation
+            if (operation !== 'upsert'
+                && operation !== 'delete') {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].operation is invalid`
+                )
+            }
+            if (typeof section.content !== 'string'
+                || section.content.length > 4_000) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].content is invalid`
+                )
+            }
+            const content = section.content.trim()
+            if ((operation === 'upsert' && content.length === 0)
+                || (operation === 'delete' && content.length > 0)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].content does not match operation`
+                )
+            }
+            totalLength += heading.length + content.length
+            if (totalLength > 12_000) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections are too large`
+                )
+            }
+            return {
+                heading,
+                operation,
+                content,
+            }
+        })
         used.add(item.candidateIndex as number)
         return {
             candidateIndex: item.candidateIndex as number,
-            markdown: item.markdown.trim(),
+            sections,
         }
     })
     return { schemaVersion: 1, documents }

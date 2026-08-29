@@ -20,11 +20,55 @@ vi.mock('node:crypto', async (importOriginal) => ({
 
 const temporaryDirectories: string[] = []
 
+function canonicalSections(markdown: string): Array<{
+    heading: string
+    operation: 'upsert'
+    content: string
+}> {
+    const normalized = markdown.replace(/\r\n?/gu, '\n').trim()
+    const title = /^(?:#{1,2})\s+.+$/mu.exec(normalized)
+    if (!title) throw new Error('Canonical test fixture requires a title')
+    const matches = [...normalized.matchAll(/^###\s+(.+?)\s*$/gmu)]
+    const sections: Array<{
+        heading: string; operation: 'upsert'; content: string
+    }> = []
+    const preamble = normalized.slice(
+        title[0].length,
+        matches[0]?.index ?? normalized.length
+    ).trim()
+    if (preamble) {
+        sections.push({ heading: '', operation: 'upsert', content: preamble })
+    }
+    for (const [index, match] of matches.entries()) {
+        sections.push({
+            heading: match[1].trim(),
+            operation: 'upsert',
+            content: normalized.slice(
+                (match.index ?? 0) + match[0].length,
+                matches[index + 1]?.index ?? normalized.length
+            ).trim(),
+        })
+    }
+    return sections
+}
+
 const canonicalBatch = (...markdown: string[]): string => JSON.stringify({
     schemaVersion: 1,
     documents: markdown.map((content, candidateIndex) => ({
         candidateIndex,
-        markdown: content,
+        sections: canonicalSections(content),
+    })),
+})
+
+const canonicalPatchBatch = (...sections: Array<Array<{
+    heading: string
+    operation: 'upsert' | 'delete'
+    content: string
+}>>): string => JSON.stringify({
+    schemaVersion: 1,
+    documents: sections.map((patches, candidateIndex) => ({
+        candidateIndex,
+        sections: patches,
     })),
 })
 
@@ -681,6 +725,115 @@ describe('memory analysis runner', () => {
             .not.toContain('대학원 재학 중')
     })
 
+    test('generates and applies only changed canonical sections', async () => {
+        const saveCanonicalDocument = vi.fn(async (input) => input)
+        const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) => {
+            if (request.format === 'memory-draft') {
+                return JSON.stringify({
+                    schemaVersion: 1,
+                    title: '학위 취득',
+                    establishedEvents: ['루치아가 석사 학위를 취득했다.'],
+                    stateChanges: [{
+                        subject: '루치아의 학력',
+                        before: '대학원 재학 중',
+                        after: '석사 학위 취득 완료',
+                    }],
+                    characterKnowledge: [],
+                    persistentFacts: [],
+                    openContinuity: [],
+                    canonicalUpdateCandidates: [{
+                        type: 'character', title: '루치아',
+                        reason: '현재 학력이 바뀌었다.', action: 'update',
+                        targetDocumentId: 'character.lucia', confidence: 1,
+                    }],
+                })
+            }
+            expect(request.system).toContain(
+                'Return only changed H3 sections'
+            )
+            return canonicalPatchBatch([{
+                heading: '현재 상태', operation: 'upsert',
+                content: '- 석사 학위 취득 완료',
+            }])
+        })
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                loadDocuments: vi.fn(async () => [{
+                    id: 'character.lucia', type: 'character' as const,
+                    title: '루치아', relativePath: 'characters/루치아.md',
+                    content: [
+                        '## 루치아', '', '### 현재 상태', '',
+                        '- 대학원 재학 중', '', '### 정체성', '', '- 수의사',
+                    ].join('\n'),
+                    contentHash: 'lucia-old', sourceMessageIds: [],
+                }]),
+                saveConfirmedTurn: vi.fn(async () => undefined),
+                saveCanonicalDocument,
+            },
+            onError: vi.fn(),
+            analyze,
+        })
+
+        await runner.run({
+            characterId: 'character', chatId: 'chat',
+            messages: [{ messageId: 'assistant-1', role: 'assistant',
+                content: '루치아가 석사 학위를 취득했다.' }],
+        })
+
+        expect(saveCanonicalDocument).toHaveBeenCalledWith(expect.objectContaining({
+            expectedContentHash: 'lucia-old',
+            markdown: [
+                '## 루치아', '', '### 현재 상태', '',
+                '- 석사 학위 취득 완료', '', '### 정체성', '', '- 수의사',
+            ].join('\n'),
+        }))
+    })
+
+    test('skips canonical persistence when verification returns no changed sections', async () => {
+        const saveCanonicalDocument = vi.fn()
+        const onError = vi.fn()
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                loadDocuments: vi.fn(async () => [{
+                    id: 'character.lucia', type: 'character' as const,
+                    title: '루치아', relativePath: 'characters/루치아.md',
+                    content: '## 루치아\n\n### 현재 상태\n\n- 여행 중',
+                    contentHash: 'lucia-old', sourceMessageIds: [],
+                }]),
+                saveConfirmedTurn: vi.fn(async () => undefined),
+                saveCanonicalDocument,
+            },
+            onError,
+            analyze: async (request) => request.format === 'canonical-batch'
+                ? canonicalPatchBatch([])
+                : JSON.stringify({
+                    schemaVersion: 1, title: '반복 확인',
+                    establishedEvents: ['루치아가 계속 여행 중이다.'],
+                    stateChanges: [], characterKnowledge: [], persistentFacts: [],
+                    openContinuity: [], canonicalUpdateCandidates: [{
+                        type: 'character', title: '루치아',
+                        reason: '상태 확인', action: 'update',
+                        targetDocumentId: 'character.lucia', confidence: 0.9,
+                    }],
+                }),
+        })
+
+        await runner.run({
+            characterId: 'character', chatId: 'chat',
+            messages: [{ messageId: 'assistant-1', role: 'assistant',
+                content: '루치아는 계속 여행 중이다.' }],
+        })
+
+        expect(saveCanonicalDocument).not.toHaveBeenCalled()
+        expect(onError).not.toHaveBeenCalled()
+    })
+
     test('recovers one exact character target when a state change candidate is omitted', async () => {
         const saveCanonicalDocument = vi.fn(async (input) => ({
             ...input,
@@ -1064,7 +1217,7 @@ describe('memory analysis runner', () => {
         expect(saveCanonicalDocument).toHaveBeenCalledWith({
             characterId: 'character', chatId: 'chat', type: 'scene',
             title: '현재 장면', sourceMessageIds: ['assistant-1'],
-            markdown: '# 현재 장면\n\n성문 앞에 도착했다.',
+            markdown: '## 현재 장면\n\n성문 앞에 도착했다.',
             reviewStatus: 'reviewed',
             writingLanguage: 'ko',
         })
@@ -1101,16 +1254,10 @@ describe('memory analysis runner', () => {
                 content: '사만다는 수석 생물학자이고 아만다는 특별 감사관이다.',
             }])
             expect(input.targets).toHaveLength(2)
-            return JSON.stringify({
-                schemaVersion: 1,
-                documents: [{
-                    candidateIndex: 0,
-                    markdown: '## 사만다\n\n수석 생물학자다.',
-                }, {
-                    candidateIndex: 1,
-                    markdown: '## 아만다\n\n특별 감사관이다.',
-                }],
-            })
+            return canonicalPatchBatch(
+                [{ heading: '', operation: 'upsert', content: '수석 생물학자다.' }],
+                [{ heading: '', operation: 'upsert', content: '특별 감사관이다.' }],
+            )
         })
         const saveCanonicalDocument = vi.fn(async (input) => ({
             ...input,

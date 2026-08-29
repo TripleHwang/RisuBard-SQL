@@ -1250,7 +1250,10 @@ describe('stored response memory analysis', () => {
                     documents: JSON.parse(request.formated[1].content).targets.map(
                         ({ candidateIndex, target }) => ({
                             candidateIndex,
-                            markdown: `# ${target.title}\n\n지속 정보.`,
+                            sections: [{
+                                heading: '', operation: 'upsert',
+                                content: `${target.title}의 지속 정보.`,
+                            }],
                         })
                     ),
                 }),
@@ -1310,6 +1313,8 @@ describe('stored response memory analysis', () => {
         // Long evidence can split the rewrite into one request per target.
         expect(modelCalls).toHaveLength(longEvidence ? 3 : 2)
         expect(modelCalls[1].schema).toContain('candidateIndex')
+        expect(modelCalls[1].schema).toContain('sections')
+        expect(modelCalls[1].schema).not.toContain('markdown')
         expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
         expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
         expect(modelCalls[0].maxTokens).toBe(analysisTokenLimit)

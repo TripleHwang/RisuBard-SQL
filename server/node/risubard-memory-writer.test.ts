@@ -116,7 +116,11 @@ describe('BardWiki memory writer skill', () => {
         }))
         expect(draft.canonicalUpdateCandidates).toHaveLength(10)
         const documents = candidates.map((candidate, candidateIndex) => ({
-            candidateIndex, markdown: `## ${candidate.title}\n\n변경된 상태`,
+            candidateIndex,
+            sections: [{
+                heading: '', operation: 'upsert',
+                content: `${candidate.title}의 변경된 상태`,
+            }],
         }))
         expect(parseCanonicalBatch(JSON.stringify({ schemaVersion: 1, documents }), 10).documents).toHaveLength(10)
         expect(() => parseCanonicalBatch(JSON.stringify({ schemaVersion: 1, documents }), 9)).toThrow()
@@ -125,6 +129,47 @@ describe('BardWiki memory writer skill', () => {
         const schema = JSON.parse(canonicalBatchSchema).properties.documents
         expect(schema.maxItems).toBeUndefined()
         expect(schema.items.properties.candidateIndex.maximum).toBeUndefined()
+    })
+
+    test('parses bounded canonical section patches and rejects full document rewrites', () => {
+        const output = JSON.stringify({
+            schemaVersion: 1,
+            documents: [{
+                candidateIndex: 0,
+                sections: [{
+                    heading: '현재 상태',
+                    operation: 'upsert',
+                    content: '- 석사 학위 취득 완료',
+                }],
+            }],
+        })
+
+        expect(parseCanonicalBatch(output, 1).documents[0]).toEqual({
+            candidateIndex: 0,
+            sections: [{
+                heading: '현재 상태',
+                operation: 'upsert',
+                content: '- 석사 학위 취득 완료',
+            }],
+        })
+        expect(() => parseCanonicalBatch(JSON.stringify({
+            schemaVersion: 1,
+            documents: [{ candidateIndex: 0, markdown: '## 루치아' }],
+        }), 1)).toThrow()
+        expect(() => parseCanonicalBatch(JSON.stringify({
+            schemaVersion: 1,
+            documents: [{
+                candidateIndex: 0,
+                sections: [
+                    { heading: '현재 상태', operation: 'upsert', content: '- A' },
+                    { heading: '현재 상태', operation: 'upsert', content: '- B' },
+                ],
+            }],
+        }), 1)).toThrow(/heading/)
+        expect(parseCanonicalBatch(JSON.stringify({
+            schemaVersion: 1,
+            documents: [{ candidateIndex: 0, sections: [] }],
+        }), 1).documents[0]?.sections).toEqual([])
     })
 
     test('validates a semantic draft and serializes deterministic Markdown', () => {
