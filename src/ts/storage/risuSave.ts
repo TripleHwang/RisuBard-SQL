@@ -4,6 +4,13 @@ import { createBotPresetTemplate, getDatabase, type Database } from "./database.
 import { forageStorage } from "../globalApi.svelte";
 import { chatToStub } from "./chatStorage";
 import { isRootKeyDeferred } from "./sql/deferredRootKeys";
+import {
+    checkRisuSaveHeader,
+    RISU_SAVE_MAGIC_COMPRESSED_HEADER,
+    RISU_SAVE_MAGIC_HEADER,
+    RISU_SAVE_MAGIC_RISUSAVE_HEADER,
+    RISU_SAVE_MAGIC_STREAM_COMPRESSED_HEADER,
+} from "./risuSaveCodec";
 
 /**
  * `database.bin` stores plugin storage as one whole block, so encoding a
@@ -33,10 +40,13 @@ const unpackr = new Unpackr({
 // NodeOnly: server cannot resolve remote blocks, always disable
 const disableRemoteSaving = () => true
 const checkedRemoteExistence = new Set<string>();
-const magicHeader = new Uint8Array([0, 82, 73, 83, 85, 83, 65, 86, 69, 0, 7]); 
-const magicCompressedHeader = new Uint8Array([0, 82, 73, 83, 85, 83, 65, 86, 69, 0, 8]);
-const magicStreamCompressedHeader = new Uint8Array([0, 82, 73, 83, 85, 83, 65, 86, 69, 0, 9]);
-const magicRisuSaveHeader = new TextEncoder().encode("RISUSAVE\0");
+// The framing constants and the frame check live in `risuSaveCodec.ts`, a leaf
+// module with no app imports, so the SQL migration client can read a save block
+// without dragging the Svelte runtime in behind it. One definition, two callers.
+const magicHeader = RISU_SAVE_MAGIC_HEADER;
+const magicCompressedHeader = RISU_SAVE_MAGIC_COMPRESSED_HEADER;
+const magicStreamCompressedHeader = RISU_SAVE_MAGIC_STREAM_COMPRESSED_HEADER;
+const magicRisuSaveHeader = RISU_SAVE_MAGIC_RISUSAVE_HEADER;
 
 
 async function checkCompressionStreams(){
@@ -662,54 +672,7 @@ export async function decodeRisuSave(data:Uint8Array){
     }
 }
 
-function checkHeader(data: Uint8Array) {
-
-    let header:'none'|'compressed'|'raw'|'stream'|'risusave' = 'raw'
-
-    if (data.length < magicHeader.length) {
-      return false;
-    }
-  
-    for (let i = 0; i < magicHeader.length; i++) {
-      if (data[i] !== magicHeader[i]) {
-        header = 'none'
-        break
-      }
-    }
-
-    if(header === 'none'){
-        header = 'compressed'
-        for (let i = 0; i < magicCompressedHeader.length; i++) {
-            if (data[i] !== magicCompressedHeader[i]) {
-                header = 'none'
-                break
-            }
-        }
-    }
-
-    if(header === 'none'){
-        header = 'stream'
-        for (let i = 0; i < magicStreamCompressedHeader.length; i++) {
-            if (data[i] !== magicStreamCompressedHeader[i]) {
-                header = 'none'
-                break
-            }
-        }
-    }
-
-    if(header === 'none'){
-        header = 'risusave'
-        for (let i = 0; i < magicRisuSaveHeader.length; i++) {
-            if (data[i] !== magicRisuSaveHeader[i]) {
-                header = 'none'
-                break
-            }
-        }
-    }
-
-    // All bytes matched
-    return header;
-}
+const checkHeader = checkRisuSaveHeader
 
 // --- Hash & normalization utilities for patch-based sync ---
 

@@ -137,6 +137,10 @@ export function sqlChatData(value: Chat): unknown {
   delete data.messageOffset;
   delete data.messageTotal;
   delete data.detailsLoaded;
+  // A chat built from a `database.bin` stub still carries the flag that says
+  // "this is a stub". Writing it into the chat row would make every chat read
+  // back out of SQL look like one.
+  delete data._stub;
   // Object spread copies own enumerable *symbol* keys, so the runtime
   // hydration window rides along on the copy unless it is stripped here.
   return stripSqlRuntimeFields(data);
@@ -159,10 +163,75 @@ function ensureMessageId(message: Message): string {
   return message.chatId;
 }
 
+/**
+ * Whether this chat object is holding its own history, or only standing in for
+ * one that lives somewhere else.
+ *
+ * The database the client downloads from `GET /api/read` has every chat reduced
+ * to a stub -- `{ id, name, _stub: true }`, with no `message` key at all -- and
+ * the histories are served per chat from `/api/chat-content`. The runtime has
+ * two more shapes with the same meaning: a placeholder chat built from such a
+ * stub, and a SQL-backed chat whose message window has not been filled.
+ *
+ * A "hybrid" carrying both `_stub: true` and a real `message` array is NOT
+ * unloaded: `isChatStub` deliberately excludes it, and it flows through the
+ * normal Chat paths so the corrupt flag self-heals.
+ */
+export function chatHistoryIsUnloaded(chat: Chat): boolean {
+  const runtime = chat as Chat & { messagesLoaded?: boolean };
+  if (!Array.isArray(chat.message)) return true;
+  if (chat._placeholder === true) return true;
+  return runtime.messagesLoaded === false;
+}
+
+/** Every chat in the database whose history is not in the object. */
+export function unloadedChatHistories(
+  database: Database,
+): { characterId: string; chatIndex: number; chatId: string; chatName: string }[] {
+  const unloaded: { characterId: string; chatIndex: number; chatId: string; chatName: string }[] = [];
+  for (const currentCharacter of database.characters ?? []) {
+    (currentCharacter.chats ?? []).forEach((chat, chatIndex) => {
+      if (!chatHistoryIsUnloaded(chat)) return;
+      unloaded.push({
+        characterId: currentCharacter.chaId,
+        chatIndex,
+        chatId: chat.id ?? "",
+        chatName: chat.name ?? "",
+      });
+    });
+  }
+  return unloaded;
+}
+
+export interface SqlReplaceCommitOptions {
+  /**
+   * Leave every chat row and every message out of the commit; the caller
+   * writes them, one chat at a time.
+   *
+   * Set by the migration when any chat's history has to be fetched. The commit
+   * then carries the settings, the characters and the chat manifests, and each
+   * chat arrives afterwards as its own small run of statements, so a 50 MB
+   * database's histories are never all resident at once.
+   *
+   * The chat ROWS are streamed too, not only the messages. A stripped
+   * `database.bin` describes a chat as `{ id, name, _stub: true, lastDate }`;
+   * everything else about it -- the note, the persona binding, the first-message
+   * index -- comes back with its content from `/api/chat-content`. Writing the
+   * chat row from the stub would migrate the history and silently drop the rest
+   * of the chat.
+   *
+   * The message manifests go with them: a `replaceAll` opens with
+   * `DELETE FROM characters`, which cascades through `chats` to `messages`, so
+   * there is nothing left for a manifest to prune.
+   */
+  streamChats?: boolean;
+}
+
 /** Build the one-time full replacement used by legacy import. */
 export function buildSqlReplaceCommit(
   database: Database,
   baseRevision: number,
+  options: SqlReplaceCommitOptions = {},
 ): SqlCommit {
   const commit = createEmptySqlCommit(baseRevision, "replace-all");
   commit.replaceAll = true;
@@ -242,12 +311,26 @@ export function buildSqlReplaceCommit(
 
     chats.forEach((chat, chatPosition) => {
       const chatId = chatIds[chatPosition];
+      // The caller is writing this chat -- row and history alike -- from the
+      // server's copy of it. See `streamChats`.
+      if (options.streamChats) return;
       commit.chats.push({
         id: chatId,
         characterId: currentCharacter.chaId,
         position: chatPosition,
         data: sqlChatData(chat),
       });
+      // Emitting `chat.message ?? []` for a chat whose history is not in the
+      // object is precisely the defect this guard exists for: it turned a stub
+      // into a finished, empty history and then marked SQL canonical.
+      if (chatHistoryIsUnloaded(chat)) {
+        throw new Error(
+          `Refusing to migrate chat "${chat.name ?? chatId}" (${chatId}) into SQL with no ` +
+          "messages: this chat object is a stub or an unfilled window, so its history is not " +
+          "loaded here. Not loaded is not the same as not present -- the messages live on the " +
+          "server and must be fetched before the chat is written.",
+        );
+      }
       const messages = chat.message ?? [];
       const messageIds = messages.map(ensureMessageId);
       commit.messageManifests.push({ chatId, ids: messageIds });
@@ -262,5 +345,33 @@ export function buildSqlReplaceCommit(
     });
   });
 
+  return commit;
+}
+
+/**
+ * One chat's messages, positioned from `startPosition`, as a commit of their
+ * own.
+ *
+ * Used by the streaming migration (one page of one chat at a time) and by the
+ * repair that backfills a chat an earlier broken migration left empty. There is
+ * no manifest: a manifest deletes the rows an id list does not mention, which
+ * is exactly wrong for a commit that carries only part of a history.
+ */
+export function buildSqlChatMessagesCommit(
+  chatId: string,
+  messages: readonly Message[],
+  startPosition: number,
+  baseRevision: number,
+  action = "chat-messages",
+): SqlCommit {
+  const commit = createEmptySqlCommit(baseRevision, action);
+  messages.forEach((message, index) => {
+    commit.messages.push({
+      id: ensureMessageId(message),
+      chatId,
+      position: startPosition + index,
+      data: sqlMessageData(message),
+    });
+  });
   return commit;
 }

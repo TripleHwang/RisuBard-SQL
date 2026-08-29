@@ -33,12 +33,22 @@ import {
   writeSqliteColdStorage,
 } from "./sqliteCommit";
 import {
+  buildSqlChatMessagesCommit,
   buildSqlReplaceCommit,
+  chatHistoryIsUnloaded,
   createEmptySqlCommit,
+  sqlChatData,
   SqlRevisionConflictError,
+  unloadedChatHistories,
   type SqlCommit,
   type SqlCommitResult,
 } from "./sqlCommit";
+import {
+  CHAT_CONTENT_TRANSFER_PAGE_SIZE,
+  streamChatContentBatches,
+  type ChatContentTarget,
+} from "../chatContentClient";
+import { decodeLegacyRisuSaveBlock } from "../risuSaveCodec";
 import {
   clearDeferredRootKey,
   deferredRootKeySnapshot,
@@ -90,7 +100,16 @@ interface SqlMigrationChunkMeta {
   id: string;
   /** 0-based position of this request. */
   chunk: number;
-  totalChunks: number;
+  /**
+   * How many requests the sequence will take, when that is known in advance.
+   *
+   * Omitted by the streaming migration, which cannot know it: its statements do
+   * not exist until the chat histories it is fetching arrive. The server treats
+   * the field as optional and validates `final` against the session it opened,
+   * so a sequence of unknown length still opens and closes correctly -- and a
+   * declared length, once given, can never be changed mid-sequence.
+   */
+  totalChunks?: number;
   /** True on the last request, the one that completes the migration. */
   final: boolean;
 }
@@ -280,6 +299,43 @@ export function planSqlMigrationChunks(statements: readonly Statement[]): number
 export const SQL_MIGRATION_MARKER_KEY = "__risuSqlMigrationInProgress";
 
 /**
+ * The root setting that says "this SQL database was migrated by a build that
+ * carried the chat histories".
+ *
+ * It exists for the users of the broken releases. Their migration ran against a
+ * database whose chats had already been stripped to stubs by `GET /api/read`,
+ * so it wrote every chat with an empty history, verified that emptiness by
+ * reloading it, and marked SQL canonical. Nothing inside the database
+ * distinguishes that from a user who genuinely has no messages.
+ *
+ * A database without this stamp is therefore not treated as ready, and the
+ * ordinary migration runs again from the legacy source -- which is intact,
+ * since the histories were never the client's to lose. That is deliberately the
+ * same path a fresh migration takes rather than a second, repair-shaped one:
+ * an in-place backfill has to rediscover which chats are wrong, and a chat the
+ * user wrote into after the broken migration no longer looks wrong. Re-running
+ * the migration cannot miss anything, and the server archives the database it
+ * replaces.
+ */
+export const SQL_CHAT_HISTORY_AUDIT_KEY = "__risuSqlChatHistoriesVerified";
+
+/**
+ * Root settings that belong to the storage layer rather than to the user.
+ *
+ * They are stored as ordinary rows because that is the only place a client can
+ * put a durable fact, but they must never reach the `Database` object: it is
+ * exported, diffed and written back, and a bookkeeping key riding along in it
+ * would be indistinguishable from a user setting.
+ */
+const SQL_INTERNAL_SETTING_KEYS: ReadonlySet<string> = new Set([
+  SQL_MIGRATION_MARKER_KEY,
+  SQL_CHAT_HISTORY_AUDIT_KEY,
+]);
+
+/** How many times one chat's history is re-requested before giving up. */
+const CHAT_CONTENT_FETCH_ATTEMPTS = 3;
+
+/**
  * The statements that raise (`marker`) or clear (`null`) the in-progress mark.
  *
  * Raising it goes through `applySqliteCommit` so the row is written exactly the
@@ -305,6 +361,100 @@ async function migrationMarkerStatements(marker: string | null): Promise<Stateme
     statements.push({ sql, bind });
   });
   return statements;
+}
+
+/** The statements one commit flattens into. */
+async function statementsOf(commit: SqlCommit): Promise<Statement[]> {
+  const statements: Statement[] = [];
+  await applySqliteCommit(commit, (sql, bind = []) => {
+    statements.push({ sql, bind });
+  });
+  return statements;
+}
+
+function totalStatementBytes(statements: readonly Statement[]): number {
+  let bytes = 0;
+  for (const statement of statements) bytes += estimateStatementBytes(statement);
+  return bytes;
+}
+
+/**
+ * One chat row. `content` is the server's copy of the chat's fields (everything
+ * but its messages); `stub` is what `database.bin` carried.
+ *
+ * The server's copy wins where the two overlap, because it is the complete one:
+ * a stripped `database.bin` describes a chat as `{ id, name, _stub, lastDate }`
+ * and nothing else, so the note, the persona binding and the first-message
+ * index only exist in the content copy.
+ */
+async function* chatRowStatements(
+  characterId: string,
+  position: number,
+  chatId: string,
+  stub: Chat,
+  content: Record<string, unknown>,
+): AsyncGenerator<Statement> {
+  const merged = { ...(stub as unknown as Record<string, unknown>), ...content };
+  const commit = createEmptySqlCommit(0, "chat-row");
+  commit.chats.push({
+    id: chatId,
+    characterId,
+    position,
+    data: sqlChatData(merged as unknown as Chat),
+  });
+  for (const statement of await statementsOf(commit)) yield statement;
+}
+
+/** One page of one chat's history, positioned from `startPosition`. */
+async function* chatMessageStatements(
+  chatId: string,
+  messages: readonly Message[],
+  startPosition: number,
+): AsyncGenerator<Statement> {
+  if (messages.length === 0) return;
+  const commit = buildSqlChatMessagesCommit(chatId, messages, startPosition, 0);
+  for (const statement of await statementsOf(commit)) yield statement;
+}
+
+/** What a database that carries its own histories says each chat holds. */
+function describedResidentHistories(database: Database): Map<string, number> {
+  const described = new Map<string, number>();
+  for (const currentCharacter of database.characters ?? []) {
+    for (const chat of currentCharacter.chats ?? []) {
+      if (!chat.id) continue;
+      described.set(chat.id, (chat.message ?? []).length);
+    }
+  }
+  return described;
+}
+
+/**
+ * What the SQL database itself says each chat holds.
+ *
+ * `messageTotal` on a bootstrap chat summary is a `COUNT(m.id)` over the
+ * `messages` table, so this is the stored rows answering for themselves rather
+ * than an echo of the commit that wrote them.
+ */
+function storedChatMessageTotals(payload: SqlBootstrapPayload): Map<string, number> {
+  const stored = new Map<string, number>();
+  for (const currentCharacter of payload.characters ?? []) {
+    for (const chat of (currentCharacter.chats ?? []) as (Chat & { messageTotal?: number })[]) {
+      if (!chat.id) continue;
+      stored.set(chat.id, Number(chat.messageTotal ?? 0));
+    }
+  }
+  return stored;
+}
+
+function chatHistoryAuditStamp(chatCount: number, note?: string): string {
+  return `${new Date().toISOString()} ${note ?? `migrated ${chatCount} chat(s)`}`;
+}
+
+/** The statements that record the audit, written like any other root setting. */
+async function chatHistoryAuditStatements(stamp: string): Promise<Statement[]> {
+  const commit = createEmptySqlCommit(0, "chat-history-audit");
+  commit.root.upserts.push({ key: SQL_CHAT_HISTORY_AUDIT_KEY, value: stamp });
+  return await statementsOf(commit);
 }
 
 /**
@@ -632,6 +782,8 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     if (payload.status !== "ready") return null;
     const settings: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload.settings)) {
+      // Storage bookkeeping, not user data: see SQL_INTERNAL_SETTING_KEYS.
+      if (SQL_INTERNAL_SETTING_KEYS.has(key)) continue;
       if (!deferred.has(key)) {
         settings[key] = value;
         continue;
@@ -682,8 +834,24 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
    * `marker === undefined` means the key is not there, which is the only
    * reading that means "no migration is in flight".
    */
-  private migrationIsIncomplete(marker: unknown): boolean {
-    if (marker === undefined) return false;
+  /**
+   * True when this database must not be treated as ready: either a migration
+   * was interrupted, or it was written by a build that could not carry the chat
+   * histories. Both mean the legacy source stays canonical and the migration
+   * runs again.
+   */
+  private migrationIsIncomplete(marker: unknown, historyStamp?: unknown): boolean {
+    if (marker === undefined && historyStamp !== undefined) return false;
+    if (marker === undefined) {
+      console.error(
+        "[SQL migration] this SQL database carries no " + SQL_CHAT_HISTORY_AUDIT_KEY + " stamp, so " +
+        "it was written by a build that migrated chats as stubs and stored empty histories. " +
+        "Refusing to treat it as ready: the legacy save file stays canonical and the migration " +
+        "runs again, which is the only path that cannot miss a chat.",
+      );
+      for (const key of deferredRootKeySnapshot()) clearDeferredRootKey(key);
+      return true;
+    }
     console.error(
       "[SQL migration] this SQL database is marked as a migration in progress " +
       `(${SQL_MIGRATION_MARKER_KEY} = ${JSON.stringify(marker)}), so it holds only part of the ` +
@@ -709,6 +877,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     // `loadDatabase` just refused.
     if (dump.status === "ready" && this.migrationIsIncomplete(
       markerRow ? (markerRow.text_value ?? true) : undefined,
+      dump.tables.system_settings?.find((row: any) => row.key === SQL_CHAT_HISTORY_AUDIT_KEY),
     )) {
       return { status: "empty", revision: dump.revision, database: null };
     }
@@ -756,6 +925,8 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     const database = {} as Database;
     for (const row of dump.tables.system_settings ?? []) {
       const key = row.key as string;
+      // Storage bookkeeping, not user data: see SQL_INTERNAL_SETTING_KEYS.
+      if (SQL_INTERNAL_SETTING_KEYS.has(key)) continue;
       (database as any)[key] = this.setting(dump, key);
     }
 
@@ -823,6 +994,7 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     const payload = this.bootstrapPayload ?? await this.loadBootstrap();
     const incomplete = payload.status === "ready" && this.migrationIsIncomplete(
       (payload.settings as Record<string, unknown>)[SQL_MIGRATION_MARKER_KEY],
+      (payload.settings as Record<string, unknown>)[SQL_CHAT_HISTORY_AUDIT_KEY],
     );
     // The server knows how far the abandoned run got and says so in the payload.
     // Reporting "empty" without that is how a database stuck eleven chunks in
@@ -1148,8 +1320,381 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       statementsSent: 0,
       statementTotal: 0,
     });
-    await this.commit(buildSqlReplaceCommit(database, this.revision));
+
+    const unloaded = unloadedChatHistories(database);
+    if (unloaded.length > 0) {
+      console.info(
+        `[SQL migration] ${unloaded.length} of this database's chats arrived without their ` +
+        "histories (GET /api/read strips them), so they will be fetched from " +
+        "/api/chat-content one at a time as the migration streams.",
+      );
+      return await this.replaceDatabaseStreamingChats(database, unloaded.length);
+    }
+
+    // Nothing to fetch: one flattening pass, one commit sequence, exactly as
+    // before. The audit stamp rides inside that commit so this path is still a
+    // single request on a small database.
+    const commit = buildSqlReplaceCommit(database, this.revision);
+    // After the build, never before it: `buildSqlReplaceCommit` is what gives a
+    // chat that arrived without one an id, and a chat with no id is a chat this
+    // check would silently skip.
+    const described = describedResidentHistories(database);
+    commit.root.upserts.push({
+      key: SQL_CHAT_HISTORY_AUDIT_KEY,
+      value: chatHistoryAuditStamp(described.size),
+    });
+    await this.commit(commit);
+    await this.verifyChatHistories(described, { markIncompleteOnFailure: true });
     return true;
+  }
+
+  /**
+   * Migrate a database whose chats are stubs: fetch each history from the
+   * server, turn it straight into statements, send it, and let it go.
+   *
+   * The shape of this is forced by memory. A 50 MB `database.bin` holds no
+   * messages at all -- the server strips them -- so the histories are a
+   * separate download that can be several times larger than the database, and
+   * a migration that collected them first would need all of it resident before
+   * it sent a byte. Instead the statements come out of an async generator and
+   * are packed into chunks as they arrive, so what is held at any moment is one
+   * page of one chat plus the chunk being filled.
+   *
+   * The consequence is that this migration cannot know its own length in
+   * advance, so it does not claim to: it opens a chunk sequence, streams, and
+   * closes it with a chunk of its own. That is what keeps the in-progress
+   * marker raised across the whole run, verification included, so a migration
+   * that comes up short is never visible as a finished one.
+   */
+  private async replaceDatabaseStreamingChats(
+    database: Database,
+    chatsToFetch: number,
+  ): Promise<boolean> {
+    const skeleton = buildSqlReplaceCommit(database, this.revision, { streamChats: true });
+    const { prelude, body } = await this.buildCommitStatements(skeleton);
+
+    const id = uuidv4();
+    const markerRaise = await migrationMarkerStatements(
+      `${id} started ${new Date().toISOString()}`,
+    );
+    const markerClear = await migrationMarkerStatements(null);
+
+    // What the server says each chat's history is, filled in as the stream
+    // reaches each chat. This is the only statement anywhere of how long a
+    // history should be -- the stub carries no count.
+    const described = new Map<string, number>();
+
+    let chunkIndex = 0;
+    let statementsSent = 0;
+    let revision = this.revision;
+    let buffer: Statement[] = [...prelude, ...markerRaise];
+    let bufferBytes = totalStatementBytes(buffer);
+
+    const flush = async (final: boolean): Promise<void> => {
+      const chunk = chunkIndex + 1;
+      reportSqlMigrationProgress({
+        phase: "uploading",
+        chunk,
+        // Unknown, and said so: see SqlMigrationProgress.chunkCount.
+        chunkCount: 0,
+        statementsSent,
+        statementTotal: 0,
+      });
+      const sending = buffer;
+      buffer = [];
+      bufferBytes = 0;
+      try {
+        const result = await this.sendStatements(
+          sending,
+          final ? "replace-all" : `replace-all-chunk-${chunk}`,
+          revision,
+          // `totalChunks` is deliberately omitted: the server treats it as
+          // optional and validates `final` against the open session instead, so
+          // a migration whose length is not knowable in advance can still open
+          // and close a sequence correctly.
+          { id, chunk: chunkIndex, final },
+        );
+        revision = result.revision;
+        statementsSent += sending.length;
+        chunkIndex += 1;
+      } catch (error) {
+        if (error instanceof SqlRevisionConflictError) throw error;
+        throw new SqlMigrationChunkError(chunk, 0, error);
+      }
+    };
+
+    for await (const statement of this.streamMigrationStatements(
+      database,
+      body,
+      described,
+      chatsToFetch,
+    )) {
+      const size = estimateStatementBytes(statement);
+      if (buffer.length > 0 && (
+        buffer.length >= SQL_MIGRATION_CHUNK_STATEMENTS ||
+        bufferBytes + size > SQL_MIGRATION_CHUNK_BYTES
+      )) {
+        await flush(false);
+      }
+      buffer.push(statement);
+      bufferBytes += size;
+    }
+    if (buffer.length > 0) await flush(false);
+
+    // Still marked in progress here, and that is the point: if this disagrees,
+    // nothing clears the marker, every load path keeps refusing this database,
+    // and the legacy save file stays canonical.
+    await this.verifyChatHistories(described, { markIncompleteOnFailure: false });
+
+    buffer = [
+      ...markerClear,
+      ...await chatHistoryAuditStatements(chatHistoryAuditStamp(described.size)),
+    ];
+    bufferBytes = totalStatementBytes(buffer);
+    revision = this.revision;
+    await flush(true);
+    return true;
+  }
+
+  /**
+   * Every statement the streaming migration sends after its opening chunk, in
+   * order: the flattened skeleton first, then one chat at a time.
+   *
+   * A chat already carrying its history (an import, or a database that was
+   * never stripped) is written from the object. A chat that is not is fetched,
+   * page by page, and each page becomes statements immediately.
+   */
+  private async *streamMigrationStatements(
+    database: Database,
+    skeleton: readonly Statement[],
+    described: Map<string, number>,
+    chatsToFetch: number,
+  ): AsyncGenerator<Statement> {
+    for (const statement of skeleton) yield statement;
+
+    let chatsFetched = 0;
+    let messagesFetched = 0;
+    for (const currentCharacter of database.characters ?? []) {
+      const chats = currentCharacter.chats ?? [];
+      for (const [chatIndex, chat] of chats.entries()) {
+        const chatId = chat.id ?? "";
+        if (!chatId) throw new Error("A chat reached the SQL migration without an id");
+
+        if (!chatHistoryIsUnloaded(chat)) {
+          const messages = chat.message ?? [];
+          described.set(chatId, messages.length);
+          yield* chatRowStatements(currentCharacter.chaId, chatIndex, chatId, chat, {});
+          yield* chatMessageStatements(chatId, messages, 0);
+          continue;
+        }
+
+        chatsFetched += 1;
+        reportSqlMigrationProgress({
+          phase: "fetching",
+          chunk: 0,
+          chunkCount: 0,
+          statementsSent: 0,
+          statementTotal: 0,
+          chat: chatsFetched,
+          chatCount: chatsToFetch,
+          messagesFetched,
+        });
+
+        const target: ChatContentTarget = {
+          chaId: currentCharacter.chaId,
+          chatIndex,
+          chatId,
+        };
+        // Re-requesting is only safe before anything has been emitted for this
+        // chat: once a page has become statements that may already be on the
+        // wire, starting over would duplicate it. After that a failure ends the
+        // migration, which leaves the marker raised and the legacy source
+        // canonical -- recoverable, unlike a chat written twice.
+        let emitted = 0;
+        for (let attempt = 1; ; attempt++) {
+          const batches = streamChatContentBatches<Message, Record<string, unknown>>({
+            request: (input, init) => this.request(input, init),
+            decode: decodeLegacyRisuSaveBlock,
+            target,
+            pageSize: CHAT_CONTENT_TRANSFER_PAGE_SIZE,
+          });
+          try {
+            let outcome: { status: "present"; chat: Record<string, unknown>; total: number }
+              | { status: "absent" }
+              | undefined;
+            for await (const event of batches) {
+              if (event.kind === "end") {
+                outcome = event.outcome;
+                continue;
+              }
+              if (event.kind === "metadata") {
+                // The chat row has to exist before its first message: `messages`
+                // has a foreign key to `chats`. It is written from the server's
+                // copy of the chat, with the stub underneath so `id`, `name` and
+                // `lastDate` survive even if the content copy omits them.
+                yield* chatRowStatements(
+                  currentCharacter.chaId, chatIndex, chatId, chat, event.chat,
+                );
+                continue;
+              }
+              yield* chatMessageStatements(chatId, event.messages, event.offset);
+              emitted += event.messages.length;
+              messagesFetched += event.messages.length;
+              reportSqlMigrationProgress({
+                phase: "fetching",
+                chunk: 0,
+                chunkCount: 0,
+                statementsSent: 0,
+                statementTotal: 0,
+                chat: chatsFetched,
+                chatCount: chatsToFetch,
+                messagesFetched,
+              });
+            }
+            if (!outcome) {
+              throw new Error(
+                `The chat content stream for chat ${chatId} ended without saying what it found`,
+              );
+            }
+            if (outcome.status === "absent") {
+              // A 404 from both routes is the server saying it holds no content
+              // for this chat, and that is a real answer: a chat created and
+              // never used has no file. It is written as an empty chat, from the
+              // stub, and recorded as describing zero messages. A request that
+              // FAILED is not this case and never reaches here -- it throws.
+              console.warn(
+                `[SQL migration] the server holds no content for chat ${chatId} ` +
+                `("${chat.name ?? ""}"); migrating it as an empty chat.`,
+              );
+              described.set(chatId, 0);
+              yield* chatRowStatements(currentCharacter.chaId, chatIndex, chatId, chat, {});
+            } else {
+              described.set(chatId, outcome.total);
+            }
+            break;
+          } catch (error) {
+            if (emitted > 0 || attempt >= CHAT_CONTENT_FETCH_ATTEMPTS) {
+              throw new Error(
+                `Could not read the history of chat ${chatId} ("${chat.name ?? ""}") from the ` +
+                `server after ${attempt} attempt(s). A chat whose history could not be read is ` +
+                "not a chat with no history, so the migration stops here rather than writing it " +
+                "empty; the legacy save file stays canonical and this runs again on the next " +
+                "launch.",
+                { cause: error },
+              );
+            }
+            console.warn(
+              `[SQL migration] attempt ${attempt} to read chat ${chatId} failed; retrying.`,
+              error,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Compare what the migration wrote against what the source said was there,
+   * and refuse to call it finished when they differ.
+   *
+   * This is the check whose absence let an empty database be recorded as a
+   * completed migration. It compares two independent statements of the same
+   * fact: the per-chat totals the migration was told while it ran, and the
+   * per-chat counts the server reports from the rows it actually holds --
+   * `bootstrap()` computes `messageTotal` with a `COUNT(m.id)` over `messages`,
+   * so it is the database's own answer, not a replay of what we sent it.
+   */
+  private async verifyChatHistories(
+    described: ReadonlyMap<string, number>,
+    options: { markIncompleteOnFailure: boolean },
+  ): Promise<void> {
+    reportSqlMigrationProgress({
+      phase: "verifying",
+      chunk: 0,
+      chunkCount: 0,
+      statementsSent: 0,
+      statementTotal: 0,
+    });
+    const payload = await this.loadBootstrap();
+    const stored = storedChatMessageTotals(payload);
+    // This payload was fetched to be counted, not to be served: on the
+    // streaming path it was taken while the in-progress marker was still up, so
+    // it describes a database that is deliberately not readable yet. Drop it
+    // rather than let a later load answer from it.
+    this.bootstrapPayload = null;
+
+    const shortfalls: string[] = [];
+    let describedTotal = 0;
+    let storedTotal = 0;
+    for (const [chatId, expected] of described) {
+      describedTotal += expected;
+      const actual = stored.get(chatId);
+      if (actual === undefined) {
+        shortfalls.push(`${chatId}: no chat row, expected ${expected} message(s)`);
+        continue;
+      }
+      storedTotal += actual;
+      if (actual !== expected) shortfalls.push(`${chatId}: holds ${actual} of ${expected}`);
+    }
+    if (shortfalls.length === 0) return;
+
+    if (options.markIncompleteOnFailure) {
+      // This path had no in-progress marker to withhold -- it is the one-shot
+      // migration of a database that needed no fetching -- so the database is
+      // already flagged initialized. Raise the marker after the fact so every
+      // load path refuses it and the next launch migrates again from the legacy
+      // source, which is intact.
+      await this.markMigrationIncomplete(
+        `verification found ${shortfalls.length} chat(s) short at ${new Date().toISOString()}`,
+      );
+    }
+    throw new Error(
+      `SQL migration is short of the source it was built from: it holds ${storedTotal} of ` +
+      `${describedTotal} message(s) across ${described.size} chat(s). ` +
+      `${shortfalls.length} chat(s) disagree, first ${Math.min(5, shortfalls.length)}: ` +
+      `${shortfalls.slice(0, 5).join("; ")}. The migration is not complete and is not being ` +
+      "recorded as one; the legacy save file stays canonical.",
+    );
+  }
+
+  /**
+   * Flag this SQL database as an unfinished migration.
+   *
+   * Best effort by necessity: it is called when something has already gone
+   * wrong, and its own failure must not replace the report of the first one.
+   * It is loud either way -- a database that cannot be flagged is a database
+   * the next launch will trust, and that has to be visible.
+   */
+  private async markMigrationIncomplete(reason: string): Promise<void> {
+    try {
+      const commit = createEmptySqlCommit(this.revision, "mark-migration-incomplete");
+      commit.root.upserts.push({ key: SQL_MIGRATION_MARKER_KEY, value: reason });
+      commit.root.deletes.push(SQL_CHAT_HISTORY_AUDIT_KEY);
+      await this.commit(commit);
+      console.error(
+        "[SQL migration] the migrated database did not match its source, so it has been flagged " +
+        `as an unfinished migration (${reason}). The legacy save file stays canonical and the ` +
+        "migration runs again from a clean slate on the next launch.",
+      );
+    } catch (error) {
+      console.error(
+        "[SQL migration] the migrated database did not match its source AND could not be flagged " +
+        "as unfinished. It may be read as canonical on the next launch even though it is short. " +
+        `Reason for flagging: ${reason}.`,
+        error,
+      );
+    }
+  }
+
+
+
+  private async stampChatHistoryAudit(note: string): Promise<void> {
+    const commit = createEmptySqlCommit(this.revision, "chat-history-audit");
+    commit.root.upserts.push({
+      key: SQL_CHAT_HISTORY_AUDIT_KEY,
+      value: chatHistoryAuditStamp(0, note),
+    });
+    await this.commit(commit);
   }
 
   private async current(): Promise<Database> {

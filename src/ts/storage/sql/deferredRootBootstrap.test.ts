@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NodeSqliteStorage, DEFERRED_BOOTSTRAP_ROOT_KEYS } from "./nodeSqliteStorage";
+import {
+  NodeSqliteStorage,
+  DEFERRED_BOOTSTRAP_ROOT_KEYS,
+  SQL_CHAT_HISTORY_AUDIT_KEY,
+} from "./nodeSqliteStorage";
 import {
   clearDeferredRootKey,
   deferredRootDeleteRefusals,
@@ -35,7 +39,14 @@ function bootstrapBody(overrides: BootstrapOverrides = {}): Record<string, unkno
   const body: Record<string, unknown> = {
     status: overrides.status ?? "ready",
     revision: overrides.revision ?? 4,
-    settings: overrides.settings ?? { username: "risu", plugins: [{ name: "kept" }] },
+    // Every fixture here is a database migrated by a build that carried the chat
+    // histories. Without the stamp the client refuses to treat it as ready and
+    // re-migrates, which is the point of the stamp -- these tests are about
+    // deferral, not about that.
+    settings: {
+      [SQL_CHAT_HISTORY_AUDIT_KEY]: "test-fixture",
+      ...(overrides.settings ?? { username: "risu", plugins: [{ name: "kept" }] }),
+    },
     pluginCustomStorage: {},
     botPresets: [],
     characters: [],

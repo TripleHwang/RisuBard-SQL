@@ -12,12 +12,11 @@ import { alertInput, waitAlert, notifyError } from "../alert"
 import { decodeRisuSave, encodeRisuSaveLegacy } from "./risuSave"
 import { normalizeChat, type Chat, type Message } from "./database.svelte"
 import {
-    assembleChatContentPages,
-    type ChatContentPageEnvelope,
-} from './chatContentPage'
+    CHAT_CONTENT_TRANSFER_PAGE_SIZE,
+    fetchWholeChatContent,
+} from './chatContentClient'
 import { createIncrementalNdjsonParser } from './ndjsonStream'
 
-const CHAT_CONTENT_TRANSFER_PAGE_SIZE = 200
 
 // ── User-gesture recency for the write lock ─────────────────────────────────
 // The server moves the single-writer lock only on writes that follow a real
@@ -970,41 +969,23 @@ export class NodeStorage{
 
     // ── Chat content (runtime lazy load) ────────────────────────────────────
 
-    private async fetchFullChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {
-        const da = await this.authFetch(`/api/chat-content/${encodeURIComponent(chaId)}/${chatIndex}`, {
-            headers: { 'x-chat-id': chatId },
-        })
-        if (da.status === 404) return null
-        if (da.status < 200 || da.status >= 300) throw new Error(`fetchChatContent error: ${da.status}`)
-        const buffer = new Uint8Array(await da.arrayBuffer())
-        return normalizeChat(await decodeRisuSave(buffer))
-    }
-
+    /**
+     * One chat's whole history, through the shared chat-content client.
+     *
+     * The paging loop, the `x-chat-id` header and the 404 fallback to the
+     * unpaged route live in `chatContentClient.ts`, because the legacy-to-SQL
+     * migration reads the same endpoint and must not grow a second client for
+     * it. `null` still means the server holds no content for this chat; every
+     * other failure throws, exactly as before.
+     */
     async fetchChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {
-        const pages: ChatContentPageEnvelope<Message, Omit<Chat, 'message'>>[] = []
-        let offset = 0
-
-        while (true) {
-            const da = await this.authFetch(
-                `/api/chat-content/${encodeURIComponent(chaId)}/${chatIndex}/page?offset=${offset}&limit=${CHAT_CONTENT_TRANSFER_PAGE_SIZE}`,
-                { headers: { 'x-chat-id': chatId } },
-            )
-            if (da.status === 404 && offset === 0) {
-                return this.fetchFullChatContent(chaId, chatIndex, chatId)
-            }
-            if (da.status < 200 || da.status >= 300) {
-                throw new Error(`fetchChatContent page error: ${da.status}`)
-            }
-
-            const buffer = new Uint8Array(await da.arrayBuffer())
-            const page = await decodeRisuSave(buffer) as ChatContentPageEnvelope<Message, Omit<Chat, 'message'>>
-            pages.push(page)
-            if (page.total === 0 || page.offset + page.messages.length >= page.total) break
-            if (page.messages.length === 0) throw new Error('fetchChatContent page made no progress')
-            offset = page.offset + page.messages.length
-        }
-
-        return normalizeChat(assembleChatContentPages(pages))
+        const chat = await fetchWholeChatContent<Message, Omit<Chat, 'message'>>({
+            request: (input, init) => this.authFetch(input, init),
+            decode: (bytes) => decodeRisuSave(bytes),
+            target: { chaId, chatIndex, chatId },
+            pageSize: CHAT_CONTENT_TRANSFER_PAGE_SIZE,
+        })
+        return chat === null ? null : normalizeChat(chat)
     }
 
     async saveChatContent(chaId: string, chatIndex: number, chatId: string, chat: any): Promise<void> {

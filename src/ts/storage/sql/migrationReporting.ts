@@ -21,17 +21,36 @@ export interface SqlMigrationProgress {
    * `preparing`  -- flattening the legacy database into SQL statements. No
    *                 network yet, and on a large database this is the phase that
    *                 looks stuck the longest.
+   * `fetching`   -- downloading the chat histories the database does not carry.
+   *                 The database the client gets from `GET /api/read` has every
+   *                 chat reduced to a stub, so on a real migration this is
+   *                 hundreds of round trips and by far the longest stretch. It
+   *                 is interleaved with `uploading`: a chat is fetched, its
+   *                 messages go into the chunk being built, and it is dropped.
    * `uploading`  -- sending statement chunks; `chunk` of `chunkCount`.
    * `verifying`  -- re-reading the migrated database to prove it landed.
    */
-  phase: "preparing" | "uploading" | "verifying";
+  phase: "preparing" | "fetching" | "uploading" | "verifying";
   /** 1-based chunk being sent. 0 outside the `uploading` phase. */
   chunk: number;
-  /** Total chunks this migration will send. 0 while still preparing. */
+  /**
+   * Total chunks this migration will send, or 0 when it is not yet known.
+   *
+   * A migration that has to fetch its chat histories cannot know its own length
+   * in advance -- the statements do not exist until the messages arrive -- and
+   * saying "part 3 of 3" and then sending a fourth would be worse than saying
+   * nothing. `describeSqlMigrationProgress` reports an open-ended count instead.
+   */
   chunkCount: number;
   statementsSent: number;
   /** 0 while still preparing, because the statements do not exist yet. */
   statementTotal: number;
+  /** 1-based chat being fetched. 0 outside the `fetching` phase. */
+  chat?: number;
+  /** How many chat histories this migration has to fetch. */
+  chatCount?: number;
+  /** Messages fetched so far, across every chat. */
+  messagesFetched?: number;
 }
 
 export interface SqlMigrationFailure {
@@ -116,10 +135,22 @@ export function describeSqlMigrationProgress(progress: SqlMigrationProgress): st
       return "Migrating to SQL: preparing the legacy database...";
     case "verifying":
       return "Migrating to SQL: verifying the migrated database...";
+    case "fetching": {
+      // The chat counter is the only thing that moves during the long stretch
+      // where the client is downloading histories one chat at a time. Without
+      // it this phase is indistinguishable from a hang.
+      const chat = progress.chat ?? 0;
+      const chatCount = progress.chatCount ?? 0;
+      const messages = progress.messagesFetched ?? 0;
+      return `Migrating to SQL: downloading chat ${chat} of ${chatCount} (${messages} messages)`;
+    }
     case "uploading": {
       const percent = progress.statementTotal > 0
         ? Math.min(100, Math.floor((progress.statementsSent / progress.statementTotal) * 100))
         : 0;
+      // A migration that fetches its histories does not know how many parts it
+      // will take, so it reports the part it is on and nothing it cannot know.
+      if (progress.chunkCount <= 0) return `Migrating to SQL: sending part ${progress.chunk}`;
       return `Migrating to SQL: part ${progress.chunk} of ${progress.chunkCount} (${percent}%)`;
     }
   }

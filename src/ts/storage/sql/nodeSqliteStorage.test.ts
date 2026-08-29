@@ -239,6 +239,12 @@ describe("Node server SQLite client", () => {
     expect(requests).toEqual([
       BOOTSTRAP_PATH,
       "/api/sql/commit",
+      // The migration reads the stored per-chat message counts back and checks
+      // them against what its source described before it calls itself
+      // finished. That check is the point of this request, and it is a
+      // bootstrap read rather than a snapshot: `messageTotal` is a COUNT, so
+      // nothing has to download the messages to count them.
+      BOOTSTRAP_PATH,
       BOOTSTRAP_PATH,
     ]);
     server.close();

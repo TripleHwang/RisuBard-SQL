@@ -34,6 +34,7 @@ type ServerStorage = {
   databasePath: string;
   revision(): number;
   commit(payload: unknown): { revision: number };
+  bootstrap(options?: unknown): unknown;
   loadChatMessages(
     chatId: string,
     before: number | undefined,
@@ -237,6 +238,13 @@ describe("legacy-to-SQL migration of a large database", () => {
     const rejections: string[] = [];
     const request = async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
+      // The migration checks what it wrote against what its source described
+      // before it calls itself finished, and it reads the stored counts from
+      // `bootstrap()`. Answering it here is the same route the real server has.
+      if (path.startsWith("/api/sql/bootstrap")) {
+        const defer = new URL(path, "https://risu.invalid").searchParams.get("defer");
+        return Response.json(server.bootstrap({ deferRootKeys: defer ? defer.split(",") : [] }));
+      }
       if (path !== "/api/sql/commit") throw new Error(`unexpected request: ${path}`);
       try {
         return Response.json(server.commit(JSON.parse(String(init?.body))));

@@ -95,6 +95,7 @@ export async function selectCanonicalDatabase(
   }
 }
 
+
 let activeSqlStorage: ISqlStorage | null = null;
 let pendingSqlStorage: ISqlStorage | null = null;
 
@@ -133,10 +134,11 @@ export async function openExistingStandaloneSql(
     markStartupPhase("sql-rebuild");
     if (loaded?.status === "ready" && loaded.database) {
       pendingSqlStorage = null;
-      activateSqlStorage(storage, loaded.database);
+      const database = loaded.database;
+      activateSqlStorage(storage, database);
       markStartupPhase("sql-baseline");
       return {
-        database: loaded.database,
+        database,
         storage,
         usingSql: true,
         migrated: false,
