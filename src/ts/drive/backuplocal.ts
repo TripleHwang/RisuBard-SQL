@@ -12,31 +12,49 @@ function formatBytes(bytes: number): string {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
-async function streamBackupToDisk(response: Response, fallbackName: string){
+async function pickNativeBackupFile(fallbackName: string): Promise<FileSystemFileHandle | null> {
+    if (typeof window.showSaveFilePicker !== 'function') return null
+    return await window.showSaveFilePicker({
+        suggestedName: fallbackName,
+        types: [{
+            description: 'Risu backup',
+            accept: { 'application/octet-stream': ['.bin'] },
+        }],
+    })
+}
+
+async function streamBackupToDisk(
+    response: Response,
+    fallbackName: string,
+    nativeFile: FileSystemFileHandle | null = null,
+){
     const disposition = response.headers.get('content-disposition') ?? ''
     const fileName = disposition.match(/filename=\"?([^"]+)\"?/)?.[1] ?? fallbackName
     const totalBytes = Number(response.headers.get('content-length') ?? '0')
 
-    if (response.body) {
-        const streamSaver = await import('streamsaver')
-        const writableStream = streamSaver.createWriteStream(fileName)
+    if (response.body || nativeFile) {
+        const writableStream = nativeFile
+            ? await nativeFile.createWritable()
+            : (await import('streamsaver')).createWriteStream(fileName)
         const writer = writableStream.getWriter()
-        const reader = response.body.getReader()
         let downloadedBytes = 0
 
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) {
-                break
+        if (response.body) {
+            const reader = response.body.getReader()
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                downloadedBytes += value.length
+                if (totalBytes > 0) {
+                    const progress = ((downloadedBytes / totalBytes) * 100).toFixed(2)
+                    alertWait(`Saving local backup... (${progress}%)`)
+                } else {
+                    alertWait(`Saving local backup... (${(downloadedBytes / (1024 * 1024)).toFixed(1)} MB)`)
+                }
+                await writer.write(value)
             }
-            downloadedBytes += value.length
-            if (totalBytes > 0) {
-                const progress = ((downloadedBytes / totalBytes) * 100).toFixed(2)
-                alertWait(`Saving local backup... (${progress}%)`)
-            } else {
-                alertWait(`Saving local backup... (${(downloadedBytes / (1024 * 1024)).toFixed(1)} MB)`)
-            }
-            await writer.write(value)
+        } else {
+            await writer.write(new Uint8Array(await response.arrayBuffer()))
         }
         await writer.close()
     } else {
@@ -46,13 +64,19 @@ async function streamBackupToDisk(response: Response, fallbackName: string){
 
 export async function SaveLocalBackup(){
     try {
+        const fallbackName = `risu-backup-${Date.now()}.bin`
+        const nativeFile = await pickNativeBackupFile(fallbackName)
         alertWait("Saving local backup...")
         const response = await forageStorage.exportBackup()
-        await streamBackupToDisk(response, `risu-backup-${Date.now()}.bin`)
+        await streamBackupToDisk(response, fallbackName, nativeFile)
         notifySuccess('Success')
     } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+            alertClear()
+            return
+        }
         console.error(error)
-        alertError('Failed')
+        alertError(error instanceof Error ? error.message : 'Failed')
     }
 }
 
