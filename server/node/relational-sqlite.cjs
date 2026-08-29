@@ -331,6 +331,28 @@ function createRelationalSqlite(options) {
      * `system_settings` but rebuilding to no value. That is a storage fault, not
      * a deletion, and it stays visible instead of vanishing into JSON.
      */
+    /**
+     * Section timings for bootstrap(), off unless RISUVAULT_BOOTSTRAP_PROFILE=1.
+     * bootstrap() assembles every settings key, every bot preset blob, every
+     * plugin storage row and every character summary into one response, and
+     * which of those dominates decides what is worth deferring. Measuring beats
+     * guessing there: optimising the wrong section costs the same effort and
+     * buys nothing.
+     */
+    const NEWLINE = String.fromCharCode(10);
+
+    function profileBootstrapSection(report, label, run) {
+        if (!report) return run();
+        const started = performance.now();
+        const value = run();
+        report.push({
+            label,
+            ms: Number((performance.now() - started).toFixed(2)),
+            bytes: JSON.stringify(value ?? null).length,
+        });
+        return value;
+    }
+
     function bootstrap(options) {
         const requestedDeferrals = normalizeDeferredRootKeys(options?.deferRootKeys);
         return inReadTransaction(() => {
@@ -343,15 +365,20 @@ function createRelationalSqlite(options) {
             const deferredRootKeys = [...deferred].sort();
             absentDeferredRootKeys.sort();
 
+            const report = process.env.RISUVAULT_BOOTSTRAP_PROFILE === '1' ? [] : null;
+            const startedAt = report ? performance.now() : 0;
+
             const unreadableRootKeys = [];
-            const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
-            const settings = Object.fromEntries(settingRows
-                .filter((row) => !deferred.has(row.key))
-                .map((row) => {
-                    const value = readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]);
-                    if (value === undefined) unreadableRootKeys.push(row.key);
-                    return [row.key, value];
-                }));
+            const settings = profileBootstrapSection(report, 'settings', () => {
+                const settingRows = database.prepare('SELECT key FROM system_settings ORDER BY key').all();
+                return Object.fromEntries(settingRows
+                    .filter((row) => !deferred.has(row.key))
+                    .map((row) => {
+                        const value = readNodeValue('setting_extension_nodes', 'setting_key = ?', [row.key]);
+                        if (value === undefined) unreadableRootKeys.push(row.key);
+                        return [row.key, value];
+                    }));
+            });
             if (unreadableRootKeys.length) {
                 console.error(
                     '[SQL bootstrap] root keys are registered but hold no relational nodes:',
@@ -370,9 +397,25 @@ function createRelationalSqlite(options) {
                 absentDeferredRootKeys,
                 unreadableRootKeys,
             };
-            if (!deferred.has('pluginCustomStorage')) payload.pluginCustomStorage = readPluginCustomStorage();
-            if (!deferred.has('botPresets')) payload.botPresets = readBotPresets();
-            if (!deferred.has('characters')) payload.characters = readCharacterSummaries();
+            if (!deferred.has('pluginCustomStorage')) {
+                payload.pluginCustomStorage = profileBootstrapSection(report, 'pluginCustomStorage', readPluginCustomStorage);
+            }
+            if (!deferred.has('botPresets')) {
+                payload.botPresets = profileBootstrapSection(report, 'botPresets', readBotPresets);
+            }
+            if (!deferred.has('characters')) {
+                payload.characters = profileBootstrapSection(report, 'characters', readCharacterSummaries);
+            }
+            if (report) {
+                const totalMs = performance.now() - startedAt;
+                const rows = report
+                    .map((entry) => `  ${entry.label.padEnd(20)} ${String(entry.ms).padStart(9)} ms  ${String(entry.bytes).padStart(11)} bytes`)
+                    .join(NEWLINE);
+                console.error(
+                    `[bootstrap profile] total ${totalMs.toFixed(2)} ms, ` +
+                    `${JSON.stringify(payload).length} bytes${NEWLINE}${rows}`,
+                );
+            }
             return payload;
         });
     }
