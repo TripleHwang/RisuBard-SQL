@@ -22,11 +22,19 @@ vi.mock('src/ts/globalApi.svelte', () => ({
 vi.mock('src/ts/storage/database.svelte', () => ({
     getDatabase: () => mocks.db,
 }))
-vi.mock('src/ts/storage/chatStorage', () => ({
-    ensureChatHydrated: mocks.ensureChatHydrated,
-    saveChatToServer: mocks.saveChatToServer,
-    isChatHistoryIncomplete: (chat: any) => !chat || chat._placeholder === true || chat.messagesLoaded === false || chat.messagesFullyLoaded === false || chat._sqlWindow?.hasOlder === true,
-}))
+vi.mock('src/ts/storage/chatStorage', async () => {
+    // Delegate the "are older messages still in storage?" check to the real
+    // accessor instead of re-spelling the marker here. The marker is a symbol
+    // key, so a double that names a property answers "complete" for a
+    // partially resident chat -- silently, which is exactly the production
+    // failure this predicate exists to prevent.
+    const { hasOlderSqlMessages } = await import('src/ts/storage/sql/sqlRuntimeWindow')
+    return {
+        ensureChatHydrated: mocks.ensureChatHydrated,
+        saveChatToServer: mocks.saveChatToServer,
+        isChatHistoryIncomplete: (chat: any) => !chat || chat._placeholder === true || chat.messagesLoaded === false || chat.messagesFullyLoaded === false || hasOlderSqlMessages(chat),
+    }
+})
 vi.mock('src/ts/alert', () => ({
     notifyError: mocks.notifyError,
     notifyInfo: mocks.notifyInfo,

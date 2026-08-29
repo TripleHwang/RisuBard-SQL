@@ -3,6 +3,7 @@ import { getDatabase, type Chat, type ChatStub, type ChatOrStub, type character,
 import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
+import { getSqlWindow, hasOlderSqlMessages, type SqlHydrationWindow } from "./sql/sqlRuntimeWindow"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
 import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRuntime"
 import { isChatGenerating } from "../process/generationState"
@@ -238,7 +239,6 @@ function parseChatKey(key: string): { characterId: string; chatId: string } | nu
 type RuntimeChat = Chat & {
     messagesLoaded?: boolean
     messagesFullyLoaded?: boolean
-    _sqlWindow?: { fullHistoryOperation?: boolean; loading?: boolean }
     isLoadingFullHistory?: boolean
     loadingFullHistory?: boolean
     fullHistoryOperation?: boolean
@@ -263,20 +263,33 @@ function hasLiveChatWork(key: string): boolean {
     const found = findRuntimeChat(key)
     if (!ids || !found) return true
     const { chat } = found
+    // `fullHistoryOperation` / `loading` are not fields of `SqlHydrationWindow`.
+    // They are read defensively: any writer that marks the window busy must be
+    // able to hold off eviction, because evicting a chat mid-operation is the
+    // whole failure this guard exists to prevent. Widening here keeps that
+    // check meaningful instead of quietly dropping it during the move to the
+    // symbol-keyed accessor.
+    const sqlWindow = getSqlWindow(chat) as (SqlHydrationWindow & {
+        fullHistoryOperation?: boolean
+        loading?: boolean
+    }) | undefined
     return chat._placeholder === true || isHydrationActive(key) || isChatGenerating(ids.chatId) ||
         Boolean(chat.isStreaming || chat.activeStreamingDisplayOptimizationMode ||
-            chat.isLoadingFullHistory || chat.loadingFullHistory || chat._sqlWindow?.fullHistoryOperation ||
-            chat._sqlWindow?.loading || chat.fullHistoryOperation || chat._fullHistoryOperation ||
+            chat.isLoadingFullHistory || chat.loadingFullHistory || sqlWindow?.fullHistoryOperation ||
+            sqlWindow?.loading || chat.fullHistoryOperation || chat._fullHistoryOperation ||
             chat.loadingMessages || chat.isLoading || chat.risuBardWikiReboot)
 }
 
 function evictRuntimeChat(key: string): boolean {
     const found = findRuntimeChat(key)
     if (!found || key === getActiveRuntimeChatKey() || hasLiveChatWork(key)) return false
-    // Keep every enumerable metadata field. The sole heavy body is `message`;
-    // `_sqlWindow` is a non-enumerable runtime cache but is excluded even if a
-    // caller made it enumerable. No message or derived-cache reference moves
-    // into the replacement slot.
+    // Keep every enumerable metadata field. The sole heavy body is `message`.
+    // The hydration window is symbol-keyed, so `Object.entries` cannot see it
+    // and it never reaches the replacement slot -- which is what we want: the
+    // slot describes an empty, unhydrated chat, and a window carried across
+    // would claim a resident page that is no longer there. The `_`-prefix
+    // filter still drops a window written as a plain property by an older
+    // build. No message or derived-cache reference moves into the slot.
     const metadata = Object.fromEntries(Object.entries(found.chat).filter(([key]) =>
         key !== 'message' && !key.startsWith('_'),
     ))
@@ -402,9 +415,8 @@ export function isChatHistoryIncomplete(chat: Chat | null | undefined): boolean 
     const runtime = chat as Chat & {
         messagesLoaded?: boolean
         messagesFullyLoaded?: boolean
-        _sqlWindow?: { hasOlder?: boolean }
     }
-    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || runtime._sqlWindow?.hasOlder === true
+    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || hasOlderSqlMessages(chat)
 }
 
 /**

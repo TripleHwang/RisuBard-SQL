@@ -48,8 +48,19 @@ describe('older reverse page validation', () => {
     it.each([
         ['duplicates', page(20, ['a', 'a'])],
         ['noncontiguous', page(19, ['a', 'b'])],
-        ['changed total', page(20, ['a', 'b'], 99)],
     ])('rejects %s reverse pages', (_, incoming) => {
         expect(() => validateOlderMessagePage(incoming, { offset: 22, total: 100, ids: ['c'] })).toThrow()
+    })
+
+    it('accepts a page whose total moved, because the window count is a snapshot', () => {
+        // `current.total` is counted when the window is built. Deleting a message
+        // afterwards legitimately moves the server's count, and rejecting that
+        // stranded the rest of the history behind a throw for the whole session.
+        // Contiguity and identity are what catch real corruption; the caller
+        // adopts the page's fresh total.
+        expect(
+            validateOlderMessagePage(page(20, ['a', 'b'], 99), { offset: 22, total: 100, ids: ['c'] })
+                .map(message => message.chatId),
+        ).toEqual(['a', 'b'])
     })
 })

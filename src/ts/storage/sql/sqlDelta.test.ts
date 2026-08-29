@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildSqlDeltaCommit } from "./sqlDelta";
+import { setSqlWindow } from "./sqlRuntimeWindow";
 
 function database() {
   return {
@@ -78,9 +79,8 @@ describe("SQL delta commits", () => {
     after.characters[0].chats[0].name = "Renamed while windowed";
     after.characters[0].chats[0].messagesLoaded = true;
     after.characters[0].chats[0].messagesFullyLoaded = false;
-    Object.defineProperty(after.characters[0].chats[0], "_sqlWindow", {
-      enumerable: false,
-      value: { hasOlder: true },
+    setSqlWindow(after.characters[0].chats[0], {
+      before: null, nextBefore: 0, total: 2, hasOlder: true, nextPosition: 2,
     });
 
     const commit = buildSqlDeltaCommit(before, after, 3)!;

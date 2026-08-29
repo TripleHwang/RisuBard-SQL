@@ -2,6 +2,13 @@ import type { Chat, Database, Message, character } from "../database.svelte";
 import { isRootKeyDeferred, refuseDeferredRootDelete } from "./deferredRootKeys";
 import type { DirtySnapshot } from "./dirtyRegistry";
 import {
+  getSqlPosition,
+  getSqlWindow,
+  hasOlderSqlMessages,
+  setSqlPosition,
+  setSqlWindow,
+} from "./sqlRuntimeWindow";
+import {
   createEmptySqlCommit,
   sqlCharacterData,
   sqlChatData,
@@ -19,9 +26,8 @@ const ROOT_EXCLUSIONS = new Set([
 type RuntimeChat = Chat & {
   messagesLoaded?: boolean;
   messagesFullyLoaded?: boolean;
-  _sqlWindow?: { hasOlder?: boolean; nextPosition?: number };
 };
-type PositionedMessage = Message & { _sqlPosition?: number };
+type PositionedMessage = Message;
 type MessageLookup = { message: PositionedMessage; localPosition: number };
 
 function findCharacter(database: Database, characterId: string): [character, number] | undefined {
@@ -40,7 +46,7 @@ function findChat(database: Database, chatId: string): [character, Chat, number,
 function messageWindowIsIncomplete(chat: RuntimeChat): boolean {
   return chat.messagesLoaded === false ||
     chat.messagesFullyLoaded === false ||
-    chat._sqlWindow?.hasOlder === true;
+    hasOlderSqlMessages(chat);
 }
 
 function canonicalMessagePosition(
@@ -49,8 +55,8 @@ function canonicalMessagePosition(
   localPosition: number,
 ): number {
   if (!messageWindowIsIncomplete(chat)) return localPosition;
-  if (Number.isSafeInteger(message._sqlPosition) && message._sqlPosition! >= 0)
-    return message._sqlPosition!;
+  const canonical = getSqlPosition(message);
+  if (Number.isSafeInteger(canonical) && canonical! >= 0) return canonical!;
   throw new Error(`Dirty message ${message.chatId ?? "(missing id)"} is missing its canonical SQL position`);
 }
 
@@ -67,24 +73,26 @@ function allocateAppendedPositions(chat: RuntimeChat): void {
   const messages = chat.message ?? [];
   let firstUnpositioned = -1;
   for (let index = 0; index < messages.length; index += 1) {
-    if (!Number.isSafeInteger((messages[index] as PositionedMessage)._sqlPosition)) {
+    if (!Number.isSafeInteger(getSqlPosition(messages[index]))) {
       firstUnpositioned = index;
       break;
     }
   }
   if (firstUnpositioned < 0) return;
   for (let index = firstUnpositioned; index < messages.length; index += 1) {
-    if (Number.isSafeInteger((messages[index] as PositionedMessage)._sqlPosition)) return;
+    if (Number.isSafeInteger(getSqlPosition(messages[index]))) return;
   }
-  const nextPosition = chat._sqlWindow?.nextPosition;
+  const window = getSqlWindow(chat);
+  const nextPosition = window?.nextPosition;
   if (!Number.isSafeInteger(nextPosition) || nextPosition! < 0) return;
   for (let index = firstUnpositioned; index < messages.length; index += 1) {
-    const message = messages[index] as PositionedMessage;
-    Object.defineProperty(message, "_sqlPosition", {
-      configurable: true, enumerable: false, writable: true, value: nextPosition! + index - firstUnpositioned,
-    });
+    setSqlPosition(messages[index], nextPosition! + index - firstUnpositioned);
   }
-  if (chat._sqlWindow) chat._sqlWindow.nextPosition = nextPosition! + messages.length - firstUnpositioned;
+  // Replace the window rather than mutating the stored one in place. The chat
+  // is a live `$state` object, so the window read back through it is a proxy of
+  // what hydration stored; writing a whole new window keeps the advance atomic
+  // and keeps every reader on a consistent snapshot.
+  if (window) setSqlWindow(chat, { ...window, nextPosition: nextPosition! + messages.length - firstUnpositioned });
 }
 
 /**

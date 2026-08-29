@@ -23,7 +23,8 @@ vi.mock('../process/generationState', () => ({ isChatGenerating: (id: string) =>
 vi.mock('./hydrationState', () => ({ beginHydration: () => undefined, beginHydrationApply: () => undefined, endHydration: () => undefined, endHydrationApply: () => undefined, isHydrationActive: (key: string) => runtimeState.hydrating.has(key) }))
 vi.mock('../stores.svelte', () => ({ selectedCharID: { subscribe: (run: (value: number) => void) => { runtimeState.listeners.push(run); run(runtimeState.selectedIndex); return () => undefined } } }))
 
-const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage, touchHydratedChat, evictHydratedChats, resetChatHydrationCacheForTesting } = await import('./chatStorage')
+const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage, touchHydratedChat, evictHydratedChats, resetChatHydrationCacheForTesting, isChatHistoryIncomplete } = await import('./chatStorage')
+const { getSqlWindow, setSqlWindow } = await import('./sql/sqlRuntimeWindow')
 type Chat = any
 type ChatStub = any
 
@@ -379,7 +380,7 @@ describe('hydrateRecentChatPage', () => {
 
         expect(loadChatMessageReversePage).toHaveBeenCalledWith('chat-1', undefined, 40)
         expect(hydrated?.message.map((message: any) => message.chatId)).toEqual(['m-39', 'm-40'])
-        expect((hydrated as any)._sqlWindow).toMatchObject({ hasOlder: true, total: 41 })
+        expect(getSqlWindow(hydrated)).toMatchObject({ hasOlder: true, total: 41 })
     })
 
     test('touches the hydrated ID after its slot reorders during the page await', async () => {
@@ -415,11 +416,19 @@ describe('hydrateRecentChatPage', () => {
 })
 
 describe('runtime hydrated-chat eviction', () => {
-    const runtimeChat = (id: string, extras: any = {}) => blankChat({
-        id, message: [{ chatId: `${id}-message`, data: 'body' }], messagesLoaded: true,
-        messagesFullyLoaded: false, _sqlWindow: { hasOlder: true }, note: `${id}-note`,
-        localLore: [{ key: id }], modules: [`${id}-module`], customMetadata: { id }, ...extras,
-    })
+    // Build the hydration window the way hydration itself does. It is
+    // symbol-keyed runtime state, so an object literal cannot express it and a
+    // fixture that tried would leave the chat looking like one that was never
+    // hydrated -- which is not what eviction has to survive.
+    const runtimeChat = (id: string, extras: any = {}) => {
+        const chat = blankChat({
+            id, message: [{ chatId: `${id}-message`, data: 'body' }], messagesLoaded: true,
+            messagesFullyLoaded: false, note: `${id}-note`,
+            localLore: [{ key: id }], modules: [`${id}-module`], customMetadata: { id }, ...extras,
+        })
+        setSqlWindow(chat, { before: null, nextBefore: 0, total: 2, hasOlder: true, nextPosition: 2 })
+        return chat
+    }
     const character = (id: string, chat: any) => ({ chaId: id, chatPage: 0, chats: [chat] })
 
     test('re-finds a stable ID after flush and replaces only its message body', async () => {
@@ -445,6 +454,12 @@ describe('runtime hydrated-chat eviction', () => {
         expect(evicted).not.toBe(replacement)
         expect(evicted).toMatchObject({ id: 'chat-1', name: 'replacement', customMetadata: { fresh: true }, note: 'chat-1-note', modules: ['chat-1-module'], message: [], _placeholder: true, messagesLoaded: false })
         expect(evicted.localLore).toEqual([{ key: 'chat-1' }])
+        // The replacement slot describes an empty, unhydrated chat, so it must
+        // carry no window at all: a window says "these forty are resident and
+        // storage holds more", and the slot now holds none. Both spellings are
+        // checked -- the symbol one is the live marker, and the string one is
+        // what a save encoder would have serialised had it survived.
+        expect(getSqlWindow(evicted)).toBeUndefined()
         expect('_sqlWindow' in evicted).toBe(false)
         expect(runtimeState.flush).toHaveBeenCalledTimes(2)
     })
@@ -539,5 +554,52 @@ describe('runtime hydrated-chat eviction', () => {
             expect(runtimeState.database.characters[0].chats[0]._placeholder).not.toBe(true)
             expect(runtimeState.database.characters[1].chats[0]._placeholder).toBe(true)
         }
+    })
+})
+
+/**
+ * `isChatHistoryIncomplete` is the single predicate the app asks before it does
+ * anything that writes a chat's whole message list back: saving a slot, merging
+ * chats, recovering a job, exporting. If it answers "complete" for a chat that
+ * is holding only its newest page, the write replaces the persisted history
+ * with that page.
+ *
+ * The window it consults is symbol-keyed runtime state. A reader still spelling
+ * the old property name reads `undefined` and answers "complete" -- silently,
+ * with no error anywhere -- which is why this is asserted against the real
+ * accessor and the real function rather than a fixture shaped by hand.
+ */
+describe('isChatHistoryIncomplete', () => {
+    test('reports a fully resident chat as complete', () => {
+        expect(isChatHistoryIncomplete(blankChat({
+            id: 'chat-1', message: [{ chatId: 'm-1' }], messagesLoaded: true, messagesFullyLoaded: true,
+        }))).toBe(false)
+    })
+
+    test('reports a chat whose older messages are still in storage as incomplete', () => {
+        const chat = blankChat({
+            id: 'chat-1', message: [{ chatId: 'm-400' }], messagesLoaded: true, messagesFullyLoaded: true,
+        })
+        setSqlWindow(chat, { before: null, nextBefore: 360, total: 400, hasOlder: true, nextPosition: 400 })
+
+        expect(isChatHistoryIncomplete(chat)).toBe(true)
+    })
+
+    test('reports the chat as complete again once the window says nothing is older', () => {
+        const chat = blankChat({
+            id: 'chat-1', message: [{ chatId: 'm-1' }], messagesLoaded: true, messagesFullyLoaded: true,
+        })
+        setSqlWindow(chat, { before: null, nextBefore: null, total: 1, hasOlder: false, nextPosition: 1 })
+
+        expect(isChatHistoryIncomplete(chat)).toBe(false)
+    })
+
+    test('still reports placeholders and unloaded chats as incomplete', () => {
+        // No window at all is "no evidence", not "nothing older": these flags
+        // are what catch a chat that was never hydrated in the first place.
+        expect(isChatHistoryIncomplete(null)).toBe(true)
+        expect(isChatHistoryIncomplete(blankChat({ _placeholder: true }))).toBe(true)
+        expect(isChatHistoryIncomplete(blankChat({ messagesLoaded: false }))).toBe(true)
+        expect(isChatHistoryIncomplete(blankChat({ messagesFullyLoaded: false }))).toBe(true)
     })
 })

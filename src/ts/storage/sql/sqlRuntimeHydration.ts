@@ -6,14 +6,14 @@ import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } 
 import { rebaselineHydratedRootKey } from "./sqlPersistenceRuntime";
 import { validateOlderMessagePage } from "../../chatWindow";
 import { clearDeferredRootKey, isRootKeyDeferred } from "./deferredRootKeys";
+import {
+  getSqlWindow,
+  setSqlPosition,
+  setSqlWindow,
+  type SqlHydrationWindow,
+} from "./sqlRuntimeWindow";
 
-export type SqlHydrationWindow = {
-  before: number | null;
-  nextBefore: number | null;
-  total: number;
-  hasOlder: boolean;
-  nextPosition: number;
-};
+export type { SqlHydrationWindow } from "./sqlRuntimeWindow";
 type HydratableCharacter = character & { detailsLoaded?: boolean };
 type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
 
@@ -121,29 +121,51 @@ function normalizeLimit(limit?: number): number {
   return Math.min(100, Math.max(1, Math.floor(limit ?? DEFAULT_MESSAGE_LIMIT)));
 }
 
-function setWindow(chat: Chat, window: SqlHydrationWindow): void {
-  Object.defineProperty(chat, "_sqlWindow", {
-    configurable: true,
-    enumerable: false,
-    writable: true,
-    value: window,
-  });
-}
-
-function getWindow(chat: Chat): SqlHydrationWindow | undefined {
-  return (chat as Chat & { _sqlWindow?: SqlHydrationWindow })._sqlWindow;
-}
-
+/**
+ * Positions are what later commits write rows back at. Silently skipping them
+ * on a malformed response would leave a window that looks healthy over messages
+ * with no canonical position, and the next save would guess -- so a mismatch is
+ * refused here, before anything observable has been touched.
+ */
 function attachCanonicalPositions(messages: Chat["message"], positions: number[] | undefined): void {
-  if (!positions || positions.length !== messages.length) return;
-  for (const [index, message] of messages.entries()) {
-    Object.defineProperty(message, "_sqlPosition", {
-      configurable: true,
-      enumerable: false,
-      writable: true,
-      value: positions[index],
-    });
+  if (messages.length === 0) return;
+  if (!positions || positions.length !== messages.length) {
+    throw new Error(
+      `SQL message page carried ${positions ? positions.length : "no"} positions for ` +
+      `${messages.length} messages; refusing to attach them.`,
+    );
   }
+  for (const [index, message] of messages.entries()) {
+    setSqlPosition(message, positions[index]);
+  }
+}
+
+/**
+ * Splice a page into a resident message array. The array object is never
+ * replaced.
+ *
+ * `Chats.svelte` mounts message components imperatively and sweeps every
+ * mounted row that is absent from the current array, so handing it a different
+ * array unmounts the whole conversation and leaves the screen blank -- even
+ * when the new array is perfectly correct. Splicing keeps the identity the
+ * mounted components were keyed against.
+ *
+ * Messages already resident are kept and never re-added. A page is a view of
+ * what storage holds, not an assertion that everything missing from it is gone,
+ * so a short page or an empty one is structurally incapable of removing a row.
+ *
+ * Ordering assumption for `"end"`: the newest page is appended after whatever
+ * is already resident, because a chat that still has no window holds at most an
+ * older prefix of its own history -- a placeholder's empty array, or the
+ * survivors of an earlier attempt. Resident messages the page does not mention
+ * are therefore treated as older, and the ID dedup is what stops a repeated
+ * tail from appearing twice.
+ */
+function insertMessages(resident: Chat["message"], incoming: Chat["message"], at: "start" | "end"): void {
+  const known = new Set(resident.map((message) => message.chatId));
+  const added = incoming.filter((message) => !known.has(message.chatId));
+  if (added.length === 0) return;
+  resident.splice(at === "start" ? 0 : resident.length, 0, ...added);
 }
 
 /**
@@ -156,7 +178,13 @@ function validateOlderReversePage(
   window: SqlHydrationWindow,
   knownIds: Set<string | undefined>,
 ): void {
-  if (page.total !== window.total || page.before !== window.nextBefore || page.nextPosition !== window.nextPosition) {
+  // `before` and `nextPosition` are the boundary contract: the page must start
+  // exactly where this window said it would. `total` is not part of it. It is a
+  // COUNT(*) snapshot taken when the window was built, and any message the user
+  // deletes afterwards legitimately moves it -- treating that as corruption made
+  // every older page throw for the rest of the session, permanently stranding
+  // history behind a single deletion. The fresh count is adopted below instead.
+  if (page.before !== window.nextBefore || page.nextPosition !== window.nextPosition) {
     throw new Error("Reverse page metadata changed")
   }
   if (!Array.isArray(page.positions) || page.positions.length !== page.messages.length) {
@@ -217,7 +245,7 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
   if (!storage) return initial;
   const chatId = initial.id;
   if (!chatId) return null;
-  const existingWindow = getWindow(initial);
+  const existingWindow = getSqlWindow(initial);
   if (existingWindow) return initial;
   const key = `${character.chaId}/${chatId}`;
   const existing = chatHydrations.get(key);
@@ -230,18 +258,42 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
       const currentIndex = character.chats.findIndex((chat) => chat?.id === chatId);
       const current = currentIndex === -1 ? null : character.chats[currentIndex];
       if (!current) return null;
+
+      // Everything that can throw runs first, and runs against the page's own
+      // objects. Attaching canonical positions rejects a page whose positions
+      // are not real positions, and it does so while the chat is still exactly
+      // as the user last saw it. Nothing below this point can fail, so there is
+      // no state in which the chat has been half-updated: the previous
+      // implementation replaced `message` before attaching the window and left
+      // a truncated, windowless chat behind when the attach threw.
       attachCanonicalPositions(page.messages, page.positions);
-      current.message = page.messages;
-      current._placeholder = false;
-      (current as HydratableChat).messagesLoaded = true;
-      (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
-      setWindow(current, {
+      const window: SqlHydrationWindow = {
         before: page.before,
         nextBefore: page.nextBefore,
         total: page.total,
         hasOlder: page.hasMore,
         nextPosition: page.nextPosition,
-      });
+      };
+
+      if (!Array.isArray(current.message)) current.message = [];
+      insertMessages(current.message, page.messages, "end");
+      current._placeholder = false;
+      (current as HydratableChat).messagesLoaded = true;
+      // A page claiming to be terminal must actually account for the whole
+      // history. Trusting `hasMore` alone lets a short or empty terminal page
+      // mark a chat complete over a fraction of its messages, and "complete" is
+      // what every export, merge and backup guard reads before deciding the
+      // history is safe to copy. The reverse-page path enforces the same
+      // coverage rule; this one had no equivalent.
+      const fullyLoaded = !page.hasMore && current.message.length >= page.total;
+      if (!page.hasMore && !fullyLoaded) {
+        console.error(
+          `[SQL hydration] chat ${chatId} returned a terminal page covering ` +
+          `${current.message.length} of ${page.total} messages; leaving it marked incomplete.`,
+        );
+      }
+      (current as HydratableChat).messagesFullyLoaded = fullyLoaded;
+      setSqlWindow(current, window);
       beginHydrationApply(key);
       await tick();
       endHydrationApply(key);
@@ -257,7 +309,7 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
 
 export async function loadOlderChatMessages(character: character, chatIndex: number, limit?: number): Promise<Chat | null> {
   const chat = character.chats[chatIndex];
-  const window = chat && getWindow(chat);
+  const window = chat && getSqlWindow(chat);
   if (!chat || !window || !window.hasOlder || window.nextBefore === null) return chat ?? null;
   const storage = getNodeBootstrapStorage();
   if (!storage) return chat;
@@ -286,20 +338,28 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
       );
       const older = olderPairs.map(({ message }) => message);
       if (older.length === 0 && page.hasMore && page.nextBefore === window.nextBefore) {
-        setWindow(current, { ...window, hasOlder: false });
+        setSqlWindow(current, { ...window, hasOlder: false });
         return current;
       }
+
+      // Same ordering rule as the initial page: attach positions to the page's
+      // own messages, build the replacement window, and only then touch the
+      // chat. `message` is spliced rather than rebuilt with
+      // `[...older, ...current.message]`, which allocated a new array and made
+      // every already-mounted message component identity-change on a success.
       attachCanonicalPositions(older, olderPairs.map(({ position }) => position));
-      current.message = [...older, ...current.message];
-      (current as HydratableChat).messagesLoaded = true;
-      (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
-      setWindow(current, {
+      const nextWindow: SqlHydrationWindow = {
         before: page.before,
         nextBefore: page.nextBefore,
         total: page.total,
         hasOlder: page.hasMore,
         nextPosition: Math.max(window.nextPosition, page.nextPosition),
-      });
+      };
+
+      insertMessages(current.message, older, "start");
+      (current as HydratableChat).messagesLoaded = true;
+      (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
+      setSqlWindow(current, nextWindow);
       beginHydrationApply(key);
       await tick();
       endHydrationApply(key);

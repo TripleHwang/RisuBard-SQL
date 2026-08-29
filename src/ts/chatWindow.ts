@@ -48,7 +48,12 @@ export type ReverseWindow = { offset: number, total: number, ids: string[] }
 /** Validates a page fetched immediately before a currently loaded reverse window. */
 export function validateOlderMessagePage<T extends { chatId?: string }>(page: ReverseMessagePage<T>, current: ReverseWindow): T[] {
     const ids = page.messages.map(message => message.chatId ?? '')
-    if (!Number.isInteger(page.offset) || page.offset < 0 || page.total !== current.total) throw new Error('Reverse page metadata changed')
+    // `current.total` is a count snapshotted when the window was built, so any
+    // message deleted since then legitimately moves it. Comparing the two made a
+    // single deletion strand the rest of the history behind a throw for the whole
+    // session. Contiguity and identity below are the checks that catch real
+    // corruption; the caller adopts the page's fresh total.
+    if (!Number.isInteger(page.offset) || page.offset < 0) throw new Error('Reverse page metadata changed')
     if (page.offset + page.messages.length !== current.offset) throw new Error('Reverse page is not contiguous')
     if (ids.some(id => !id) || new Set(ids).size !== ids.length || ids.some(id => current.ids.includes(id))) throw new Error('Reverse page has duplicate message IDs')
     return page.messages

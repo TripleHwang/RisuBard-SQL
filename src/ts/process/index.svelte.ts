@@ -82,6 +82,7 @@ import {
 } from '../risubard/wikiPromptPreset';
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
 import { saveChatToServer } from '../storage/chatStorage';
+import { hasOlderSqlMessages } from '../storage/sql/sqlRuntimeWindow';
 import {
     createWikiRebootJob,
     nextWikiRebootBatch,
@@ -844,7 +845,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         alertError('Chat is still loading. Please wait a moment.')
         return false
     }
-    if ((selectedConversation as (Chat & { _sqlWindow?: { hasOlder?: boolean } }) | undefined)?._sqlWindow?.hasOlder) {
+    if (hasOlderSqlMessages(selectedConversation)) {
         alertError('Load earlier messages before generating.')
         return false
     }

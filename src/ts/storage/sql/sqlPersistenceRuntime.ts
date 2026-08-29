@@ -291,6 +291,24 @@ export function rebaselineHydratedRootKey(database: Database, key: string): void
     compatibilityBaseline.roots.set(key, fingerprint(record[key]))
 }
 
+/**
+ * A message id missing from a chat's array means "deleted" only when that array
+ * is the whole history. Under SQL windowing it is a slice: hydration makes the
+ * newest forty resident, and eviction (chatStorage.ts:300) drops the array
+ * entirely while setting messagesFullyLoaded false. Without this guard the idle
+ * audit reads an evicted chat as one whose every message the user just deleted,
+ * and issues a delete for each -- partial knowledge turned into a definite
+ * negative, against rows that are still on disk.
+ */
+function deleteMissing(
+    chatId: string,
+    prior: { order: string[] },
+    current: { values: Map<string, string>; complete: boolean },
+): void {
+    if (!current.complete) return
+    for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
+}
+
 /** Idle compatibility audit: baseline first, then only explicitly changed scopes. */
 export function auditSqlCompatibilityDatabase(database: Database): void {
     const next = snapshotCompatibility(database)
@@ -338,11 +356,11 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
             // reconcile the same mutation. Independent row edits below remain dirty.
             next.messages.set(chatId, prior)
             for (const id of currentPrior) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
-            for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
+            deleteMissing(chatId, prior, current)
             continue
         }
         for (const id of current.order) if (prior.values.get(id) !== current.values.get(id)) markSqlMessageDirty(chatId, id)
-        for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
+        deleteMissing(chatId, prior, current)
         if (current.complete && prior.order.join('\u0000') !== current.order.join('\u0000')) {
             for (const id of current.order) markSqlMessageDirty(chatId, id)
             markSqlMessageManifestDirty(chatId)

@@ -38,6 +38,7 @@
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
     import { loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
+    import { hasOlderSqlMessages } from '../../ts/storage/sql/sqlRuntimeWindow';
     import { sleep } from "../../ts/util";
     import { language } from "../../lang";
     import { isExpTranslator, translate } from "../../ts/translator/translator";
@@ -331,8 +332,8 @@ import { isMobile } from 'src/ts/platform'
 
     async function selectPreviousChatPage() {
         if (chatPage > 0) return selectChatPage(chatPage - 1)
-        const chat = currentCharacter?.chats[currentCharacter.chatPage] as (ChatData & { _sqlWindow?: { hasOlder?: boolean } }) | undefined
-        if (!chat?._sqlWindow?.hasOlder || !currentCharacter) return
+        const chat = currentCharacter?.chats[currentCharacter.chatPage]
+        if (!hasOlderSqlMessages(chat) || !currentCharacter) return
         const container = document.querySelector('.default-chat-screen') as HTMLElement | null
         const firstVisible = container
             ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-id]'))
@@ -1544,7 +1545,12 @@ import { isMobile } from 'src/ts/platform'
                 </button>
             {/if}
 
-            {#if chatBounds.pageCount > 1}
+            <!-- chatBounds counts RESIDENT messages, so a freshly hydrated chat
+                 holding its newest window is one page even when hundreds more sit
+                 on disk. Gating the nav on that alone hides the previous-page
+                 button, which is the only caller of loadOlderChatMessages in the
+                 app -- older history becomes unreachable while appearing complete. -->
+            {#if chatBounds.pageCount > 1 || hasOlderSqlMessages(currentChatSlot)}
                 <nav
                     data-chat-pagination
                     class="mx-auto my-3 flex max-w-xl items-center justify-center gap-2 rounded-full border border-darkborderc bg-darkbg/90 px-3 py-2 text-sm text-textcolor shadow-sm"
@@ -1553,7 +1559,7 @@ import { isMobile } from 'src/ts/platform'
                     <button
                         data-chat-page-previous
                         class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page === 0 && !(currentChatSlot as any)?._sqlWindow?.hasOlder}
+                        disabled={chatBounds.page === 0 && !hasOlderSqlMessages(currentChatSlot)}
                         onclick={() => void selectPreviousChatPage()}
                     >{language.chatPagePrevious}</button>
                     <span class="min-w-20 text-center tabular-nums">

@@ -13,6 +13,7 @@ import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
 import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, touchHydratedChat, chatToStub, classifyChat } from "./storage/chatStorage";
+import { hasOlderSqlMessages } from "./storage/sql/sqlRuntimeWindow";
 import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
@@ -876,9 +877,9 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             // Skip placeholders — they have no real data to save
             if (!chat || chat._placeholder) continue
             const partialSqlWindow = getActiveSqlStorage()?.backendKind === 'server-sql' &&
-                ((chat as Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean; _sqlWindow?: { hasOlder?: boolean } }).messagesLoaded === false ||
+                ((chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false ||
                 (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false ||
-                (chat as Chat & { _sqlWindow?: { hasOlder?: boolean } })._sqlWindow?.hasOlder === true)
+                hasOlderSqlMessages(chat))
             if (partialSqlWindow) continue
             try {
                 await saveChatToServer(chaId, chatIndex, chatId, chat)

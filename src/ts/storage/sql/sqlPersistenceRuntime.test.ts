@@ -181,3 +181,45 @@ describe('SQL persistence runtime', () => {
         expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({ messageManifests: [{ chatId: 'chat-a', ids: ['m-0', 'm-middle', 'm-1'] }] }))
     })
 })
+
+describe('an unloaded chat is not a chat whose messages were deleted', () => {
+    // SQL windowing makes chat.message a slice, and eviction (chatStorage.ts:300)
+    // drops it entirely while setting messagesFullyLoaded false. The idle audit
+    // used to read that as the user having deleted every message in the chat and
+    // issued a delete for each -- against rows still on disk.
+    const messageDeletesOf = (storage: ISqlStorage): string[] =>
+        (storage.commit as any).mock.calls.flatMap(([commit]: [any]) =>
+            (commit.messageDeletes ?? []).flatMap((entry: any) => entry.ids as string[]))
+
+    it('issues no deletes when a windowed chat is evicted', async () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = fixtureDatabaseWithMessages(40)
+        const chat = database.characters[0].chats[0]
+        chat.messagesFullyLoaded = false
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        // Eviction: the array is emptied and the chat is marked not fully loaded.
+        chat.message = []
+        chat.messagesLoaded = false
+        auditSqlCompatibilityDatabase(database)
+        await flushSqlDirtyChanges()
+
+        expect(messageDeletesOf(storage)).toEqual([])
+    })
+
+    it('still deletes a message removed from a fully loaded chat', async () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = fixtureDatabaseWithMessages(3)
+        const chat = database.characters[0].chats[0]
+        chat.messagesFullyLoaded = true
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        chat.message.splice(1, 1)
+        auditSqlCompatibilityDatabase(database)
+        await flushSqlDirtyChanges()
+
+        expect(messageDeletesOf(storage)).toEqual(['m-1'])
+    })
+})

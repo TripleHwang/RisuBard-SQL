@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DirtySnapshot } from "./dirtyRegistry";
 import { buildSqlDirtyCommit } from "./sqlDirtyCommit";
+import { getSqlPosition, setSqlPosition, setSqlWindow } from "./sqlRuntimeWindow";
 
 const cleanDirty = (): DirtySnapshot => ({
   rootKeys: [], characterIds: [], chats: [], messages: [],
@@ -61,8 +62,8 @@ describe("row-scoped SQL dirty commits", () => {
     const chat = db.characters[0].chats[0];
     chat.message = chat.message.slice(3);
     chat.messagesFullyLoaded = false;
-    Object.defineProperty(chat.message[0], "_sqlPosition", { value: 3, enumerable: false });
-    Object.defineProperty(chat.message[1], "_sqlPosition", { value: 4, enumerable: false });
+    setSqlPosition(chat.message[0], 3);
+    setSqlPosition(chat.message[1], 4);
     const dirty = cleanDirty();
     dirty.messages = [{ chatId: "chat-a", messageIds: ["m-4"] }];
 
@@ -77,7 +78,7 @@ describe("row-scoped SQL dirty commits", () => {
     chat.message = [chat.message[1], chat.message[2], chat.message[3], chat.message[4], chat.message[5]];
     chat.messagesFullyLoaded = false;
     for (const [index, message] of chat.message.entries()) {
-      Object.defineProperty(message, "_sqlPosition", { value: index + 1, enumerable: false });
+      setSqlPosition(message, index + 1);
     }
     const dirty = cleanDirty();
     dirty.messages = [{ chatId: "chat-a", messageIds: ["m-1"] }];
@@ -92,9 +93,9 @@ describe("row-scoped SQL dirty commits", () => {
     const chat = db.characters[0].chats[0];
     chat.message = chat.message.slice(3);
     chat.messagesFullyLoaded = false;
-    Object.defineProperty(chat, "_sqlWindow", { value: { hasOlder: true, nextPosition: 9 }, enumerable: false });
-    Object.defineProperty(chat.message[0], "_sqlPosition", { value: 4, enumerable: false });
-    Object.defineProperty(chat.message[1], "_sqlPosition", { value: 8, enumerable: false });
+    setSqlWindow(chat, { before: null, nextBefore: 4, total: 5, hasOlder: true, nextPosition: 9 });
+    setSqlPosition(chat.message[0], 4);
+    setSqlPosition(chat.message[1], 8);
     chat.message.push({ chatId: "m-new", role: "char", data: "new" });
     const dirty = cleanDirty();
     dirty.messages = [{ chatId: "chat-a", messageIds: ["m-new"] }];
@@ -102,7 +103,7 @@ describe("row-scoped SQL dirty commits", () => {
     expect(buildSqlDirtyCommit(db, dirty, 7).messages).toEqual([
       expect.objectContaining({ id: "m-new", position: 9 }),
     ]);
-    expect((chat.message[2] as any)._sqlPosition).toBe(9);
+    expect(getSqlPosition(chat.message[2])).toBe(9);
   });
 
   it("uses a parent chat manifest when a dirty chat has been deleted", () => {

@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import type { Database, Message } from "../database.svelte";
 import { flattenRelationalValue } from "./relationalNodeCodec";
+import { hasOlderSqlMessages } from "./sqlRuntimeWindow";
 import {
   createEmptySqlCommit,
   hasSqlCommitChanges,
@@ -170,11 +171,10 @@ export function buildSqlDeltaCommit(
       const runtimeChat = chat as typeof chat & {
         messagesLoaded?: boolean;
         messagesFullyLoaded?: boolean;
-        _sqlWindow?: { hasOlder?: boolean };
       };
       const incompleteWindow = runtimeChat.messagesLoaded === false ||
         runtimeChat.messagesFullyLoaded === false ||
-        runtimeChat._sqlWindow?.hasOlder === true;
+        hasOlderSqlMessages(chat);
       if (incompleteWindow) return;
 
       const oldMessages = oldChat?.message ?? [];

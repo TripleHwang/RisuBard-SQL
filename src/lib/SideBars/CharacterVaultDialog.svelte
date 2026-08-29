@@ -38,6 +38,7 @@
         requiresFullEncoderReload,
         saveAsset,
     } from 'src/ts/globalApi.svelte'
+    import { hasOlderSqlMessages } from 'src/ts/storage/sql/sqlRuntimeWindow'
     import { selectSingleFile } from 'src/ts/util'
     import { getCharImage } from 'src/ts/characters'
     import { alertConfirm, alertInput } from 'src/ts/alert'
@@ -345,7 +346,7 @@
                             await ensureChatHydrated(source.chats, index, source.chaId)
                         }
                         const hydrated = source.chats[index] as any
-                        if (hydrated?._placeholder || hydrated?.messagesFullyLoaded === false || hydrated?._sqlWindow?.hasOlder) {
+                        if (hydrated?._placeholder || hydrated?.messagesFullyLoaded === false || hasOlderSqlMessages(hydrated)) {
                             throw new Error(`${source.name}: Load earlier messages before cloning.`)
                         }
                     }

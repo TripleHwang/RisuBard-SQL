@@ -6,6 +6,7 @@ import {
   createEmptySqlCommit,
   hasSqlCommitChanges,
 } from "./sqlCommit";
+import { getSqlPosition, getSqlWindow, setSqlPosition, setSqlWindow } from "./sqlRuntimeWindow";
 
 describe("RisuVault SQL row commits", () => {
   it("splits legacy snapshots into character, chat and message rows", () => {
@@ -41,6 +42,7 @@ describe("RisuVault SQL row commits", () => {
     expect(commit.characters[0].data).not.toHaveProperty("chats");
     expect(commit.chats[0].data).not.toHaveProperty("message");
     expect(commit.chats[0].data).not.toHaveProperty("messagesLoaded");
+    expect(getSqlWindow(commit.chats[0].data as object)).toBeUndefined();
     expect(commit.chats[0].data).not.toHaveProperty("_sqlWindow");
     expect(commit.messages).toEqual([
       {
@@ -52,7 +54,30 @@ describe("RisuVault SQL row commits", () => {
     ]);
   });
 
-  it("does not serialize runtime SQL message windows", () => {
+  it("does not serialize runtime SQL hydration marks", () => {
+    // Build the marks the way hydration does. They are symbol-keyed, and a
+    // spread or rest-destructure -- which is how the commit builders copy a
+    // chat and a message -- carries own enumerable symbols across. Asserting
+    // only on the old property name would pass on a payload that still had
+    // them.
+    const chat: any = { id: "chat-1", message: [{ chatId: "message-1", role: "user", data: "hello" }] };
+    setSqlWindow(chat, { before: null, nextBefore: 8, total: 10, hasOlder: true, nextPosition: 10 });
+    setSqlPosition(chat.message[0], 9);
+    const database = {
+      characters: [{ chaId: "character-1", chats: [chat] }],
+      botPresets: [], botPresetsId: 0,
+    } as any;
+
+    const commit = buildSqlReplaceCommit(database, 0);
+
+    expect(getSqlWindow(commit.chats[0].data as object)).toBeUndefined();
+    expect(getSqlPosition(commit.messages[0].data as object)).toBeUndefined();
+    // The live chat keeps its marks: stripping happens on the copy.
+    expect(getSqlWindow(chat)).toMatchObject({ hasOlder: true, total: 10 });
+    expect(getSqlPosition(chat.message[0])).toBe(9);
+  });
+
+  it("does not serialize hydration marks left as plain properties by an older build", () => {
     const database = {
       characters: [{ chaId: "character-1", chats: [{ id: "chat-1", message: [], _sqlWindow: { total: 10 } }] }],
       botPresets: [], botPresetsId: 0,

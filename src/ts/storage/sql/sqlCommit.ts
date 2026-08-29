@@ -8,6 +8,7 @@ import type {
   Message,
 } from "../database.svelte";
 import { isRootKeyDeferred } from "./deferredRootKeys";
+import { stripSqlRuntimeFields } from "./sqlRuntimeWindow";
 
 export interface SqlSettingUpsert {
   key: string;
@@ -135,14 +136,17 @@ export function sqlChatData(value: Chat): unknown {
   delete data.messagesFullyLoaded;
   delete data.messageOffset;
   delete data.messageTotal;
-  delete data._sqlWindow;
   delete data.detailsLoaded;
-  return data;
+  // Object spread copies own enumerable *symbol* keys, so the runtime
+  // hydration window rides along on the copy unless it is stripped here.
+  return stripSqlRuntimeFields(data);
 }
 
 export function sqlMessageData(value: Message): unknown {
+  // Rest destructuring copies symbol keys for the same reason as the spread
+  // above; the canonical SQL position is runtime bookkeeping, never row data.
   const { chatId: _messageId, ...data } = value;
-  return data;
+  return stripSqlRuntimeFields(data);
 }
 
 function ensureId(value: { id?: string }): string {

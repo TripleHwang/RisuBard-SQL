@@ -1,0 +1,163 @@
+import type { Chat, Message } from "../database.svelte";
+
+/**
+ * Runtime-only markers attached to live chats and messages by SQL page
+ * hydration.
+ *
+ * These are storage bookkeeping, not user data: they say *how much of a chat is
+ * resident* and *where a resident message sits in the persisted order*. They
+ * must be reachable from a live `$state` object and must never reach the
+ * database.
+ *
+ * The previous implementation used `Object.defineProperty(..., { enumerable:
+ * false })` to get "invisible to serialization". Svelte 5 rejects that on a
+ * `$state` proxy outright -- `proxy.js` throws `state_descriptors_fixed` for any
+ * descriptor that is not value-carrying, enumerable, writable and configurable --
+ * so every chat opened in SQL mode threw mid-hydration.
+ *
+ * A symbol key gets the same guarantee by a route the proxy accepts. A plain
+ * assignment under a symbol key is an ordinary writable/enumerable/configurable
+ * property as far as the proxy is concerned, while `JSON.stringify`,
+ * `structuredClone` and `$state.snapshot` -- every path that leads to persistence
+ * or to a wire format -- ignore symbol keys entirely. `Object.keys`,
+ * `Object.entries` and `for...in` ignore them too, so the legacy save encoder and
+ * the diffing fingerprints stay unchanged.
+ *
+ * `Symbol.for` rather than `Symbol()` is deliberate. Under Vite the same module
+ * can be instantiated more than once (SSR graph vs browser graph, or a test
+ * transform boundary). Two module instances holding two distinct `Symbol()`
+ * values would silently fail to see each other's marks: a chat would look
+ * unhydrated to one half of the app and fully loaded to the other -- partial
+ * knowledge read as a finished state, the exact failure class this codebase
+ * refuses. A registry symbol is the same key in every instance.
+ *
+ * Nothing outside this module should name these keys. Use the accessors.
+ */
+const SQL_WINDOW_KEY = Symbol.for("risuvault.sql.hydrationWindow");
+const SQL_POSITION_KEY = Symbol.for("risuvault.sql.canonicalPosition");
+
+/**
+ * What the runtime knows about the persisted extent of one chat's history.
+ *
+ * `hasOlder` is the load-bearing field: `true` means messages exist in storage
+ * that are not in `chat.message`. Anything that would write the whole message
+ * list back, export it, or treat it as the complete history must consult it.
+ */
+export type SqlHydrationWindow = {
+  /** Position boundary this page was requested before (`null` for the newest page). */
+  before: number | null;
+  /** Boundary to request next when walking backwards; `null` at the start of history. */
+  nextBefore: number | null;
+  /** Total persisted message count for the chat, not the resident count. */
+  total: number;
+  /** True when storage holds messages older than the resident window. */
+  hasOlder: boolean;
+  /** Next free persisted position, used to allocate positions for appended messages. */
+  nextPosition: number;
+};
+
+type WindowCarrier = { [SQL_WINDOW_KEY]?: SqlHydrationWindow };
+type PositionCarrier = { [SQL_POSITION_KEY]?: number };
+
+/** A chat-shaped value; hydration marks are attached to live `$state` chats. */
+type ChatLike = Chat | (object & { message?: unknown });
+/** A message-shaped value. */
+type MessageLike = Message | object;
+
+/**
+ * The lazy-loading window attached during hydration, or `undefined` when this
+ * chat has never been hydrated from a SQL page.
+ *
+ * `undefined` means "no window recorded", which is not the same as "no older
+ * messages" -- callers that need the latter must ask {@link hasOlderSqlMessages}
+ * or check the chat's own `messagesLoaded` / `messagesFullyLoaded` flags.
+ */
+export function getSqlWindow(chat: ChatLike | null | undefined): SqlHydrationWindow | undefined {
+  if (!chat || typeof chat !== "object") return undefined;
+  return (chat as WindowCarrier)[SQL_WINDOW_KEY];
+}
+
+/**
+ * Record the window for a chat. Callers replace the whole window rather than
+ * mutating the previous one, so a half-updated window can never be observed.
+ */
+export function setSqlWindow(chat: ChatLike, window: SqlHydrationWindow): void {
+  (chat as WindowCarrier)[SQL_WINDOW_KEY] = window;
+}
+
+/**
+ * Forget the window. Use when a chat slot stops being a hydrated view of
+ * storage -- eviction back to a placeholder, or a slot replaced wholesale --
+ * so the next read re-hydrates instead of trusting a window that describes a
+ * message array which is no longer there.
+ */
+export function clearSqlWindow(chat: ChatLike): void {
+  delete (chat as WindowCarrier)[SQL_WINDOW_KEY];
+}
+
+/**
+ * True only when a window is present *and* says storage holds older messages.
+ *
+ * Deliberately false for a chat with no window: absence of a window is absence
+ * of evidence, and every caller of this predicate pairs it with `_placeholder`,
+ * `messagesLoaded === false` and `messagesFullyLoaded === false`, which are the
+ * checks that catch "not hydrated at all".
+ */
+export function hasOlderSqlMessages(chat: ChatLike | null | undefined): boolean {
+  return getSqlWindow(chat)?.hasOlder === true;
+}
+
+/**
+ * The canonical persisted position of a resident message, or `undefined` when
+ * none has been attached.
+ *
+ * `undefined` means the position is unknown, never zero. Callers writing a
+ * message back into a partially resident chat must treat it as unknown and
+ * refuse the write rather than substituting an array index.
+ */
+export function getSqlPosition(message: MessageLike | null | undefined): number | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  return (message as PositionCarrier)[SQL_POSITION_KEY];
+}
+
+/**
+ * Attach a canonical persisted position.
+ *
+ * Rejects anything that is not a real position. A message carrying a bogus
+ * position is worse than one carrying none: the missing-position path already
+ * throws loudly at commit time, while a bogus one would be written into the
+ * `messages.position` column and silently reorder or overwrite a row.
+ */
+export function setSqlPosition(message: MessageLike, position: number): void {
+  if (!Number.isSafeInteger(position) || position < 0) {
+    throw new Error(`Refusing to attach a non-positional canonical SQL position: ${String(position)}`);
+  }
+  (message as PositionCarrier)[SQL_POSITION_KEY] = position;
+}
+
+/** Forget a message's canonical position. */
+export function clearSqlPosition(message: MessageLike): void {
+  delete (message as PositionCarrier)[SQL_POSITION_KEY];
+}
+
+/**
+ * Remove every runtime hydration mark from a value on its way to storage.
+ *
+ * Symbol keys already vanish through `JSON.stringify` and `$state.snapshot`, so
+ * this is not what keeps them out of the database -- it is what keeps them out
+ * of the in-memory commit payloads and diff fingerprints that are built with
+ * object spread and rest destructuring, both of which *do* copy own enumerable
+ * symbols. The string-keyed deletes clear marks left by older builds that wrote
+ * these as ordinary properties.
+ *
+ * Mutates and returns the value passed; call it on the copy, never on the live
+ * chat.
+ */
+export function stripSqlRuntimeFields<T extends object>(data: T): T {
+  const record = data as T & WindowCarrier & PositionCarrier & Record<string, unknown>;
+  delete record[SQL_WINDOW_KEY];
+  delete record[SQL_POSITION_KEY];
+  delete record._sqlWindow;
+  delete record._sqlPosition;
+  return data;
+}

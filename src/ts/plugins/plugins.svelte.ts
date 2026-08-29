@@ -15,6 +15,7 @@ import { runPluginUpdate } from "./pluginUpdate";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 import { PluginChatOutputListeners, V2_CHAT_OUTPUT_OWNER, createV2ChatOutputApi } from "./pluginChatOutput";
 import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
+import { hasOlderSqlMessages } from "../storage/sql/sqlRuntimeWindow";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -45,7 +46,7 @@ export function assertPluginStorageResident(action: string): void {
 }
 
 export function isPluginChatComplete(chat: any): boolean {
-    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && chat._sqlWindow?.hasOlder !== true
+    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && !hasOlderSqlMessages(chat)
 }
 
 export function isPluginCharacterComplete(character: any): boolean {

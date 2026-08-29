@@ -1,6 +1,7 @@
 import { get, writable } from "svelte/store";
 import { saveImage, setDatabase, type character, type Chat, defaultSdDataFunc, type loreBook, getDatabase, getCharacterByIndex, setCharacterByIndex, getCurrentChat, loadTogglesFromChat, normalizeChat, newChatModelDefaults } from "./storage/database.svelte";
 import { ensureChatHydrated, touchHydratedChat } from "./storage/chatStorage";
+import { hasOlderSqlMessages } from "./storage/sql/sqlRuntimeWindow";
 import { ensureCharacterHydrated } from "./storage/sql/sqlRuntimeHydration";
 import { alertAddCharacter, alertConfirm, alertError, alertSelect, alertStore, alertWait, notifySuccess, notifyInfo } from "./alert";
 import { loadingOverlayStore, chatDeselected } from "./stores.svelte";
@@ -200,8 +201,8 @@ export async function exportChat(page:number){
         if(char.chats[page]?._placeholder || (char.chats[page] as Chat & { messagesLoaded?: boolean }).messagesLoaded === false){
             await ensureChatHydrated(char.chats, page, char.chaId)
         }
-        const hydratedChat = char.chats[page] as Chat & { _sqlWindow?: { hasOlder?: boolean }; messagesFullyLoaded?: boolean }
-        if(hydratedChat?._placeholder || hydratedChat?.messagesFullyLoaded === false || hydratedChat?._sqlWindow?.hasOlder){
+        const hydratedChat = char.chats[page] as Chat & { messagesFullyLoaded?: boolean }
+        if(hydratedChat?._placeholder || hydratedChat?.messagesFullyLoaded === false || hasOlderSqlMessages(hydratedChat)){
             alertError('Load earlier messages before exporting this chat.')
             return
         }
@@ -547,8 +548,8 @@ export async function exportAllChats() {
                 alertWait(`Loading chat data... (${i + 1}/${char.chats.length})`)
                 await ensureChatHydrated(char.chats, i, char.chaId)
             }
-            const chat = char.chats[i] as Chat & { _sqlWindow?: { hasOlder?: boolean }; messagesFullyLoaded?: boolean }
-            if (chat?._placeholder || chat?.messagesFullyLoaded === false || chat?._sqlWindow?.hasOlder) {
+            const chat = char.chats[i] as Chat & { messagesFullyLoaded?: boolean }
+            if (chat?._placeholder || chat?.messagesFullyLoaded === false || hasOlderSqlMessages(chat)) {
                 alertError(`Load earlier messages before exporting "${chat.name}". Export aborted to prevent data loss.`)
                 return
             }
