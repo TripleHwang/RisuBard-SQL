@@ -43,6 +43,7 @@ import {
 } from './storage/sql/migrationReporting'
 import { markPerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
+import { beginStartupPhases, markStartupPhase, reportStartupPhases } from './performance/startupPhases'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
 import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
 import { isRootKeyDeferred } from './storage/sql/deferredRootKeys'
@@ -91,35 +92,6 @@ async function loadDeferredModules(): Promise<void> {
     moduleUpdate()
 }
 
-/**
- * Startup phase timings, logged once as a single line.
- *
- * The loading text is the only signal a user has for where startup time goes,
- * and it is a poor one: "Opening SQL Database..." covers the metadata request,
- * its transfer and parse, the patch-sync clone and the whole setDatabase
- * migration. Measured in isolation every one of those is a few milliseconds, so
- * when startup feels slow the label alone cannot say which part grew. This
- * records the real boundaries so the answer is in the console instead of being
- * guessed at.
- */
-function createStartupPhases() {
-    const phases: string[] = []
-    let last = performance.now()
-    const started = last
-    return {
-        mark(label: string) {
-            const now = performance.now()
-            phases.push(`${label} ${(now - last).toFixed(0)}ms`)
-            last = now
-        },
-        report() {
-            console.error(
-                `[startup] total ${(performance.now() - started).toFixed(0)}ms — ${phases.join(', ')}`,
-            )
-        },
-    }
-}
-
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
     LoadingStatusState.text = "Opening SQL Database..."
     // A migration of a large database takes minutes and used to leave the
@@ -163,22 +135,24 @@ export async function loadData() {
     if (get(loadedStore) || dataLoading) return
     dataLoading = true
     const bootstrapMetric = runtimeMetrics.start('bootstrap')
-    const startupPhases = createStartupPhases()
+    beginStartupPhases()
     try {
             applyEarlyLanguage()
             let createdFreshDatabase = false
             let startupMode: 'metadata-first' | 'degraded' | 'unsupported' | undefined
             {
                 await forageStorage.Init()
-                startupPhases.mark('forage-init')
+                markStartupPhase('forage-init')
 
                 LoadingStatusState.text = "Opening SQL Database..."
                 const existingSql = await openExistingStandaloneSql()
-                startupPhases.mark('sql-metadata')
+                markStartupPhase('sql-metadata')
                 startupMode = existingSql?.mode
                 if (existingSql?.usingSql) {
                     setPatchSyncBaseline(safeStructuredClone(existingSql.database))
+                    markStartupPhase('patch-baseline-clone')
                     setDatabase(existingSql.database)
+                    markStartupPhase('set-database')
                 } else if (startupMode === 'degraded') {
                     LoadingStatusState.text = 'Server metadata load failed. Recovering in degraded mode...'
                     const recovery = await existingSql?.recoveryStorage?.loadRecoverySnapshot()
@@ -261,11 +235,11 @@ export async function loadData() {
             } catch (error) {
 
             }
+            markStartupPhase('database-activate')
             if (startupMode !== 'metadata-first') {
-                startupPhases.mark('database-activate')
                 LoadingStatusState.text = "Checking For Format Update..."
                 await checkNewFormat()
-                startupPhases.mark('format-check')
+                markStartupPhase('format-check')
 
                 // Convert any ChatStubs (from server-stripped database.bin) to placeholder Chats
                 // so runtime code only sees Chat objects
@@ -330,8 +304,8 @@ export async function loadData() {
         alertError(error)
     } finally {
         dataLoading = false
-        startupPhases.mark('states')
-        startupPhases.report()
+        markStartupPhase('states')
+        reportStartupPhases()
         runtimeMetrics.end(bootstrapMetric)
     }
 }

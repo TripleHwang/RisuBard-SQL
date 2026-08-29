@@ -5,6 +5,7 @@ import type { ISqlStorage, SqlBootstrapStorage } from "./ISqlStorage";
 import { activateSqlPersistenceRuntime, deactivateSqlPersistenceRuntime, flushSqlDirtyChanges } from "./sqlPersistenceRuntime";
 import { reportSqlMigrationFailure, reportSqlMigrationProgress } from "./migrationReporting";
 import { WebSqliteStorage } from "./webSqliteStorage";
+import { markStartupPhase } from "../../performance/startupPhases";
 
 export interface SqlBootstrapResult {
   database: Database;
@@ -123,11 +124,17 @@ export async function openExistingStandaloneSql(
 ): Promise<ExistingSqlOpenResult | null> {
   try {
     storage ??= await createDefaultSqlStorage();
+    // Split so the request, the rebuild and the baseline are separable: one
+    // "sql-metadata" number cannot say whether startup is waiting on the wire,
+    // on building objects, or on fingerprinting them.
     if (!(await storage.init())) return null;
+    markStartupPhase("sql-fetch");
     const loaded = await storage.loadDatabase({ shallow: true });
+    markStartupPhase("sql-rebuild");
     if (loaded?.status === "ready" && loaded.database) {
       pendingSqlStorage = null;
       activateSqlStorage(storage, loaded.database);
+      markStartupPhase("sql-baseline");
       return {
         database: loaded.database,
         storage,
