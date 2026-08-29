@@ -12,6 +12,9 @@ import { resolveMemoryWorkspace } from './risubard-memory-workspace'
 const SAVE_MANIFEST = 'risubard-save.json'
 const SAVE_CHAT = 'chat.bin'
 const SAVE_PREFIX = 'save-slot:'
+const SAVE_DIRECTORY_PREFIX = `id-${Buffer.from(
+    SAVE_PREFIX.slice(0, -1), 'utf8'
+).toString('base64url')}`
 
 export interface MemorySaveEventPreview {
     title: string
@@ -291,7 +294,9 @@ export async function listMemorySaveSlots(input: {
     }
     const summaries: MemorySaveSlotSummary[] = []
     for (const entry of entries) {
-        if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+        if (!entry.isDirectory()
+            || entry.isSymbolicLink()
+            || !entry.name.startsWith(SAVE_DIRECTORY_PREFIX)) continue
         const directory = join(chatsDirectory, entry.name)
         const manifestPath = join(directory, SAVE_MANIFEST)
         const chatPath = join(directory, SAVE_CHAT)

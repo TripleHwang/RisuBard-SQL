@@ -21,7 +21,12 @@ export function canBranchFromMessage(
     messages: readonly BardWikiHistoryMessage[],
     index: number,
 ): boolean {
-    if (!Number.isInteger(index) || index < 0 || index >= messages.length) return false
-    if (getBardWikiEvidenceMessageIds(messages).size === 0) return true
-    return index === messages.length - 1
+    return Number.isInteger(index) && index >= 0 && index < messages.length
+}
+
+export function isHistoricalBranch(
+    messages: readonly BardWikiHistoryMessage[],
+    index: number,
+): boolean {
+    return canBranchFromMessage(messages, index) && index < messages.length - 1
 }

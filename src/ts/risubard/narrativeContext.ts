@@ -45,6 +45,7 @@ export interface NarrativeInquiryResponse {
         inspectedEdgeCount: number
         selectedNodeCount: number
         selectedTokens: number
+        semanticCandidateCount?: number
         hopCount: number
         auxiliaryModelCalls: 0
     }
@@ -91,6 +92,10 @@ export async function loadNarrativeInquiry(input: {
         target: number
         maximum: number
     }
+    semanticMatches?: readonly {
+        documentId: string
+        score: number
+    }[]
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
     timeoutMs?: number
@@ -130,6 +135,10 @@ export async function loadNarrativeInquiry(input: {
                                         input.tokenBudget.target,
                                         input.tokenBudget.maximum
                                     ) }),
+                            ...(input.semanticMatches === undefined
+                                ? {}
+                                : { semanticMatches:
+                                    input.semanticMatches.slice(0, 32) }),
                         }),
                     }
                 )
@@ -180,15 +189,24 @@ export async function loadNarrativeInquiry(input: {
         || !Array.isArray(value.sources)
         || value.sources.length > 16
         || !isRecord(value.metrics)
-        || !hasExactKeys(value.metrics, [
-            'candidateCount',
-            'inspectedNodeCount',
-            'inspectedEdgeCount',
-            'selectedNodeCount',
-            'selectedTokens',
-            'hopCount',
-            'auxiliaryModelCalls',
-        ])
+        || !(hasExactKeys(value.metrics, [
+                'candidateCount',
+                'inspectedNodeCount',
+                'inspectedEdgeCount',
+                'selectedNodeCount',
+                'selectedTokens',
+                'hopCount',
+                'auxiliaryModelCalls',
+            ]) || hasExactKeys(value.metrics, [
+                'candidateCount',
+                'inspectedNodeCount',
+                'inspectedEdgeCount',
+                'selectedNodeCount',
+                'selectedTokens',
+                'semanticCandidateCount',
+                'hopCount',
+                'auxiliaryModelCalls',
+            ]))
         || (value.mode === 'v2-current'
             && value.cacheStatus !== 'current')
         || (value.mode === 'bounded-v1-fallback'
@@ -279,6 +297,12 @@ export async function loadNarrativeInquiry(input: {
             selectedTokens: boundedMetric(
                 value.metrics.selectedTokens
             ),
+            ...(value.metrics.semanticCandidateCount === undefined
+                ? {}
+                : { semanticCandidateCount: boundedMetric(
+                    value.metrics.semanticCandidateCount,
+                    32
+                ) }),
             hopCount: boundedMetric(value.metrics.hopCount, 2),
             auxiliaryModelCalls: 0,
         },

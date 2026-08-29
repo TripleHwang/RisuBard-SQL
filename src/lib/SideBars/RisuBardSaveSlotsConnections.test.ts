@@ -248,14 +248,13 @@ describe('chat file save slot connections', () => {
     })
 
     test('replaces the current chat and finalizes its wiki only after persistence', () => {
-        expect(chatScreenSource).toContain('const destinationChatId = currentChat.id')
+        expect(chatScreenSource).toContain('const destinationChatId = asNewChat ? v4() : currentChat.id')
         expect(chatScreenSource).toMatch(/prepareMemorySaveLoad\(\{[^}]*currentChat,/)
         expect(chatScreenSource).toContain('destinationChatId,')
         expect(chatScreenSource).toContain('loadedChat.id = destinationChatId')
         expect(chatScreenSource).toContain('character.chats[chatIdx] = loadedChat')
         expect(chatScreenSource).toContain('character.chats[chatIdx] = currentChat')
-        expect(chatScreenSource).toContain('changeChatTo(chatIdx)')
-        expect(chatScreenSource).not.toContain('character.chats.unshift(loadedChat)')
+        expect(chatScreenSource).toContain('changeChatTo(asNewChat ? 0 : chatIdx)')
         expect(chatScreenSource).toMatch(
             /prepareMemorySaveLoad[\s\S]*requestImmediateSave[\s\S]*action: 'finalize'/
         )
@@ -264,6 +263,18 @@ describe('chat file save slot connections', () => {
         )
         expect(chatScreenSource).not.toContain('void requestImmediateSave({ forceFullWrite: true })')
         expect(chatScreenSource).toContain("notifySuccess('스토리 불러오기 완료', { duration: 3000 })")
+    })
+
+    test('can load a save as a new chat without replacing the current chat', () => {
+        expect(dialogSource).toContain('새 챗으로 불러오기')
+        expect(dialogSource).toContain('onLoad(saveId, loadAsNewChat)')
+        expect(chatScreenSource).toContain('async function loadSavedChat(saveId: string, asNewChat = false)')
+        expect(chatScreenSource).toContain('const destinationChatId = asNewChat ? v4() : currentChat.id')
+        expect(chatScreenSource).toContain('character.chats.unshift(loadedChat)')
+        expect(chatScreenSource).toContain("loadedChat.name = createChatCopyName(loadedChat.name, 'Copy')")
+        expect(chatScreenSource).toContain('if(asNewChat)')
+        expect(chatScreenSource).toContain('character.chats.splice(0, 1)')
+        expect(chatScreenSource).toContain('changeChatTo(asNewChat ? 0 : chatIdx)')
     })
 
     test('uses the defined theme tokens for opaque save slot surfaces', () => {

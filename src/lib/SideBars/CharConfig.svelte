@@ -19,6 +19,7 @@ import { openAssetViewer, hasImageAssets } from "src/ts/assetViewer.svelte";
     import TextInput from "../UI/GUI/TextInput.svelte";
     import ShInput from "../UI/GUI/ShInput.svelte";
 import ShButton from "../UI/GUI/ShButton.svelte";
+    import ShAccordion from "../UI/GUI/ShAccordion.svelte";
     import NumberInput from "../UI/GUI/NumberInput.svelte";
     import TextAreaInput from "../UI/GUI/TextAreaInput.svelte";
     import Button from "../UI/GUI/Button.svelte";
@@ -275,6 +276,64 @@ import ShButton from "../UI/GUI/ShButton.svelte";
         </div>
         <TextAreaInput highlight margin="both" autocomplete="off" bind:value={DBState.db.characters[$selectedCharID].firstMessage}></TextAreaInput>
         <span class="text-textcolor2 mb-6 text-sm">{tokens.firstMsg} {language.tokens}</span>
+
+        <div data-alternate-greetings class="mb-6">
+            <ShAccordion
+                name={`${language.altGreet} (${DBState.db.characters[$selectedCharID].alternateGreetings.length})`}
+                variant="card"
+            >
+                <table class="contain w-full max-w-full tabler">
+                    <tbody>
+                    <tr>
+                        <th class="font-medium">{language.value}</th>
+                        <th class="font-medium cursor-pointer w-8">
+                            <button class="hover:text-primary" onclick={() => {
+                                if(DBState.db.characters[$selectedCharID].type === 'character'){
+                                    let alternateGreetings = DBState.db.characters[$selectedCharID].alternateGreetings
+                                    alternateGreetings.push('')
+                                    DBState.db.characters[$selectedCharID].alternateGreetings = alternateGreetings
+                                }
+                            }}>
+                                <PlusIcon />
+                            </button>
+                        </th>
+                    </tr>
+                    {#if DBState.db.characters[$selectedCharID].alternateGreetings.length === 0}
+                        <tr>
+                            <td colspan="2">{language.noData}</td>
+                        </tr>
+                    {/if}
+                    {#each DBState.db.characters[$selectedCharID].alternateGreetings as bias, i}
+                        <tr>
+                            <td class="font-medium truncate">
+                                <TextAreaInput highlight bind:value={DBState.db.characters[$selectedCharID].alternateGreetings[i]} placeholder="..." fullwidth />
+                            </td>
+                            <th class="font-medium cursor-pointer w-8">
+                                <div class="flex flex-col items-center">
+                                    <button class="hover:text-primary p-1" onclick={() => moveAlternateGreetingUp(i)} disabled={i === 0}>
+                                        <ArrowUp size={16} />
+                                    </button>
+                                    <button class="hover:text-primary p-1" onclick={() => moveAlternateGreetingDown(i)} disabled={i === DBState.db.characters[$selectedCharID].alternateGreetings.length - 1}>
+                                        <ArrowDown size={16} />
+                                    </button>
+                                    <button class="hover:text-draculared p-1" onclick={() => {
+                                        if(DBState.db.characters[$selectedCharID].type === 'character'){
+                                            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].fmIndex = -1
+                                            let alternateGreetings = DBState.db.characters[$selectedCharID].alternateGreetings
+                                            alternateGreetings.splice(i, 1)
+                                            DBState.db.characters[$selectedCharID].alternateGreetings = alternateGreetings
+                                        }
+                                    }}>
+                                        <TrashIcon size={16} />
+                                    </button>
+                                </div>
+                            </th>
+                        </tr>
+                    {/each}
+                    </tbody>
+                </table>
+            </ShAccordion>
+        </div>
     {/if}
     <span class="text-textcolor">{language.authorNote} <Help key="chatNote"/></span>
     <TextAreaInput
@@ -1127,60 +1186,6 @@ import ShButton from "../UI/GUI/ShButton.svelte";
         <div class="flex justify-center items-center">
             <NumberInput bind:value={DBState.db.characters[$selectedCharID].depth_prompt.depth} className="w-12"/>
             <ShInput autocomplete="off" bind:value={DBState.db.characters[$selectedCharID].depth_prompt.prompt} className="flex-1"/>
-        </div>
-
-        <span class="text-textcolor mt-2">{language.altGreet}</span>
-        <div class="w-full max-w-full border border-selected rounded-md p-2">
-            <table class="contain w-full max-w-full tabler mt-2">
-                <tbody>
-                <tr>
-                    <th class="font-medium">{language.value}</th>
-                    <th class="font-medium cursor-pointer w-8">
-                        <button class="hover:text-primary" onclick={() => {
-                            if(DBState.db.characters[$selectedCharID].type === 'character'){
-                                let alternateGreetings = DBState.db.characters[$selectedCharID].alternateGreetings
-                                alternateGreetings.push('')
-                                DBState.db.characters[$selectedCharID].alternateGreetings = alternateGreetings
-                            }
-                        }}>
-                            <PlusIcon />
-                        </button>
-                    </th>
-                </tr>
-                {#if DBState.db.characters[$selectedCharID].alternateGreetings.length === 0}
-                    <tr>
-                        <td colspan="3">{language.noData}</td>
-                    </tr>
-                {/if}
-                {#each DBState.db.characters[$selectedCharID].alternateGreetings as bias, i}
-                    <tr>
-                        <td class="font-medium truncate">
-                            <TextAreaInput highlight bind:value={DBState.db.characters[$selectedCharID].alternateGreetings[i]} placeholder="..." fullwidth />
-                        </td>
-                        <th class="font-medium cursor-pointer w-8">
-                            <div class="flex flex-col items-center">
-                                <button class="hover:text-primary p-1" onclick={() => moveAlternateGreetingUp(i)} disabled={i === 0}>
-                                    <ArrowUp size={16} />
-                                </button>
-                                <button class="hover:text-primary p-1" onclick={() => moveAlternateGreetingDown(i)} disabled={i === DBState.db.characters[$selectedCharID].alternateGreetings.length - 1}>
-                                    <ArrowDown size={16} />
-                                </button>
-                                <button class="hover:text-draculared p-1" onclick={() => {
-                                    if(DBState.db.characters[$selectedCharID].type === 'character'){
-                                        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].fmIndex = -1
-                                        let alternateGreetings = DBState.db.characters[$selectedCharID].alternateGreetings
-                                        alternateGreetings.splice(i, 1)
-                                        DBState.db.characters[$selectedCharID].alternateGreetings = alternateGreetings
-                                    }
-                                }}>
-                                    <TrashIcon size={16} />
-                                </button>
-                            </div>
-                        </th>
-                    </tr>
-                {/each}
-            </tbody>
-            </table>
         </div>
 
         <div class="flex items-center mt-4">

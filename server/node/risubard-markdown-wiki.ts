@@ -1752,6 +1752,10 @@ export function createMarkdownNarrativeWiki(
             characterId: string
             chatId: string
             currentInput: string
+            semanticMatches?: readonly {
+                documentId: string
+                score: number
+            }[]
             tokenBudget?: {
                 target: number
                 maximum: number
@@ -1763,6 +1767,9 @@ export function createMarkdownNarrativeWiki(
                     input.chatId
                 ),
                 currentInput: input.currentInput,
+                ...(input.semanticMatches
+                    ? { semanticMatches: input.semanticMatches }
+                    : {}),
                 ...(input.tokenBudget
                     ? { tokenBudget: input.tokenBudget }
                     : {}),

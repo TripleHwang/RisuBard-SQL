@@ -15,7 +15,7 @@
     import RisuBardSaveSlotsDialog from '../SideBars/RisuBardSaveSlotsDialog.svelte';
     import { ensureChatHydrated } from 'src/ts/storage/chatStorage';
     import { alertConfirm, notifyInfo, notifySuccess } from 'src/ts/alert';
-    import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
+    import { changeChatTo, createChatCopyName, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
     import { countChatTurns, createMemorySaveSlot, deleteMemorySaveSlot, latestChatMessageId, listMemorySaveSlots, prepareMemorySaveLoad, shouldConfirmMemorySaveLoad, type MemorySaveSlotSummary } from 'src/ts/risubard/memorySaveSlots';
     import { autoSaveId, normalizeAutosaveInterval, normalizeAutosaveRetention, obsoleteAutosaveIds, quickSaveId, shouldCreateAutosave } from 'src/ts/risubard/memorySavePolicy';
@@ -165,7 +165,7 @@
         }
     }
 
-    async function loadSavedChat(saveId: string): Promise<void> {
+    async function loadSavedChat(saveId: string, asNewChat = false): Promise<void> {
         const character = currentCharacter
         if(!character?.chaId) return
         const chatIdx = character.chatPage
@@ -179,7 +179,7 @@
         if(currentChat.isStreaming){
             throw new Error('응답 생성이 끝난 뒤 저장 파일을 불러와 주세요.')
         }
-        const destinationChatId = currentChat.id
+        const destinationChatId = asNewChat ? v4() : currentChat.id
         const prepared = await prepareMemorySaveLoad({
             characterId: character.chaId,
             saveId,
@@ -193,7 +193,13 @@
         loadedChat.isStreaming = false
         delete loadedChat.activeStreamingDisplayOptimizationMode
         delete loadedChat._placeholder
-        character.chats[chatIdx] = loadedChat
+        if(asNewChat){
+            loadedChat.name = createChatCopyName(loadedChat.name, 'Copy')
+            character.chats.unshift(loadedChat)
+        }
+        else {
+            character.chats[chatIdx] = loadedChat
+        }
         character.chats = character.chats
         try {
             await requestImmediateSave({
@@ -202,7 +208,12 @@
             })
         }
         catch(error){
-            character.chats[chatIdx] = currentChat
+            if(asNewChat){
+                character.chats.splice(0, 1)
+            }
+            else {
+                character.chats[chatIdx] = currentChat
+            }
             character.chats = character.chats
             await completeMemoryWikiFork({
                 characterId: character.chaId,
@@ -226,7 +237,7 @@
             fetchImpl: fetch,
             createAuth: () => forageStorage.createAuth(),
         })
-        changeChatTo(chatIdx)
+        changeChatTo(asNewChat ? 0 : chatIdx)
         saveSlotsOpen = false
         notifySuccess('스토리 불러오기 완료', { duration: 3000 })
     }

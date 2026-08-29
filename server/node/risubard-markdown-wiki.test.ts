@@ -943,6 +943,30 @@ describe('Markdown narrative wiki', () => {
         expect(inquiry.entityCandidates).toEqual([])
     })
 
+    test('passes bounded semantic candidates into the inquiry core', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        const event = await wiki.saveConfirmedTurn({
+            characterId: 'character',
+            chatId: 'chat',
+            sourceMessageIds: ['assistant-1'],
+            markdown: '# 월광 의식\n\n은빛 구체를 제단 홈에 놓자 석문이 열렸다.',
+        })
+
+        const inquiry = await wiki.inquire({
+            characterId: 'character',
+            chatId: 'chat',
+            currentInput: '출구를 막은 장치를 풀 방법이 필요하다.',
+            semanticMatches: [{ documentId: event.id, score: 0.91 }],
+        })
+
+        expect(inquiry.sources[0]?.id).toBe(
+            `narrative-memory:wiki:${event.relativePath}`
+        )
+        expect(inquiry.metrics.semanticCandidateCount).toBe(1)
+    })
+
     test('retrieves linked provenance two hops away without scanning chat history', async () => {
         const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
         temporaryDirectories.push(root)

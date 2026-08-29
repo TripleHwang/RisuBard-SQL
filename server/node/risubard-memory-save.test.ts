@@ -281,6 +281,49 @@ describe('memory save slots', () => {
         expect(slots.map((slot) => slot.saveId)).toEqual(['newer', 'older'])
     })
 
+    test('does not probe ordinary chat workspaces while listing save slots', async () => {
+        const root = await createRoot()
+        const ordinaryDirectories: string[] = []
+        for (let index = 0; index < 24; index += 1) {
+            const workspace = resolveMemoryWorkspace(
+                root, 'character', `ordinary-chat-${index}`
+            )
+            ordinaryDirectories.push(workspace.directory)
+            await fs.mkdir(workspace.directory, { recursive: true })
+        }
+        await createMemorySaveSlot({
+            userDataDirectory: root, characterId: 'character',
+            sourceChatId: 'source', saveId: 'save-1',
+            sourceChatName: '모험', turnCount: 1,
+            chatBytes: Buffer.from('saved'),
+        })
+
+        const probedPaths: string[] = []
+        const fileSystem = {
+            lstat: async (path: Parameters<typeof fs.lstat>[0]) => {
+                probedPaths.push(String(path))
+                return fs.lstat(path)
+            },
+            mkdir: fs.mkdir,
+            readdir: fs.readdir,
+            readFile: fs.readFile,
+            rm: fs.rm,
+            writeFile: fs.writeFile,
+            copyFile: fs.copyFile,
+            rename: fs.rename,
+            realpath: fs.realpath,
+        }
+
+        await expect(listMemorySaveSlots({
+            userDataDirectory: root,
+            characterId: 'character',
+            sourceChatId: 'source',
+        }, { fileSystem })).resolves.toHaveLength(1)
+        expect(probedPaths.some((path) => ordinaryDirectories.some(
+            (directory) => path.startsWith(directory)
+        ))).toBe(false)
+    })
+
     test('reads, renames, and deletes one validated saved file', async () => {
         const root = await createRoot()
         const source = resolveMemoryWorkspace(root, 'character', 'chat-source')

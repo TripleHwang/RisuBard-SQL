@@ -8,11 +8,14 @@ const MAX_SELECTED_DOCUMENTS = 12
 const MAX_SOURCE_CHARACTERS = 2_000
 const MAX_CANDIDATES = 64
 const MAX_DIRECT_SEEDS = 32
+const MAX_SEMANTIC_SEEDS = 32
 const MAX_EXPANDED_DOCUMENTS_PER_HOP = 8
 const MAX_EDGES_PER_DOCUMENT = 16
 const MAX_INSPECTED_EDGES = 256
 const MAX_HOPS = 2
 const MAX_RESERVED_HISTORICAL_EVENTS = 2
+const SEMANTIC_RRF_K = 60
+const SEMANTIC_RRF_SCALE = 480
 
 const QUERY_STOPWORDS = new Set([
     '그는', '그녀는', '그들은', '나는', '우리는', '이것', '그것', '저것',
@@ -42,6 +45,10 @@ function countInquiryTokens(value: string): number {
 export interface MarkdownInquiryInput {
     documents: readonly MarkdownWikiDocument[]
     currentInput: string
+    semanticMatches?: readonly {
+        documentId: string
+        score: number
+    }[]
     tokenBudget?: {
         target: number
         maximum: number
@@ -68,6 +75,7 @@ export interface MarkdownInquiryResult {
         inspectedEdgeCount: number
         selectedNodeCount: number
         selectedTokens: number
+        semanticCandidateCount: number
         hopCount: number
         auxiliaryModelCalls: 0
     }
@@ -212,7 +220,8 @@ function lexicalScore(
     document: MarkdownWikiDocument,
     normalizedQuery: string,
     terms: readonly string[],
-    characterAnchorTerms: ReadonlySet<string>
+    characterAnchorTerms: ReadonlySet<string>,
+    termWeights: ReadonlyMap<string, number>
 ): number {
     const { title, content, links } = normalizedDocument(document)
     let score = title === normalizedQuery ? 12 : 0
@@ -226,13 +235,34 @@ function lexicalScore(
             if (title === term) score += 4
             continue
         }
+        const weight = termWeights.get(term) ?? 1
         if (title.includes(term) || (title.length > 1 && term.includes(title))) {
-            score += 4
+            score += 4 * weight
         }
-        if (links.includes(term)) score += 3
-        if (content.includes(term)) score += 2
+        if (links.includes(term)) score += 3 * weight
+        if (content.includes(term)) score += 2 * weight
     }
     return score
+}
+
+function queryTermWeights(
+    documents: readonly MarkdownWikiDocument[],
+    terms: readonly string[]
+): Map<string, number> {
+    const weights = new Map<string, number>()
+    for (const term of terms) {
+        const documentFrequency = documents.reduce((count, document) => {
+            const { title, content, links } = normalizedDocument(document)
+            return count + Number(title.includes(term)
+                || links.includes(term)
+                || content.includes(term))
+        }, 0)
+        const inverseDocumentFrequency = Math.log(1 + (
+            documents.length - documentFrequency + 0.5
+        ) / (documentFrequency + 0.5))
+        weights.set(term, inverseDocumentFrequency)
+    }
+    return weights
 }
 
 function candidateScore(
@@ -258,6 +288,7 @@ export function inquireMarkdownDocuments(
         .map((document) => normalized(document.title)))
     const characterAnchorTerms = new Set(terms.filter((term) =>
         characterTitles.has(term)))
+    const termWeights = queryTermWeights(eligibleDocuments, terms)
     const requiredDocuments = eligibleDocuments.filter((document) =>
         document.contextMode === 'always'
             || document.type === 'scene')
@@ -275,28 +306,63 @@ export function inquireMarkdownDocuments(
             document,
             normalizedQuery,
             terms,
-            characterAnchorTerms
+            characterAnchorTerms,
+            termWeights
         ),
     })).filter(({ directScore }) => directScore > 0)
         .sort((left, right) =>
             right.directScore - left.directScore
             || right.document.updated.localeCompare(left.document.updated)
             || left.document.id.localeCompare(right.document.id))
+    const semanticScores = new Map<string, number>()
+    for (const match of input.semanticMatches ?? []) {
+        if (!Number.isFinite(match.score) || match.score <= 0
+            || !byId.has(match.documentId)) continue
+        semanticScores.set(
+            match.documentId,
+            Math.max(semanticScores.get(match.documentId) ?? 0, match.score)
+        )
+    }
+    const semantic = [...semanticScores.entries()]
+        .sort((left, right) => right[1] - left[1]
+            || left[0].localeCompare(right[0]))
+        .slice(0, MAX_SEMANTIC_SEEDS)
+    const directById = new Map(direct.slice(0, MAX_DIRECT_SEEDS).map((item) =>
+        [item.document.id, item]))
+    semantic.forEach(([documentId], index) => {
+        const document = byId.get(documentId)
+        if (!document) return
+        const semanticRankBonus = SEMANTIC_RRF_SCALE
+            / (SEMANTIC_RRF_K + index + 1)
+        const existing = directById.get(documentId)
+        directById.set(documentId, {
+            document,
+            directScore: (existing?.directScore ?? 0) + semanticRankBonus,
+        })
+    })
+    const hybridDirect = [...directById.values()]
+        .sort((left, right) =>
+            right.directScore - left.directScore
+            || right.document.updated.localeCompare(left.document.updated)
+            || left.document.id.localeCompare(right.document.id))
+        .slice(0, MAX_DIRECT_SEEDS)
     const candidates = new Map<string, Candidate>()
     for (const document of requiredDocuments) {
         candidates.set(document.id, {
             document,
-            directScore: lexicalScore(
+            directScore: directById.get(document.id)?.directScore
+                ?? lexicalScore(
                 document,
                 normalizedQuery,
                 terms,
-                characterAnchorTerms
+                characterAnchorTerms,
+                termWeights
             ),
             hop: 0,
             linkScore: 0,
         })
     }
-    for (const item of direct.slice(0, MAX_DIRECT_SEEDS)) {
+    for (const item of hybridDirect) {
         if (candidates.size >= MAX_CANDIDATES) break
         candidates.set(item.document.id, {
             ...item,
@@ -341,7 +407,8 @@ export function inquireMarkdownDocuments(
                         neighbor,
                         normalizedQuery,
                         terms,
-                        characterAnchorTerms
+                        characterAnchorTerms,
+                        termWeights
                     ),
                     hop: hop + 1,
                     linkScore,
@@ -476,6 +543,7 @@ export function inquireMarkdownDocuments(
             inspectedEdgeCount,
             selectedNodeCount: selected.length,
             selectedTokens,
+            semanticCandidateCount: semantic.length,
             hopCount: selected.reduce((maximum, candidate) =>
                 Math.max(maximum, candidate.hop), 0),
             auxiliaryModelCalls: 0,

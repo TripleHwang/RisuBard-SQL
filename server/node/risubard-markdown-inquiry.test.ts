@@ -126,6 +126,49 @@ describe('progressive Markdown inquiry', () => {
         expect(result.metrics.candidateCount).toBe(0)
     })
 
+    test('ranks rare discriminative terms above ubiquitous narrative terms', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '청동나비 표식이 있는 봉인문 기록을 찾아줘.',
+            documents: [
+                document({
+                    id: 'rare-clue', type: 'event', title: '오래된 단서',
+                    relativePath: 'events/rare-clue.md',
+                    updated: '2026-08-01T00:00:00.000Z',
+                    content: '# 오래된 단서\n\n청동나비 표식이 찍힌 봉인문 기록이다.',
+                }),
+                ...Array.from({ length: 8 }, (_, index) => document({
+                    id: `common-${index}`, type: 'event',
+                    title: '봉인문 기록',
+                    relativePath: `events/common-${index}.md`,
+                    updated: `2026-08-29T00:00:0${index}.000Z`,
+                    content: '# 봉인문 기록\n\n봉인문 기록을 정리했다.',
+                })),
+            ],
+        })
+
+        expect(result.sources[0]?.id).toBe(
+            'narrative-memory:wiki:events/rare-clue.md'
+        )
+    })
+
+    test('admits semantic candidates without lexical overlap', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '출구를 막은 장치를 풀 방법이 필요하다.',
+            semanticMatches: [{ documentId: 'moon-seal', score: 0.91 }],
+            documents: [document({
+                id: 'moon-seal', type: 'event', title: '월광 의식',
+                relativePath: 'events/moon-seal.md',
+                content: '# 월광 의식\n\n은빛 구체를 제단 홈에 놓자 석문이 열렸다.',
+            })],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual([
+            'narrative-memory:wiki:events/moon-seal.md',
+        ])
+        expect(result.metrics.semanticCandidateCount).toBe(1)
+        expect(result.metrics.auxiliaryModelCalls).toBe(0)
+    })
+
     test('uses a compact default budget instead of filling the hard limit', () => {
         const result = inquireMarkdownDocuments({
             currentInput: '프로도에 대한 관련 정보를 알려 줘.',

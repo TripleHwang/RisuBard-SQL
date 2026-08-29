@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
     canBranchFromMessage,
     getBardWikiEvidenceMessageIds,
+    isHistoricalBranch,
 } from './chatHistoryPolicy'
 
 type TestMessage = {
@@ -31,10 +32,13 @@ describe('BardWiki chat history policy', () => {
         ])
     })
 
-    it('allows branching only from the current final message', () => {
-        expect(canBranchFromMessage(messages, 2)).toBe(false)
+    it('allows a historical branch and distinguishes it from the current head', () => {
+        expect(canBranchFromMessage(messages, 2)).toBe(true)
+        expect(isHistoricalBranch(messages, 2)).toBe(true)
         expect(canBranchFromMessage(messages, 3)).toBe(true)
+        expect(isHistoricalBranch(messages, 3)).toBe(false)
         expect(canBranchFromMessage(messages, -1)).toBe(false)
+        expect(isHistoricalBranch(messages, -1)).toBe(false)
         expect(canBranchFromMessage([], 0)).toBe(false)
     })
 

@@ -5,7 +5,8 @@
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
-    import { canBranchFromMessage } from "src/ts/risubard/chatHistoryPolicy"
+    import { canBranchFromMessage, isHistoricalBranch } from "src/ts/risubard/chatHistoryPolicy"
+    import { resetImportedBardWikiState } from "src/ts/risubard/chatImportMemory"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
     import { getModelInfo } from "src/ts/model/modellist"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
@@ -1123,14 +1124,17 @@
         const currentCharacter = DBState.db.characters[selIdState.selId]
         const currentChat = currentCharacter.chats[currentCharacter.chatPage]
         if(!canBranchFromMessage(currentChat.message, idx)){
-            notifyInfo(language.bardWikiHistoricalBranchBlocked)
             return
         }
+        const historicalBranch = isHistoricalBranch(currentChat.message, idx)
         const currentMessage = currentChat.message[idx]
         const newChat = $state.snapshot(currentChat)
         newChat.name = createChatCopyName(newChat.name, 'Branch')
         newChat.id = v4()
         newChat.message = newChat.message.slice(0, idx + 1)
+        if(historicalBranch){
+            resetImportedBardWikiState(newChat)
+        }
         const messageIds = currentChat.message.flatMap(
             (message) => typeof message.chatId === 'string'
                 && message.chatId.length > 0
@@ -1147,26 +1151,28 @@
             notifyError('Memory Wiki branch requires stable chat and character IDs.')
             return
         }
-        let forkReceipt: Awaited<ReturnType<typeof forkMemoryWiki>>
-        try {
-            forkReceipt = await forkMemoryWiki({
-                characterId: currentCharacter.chaId,
-                sourceChatId: currentChat.id,
-                destinationChatId: newChat.id,
-                mode: 'branch',
-                retainedMessageIds,
-                messageIds,
-                fetchImpl: fetch,
-                createAuth: () => forageStorage.createAuth(),
-            })
-        }
-        catch(error){
-            notifyError(
-                `Memory Wiki branch failed: ${error instanceof Error
-                    ? error.message
-                    : String(error)}`
-            )
-            return
+        let forkReceipt: Awaited<ReturnType<typeof forkMemoryWiki>> | undefined
+        if(!historicalBranch){
+            try {
+                forkReceipt = await forkMemoryWiki({
+                    characterId: currentCharacter.chaId,
+                    sourceChatId: currentChat.id,
+                    destinationChatId: newChat.id,
+                    mode: 'branch',
+                    retainedMessageIds,
+                    messageIds,
+                    fetchImpl: fetch,
+                    createAuth: () => forageStorage.createAuth(),
+                })
+            }
+            catch(error){
+                notifyError(
+                    `Memory Wiki branch failed: ${error instanceof Error
+                        ? error.message
+                        : String(error)}`
+                )
+                return
+            }
         }
 
         const originalFolderId = currentChat.folderId
@@ -1208,18 +1214,20 @@
                     .filter((folder) => folder.id !== createdFolderId)
             }
             let cleanupError: unknown
-            try {
-                await completeMemoryWikiFork({
-                    characterId: currentCharacter.chaId,
-                    destinationChatId: newChat.id,
-                    forkToken: forkReceipt.forkToken,
-                    action: 'discard',
-                    fetchImpl: fetch,
-                    createAuth: () => forageStorage.createAuth(),
-                })
-            }
-            catch(discardError){
-                cleanupError = discardError
+            if(forkReceipt){
+                try {
+                    await completeMemoryWikiFork({
+                        characterId: currentCharacter.chaId,
+                        destinationChatId: newChat.id,
+                        forkToken: forkReceipt.forkToken,
+                        action: 'discard',
+                        fetchImpl: fetch,
+                        createAuth: () => forageStorage.createAuth(),
+                    })
+                }
+                catch(discardError){
+                    cleanupError = discardError
+                }
             }
             void requestImmediateSave({ forceFullWrite: true })
             notifyError(
@@ -1233,28 +1241,33 @@
             )
             return
         }
-        try {
-            await completeMemoryWikiFork({
-                characterId: currentCharacter.chaId,
-                destinationChatId: newChat.id,
-                forkToken: forkReceipt.forkToken,
-                action: 'finalize',
-                fetchImpl: fetch,
-                createAuth: () => forageStorage.createAuth(),
-            })
-        }
-        catch(error){
-            notifyError(
-                `Chat branch was saved, but Memory Wiki finalization failed: ${error instanceof Error
-                    ? error.message
-                    : String(error)}`
-            )
-            return
-        }
-        if(forkReceipt.warnings.length > 0){
-            notifyInfo(forkReceipt.warnings.join('\n'))
+        if(forkReceipt){
+            try {
+                await completeMemoryWikiFork({
+                    characterId: currentCharacter.chaId,
+                    destinationChatId: newChat.id,
+                    forkToken: forkReceipt.forkToken,
+                    action: 'finalize',
+                    fetchImpl: fetch,
+                    createAuth: () => forageStorage.createAuth(),
+                })
+            }
+            catch(error){
+                notifyError(
+                    `Chat branch was saved, but Memory Wiki finalization failed: ${error instanceof Error
+                        ? error.message
+                        : String(error)}`
+                )
+                return
+            }
+            if(forkReceipt.warnings.length > 0){
+                notifyInfo(forkReceipt.warnings.join('\n'))
+            }
         }
         changeChatTo(0)
+        if(historicalBranch){
+            notifyInfo(language.bardWikiHistoricalBranchCreated)
+        }
     }}>
         <SplitIcon size={20}/>
         {#if showNames}

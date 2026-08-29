@@ -14,6 +14,7 @@
         type MemorySaveSlotSummary,
     } from 'src/ts/risubard/memorySaveSlots'
     import ShButton from '../UI/GUI/ShButton.svelte'
+    import CheckInput from '../UI/GUI/CheckInput.svelte'
     import ShDialog from '../UI/GUI/ShDialog.svelte'
     import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte'
 
@@ -26,7 +27,7 @@
         currentLatestMessageId?: string
         mode?: 'save' | 'load'
         onOpenChange(open: boolean): void
-        onLoad(saveId: string): Promise<void>
+        onLoad(saveId: string, asNewChat: boolean): Promise<void>
         onSave?(saveId?: string, overwrite?: boolean): Promise<MemorySaveSlotSummary>
     }
 
@@ -48,6 +49,7 @@
     let sortAscending = $state(false)
     let loading = $state(false)
     let loadingId = $state('')
+    let loadAsNewChat = $state(false)
     let previewLoadingId = $state('')
     let previewCache = $state<Record<string, MemorySavePreviewMessage[]>>({})
     let error = $state('')
@@ -133,9 +135,9 @@
         loadingId = saveId
         error = ''
         try {
-            if (shouldConfirmMemorySaveLoad(currentLatestMessageId, slots) && !await alertConfirm('저장하지 않은 채팅은 사라집니다. 불러올까요?')) return
+            if (!loadAsNewChat && shouldConfirmMemorySaveLoad(currentLatestMessageId, slots) && !await alertConfirm('저장하지 않은 채팅은 사라집니다. 불러올까요?')) return
             if (sequence !== requestSequence || !open) return
-            await onLoad(saveId)
+            await onLoad(saveId, loadAsNewChat)
         } catch (cause) {
             error = cause instanceof Error ? cause.message : String(cause)
         } finally {
@@ -293,6 +295,10 @@
                                         {#if loadingId === '#new'}<LoaderCircleIcon size={16} class="animate-spin" />{:else}<PlusIcon size={16} />{/if}새 슬롯
                                     </ShButton>
                                 {/if}
+                                {#if mode === 'load'}
+                                    <CheckInput bind:check={loadAsNewChat} name="새 챗으로 불러오기" margin={false} className="save-load-new-chat" />
+                                    <span class="save-ledger__divider"></span>
+                                {/if}
                                 <ShButton data-save-file-delete variant="destructive" size="icon-sm" aria-label="선택한 파일 삭제" title="선택한 파일 삭제" disabled={!selectedIsManual || Boolean(loadingId)} onclick={() => void deleteSelected()}><Trash2Icon size={16} /></ShButton>
                                 <span class="save-ledger__divider"></span>
                                 <ShButton data-save-file-sort variant="ghost" size="icon-sm" aria-label={sortAscending ? '새 파일을 위로 정렬' : '오래된 파일을 위로 정렬'} title={sortAscending ? '현재: 오래된 파일부터' : '현재: 새 파일부터'} onclick={() => { sortAscending = !sortAscending }}>{#if sortAscending}<ArrowUpIcon size={16} />{:else}<ArrowDownIcon size={16} />{/if}</ShButton>
@@ -355,6 +361,7 @@
     .slot-section__head > strong { color: var(--color-textcolor2); font: 700 .68rem ui-monospace, monospace; letter-spacing: .13em; }
     .slot-section__head > span { color: var(--color-textcolor2); font-size: .65rem; }
     .save-ledger__toolbar { flex-wrap: wrap; gap: .2rem; margin-left: auto; }
+    :global(.save-load-new-chat) { margin-right: .2rem; font-size: .75rem; white-space: nowrap; }
     .save-ledger__divider { width: 1px; height: 1.1rem; margin: 0 .2rem; background: var(--color-darkborderc); }
     .autosave-strip, .manual-grid { margin: 0; padding: 0; list-style: none; }
     .autosave-strip { display: grid; grid-auto-columns: minmax(7rem, 1fr); grid-auto-flow: column; gap: .55rem; overflow-x: auto; padding-bottom: .25rem; scrollbar-width: thin; }

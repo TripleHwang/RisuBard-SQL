@@ -32,7 +32,7 @@ describe('chat memory fork connections', () => {
             .toBeLessThan(flow.indexOf('notifySuccess(language.copyChatSuccess)'))
     })
 
-    test('intermediate branch sends retained IDs before mutating folders or chats', () => {
+    test('historical branch starts without copied wiki state before mutating chats', () => {
         expect(chat).toContain('forkMemoryWiki')
         const call = chat.lastIndexOf('await forkMemoryWiki')
         expect(call).toBeGreaterThan(0)
@@ -45,6 +45,10 @@ describe('chat memory fork connections', () => {
             call
         ))
         expect(chat).toContain('retainedMessageIds')
+        expect(chat).toContain('isHistoricalBranch')
+        expect(chat).toContain('resetImportedBardWikiState(newChat)')
+        expect(chat).toContain('if(!historicalBranch)')
+        expect(chat).toContain('language.bardWikiHistoricalBranchCreated')
         expect(chat).toContain('await requestImmediateSave({')
         expect(chat).toContain('rejectOnFailure: true')
         expect(chat).toContain("action: 'discard'")

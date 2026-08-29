@@ -1,7 +1,7 @@
 <script lang="ts">
 
     import Suggestion from './Suggestion.svelte';
-    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon } from "@lucide/svelte";
+    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, FileTextIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon } from "@lucide/svelte";
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
@@ -65,6 +65,7 @@ import { isMobile } from 'src/ts/platform'
     import PluginFloatingActionButtons from '../Others/PluginFloatingActionButtons.svelte';
     import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
     import RisuBardMemoryWiki from '../Others/RisuBardMemoryWiki.svelte';
+    import ArcaChatLogDialog from './ArcaChatLogDialog.svelte'
     import RisuBardSaveLoadShortcuts from './RisuBardSaveLoadShortcuts.svelte';
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar';
     import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
@@ -113,6 +114,7 @@ import { isMobile } from 'src/ts/platform'
     let messageInputTranslate:string = $state('')
     let openMenu = $state(false)
     let memoryWikiOpen = $state(false)
+    let arcaChatLogOpen = $state(false)
     let chatPage = $state(0)
     let paginationKey = $state('')
     let paginationMessageCount = $state(0)
@@ -1155,6 +1157,10 @@ import { isMobile } from 'src/ts/platform'
                                     <DatabaseIcon /><span>{language.chatList}</span>
                                 </ShDropdownMenuItem>
                             {/if}
+                            <ShDropdownMenuItem data-open-arca-chat-log disabled={!currentChatReady}
+                                onSelect={() => { arcaChatLogOpen = true }}>
+                                <FileTextIcon /><span>{language.arcaChatLog.menu}</span>
+                            </ShDropdownMenuItem>
                             {#each additionalChatMenu as menu}
                                 <ShDropdownMenuItem onSelect={() => { menu.callback() }}>
                                     <PluginDefinedIcon ico={menu} /><span>{menu.name}</span>
@@ -1612,6 +1618,16 @@ import { isMobile } from 'src/ts/platform'
             onExecuteWikiCommand={executeCurrentNarrativeWikiCommand}
             onNavigateStorySource={navigateStorySource}
         />
+        {#if currentChatReady}
+            <ArcaChatLogDialog
+                open={arcaChatLogOpen}
+                onOpenChange={(next) => { arcaChatLogOpen = next }}
+                character={currentCharacter}
+                chat={currentChatSlot}
+                {currentUsername}
+                {userIcon}
+            />
+        {/if}
     {/if}
 </div>
 

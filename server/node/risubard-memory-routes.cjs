@@ -39,6 +39,18 @@ function validInquiryTokenBudget(value) {
         && value.target <= value.maximum
 }
 
+function validSemanticMatches(value) {
+    return Array.isArray(value)
+        && value.length <= 32
+        && value.every((match) =>
+            hasExactKeys(match, ['documentId', 'score'])
+            && hasBoundedId(match.documentId)
+            && Number.isFinite(match.score)
+            && match.score > 0
+            && match.score <= 1
+        )
+}
+
 function validRebootSources(body, includeGroups) {
     const groups = body?.eventSourceGroups
     return hasBoundedId(body?.characterId)
@@ -420,6 +432,9 @@ function registerRisuBardMemoryRoutes(app, options) {
                 ...(req.body.tokenBudget === undefined
                     ? []
                     : ['tokenBudget']),
+                ...(req.body.semanticMatches === undefined
+                    ? []
+                    : ['semanticMatches']),
             ])
             if (!validShape
                 || !hasBoundedId(req.body.characterId)
@@ -429,6 +444,8 @@ function registerRisuBardMemoryRoutes(app, options) {
                 || req.body.currentInput.length > 4_096
                 || (req.body.tokenBudget !== undefined
                     && !validInquiryTokenBudget(req.body.tokenBudget))
+                || (req.body.semanticMatches !== undefined
+                    && !validSemanticMatches(req.body.semanticMatches))
                 || Buffer.byteLength(JSON.stringify(req.body), 'utf8')
                     > 32 * 1_024) {
                 res.status(400).send({

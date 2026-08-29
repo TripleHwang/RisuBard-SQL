@@ -244,6 +244,10 @@ describe('actual narrative inquiry prompt', () => {
             chatId: 'chat-1',
             currentInput: 'What happened?',
             tokenBudget: { target: 1_500, maximum: 4_500 },
+            semanticMatches: [{
+                documentId: 'event-bridge',
+                score: 0.91,
+            }],
             fetchImpl,
             createAuth: async () => 'auth',
         })
@@ -264,6 +268,10 @@ describe('actual narrative inquiry prompt', () => {
                     chatId: 'chat-1',
                     currentInput: 'What happened?',
                     tokenBudget: { target: 1_500, maximum: 4_500 },
+                    semanticMatches: [{
+                        documentId: 'event-bridge',
+                        score: 0.91,
+                    }],
                 }),
             })
         )
@@ -311,6 +319,7 @@ describe('actual narrative inquiry prompt', () => {
                 inspectedEdgeCount: 128,
                 selectedNodeCount: 3,
                 selectedTokens: 450,
+                semanticCandidateCount: 2,
                 hopCount: 2,
                 auxiliaryModelCalls: 0,
             },
@@ -325,6 +334,7 @@ describe('actual narrative inquiry prompt', () => {
         })).resolves.toMatchObject({
             metrics: {
                 inspectedNodeCount: 2_000,
+                semanticCandidateCount: 2,
                 hopCount: 2,
             },
         })

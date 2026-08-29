@@ -526,6 +526,10 @@ describe('RisuBard memory routes', () => {
                     chatId: 'chat',
                     currentInput: 'bridge',
                     tokenBudget: { target: 1_500, maximum: 4_500 },
+                    semanticMatches: [{
+                        documentId: 'event-bridge',
+                        score: 0.91,
+                    }],
                 },
             },
             harness.response,
@@ -537,8 +541,30 @@ describe('RisuBard memory routes', () => {
             chatId: 'chat',
             currentInput: 'bridge',
             tokenBudget: { target: 1_500, maximum: 4_500 },
+            semanticMatches: [{
+                documentId: 'event-bridge',
+                score: 0.91,
+            }],
         })
         expect(harness.response.statusCode).toBe(200)
+
+        await harness.routes.get('/api/risubard/memory/inquiry')!(
+            {
+                body: {
+                    characterId: 'character',
+                    chatId: 'chat',
+                    currentInput: 'bridge',
+                    semanticMatches: Array.from({ length: 33 }, (_, index) => ({
+                        documentId: `event-${index}`,
+                        score: 0.9,
+                    })),
+                },
+            },
+            harness.response,
+            vi.fn()
+        )
+        expect(harness.response.statusCode).toBe(400)
+        expect(service.inquireNarrative).toHaveBeenCalledTimes(1)
 
         await harness.routes.get('/api/risubard/memory/inquiry')!(
             {
