@@ -65,9 +65,15 @@ export async function selectCanonicalDatabase(
       statementsSent: 0,
       statementTotal: 0,
     });
-    const verified = storage.backendKind === "server-sql" && "loadRecoverySnapshot" in storage
-      ? await (storage as SqlBootstrapStorage).loadRecoverySnapshot()
-      : await storage.loadDatabase({ shallow: false });
+    // Shallow, deliberately. The migration streams chats one at a time so a
+    // large database never has every message resident, and pulling the whole
+    // thing back to check it threw that away on the one launch where it costs
+    // most -- then bootstrap cloned the result for the patch-sync baseline.
+    // Completeness was already established against the source before the
+    // migration marked itself finished; what is left to establish here is that
+    // the database reads back as ready, which is what every later launch reads
+    // too. Starting in the same state either way is the point.
+    const verified = await storage.loadDatabase({ shallow: true });
     if (verified?.status !== "ready" || !verified.database) {
       throw new Error("SQL migration could not be verified by reloading it");
     }

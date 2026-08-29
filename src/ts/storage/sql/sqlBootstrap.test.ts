@@ -144,23 +144,37 @@ describe("standalone SQL bootstrap", () => {
     });
   });
 
-  it("uses explicit snapshot recovery only to verify a Node migration", async () => {
+  it("verifies a Node migration shallowly, without pulling the whole database back", async () => {
+    // The migration streams chats one at a time so a large database never has
+    // every message resident. Verifying it with the full snapshot undid that on
+    // the one launch where it costs most, and bootstrap then cloned the result
+    // for the patch-sync baseline. Completeness was already established against
+    // the source; what is left is that the database reads back as ready.
     const legacy = { characters: [], username: "legacy" } as any;
     const verified = { characters: [], username: "legacy" } as any;
+    const shallowCalls: (boolean | undefined)[] = [];
+    const loadDatabase = vi.fn(async (options?: { shallow?: boolean }) => {
+      shallowCalls.push(options?.shallow);
+      return shallowCalls.length === 1
+        ? { status: "empty" as const, revision: 0, database: null }
+        : { status: "ready" as const, revision: 1, database: verified };
+    });
     const storage = {
-      ...fakeStorage([{ status: "empty", revision: 0, database: null }]),
+      ...fakeStorage([]),
+      loadDatabase,
       backendKind: "server-sql" as const,
       loadBootstrap: vi.fn(),
-      loadRecoverySnapshot: vi.fn(async () => ({ status: "ready" as const, revision: 1, database: verified })),
+      loadRecoverySnapshot: vi.fn(),
       loadCharacterHydration: vi.fn(),
       loadChatMessageReversePage: vi.fn(),
     } as unknown as SqlBootstrapStorage;
 
     const result = await selectCanonicalDatabase(storage, legacy);
 
-    expect(storage.loadRecoverySnapshot).toHaveBeenCalledOnce();
-    expect(storage.loadDatabase).toHaveBeenCalledOnce();
+    expect(storage.loadRecoverySnapshot).not.toHaveBeenCalled();
+    expect(shallowCalls[1]).toBe(true);
     expect(result.database).toBe(verified);
+    expect(result.migrated).toBe(true);
   });
 
   it("preserves the source snapshot when migration verification fails", async () => {
