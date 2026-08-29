@@ -1078,22 +1078,23 @@ describe('stored response memory analysis', () => {
     test('awaits an explicit confirmation and announces its completed write', async () => {
         const updates = vi.fn()
         window.addEventListener('risubard-memory-updated', updates)
+        const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => ({
+            type: 'success',
+            result: request.schema?.includes('establishedEvents')
+                ? JSON.stringify({
+                    schemaVersion: 1,
+                    title: '확정된 턴',
+                    establishedEvents: ['턴이 확정되었다.'],
+                    stateChanges: [],
+                    characterKnowledge: [],
+                    persistentFacts: [],
+                    openContinuity: [],
+                    canonicalUpdateCandidates: [],
+                })
+                : 'NONE',
+        }))
         const analysis = createStoredResponseMemoryAnalysis({
-            requestModel: vi.fn(async (request) => ({
-                type: 'success',
-                result: request.schema?.includes('establishedEvents')
-                    ? JSON.stringify({
-                        schemaVersion: 1,
-                        title: '확정된 턴',
-                        establishedEvents: ['턴이 확정되었다.'],
-                        stateChanges: [],
-                        characterKnowledge: [],
-                        persistentFacts: [],
-                        openContinuity: [],
-                        canonicalUpdateCandidates: [],
-                    })
-                    : 'NONE',
-            })),
+            requestModel,
             fetchImpl: vi.fn(async (input) => {
                 if (String(input).endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
@@ -1130,11 +1131,12 @@ describe('stored response memory analysis', () => {
                         role: 'assistant'
                         content: string
                     }>
-                }) => Promise<void>
+                }, signal?: AbortSignal) => Promise<void>
             }
         ).confirm
 
         expect(confirm).toBeTypeOf('function')
+        const controller = new AbortController()
         await confirm?.({
             characterId: 'character',
             chatId: 'chat',
@@ -1143,7 +1145,9 @@ describe('stored response memory analysis', () => {
                 role: 'assistant',
                 content: 'The accepted turn.',
             }],
-        })
+        }, controller.signal)
+        expect((requestModel.mock.calls[0] as unknown[])[2])
+            .toBe(controller.signal)
         expect(updates).toHaveBeenCalledOnce()
         window.removeEventListener('risubard-memory-updated', updates)
     })

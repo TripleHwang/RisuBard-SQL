@@ -2725,6 +2725,7 @@ export const languageEnglish = {
     risuBardAutoWiki: "Write BardWiki automatically after message generation",
     risuBardAutoWikiOn: "Automatic BardWiki writing on",
     risuBardAutoWikiOff: "Automatic BardWiki writing off",
+    risuBardWikiCancel: "Cancel BardWiki task",
     risuBardMemoryForceUpdate: "Additional analysis",
     risuBardMemoryForceUpdating: "Analyzing unprocessed items...",
     risuBardMemoryForceUpdateDone: "Additional analysis completed, excluding canon already applied.",

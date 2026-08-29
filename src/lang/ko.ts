@@ -2932,6 +2932,7 @@ export const languageKorean = {
   risuBardAutoWiki: "메시지 생성 후 BardWiki 자동 작성",
   risuBardAutoWikiOn: "BardWiki 자동 작성 켜짐",
   risuBardAutoWikiOff: "BardWiki 자동 작성 꺼짐",
+  risuBardWikiCancel: "바드위키 작업 취소",
   risuBardMemoryForceUpdate: "추가 분석",
   risuBardMemoryForceUpdating: "미처리 항목 추가 분석 중...",
   risuBardMemoryForceUpdateDone: "이미 적용된 정본을 제외하고 추가 분석을 완료했습니다.",

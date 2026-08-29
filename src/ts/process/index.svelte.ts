@@ -137,7 +137,7 @@ async function confirmProjectedNarrativeTurn(input: {
     if (narrativeConfirmations.has(key)) return false
     narrativeConfirmations.add(key)
     const generationOperation = `analysis:${key}`
-    beginWikiGeneration(generationOperation)
+    const generationSignal = beginWikiGeneration(generationOperation)
     try {
         const character = DBState.db.characters.find(
             (item) => item.chaId === input.characterId
@@ -194,7 +194,7 @@ async function confirmProjectedNarrativeTurn(input: {
                     input.targetMessageId
                 ),
             } : {}),
-        })
+        }, generationSignal)
         const message = chat?.message.find(
             (item) => item.chatId === input.targetMessageId
         )
@@ -208,6 +208,7 @@ async function confirmProjectedNarrativeTurn(input: {
         return true
     }
     catch (error) {
+        if (generationSignal.aborted) return false
         const reason = (error instanceof Error
             ? error.message
             : String(error)).trim().slice(0, 512)
@@ -406,7 +407,7 @@ async function runWikiReboot(
     const operationId = `reboot:${character.chaId}:${chatId}`
     if (activeWikiReboots.has(operationId)) return false
     activeWikiReboots.add(operationId)
-    beginWikiGeneration(operationId)
+    const generationSignal = beginWikiGeneration(operationId)
     try {
         while (chat.risuBardWikiReboot) {
             const job = chat.risuBardWikiReboot
@@ -509,7 +510,7 @@ async function runWikiReboot(
                     ),
                     batch.at(-1)?.assistantMessageId
                 ),
-            })
+            }, generationSignal)
             if (!receipt) {
                 throw new Error('리부트 배치 완료 영수증을 저장하지 못했습니다.')
             }
@@ -529,6 +530,16 @@ async function runWikiReboot(
     }
     catch (error) {
         const job = chat.risuBardWikiReboot
+        if (generationSignal.aborted) {
+            if (job) {
+                job.status = 'paused'
+                job.lastError = undefined
+                job.updatedAt = Date.now()
+                await persistWikiReboot(character, chat, chatIndex)
+                    .catch(() => {})
+            }
+            return true
+        }
         if (job) {
             job.status = 'failed'
             job.lastError = (error instanceof Error
@@ -671,7 +682,7 @@ export async function executeCurrentNarrativeWikiCommand(
         message: '사용자 직접 위키 명령을 실행합니다.',
     })
     const generationOperation = `command:${characterId}:${chatId}`
-    beginWikiGeneration(generationOperation)
+    const generationSignal = beginWikiGeneration(generationOperation)
     try {
         const result = await executeDirectWikiCommand({
             instruction,
@@ -684,7 +695,8 @@ export async function executeCurrentNarrativeWikiCommand(
                     realChatId: chatId,
                     logSource: 'wiki-admin',
                 },
-                settings.risuBardModelMode
+                settings.risuBardModelMode,
+                generationSignal
             ),
             saveDocument: (document) => saveManualWikiDocument({
                 characterId,
@@ -734,6 +746,16 @@ export async function executeCurrentNarrativeWikiCommand(
         return result
     }
     catch (cause) {
+        if (generationSignal.aborted) {
+            publishRisuBardMemoryActivity({
+                characterId,
+                chatId,
+                operation: 'error',
+                timestamp: Date.now(),
+                message: '사용자가 바드위키 작업을 취소했습니다.',
+            })
+            return { applied: [], failed: [] }
+        }
         const reason = (cause instanceof Error
             ? cause.message
             : String(cause)).trim().slice(0, 512)
@@ -3185,7 +3207,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     }
 
     if (narrativeTurnToConfirm
-        && shouldAutomaticallyConfirmNarrativeTurn()) {
+        && shouldAutomaticallyConfirmNarrativeTurn(
+            DBState.db.risuBardAutoWikiEnabled
+        )) {
         void confirmProjectedNarrativeTurn({
             characterId: currentChar.chaId,
             chatId: narrativeSessionChatId,

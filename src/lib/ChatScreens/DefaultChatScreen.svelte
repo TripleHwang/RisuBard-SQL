@@ -57,7 +57,10 @@ import { isMobile } from 'src/ts/platform'
     import { quickMenu } from 'src/ts/hotkey';
     import { loadChatDraft, scheduleSaveChatDraft, flushChatDraft, removeChatDraft } from 'src/ts/storage/chatDraft';
     import { blocksChatGeneration } from 'src/ts/risubard/wikiReboot';
-    import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
+    import {
+        cancelWikiGeneration,
+        isWikiGenerating,
+    } from 'src/ts/risubard/wikiGenerationState';
 
     import Chats from './Chats.svelte';
     import Button from '../UI/GUI/Button.svelte';
@@ -1339,17 +1342,62 @@ import { isMobile } from 'src/ts/platform'
                 {/if}
 
                 {#if currentCharacter?.chaId !== '§playground' && currentCharacter?.chaId && currentChatSlot?.id}
-                    <div class="order-3 shrink-0 flex items-center h-9" data-risubard-wiki-controls>
+                    <div class="relative order-3 shrink-0 flex items-center h-9" data-risubard-wiki-controls>
+                        {#if $isWikiGenerating}
+                            <button
+                                    type="button"
+                                    data-risubard-wiki-cancel
+                                    onclick={cancelWikiGeneration}
+                                    aria-label={language.risuBardWikiCancel}
+                                    title={language.risuBardWikiCancel}
+                                    class="absolute bottom-[calc(100%+6px)] right-0 z-30 whitespace-nowrap rounded-md border border-danger/70 bg-danger px-2.5 py-1.5 text-xs font-bold text-on-danger shadow-lg transition-colors hover:bg-danger/85 active:bg-danger/75"
+                            >
+                                {language.risuBardWikiCancel}
+                            </button>
+                        {/if}
                         <button
                                 type="button"
                                 data-risubard-wiki-button
                                 onclick={() => memoryWikiOpen = !memoryWikiOpen}
                                 aria-label={language.risuBardMemoryOpenManual}
                                 title={language.risuBardMemoryOpenManual}
+                                style="left: 5px"
                                 class="relative z-10 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-warning text-on-warning shadow-sm hover:bg-warning/85 active:bg-warning/75 transition-colors"
                                 class:wiki-generating={$isWikiGenerating}
                         >
                             <BookOpenIcon size={18} strokeWidth={2.2} />
+                        </button>
+                        <button
+                                type="button"
+                                role="switch"
+                                data-risubard-auto-wiki
+                                aria-checked={DBState.db.risuBardAutoWikiEnabled !== false}
+                                aria-label={language.risuBardAutoWiki}
+                                title={DBState.db.risuBardAutoWikiEnabled !== false
+                                    ? language.risuBardAutoWikiOn
+                                    : language.risuBardAutoWikiOff}
+                                onclick={() => {
+                                    DBState.db.risuBardAutoWikiEnabled =
+                                        DBState.db.risuBardAutoWikiEnabled === false
+                                }}
+                                class={`-ml-1 flex h-7 items-center gap-1 rounded-r-full border py-0.5 pl-2.5 pr-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                                    DBState.db.risuBardAutoWikiEnabled !== false
+                                        ? 'border-warning bg-warning/20 text-warning'
+                                        : 'border-darkborderc bg-darkbg text-textcolor2'
+                                }`}
+                        >
+                            <span>auto</span>
+                            <span
+                                    aria-hidden="true"
+                                    class="flex h-4 w-4 items-center justify-center rounded-full border transition-colors"
+                                    class:border-warning={DBState.db.risuBardAutoWikiEnabled !== false}
+                                    class:bg-warning={DBState.db.risuBardAutoWikiEnabled !== false}
+                                    class:shadow-sm={DBState.db.risuBardAutoWikiEnabled !== false}
+                                    class:border-darkborderc={DBState.db.risuBardAutoWikiEnabled === false}
+                                    class:bg-bgcolor={DBState.db.risuBardAutoWikiEnabled === false}
+                            >
+                                <span class="h-1.5 w-1.5 rounded-full bg-white/90"></span>
+                            </span>
                         </button>
                     </div>
                 {/if}

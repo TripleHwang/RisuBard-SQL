@@ -235,7 +235,10 @@ export interface MemoryAnalysisRunnerOptions {
     graphService?: NarrativeGraphWriteService
     markdownWikiService?: NarrativeMarkdownWikiWriteService
     nativeV2Analysis?: boolean
-    analyze(request: MemoryAnalysisModelRequest): Promise<string | ModelResponse>
+    analyze(
+        request: MemoryAnalysisModelRequest,
+        signal?: AbortSignal
+    ): Promise<string | ModelResponse>
     onError(error: unknown): void | Promise<void>
 }
 
@@ -762,13 +765,17 @@ export function createMemoryAnalysisRunner(
         }
     }
     const run = async (
-        input: MemoryAnalysisInput
+        input: MemoryAnalysisInput,
+        signal?: AbortSignal
     ): Promise<MemoryAnalysisRunResult> => {
         const snapshot = snapshotInput(input)
-        const analyzeRaw = (request: MemoryAnalysisModelRequest) => options.analyze({
+        const analyzeRaw = (request: MemoryAnalysisModelRequest) => {
+            signal?.throwIfAborted()
+            return options.analyze({
                 ...request,
                 sessionChatId: snapshot.modelSessionChatId ?? snapshot.chatId,
-            })
+            }, signal)
+        }
         const analyzeResponse = async (request: MemoryAnalysisModelRequest): Promise<ModelResponse> => {
             const response = await analyzeRaw(request)
             return typeof response === 'object' && response !== null && 'type' in response
