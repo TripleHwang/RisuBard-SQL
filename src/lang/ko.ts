@@ -2142,6 +2142,7 @@ export const languageKorean = {
   bookmark: "북마크",
   branch: "분기점",
   bardWikiHistoricalBranchBlocked: "BardWiki가 있는 대화는 이전 메시지에서 안전하게 분기할 수 없습니다. 먼저 저장 및 불러오기로 해당 시점으로 돌아가세요. 이미 대화와 위키가 어긋난 경우 위키 리부트를 실행하세요.",
+  risuBardChatImportWikiUnavailable: "원본 BardWiki 작업공간을 찾지 못해 위키 확정 표식을 초기화했습니다. 다른 설치에서 가져온 파일이라면 전체 백업을 사용하거나 위키 리부트를 실행하세요.",
   fetchLogConsent:
     "플러그인 {} 이(가) 로그를 가져오려고 합니다. 민감한 정보가 노출될 수 있습니다. 허용하시겠습니까?",
   getFullDatabaseConsent:

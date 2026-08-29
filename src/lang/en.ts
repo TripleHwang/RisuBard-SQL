@@ -1986,6 +1986,7 @@ export const languageEnglish = {
     translate: "Translate",
     branch: "Branch",
     bardWikiHistoricalBranchBlocked: "BardWiki cannot safely branch from an earlier message. Use Save and Load to return to that point first. If this chat is already inconsistent, run Wiki Reboot.",
+    risuBardChatImportWikiUnavailable: "The source BardWiki workspace was unavailable, so stale confirmation markers were cleared. For files from another installation, use a full backup or run Wiki Reboot.",
     branchedText: "This chat has been branched from {}.",
     loadMore: "Load More",
     disableMessage: "Disable Message",

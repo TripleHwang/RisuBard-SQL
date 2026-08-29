@@ -31,6 +31,9 @@ const databaseSource = readFileSync(resolve(
     process.cwd(), 'src/ts/storage/database.svelte.ts'
 ), 'utf8')
 const koreanSource = readFileSync(resolve(process.cwd(), 'src/lang/ko.ts'), 'utf8')
+const charactersSource = readFileSync(resolve(
+    process.cwd(), 'src/ts/characters.ts'
+), 'utf8')
 
 describe('chat file save slot connections', () => {
     test('opens save mode in every chat theme and only writes after choosing a slot', () => {
@@ -139,6 +142,29 @@ describe('chat file save slot connections', () => {
         expect(chatScreenSource).toContain('silent: true')
         expect(defaultChatSource).toContain('onQuickSave')
         expect(defaultChatSource).toContain('onQuickLoad')
+    })
+
+    test('autosaves an idle completed turn without waiting for the next turn confirmation', () => {
+        const effectStart = chatScreenSource.indexOf('$effect(() => {',
+            chatScreenSource.indexOf('async function autosaveCurrentChat'))
+        const effectEnd = chatScreenSource.indexOf('const wallPaper', effectStart)
+        const autosaveEffect = chatScreenSource.slice(effectStart, effectEnd)
+
+        expect(autosaveEffect).toContain('$isWikiGenerating')
+        expect(autosaveEffect).toContain('$generationStates.has(chatGenKey(chat.id))')
+        expect(autosaveEffect).toContain('shouldCreateAutosave(')
+        expect(autosaveEffect).not.toContain('risubardMemoryConfirmed')
+        expect(autosaveEffect).not.toContain('wikiReady')
+    })
+
+    test('keeps BardWiki when a RisuBard chat is exported and reimported locally', () => {
+        expect(charactersSource).toContain('sourceCharacterId: char.chaId')
+        expect(charactersSource).toContain('await forkMemoryWiki({')
+        expect(charactersSource).toContain("mode: 'copy'")
+        expect(charactersSource).toMatch(
+            /await requestImmediateSave[\s\S]*await Promise\.all[\s\S]*completeMemoryWikiFork/
+        )
+        expect(charactersSource).toContain('resetImportedBardWikiState')
     })
 
     test('shows the current chat as a plain title above a separate chat-list disclosure', () => {

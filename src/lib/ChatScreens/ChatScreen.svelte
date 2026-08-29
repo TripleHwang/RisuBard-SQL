@@ -21,6 +21,7 @@
     import { autoSaveId, normalizeAutosaveInterval, normalizeAutosaveRetention, obsoleteAutosaveIds, quickSaveId, shouldCreateAutosave } from 'src/ts/risubard/memorySavePolicy';
     import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
     import { resolveChatTextSurface } from 'src/ts/gui/textTheme';
+    import { chatGenKey, generationStates } from 'src/ts/process/generationState';
     let openChatList = $state(false)
     let openModuleList = $state(false)
     let saveSlotsOpen = $state(false)
@@ -241,16 +242,12 @@
         const character = currentCharacter
         const chat = character?.chats[character.chatPage]
         if(!character?.chaId || !chat?.id || chat._placeholder || chat.isStreaming
-            || savingSlot || $isWikiGenerating) return
+            || savingSlot || $isWikiGenerating
+            || $generationStates.has(chatGenKey(chat.id))) return
         const turnCount = countChatTurns(chat.message)
         const interval = normalizeAutosaveInterval(DBState.db.risuBardAutosaveInterval)
         const retention = normalizeAutosaveRetention(DBState.db.risuBardAutosaveRetention)
-        const latestAssistant = [...chat.message].reverse().find((message) =>
-            message.role === 'char' && !message.isComment && !message.disabled
-        )
-        const wikiReady = DBState.db.risuBardAutoWikiEnabled === false
-            || latestAssistant?.risubardMemoryConfirmed === true
-        if(wikiReady && shouldCreateAutosave(
+        if(shouldCreateAutosave(
             turnCount,
             interval,
             chat.risuBardLastAutosaveTurn,
