@@ -211,7 +211,10 @@ describe('server relational SQLite', () => {
               VALUES (?, ?, datetime('now'))`,
         bind: ['pagefold.config.v1', '{"provider":"google"}'],
       }],
-    })).toEqual({ revision: 1 })
+      // An ordinary commit reports the two facts a chunked migration made
+      // separable: the database IS now initialized, and nothing is still on its
+      // way to it. See sql-migration-chunks.test.ts.
+    })).toEqual({ revision: 1, initialized: true, migration: null })
     expect(storage.dump().tables.plugin_custom_storage).toEqual([
       expect.objectContaining({ key: 'pagefold.config.v1' }),
     ])

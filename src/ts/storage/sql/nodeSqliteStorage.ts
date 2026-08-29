@@ -1,3 +1,5 @@
+import { v4 as uuidv4 } from "uuid";
+
 import type {
   BotPresetSummary,
   SqlBotChatStats,
@@ -32,6 +34,7 @@ import {
 } from "./sqliteCommit";
 import {
   buildSqlReplaceCommit,
+  createEmptySqlCommit,
   SqlRevisionConflictError,
   type SqlCommit,
   type SqlCommitResult,
@@ -41,6 +44,10 @@ import {
   deferredRootKeySnapshot,
   markRootKeysDeferred,
 } from "./deferredRootKeys";
+import {
+  reportSqlMigrationProgress,
+  sqlMigrationErrorText,
+} from "./migrationReporting";
 
 type AuthenticatedRequest = (
   input: RequestInfo | URL,
@@ -59,6 +66,107 @@ export class SqlHttpError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
     this.name = "SqlHttpError";
+  }
+}
+
+/**
+ * Per-request metadata describing one slice of a migration that spans several
+ * requests.
+ *
+ * The field names are the server's (`server/node/sql-commit-route.cjs`), which
+ * uses them to keep its own completion marker withheld until `final` lands and
+ * to reject a slice that arrives out of order. A server that does not know the
+ * field ignores it and applies each slice as an ordinary commit, which is why
+ * the client keeps its own in-progress marker as well.
+ *
+ * Constraints the server enforces, all satisfied by `sendMigration` below: `id`
+ * is 1..128 characters, `chunk` is a 0-based integer below `totalChunks`,
+ * `totalChunks` is at least 2, and `final` is true on exactly the last chunk. A
+ * migration that fits in one request sends no descriptor at all -- one chunk is
+ * not a sequence, and the server rejects `totalChunks: 1`.
+ */
+interface SqlMigrationChunkMeta {
+  /** Identifies one migration across all of its requests. */
+  id: string;
+  /** 0-based position of this request. */
+  chunk: number;
+  totalChunks: number;
+  /** True on the last request, the one that completes the migration. */
+  final: boolean;
+}
+
+/**
+ * A 409 that is not a revision conflict.
+ *
+ * The commit route answers 409 for a family of migration-sequence problems
+ * ("a migration is already in flight", "that is not the chunk I expect"). None
+ * of them is fixed by retrying against a newer revision, so none of them may
+ * arrive as `SqlRevisionConflictError` -- a caller that retries on that would
+ * loop. The server's own code and message are carried through verbatim.
+ */
+export class SqlCommitConflictError extends Error {
+  constructor(readonly code: string, message: string, readonly detail: unknown) {
+    super(message);
+    this.name = "SqlCommitConflictError";
+  }
+}
+
+/**
+ * A migration slice the server did not accept.
+ *
+ * Named separately from a plain commit failure because the consequence is
+ * different: the SQL database now holds a partial copy. The message says so,
+ * because the person reading it needs to know that the legacy database is
+ * untouched and that the next launch starts over rather than adopting the
+ * wreckage.
+ */
+export class SqlMigrationChunkError extends Error {
+  constructor(
+    readonly chunk: number,
+    readonly chunkCount: number,
+    readonly reason: unknown,
+  ) {
+    super(
+      `SQL migration failed while sending part ${chunk} of ${chunkCount}: ` +
+      `${sqlMigrationErrorText(reason)}. The SQL database holds a partial copy and stays ` +
+      "marked as an unfinished migration, so it is not used; your existing save file is " +
+      "unchanged and the migration starts over on the next launch.",
+    );
+    this.name = "SqlMigrationChunkError";
+  }
+}
+
+/**
+ * A non-JSON error body is normal (proxies and express both answer with HTML),
+ * so failing to parse one is not a failure to report -- the raw text is used
+ * verbatim instead and nothing is lost.
+ */
+function parseJsonOrNull(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The server's own words about why it refused a commit.
+ *
+ * `sendStatements` used to throw away the response body, so the one thing that
+ * could explain a failed migration -- "SQL commit is too large" -- never
+ * reached the user or the console; all anyone ever saw was the status code.
+ */
+async function serverErrorDetail(response: Response): Promise<string> {
+  try {
+    const body = (await response.text()).trim();
+    if (!body) return "";
+    const parsed = parseJsonOrNull(body) as { error?: unknown } | null;
+    const detail = parsed && typeof parsed === "object" && typeof parsed.error === "string" && parsed.error
+      ? parsed.error
+      : body;
+    return `: ${detail.slice(0, 500)}`;
+  } catch (error) {
+    return `: <the server's error body could not be read: ${sqlMigrationErrorText(error)}>`;
   }
 }
 
@@ -85,6 +193,65 @@ function sorted(rows: Record<string, unknown>[], key = "position") {
  * knowledge.
  */
 export const DEFERRED_BOOTSTRAP_ROOT_KEYS: readonly string[] = ["pluginCustomStorage"];
+
+/**
+ * Statements per request when a legacy-to-SQL migration is too big to send at
+ * once.
+ *
+ * The server refuses a commit above its own per-request cap (250,000 today), a
+ * guard on how much it will hold in memory and execute in one transaction, and
+ * raising it is not the fix -- a 50 MB legacy database produces ~355,000
+ * statements and there is no cap that makes "one request" the right shape.
+ * This is deliberately an order of magnitude below the server's cap: it bounds
+ * the JSON body (~10 MB rather than ~100 MB), so a stalled upload is noticed in
+ * seconds instead of minutes, and it leaves room for the cap to be lowered
+ * without this client immediately breaking.
+ */
+export const SQL_MIGRATION_CHUNK_STATEMENTS = 20_000;
+
+/**
+ * The root setting that says "a migration started here and has not finished".
+ *
+ * A chunked migration cannot be one transaction, so between its first and last
+ * request the SQL database holds a partial copy -- and the server marks it
+ * `initialized = 1` as soon as the first chunk lands. That flag alone would
+ * therefore say "canonical" about a half-written database.
+ *
+ * This key is written in the same transaction as the migration's opening
+ * DELETEs and cleared in the same transaction as its last chunk, so it is
+ * present for exactly as long as the database is incomplete. Every load path
+ * checks it and refuses to treat such a database as ready, which sends the next
+ * launch back to the legacy source and migrates again from a clean slate.
+ */
+export const SQL_MIGRATION_MARKER_KEY = "__risuSqlMigrationInProgress";
+
+/**
+ * The statements that raise (`marker`) or clear (`null`) the in-progress mark.
+ *
+ * Raising it goes through `applySqliteCommit` so the row is written exactly the
+ * way every other root setting is -- including its relational nodes, without
+ * which the server's bootstrap would report the key as unreadable instead of
+ * as a value. Clearing it removes both halves, leaving no trace on a database
+ * that finished migrating.
+ */
+async function migrationMarkerStatements(marker: string | null): Promise<Statement[]> {
+  if (marker === null) {
+    return [
+      { sql: "DELETE FROM system_settings WHERE key = ?", bind: [SQL_MIGRATION_MARKER_KEY] },
+      {
+        sql: "DELETE FROM setting_extension_nodes WHERE setting_key = ?",
+        bind: [SQL_MIGRATION_MARKER_KEY],
+      },
+    ];
+  }
+  const commit = createEmptySqlCommit(0, "migration-marker");
+  commit.root.upserts.push({ key: SQL_MIGRATION_MARKER_KEY, value: marker });
+  const statements: Statement[] = [];
+  await applySqliteCommit(commit, (sql, bind = []) => {
+    statements.push({ sql, bind });
+  });
+  return statements;
+}
 
 /**
  * Keys `rebuildBootstrap` populates itself from dedicated payload fields *and*
@@ -447,9 +614,50 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return database;
   }
 
+  /**
+   * Reports whether this SQL database is a migration that never finished, and
+   * says so loudly when it is.
+   *
+   * `system_storage_meta.initialized` is set by the server on every successful
+   * commit, so after the first slice of a chunked migration it already says
+   * "canonical" about a database holding a fraction of the user's data. The
+   * marker is the second fact that makes the first one readable, and it is
+   * absent on every database that migrated in one request or finished
+   * migrating in several.
+   *
+   * `marker === undefined` means the key is not there, which is the only
+   * reading that means "no migration is in flight".
+   */
+  private migrationIsIncomplete(marker: unknown): boolean {
+    if (marker === undefined) return false;
+    console.error(
+      "[SQL migration] this SQL database is marked as a migration in progress " +
+      `(${SQL_MIGRATION_MARKER_KEY} = ${JSON.stringify(marker)}), so it holds only part of the ` +
+      "legacy database. Refusing to treat it as ready: the legacy save file stays canonical and " +
+      "the migration runs again from a clean slate.",
+    );
+    // Anything this half-written database reported as withheld describes a
+    // database that is about to be replaced wholesale. A mark left set here
+    // would make `buildSqlReplaceCommit` refuse the very migration that
+    // repairs it, and the user would be stuck in legacy mode permanently.
+    for (const key of deferredRootKeySnapshot()) clearDeferredRootKey(key);
+    return true;
+  }
+
   async loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null> {
     const dump = await this.fetchDump();
     this.bootstrapPayload = null;
+    const markerRow = (dump.tables.system_settings ?? []).find(
+      (row) => row.key === SQL_MIGRATION_MARKER_KEY,
+    );
+    // The recovery path has to reach the same verdict as the normal one, or a
+    // degraded startup would adopt the half-migrated database that
+    // `loadDatabase` just refused.
+    if (dump.status === "ready" && this.migrationIsIncomplete(
+      markerRow ? (markerRow.text_value ?? true) : undefined,
+    )) {
+      return { status: "empty", revision: dump.revision, database: null };
+    }
     const database = this.rebuild(dump);
     return { status: database ? "ready" : "empty", revision: dump.revision, database };
   }
@@ -559,6 +767,36 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   async loadDatabase(_options?: SqlLoadDatabaseOptions): Promise<SqlLoadDatabaseResult | null> {
     if (!this.enabled) await this.init();
     const payload = this.bootstrapPayload ?? await this.loadBootstrap();
+    const incomplete = payload.status === "ready" && this.migrationIsIncomplete(
+      (payload.settings as Record<string, unknown>)[SQL_MIGRATION_MARKER_KEY],
+    );
+    // The server knows how far the abandoned run got and says so in the payload.
+    // Reporting "empty" without that is how a database stuck eleven chunks in
+    // becomes indistinguishable from one that was never migrated -- which is
+    // exactly the shape of failure that let this whole defect hide for months.
+    const session = (payload as {
+      migration?: {
+        chunksApplied?: number
+        totalChunks?: number | null
+        startedAt?: string | null
+        archivedPath?: string | null
+      } | null
+    }).migration;
+    if (incomplete || session) {
+      console.error(
+        "[SQL migration] the SQL database is incomplete and will be rebuilt from the legacy source" +
+        (session
+          ? `: an earlier attempt stopped after ${session.chunksApplied ?? "?"} of ` +
+            `${session.totalChunks ?? "?"} chunks, started ${session.startedAt ?? "unknown"}` +
+            (session.archivedPath ? `, prior database archived at ${session.archivedPath}` : "")
+          : ": a migration marker was left behind by an interrupted attempt."),
+      );
+    }
+    if (incomplete) {
+      // "Not complete" is reported as "not present", never as "ready": the
+      // caller migrates again from the legacy source, which is intact.
+      return { status: "empty", revision: payload.revision, database: null };
+    }
     const database = this.rebuildBootstrap(payload);
     return { status: payload.status, revision: payload.revision, database };
   }
@@ -667,50 +905,192 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     }
   }
 
+  /*
+   * -------------------------------------------------------------------------
+   * COMMIT TRANSPORT -- the only place that decides how many requests a commit
+   * becomes, and the only place that encodes the chunk wire format.
+   *
+   *   POST /api/sql/commit
+   *       { baseRevision, action, statements }              (every commit)
+   *       { baseRevision, action, statements, migration }   (migration slices)
+   *
+   * `migration` is additive: the server in this repository reads only
+   * `baseRevision`, `action` and `statements`, so a chunked migration works
+   * against it unchanged, one ordinary commit at a time. If the server grows a
+   * resumable migration protocol, `sendStatements` and `sendMigration` below
+   * are the whole surface to adjust.
+   * -------------------------------------------------------------------------
+   */
+
   private async sendStatements(
     statements: Statement[],
     action: string,
     baseRevision = this.revision,
+    migration?: SqlMigrationChunkMeta,
   ): Promise<SqlCommitResult> {
     const response = await this.request("/api/sql/commit", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ baseRevision, action, statements }),
+      body: JSON.stringify(
+        migration
+          ? { baseRevision, action, statements, migration }
+          : { baseRevision, action, statements },
+      ),
     });
     if (response.status === 409) {
-      const body = await response.json();
-      this.revision = Number(body.currentRevision) || 0;
+      const body = await response.json() as {
+        code?: unknown;
+        error?: unknown;
+        currentRevision?: unknown;
+      };
       this.bootstrapPayload = null;
+      const code = typeof body?.code === "string" ? body.code : "";
+      if (code && code !== "SQL_REVISION_CONFLICT") {
+        // Not a stale revision. Leaving `this.revision` alone matters: these
+        // bodies carry no `currentRevision`, and coercing a missing one to 0
+        // would leave the client committing against revision 0 forever.
+        throw new SqlCommitConflictError(
+          code,
+          typeof body?.error === "string" && body.error
+            ? `SQL commit rejected (${code}): ${body.error}`
+            : `SQL commit rejected (${code})`,
+          body,
+        );
+      }
+      this.revision = Number(body.currentRevision) || 0;
       throw new SqlRevisionConflictError(this.revision);
     }
-    if (!response.ok) throw new Error(`SQL commit failed (${response.status})`);
+    if (!response.ok) {
+      // The status alone was the whole error for years, so "SQL commit is too
+      // large" -- the one sentence that explained a four-minute failed
+      // migration -- never left the server.
+      throw new SqlHttpError(
+        `SQL commit failed (${response.status})${await serverErrorDetail(response)}`,
+        response.status,
+      );
+    }
     const result = (await response.json()) as SqlCommitResult;
     this.revision = result.revision;
     this.bootstrapPayload = null;
     return result;
   }
 
-  async commit(commit: SqlCommit): Promise<SqlCommitResult> {
-    const statements: Statement[] = [];
+  private async buildCommitStatements(
+    commit: SqlCommit,
+  ): Promise<{ prelude: Statement[]; body: Statement[] }> {
+    const prelude: Statement[] = [];
     if (commit.replaceAll) {
-      statements.push(
+      prelude.push(
         { sql: "DELETE FROM system_settings", bind: [] },
         { sql: "DELETE FROM plugin_custom_storage", bind: [] },
         { sql: "DELETE FROM characters", bind: [] },
         { sql: "DELETE FROM bot_presets", bind: [] },
       );
     }
+    const body: Statement[] = [];
     await applySqliteCommit(commit, (sql, bind = []) => {
-      statements.push({ sql, bind });
+      body.push({ sql, bind });
     });
-    return await this.sendStatements(
-      statements,
-      commit.action || (commit.replaceAll ? "replace-all" : "sync"),
-      commit.baseRevision,
-    );
+    return { prelude, body };
+  }
+
+  /**
+   * Sends a replace-all migration, splitting it across requests when it is too
+   * large for one.
+   *
+   * Splitting costs the migration its single transaction, so it buys that back
+   * with the in-progress marker: raised in the same request as the opening
+   * DELETEs (never before them -- `DELETE FROM system_settings` would wipe it)
+   * and cleared in the same request as the last slice. There is therefore no
+   * instant at which the database is incomplete and unmarked, and no instant at
+   * which it is complete and still marked.
+   *
+   * A migration that fits in one request is still one request and one
+   * transaction. It does carry a chunk descriptor, because that is the only
+   * thing that can clear a session left behind by an interrupted migration.
+   */
+  private async sendMigration(
+    prelude: Statement[],
+    body: Statement[],
+    action: string,
+    baseRevision: number,
+  ): Promise<SqlCommitResult> {
+    const total = prelude.length + body.length;
+    const id = uuidv4();
+    const statements = total <= SQL_MIGRATION_CHUNK_STATEMENTS
+      ? [...prelude, ...body]
+      : [
+        ...prelude,
+        ...await migrationMarkerStatements(`${id} started ${new Date().toISOString()}`),
+        ...body,
+        ...await migrationMarkerStatements(null),
+      ];
+    const chunkCount = Math.max(1, Math.ceil(statements.length / SQL_MIGRATION_CHUNK_STATEMENTS));
+
+    let revision = baseRevision;
+    let result: SqlCommitResult = { revision: baseRevision };
+    for (let index = 0; index < chunkCount; index++) {
+      const start = index * SQL_MIGRATION_CHUNK_STATEMENTS;
+      const final = index === chunkCount - 1;
+      reportSqlMigrationProgress({
+        phase: "uploading",
+        chunk: index + 1,
+        chunkCount,
+        statementsSent: start,
+        statementTotal: statements.length,
+      });
+      try {
+        result = await this.sendStatements(
+          statements.slice(start, start + SQL_MIGRATION_CHUNK_STATEMENTS),
+          // The last slice carries the caller's action, so a server that keys
+          // off "replace-all" still sees it, and sees it last.
+          final ? action : `${action}-chunk-${index + 1}-of-${chunkCount}`,
+          revision,
+          // Always sent, single-chunk migrations included. Only a chunk 0 can
+          // supersede a session abandoned by an earlier interrupted migration;
+          // without one, a retry small enough to fit in a single request is
+          // refused with SQL_MIGRATION_IN_PROGRESS forever, and the user can
+          // never get out of legacy mode. A lone chunk is chunk 0 and final, so
+          // it opens and closes the session in the same transaction.
+          { id, chunk: index, totalChunks: chunkCount, final },
+        );
+      } catch (error) {
+        // A conflict keeps its type: callers retry on it, and it means another
+        // writer moved the revision, not that this migration is broken.
+        if (chunkCount === 1 || error instanceof SqlRevisionConflictError) throw error;
+        throw new SqlMigrationChunkError(index + 1, chunkCount, error);
+      }
+      // Every slice is committed against the revision the previous one
+      // returned; the server bumps it on each success.
+      revision = result.revision;
+    }
+    return result;
+  }
+
+  async commit(commit: SqlCommit): Promise<SqlCommitResult> {
+    const action = commit.action || (commit.replaceAll ? "replace-all" : "sync");
+    const { prelude, body } = await this.buildCommitStatements(commit);
+    // Ordinary commits stay one request and one server transaction, whatever
+    // their size. Their all-or-nothing behaviour is what keeps a half-saved
+    // chat from existing, and only a replace-all has the marker that makes a
+    // partial write recognisable afterwards.
+    if (!commit.replaceAll) {
+      return await this.sendStatements([...prelude, ...body], action, commit.baseRevision);
+    }
+    return await this.sendMigration(prelude, body, action, commit.baseRevision);
   }
 
   async replaceDatabase(database: Database): Promise<boolean> {
+    // Flattening the legacy database into statements happens before any
+    // request and takes seconds on a large one, so it is announced: it is the
+    // stretch that looks most like a hang.
+    reportSqlMigrationProgress({
+      phase: "preparing",
+      chunk: 0,
+      chunkCount: 0,
+      statementsSent: 0,
+      statementTotal: 0,
+    });
     await this.commit(buildSqlReplaceCommit(database, this.revision));
     return true;
   }

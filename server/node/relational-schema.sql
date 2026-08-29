@@ -15,6 +15,35 @@ CREATE TABLE IF NOT EXISTS system_storage_meta (
 INSERT OR IGNORE INTO system_storage_meta (singleton, schema_version, schema_layout)
 VALUES (1, 3, 'relational-schema-v3');
 
+-- A legacy-to-SQL migration does not fit in one request. A 50 MB `database.bin`
+-- builds ~350,000 statements against a 250,000 per-commit cap, so it lands as a
+-- SEQUENCE of commits instead. This row exists for exactly as long as such a
+-- sequence is in flight, and it is what lets the next launch tell an INCOMPLETE
+-- database apart from an empty one.
+--
+-- `system_storage_meta.initialized` stays 0 for every chunk but the last, so a
+-- half-applied migration can never be read as a finished database. The row is
+-- deleted in the same transaction that sets `initialized = 1`.
+CREATE TABLE IF NOT EXISTS system_migration_sessions (
+    singleton INTEGER PRIMARY KEY DEFAULT 1 CHECK (singleton = 1),
+    migration_id TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'migrate',
+    -- Chunks fully applied so far; also the 0-based index of the next chunk.
+    chunks_applied INTEGER NOT NULL DEFAULT 0 CHECK (chunks_applied >= 0),
+    statements_applied INTEGER NOT NULL DEFAULT 0 CHECK (statements_applied >= 0),
+    total_chunks INTEGER CHECK (total_chunks IS NULL OR total_chunks >= 1),
+    -- The storage revision this sequence started from, kept so an abandoned
+    -- migration can be reported against the state it was replacing.
+    base_revision INTEGER NOT NULL,
+    -- 1 when this sequence began over a database that was already complete.
+    -- `archived_path` then names the consistent copy taken before the first
+    -- chunk overwrote it, because a chunked replace-all is not atomic.
+    was_initialized INTEGER NOT NULL DEFAULT 0 CHECK (was_initialized IN (0, 1)),
+    archived_path TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS bot_presets (
     preset_id TEXT PRIMARY KEY,
     position INTEGER NOT NULL UNIQUE CHECK (position >= 0),

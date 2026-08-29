@@ -23,9 +23,19 @@ const TABLES = Object.freeze([
     'chat_drafts',
 ]);
 
+// `system_migration_sessions` is deliberately absent from TABLES. It is server
+// bookkeeping, not user data, so it stays out of `dump()`; and because
+// WRITABLE_TABLES is derived from TABLES, no client-supplied statement can ever
+// reach it. Only `commit()` writes it, in the same transaction as the chunk.
 const WRITABLE_TABLES = new Set(TABLES.filter((table) => (
     table !== 'system_storage_meta' && table !== 'system_revisions'
 )));
+// Bounds per-request memory: one commit is parsed and held whole before it is
+// applied. It is NOT a ceiling on how much can be migrated -- a migration
+// larger than this lands as a sequence of chunked commits; see `commit()`.
+const MAX_STATEMENTS_PER_COMMIT = 250_000;
+const MAX_MIGRATION_ID_LENGTH = 128;
+const MAX_MIGRATION_CHUNKS = 100_000;
 const DEFAULT_MESSAGE_PAGE_LIMIT = 40;
 const MAX_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
@@ -58,6 +68,58 @@ function statementTable(sql) {
         throw new Error('Statement targets a non-writable table');
     }
     return match[1].toLowerCase();
+}
+
+function sqlError(message, code, status, extra) {
+    const error = new Error(message);
+    error.code = code;
+    error.status = status;
+    if (extra) Object.assign(error, extra);
+    return error;
+}
+
+/**
+ * The `migration` field of a commit payload, or null for an ordinary commit.
+ *
+ * A migration chunk names the sequence it belongs to (`id`), its 0-based
+ * position in that sequence (`chunk`), and whether it is the last one
+ * (`final`). `totalChunks` is optional and exists only so the server can report
+ * progress back; nothing depends on it being present.
+ *
+ * Every field is validated before anything is written. An unparseable migration
+ * descriptor is a 400, never a silently-ignored field -- a commit that was meant
+ * to be one chunk of a sequence must not be applied as a complete database.
+ */
+function normalizeMigrationChunk(raw) {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+        throw sqlError('Invalid SQL migration descriptor', 'SQL_MIGRATION_INVALID', 400);
+    }
+    const id = raw.id;
+    if (typeof id !== 'string' || id.trim().length === 0 || id.length > MAX_MIGRATION_ID_LENGTH) {
+        throw sqlError('Invalid SQL migration id', 'SQL_MIGRATION_INVALID', 400);
+    }
+    const chunk = raw.chunk;
+    if (!Number.isSafeInteger(chunk) || chunk < 0 || chunk >= MAX_MIGRATION_CHUNKS) {
+        throw sqlError('Invalid SQL migration chunk index', 'SQL_MIGRATION_INVALID', 400);
+    }
+    if (typeof raw.final !== 'boolean') {
+        throw sqlError('Invalid SQL migration chunk terminator', 'SQL_MIGRATION_INVALID', 400);
+    }
+    let totalChunks = null;
+    if (raw.totalChunks !== undefined && raw.totalChunks !== null) {
+        totalChunks = raw.totalChunks;
+        if (!Number.isSafeInteger(totalChunks) || totalChunks < 1 || totalChunks > MAX_MIGRATION_CHUNKS) {
+            throw sqlError('Invalid SQL migration chunk total', 'SQL_MIGRATION_INVALID', 400);
+        }
+        if (chunk >= totalChunks) {
+            throw sqlError('SQL migration chunk index exceeds its total', 'SQL_MIGRATION_INVALID', 400);
+        }
+        if (raw.final !== (chunk === totalChunks - 1)) {
+            throw sqlError('SQL migration chunk contradicts its total', 'SQL_MIGRATION_INVALID', 400);
+        }
+    }
+    return { id, chunk, final: raw.final, totalChunks };
 }
 
 function createRelationalSqlite(options) {
@@ -99,6 +161,9 @@ function createRelationalSqlite(options) {
         return {
             status: Number(meta.initialized) === 1 ? 'ready' : 'empty',
             revision: Number(meta.revision) || 0,
+            // Non-null when a chunked migration is in flight. 'empty' plus a
+            // migration means INCOMPLETE, which is not the same fact as empty.
+            migration: migrationState(),
             tables,
         };
     }
@@ -396,6 +461,12 @@ function createRelationalSqlite(options) {
                 deferredRootKeys,
                 absentDeferredRootKeys,
                 unreadableRootKeys,
+                // `status` alone cannot distinguish a database that was never
+                // migrated from one whose migration is still only half applied:
+                // both are 'empty', because neither is safe to read as
+                // canonical. This says which of the two it is, and where a
+                // resumed migration should pick up.
+                migration: migrationState(),
             };
             if (!deferred.has('pluginCustomStorage')) {
                 payload.pluginCustomStorage = profileBootstrapSection(report, 'pluginCustomStorage', readPluginCustomStorage);
@@ -630,37 +701,242 @@ function createRelationalSqlite(options) {
         ));
     }
 
+    // ── Chunked migrations ──────────────────────────────────────────────────
+    //
+    // A legacy-to-SQL migration is bigger than one request and always was: a
+    // 50 MB `database.bin` builds ~350,000 statements against a 250,000
+    // per-commit cap, so as a single commit it could never land at all. It
+    // lands as a SEQUENCE of commits instead, and the bookkeeping below is what
+    // keeps a half-applied sequence from ever being read as a finished one.
+    //
+    //   * `system_storage_meta.initialized` stays 0 for every chunk but the
+    //     last. `bootstrap()` keeps answering 'empty', so the client keeps
+    //     using its legacy source until the migration is genuinely complete.
+    //   * `system_migration_sessions` holds one row for as long as a sequence
+    //     is in flight. Its presence is the whole difference between "empty"
+    //     and "incomplete"; `bootstrap().migration` reports it so the next
+    //     launch can tell those apart and resume from `nextChunk`.
+    //   * Each chunk is its own IMMEDIATE transaction and advances the session
+    //     row inside that same transaction. A chunk that fails rolls back
+    //     whole, leaving the chunks before it and the session row exactly as
+    //     they were, so the client retries one chunk rather than the migration.
+    //   * An ordinary (non-migration) commit is REFUSED while a session is
+    //     open, because applying one would set `initialized = 1` over a
+    //     half-applied database -- the exact state this design exists to
+    //     prevent. Sending chunk 0 again supersedes an abandoned sequence.
+
+    function readMigrationSession() {
+        return database.prepare(
+            'SELECT * FROM system_migration_sessions WHERE singleton = 1',
+        ).get() || null;
+    }
+
+    function describeMigrationSession(row) {
+        if (!row) return null;
+        return {
+            id: row.migration_id,
+            action: row.action,
+            chunksApplied: Number(row.chunks_applied),
+            // Same number as `chunksApplied`, named for the caller's decision:
+            // this is the 0-based index of the chunk the server will accept.
+            nextChunk: Number(row.chunks_applied),
+            statementsApplied: Number(row.statements_applied),
+            totalChunks: row.total_chunks == null ? null : Number(row.total_chunks),
+            baseRevision: Number(row.base_revision),
+            replacedCompleteDatabase: Number(row.was_initialized) === 1,
+            archivedPath: row.archived_path ?? null,
+            startedAt: row.started_at,
+            updatedAt: row.updated_at,
+        };
+    }
+
+    /** The in-flight migration sequence, or null when none is in flight. */
+    function migrationState() {
+        return describeMigrationSession(readMigrationSession());
+    }
+
+    /**
+     * A consistent copy of the database as it stands, taken before the first
+     * chunk of a sequence overwrites a database that is already complete.
+     *
+     * A chunked replace-all is not atomic the way the old single commit was, so
+     * the state it is about to destroy is captured first. `VACUUM INTO` writes
+     * that copy without closing the live connection and cannot run inside a
+     * transaction, which is why this happens before `BEGIN IMMEDIATE`.
+     */
+    function archiveBeforeMigration() {
+        const archiveDirectory = path.join(dataRoot, 'migration-backups');
+        fs.mkdirSync(archiveDirectory, { recursive: true });
+        const archivedPath = path.join(
+            archiveDirectory,
+            `sql-pre-migration-${Date.now()}-${process.pid}.sqlite3`,
+        );
+        database.exec(`VACUUM INTO '${archivedPath.replace(/'/g, "''")}'`);
+        return archivedPath;
+    }
+
     function commit(payload) {
         const statements = Array.isArray(payload?.statements) ? payload.statements : [];
-        if (statements.length > 250_000) throw new Error('SQL commit is too large');
+        if (statements.length > MAX_STATEMENTS_PER_COMMIT) {
+            throw sqlError('SQL commit is too large', 'SQL_COMMIT_TOO_LARGE', 413, {
+                maxStatementsPerCommit: MAX_STATEMENTS_PER_COMMIT,
+            });
+        }
+        const migration = normalizeMigrationChunk(payload?.migration);
         const baseRevision = Number(payload?.baseRevision);
+        const action = String(payload?.action || (migration ? 'migrate' : 'sync')).slice(0, 128);
+
+        // Only when a first chunk is about to overwrite a database that is
+        // actually finished, and never inside a transaction.
+        let archivedPath = null;
+        if (migration && migration.chunk === 0 && Number(database.prepare(
+            'SELECT initialized FROM system_storage_meta WHERE singleton = 1',
+        ).get()?.initialized) === 1) {
+            archivedPath = archiveBeforeMigration();
+        }
+
         database.exec('BEGIN IMMEDIATE');
         try {
             const currentRevision = revision();
             if (baseRevision !== currentRevision) {
-                const error = new Error('SQL revision conflict');
-                error.code = 'SQL_REVISION_CONFLICT';
-                error.currentRevision = currentRevision;
-                throw error;
+                throw sqlError('SQL revision conflict', 'SQL_REVISION_CONFLICT', 409, {
+                    currentRevision,
+                });
             }
+            const session = readMigrationSession();
+            if (migration) {
+                if (migration.chunk !== 0) {
+                    if (!session) {
+                        throw sqlError(
+                            'No SQL migration is in progress',
+                            'SQL_MIGRATION_NOT_FOUND', 409,
+                            { expectedChunk: 0, currentRevision, migration: null },
+                        );
+                    }
+                    if (session.migration_id !== migration.id) {
+                        throw sqlError(
+                            'A different SQL migration is in progress',
+                            'SQL_MIGRATION_MISMATCH', 409,
+                            {
+                                expectedChunk: Number(session.chunks_applied),
+                                currentRevision,
+                                migration: describeMigrationSession(session),
+                            },
+                        );
+                    }
+                    if (Number(session.chunks_applied) !== migration.chunk) {
+                        throw sqlError(
+                            'SQL migration chunk is out of order',
+                            'SQL_MIGRATION_SEQUENCE', 409,
+                            {
+                                expectedChunk: Number(session.chunks_applied),
+                                currentRevision,
+                                migration: describeMigrationSession(session),
+                            },
+                        );
+                    }
+                    // `final` is validated against the total the chunk itself
+                    // declares, so a sequence opened as 18 chunks could be
+                    // closed by a chunk claiming to be 2 of 2 -- marking a
+                    // sixteen-chunk-short database `initialized`. The length of
+                    // a migration is fixed when it opens.
+                    if (
+                        migration.totalChunks !== null &&
+                        session.total_chunks !== null &&
+                        Number(session.total_chunks) !== migration.totalChunks
+                    ) {
+                        throw sqlError(
+                            'SQL migration chunk total changed mid-sequence',
+                            'SQL_MIGRATION_INVALID', 409,
+                            {
+                                expectedChunk: Number(session.chunks_applied),
+                                currentRevision,
+                                migration: describeMigrationSession(session),
+                            },
+                        );
+                    }
+                }
+                // chunk 0 needs no session: it starts one, and deliberately
+                // supersedes an abandoned sequence, because chunk 0 of a
+                // replace-all carries the DELETEs that clear what it left.
+            } else if (session) {
+                throw sqlError(
+                    'A SQL migration is in progress',
+                    'SQL_MIGRATION_IN_PROGRESS', 409,
+                    {
+                        expectedChunk: Number(session.chunks_applied),
+                        currentRevision,
+                        migration: describeMigrationSession(session),
+                    },
+                );
+            }
+
             for (const entry of statements) {
                 statementTable(entry?.sql);
                 const bind = Array.isArray(entry?.bind) ? entry.bind : [];
                 database.prepare(entry.sql).run(...bind);
             }
             const nextRevision = currentRevision + 1;
+            // The one line the whole design turns on: a database counts as
+            // initialized only when nothing is still on its way to it.
+            const initialized = migration && !migration.final ? 0 : 1;
             database.prepare(
                 `UPDATE system_storage_meta
-                 SET revision = ?, initialized = 1, updated_at = datetime('now')
+                 SET revision = ?, initialized = ?, updated_at = datetime('now')
                  WHERE singleton = 1`,
-            ).run(nextRevision);
+            ).run(nextRevision, initialized);
             database.prepare(
                 `INSERT INTO system_revisions
                  (storage_revision, database_initialized, scope, action, created_at)
-                 VALUES (?, 1, 'database', ?, datetime('now'))`,
-            ).run(nextRevision, String(payload?.action || 'sync').slice(0, 128));
+                 VALUES (?, ?, 'database', ?, datetime('now'))`,
+            ).run(nextRevision, initialized, action);
+
+            let migrationSession = null;
+            if (migration && migration.final) {
+                database.prepare('DELETE FROM system_migration_sessions WHERE singleton = 1').run();
+            } else if (migration) {
+                const first = migration.chunk === 0;
+                database.prepare(
+                    `INSERT INTO system_migration_sessions
+                       (singleton, migration_id, action, chunks_applied, statements_applied,
+                        total_chunks, base_revision, was_initialized, archived_path,
+                        started_at, updated_at)
+                     VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))
+                     ON CONFLICT (singleton) DO UPDATE SET
+                        migration_id = excluded.migration_id,
+                        action = excluded.action,
+                        chunks_applied = excluded.chunks_applied,
+                        statements_applied = excluded.statements_applied,
+                        total_chunks = excluded.total_chunks,
+                        base_revision = excluded.base_revision,
+                        was_initialized = excluded.was_initialized,
+                        archived_path = excluded.archived_path,
+                        started_at = excluded.started_at,
+                        updated_at = excluded.updated_at`,
+                ).run(
+                    migration.id,
+                    action,
+                    migration.chunk + 1,
+                    (first ? 0 : Number(session.statements_applied)) + statements.length,
+                    migration.totalChunks ?? (session ? session.total_chunks ?? null : null),
+                    first ? currentRevision : Number(session.base_revision),
+                    // An archive taken by an earlier attempt still describes the
+                    // complete database this sequence replaced; a restart must
+                    // not forget it just because `initialized` is already 0.
+                    archivedPath ? 1 : Number(session?.was_initialized ?? 0),
+                    archivedPath ?? (session ? session.archived_path ?? null : null),
+                    // How long this database has been incomplete, which a
+                    // restarted attempt inherits rather than resets.
+                    session ? session.started_at : null,
+                );
+                migrationSession = describeMigrationSession(readMigrationSession());
+            }
             database.exec('COMMIT');
-            return { revision: nextRevision };
+            return {
+                revision: nextRevision,
+                initialized: initialized === 1,
+                migration: migrationSession,
+            };
         } catch (error) {
             try { database.exec('ROLLBACK'); } catch {}
             throw error;
@@ -708,12 +984,15 @@ function createRelationalSqlite(options) {
         databasePath, revision, dump, bootstrap, loadRootKey, loadCharacter, loadChat, loadChatMessages,
         getChatDraft, listChatDraftKeys, getColdStorageItem, listColdStorageItems, listRevisions,
         searchMessages, searchCharactersByName, searchCharactersByTag,
-        commit, checkpoint, reset, close,
+        commit, migrationState, checkpoint, reset, close,
+        maxStatementsPerCommit: MAX_STATEMENTS_PER_COMMIT,
     };
 }
 
 module.exports = {
     TABLES,
+    MAX_STATEMENTS_PER_COMMIT,
+    normalizeMigrationChunk,
     COLLECTION_ROOT_KEYS: Object.freeze([...COLLECTION_ROOT_PROBES.keys()]),
     createRelationalSqlite,
     statementTable,

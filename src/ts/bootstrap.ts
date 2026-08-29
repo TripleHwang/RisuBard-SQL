@@ -35,6 +35,12 @@ import { purgeUnsupportedGroupChats } from "./storage/database.svelte";
 import { canDeleteAssetsAfterPluginStorageScan, characterAssetReferencesComplete, collectNestedAssetReferences, isAutoAssetCleanupEnabled, pluginStorageAssetReferencesComplete, shouldDeleteUnreferencedAsset } from './storage/assetRefs'
 import { normalizeFirstMessageStudioProject } from './firstMessageStudio'
 import { activateRecoveredSqlStorage, openExistingStandaloneSql, openStandaloneSql } from './storage/sql/sqlBootstrap'
+import {
+    describeSqlMigrationProgress,
+    onSqlMigrationFailure,
+    onSqlMigrationProgress,
+    type SqlMigrationFailure,
+} from './storage/sql/migrationReporting'
 import { markPerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
@@ -116,16 +122,38 @@ function createStartupPhases() {
 
 async function activateCanonicalDatabase(decoded: Database, source: Uint8Array) {
     LoadingStatusState.text = "Opening SQL Database..."
-    const canonical = await openStandaloneSql(decoded, {
-        beforeMigrate: async () => {
-            const existing = await forageStorage.getItem(SQL_MIGRATION_BACKUP_PATH) as unknown as Uint8Array
-            if (checkNullish(existing)) {
-                await forageStorage.setItem(SQL_MIGRATION_BACKUP_PATH, source)
-            }
-        },
+    // A migration of a large database takes minutes and used to leave the
+    // loading screen on one unchanging label for all of them, which is
+    // indistinguishable from a hang. The chunk counter moves on every request.
+    const stopProgress = onSqlMigrationProgress((progress) => {
+        LoadingStatusState.text = describeSqlMigrationProgress(progress)
     })
+    // Alerting cannot happen here: `alertError` reads the database for its
+    // network-error hint, and there is no database until `setDatabase` below.
+    let migrationFailure: SqlMigrationFailure | null = null
+    const stopFailure = onSqlMigrationFailure((failure) => {
+        migrationFailure = failure
+    })
+    let canonical: Awaited<ReturnType<typeof openStandaloneSql>>
+    try {
+        canonical = await openStandaloneSql(decoded, {
+            beforeMigrate: async () => {
+                const existing = await forageStorage.getItem(SQL_MIGRATION_BACKUP_PATH) as unknown as Uint8Array
+                if (checkNullish(existing)) {
+                    await forageStorage.setItem(SQL_MIGRATION_BACKUP_PATH, source)
+                }
+            },
+        })
+    } finally {
+        stopProgress()
+        stopFailure()
+    }
     setPatchSyncBaseline(safeStructuredClone(canonical.database))
     setDatabase(canonical.database)
+    // The fallback to the legacy database keeps the app working, so nothing
+    // else here will ever mention that it happened. Every launch pays the full
+    // download-and-upload cost again until it is fixed, so every launch says so.
+    if (migrationFailure) alertError((migrationFailure as SqlMigrationFailure).message)
 }
 
 /**

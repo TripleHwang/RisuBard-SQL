@@ -3,6 +3,7 @@ import { isNodeServer } from "../../platform";
 import type { Database } from "../database.svelte";
 import type { ISqlStorage, SqlBootstrapStorage } from "./ISqlStorage";
 import { activateSqlPersistenceRuntime, deactivateSqlPersistenceRuntime, flushSqlDirtyChanges } from "./sqlPersistenceRuntime";
+import { reportSqlMigrationFailure, reportSqlMigrationProgress } from "./migrationReporting";
 import { WebSqliteStorage } from "./webSqliteStorage";
 
 export interface SqlBootstrapResult {
@@ -54,6 +55,15 @@ export async function selectCanonicalDatabase(
     );
     if (!imported) throw new Error("SQL storage rejected the legacy database");
 
+    // Re-reading a freshly migrated database is not instant on a large one, and
+    // it is the last thing standing between the user and a usable app.
+    reportSqlMigrationProgress({
+      phase: "verifying",
+      chunk: 0,
+      chunkCount: 0,
+      statementsSent: 0,
+      statementTotal: 0,
+    });
     const verified = storage.backendKind === "server-sql" && "loadRecoverySnapshot" in storage
       ? await (storage as SqlBootstrapStorage).loadRecoverySnapshot()
       : await storage.loadDatabase({ shallow: false });
@@ -68,6 +78,12 @@ export async function selectCanonicalDatabase(
     };
   } catch (error) {
     console.error("Standalone SQL bootstrap failed; preserving legacy source", error);
+    // Keeping the legacy database usable is the right call and stays. What was
+    // wrong is that it was also silent: a user whose migration could not fit in
+    // one request ran in legacy mode for months, re-downloading and
+    // re-uploading a 50 MB save file on every launch, and was never told. The
+    // fallback is unchanged; only the silence is.
+    reportSqlMigrationFailure(error);
     return {
       database: legacyDatabase,
       storage: null,

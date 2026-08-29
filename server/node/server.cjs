@@ -49,6 +49,8 @@ const {
     normalizeSqlAncillaryPageQuery,
 } = require('./sql-read-route-params.cjs');
 const { createSqlBootstrapHandler, createSqlRootKeyHandler } = require('./sql-root-key-route.cjs');
+const { createSqlCommitHandler } = require('./sql-commit-route.cjs');
+const { createExpressErrorResponder } = require('./express-error-response.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
 const { importCharXStream, DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs');
 const { createCharXImportHandler } = require('./charx-import-route.cjs');
@@ -3862,22 +3864,16 @@ app.get('/api/sql/snapshot', async (req, res, next) => {
     }
 });
 
-app.post('/api/sql/commit', async (req, res, next) => {
-    if (!await checkAuth(req, res)) return;
-    if (!checkActiveSession(req, res)) return;
-    try {
-        const result = await queueStorageOperation(async () => relationalSql.commit(req.body));
-        res.json(result);
-    } catch (error) {
-        if (error?.code === 'SQL_REVISION_CONFLICT') {
-            return res.status(409).json({
-                error: 'SQL revision conflict',
-                currentRevision: error.currentRevision,
-            });
-        }
-        next(error);
-    }
-});
+// A migration larger than one commit arrives here as a sequence of chunks
+// sharing one `migration.id`; see sql-commit-route.cjs and relational-sqlite.cjs
+// `commit()`. Every chunk is its own transaction, and the database is not marked
+// initialized until the chunk flagged `final` lands.
+app.post('/api/sql/commit', createSqlCommitHandler({
+    auth: checkAuth,
+    activeSession: checkActiveSession,
+    relationalSql,
+    queue: queueStorageOperation,
+}));
 
 app.post('/api/write', async (req, res, next) => {
     if(!await checkAuth(req, res)){
@@ -6782,10 +6778,10 @@ app.post('/api/tunnel/stop', async (req, res) => {
 
 // ─── Express error middleware — must be registered after all routes ─────────
 app.use(expressErrorMiddleware);
-app.use((err, req, res, next) => {
-    if (res.headersSent) return next(err);
-    res.status(500).json({ error: err?.message || 'internal server error' });
-});
+// Reports the failure to the operator's console and answers with the status the
+// error actually carries (express's PayloadTooLargeError carries 413) instead of
+// flattening everything into an unlogged 500. See express-error-response.cjs.
+app.use(createExpressErrorResponder({}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 
