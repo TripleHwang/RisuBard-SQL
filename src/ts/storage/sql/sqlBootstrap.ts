@@ -3,6 +3,7 @@ import { isNodeServer } from "../../platform";
 import type { Database } from "../database.svelte";
 import type { ISqlStorage, SqlBootstrapStorage } from "./ISqlStorage";
 import { activateSqlPersistenceRuntime, deactivateSqlPersistenceRuntime, flushSqlDirtyChanges } from "./sqlPersistenceRuntime";
+import { resolveLiveDatabase } from "./liveDatabase";
 import { reportSqlMigrationFailure, reportSqlMigrationProgress } from "./migrationReporting";
 import { WebSqliteStorage } from "./webSqliteStorage";
 import { markStartupPhase } from "../../performance/startupPhases";
@@ -120,9 +121,25 @@ async function createDefaultSqlStorage(): Promise<ISqlStorage> {
   );
 }
 
+/**
+ * `database` is deliberately unused for persistence.
+ *
+ * Every caller here runs BEFORE `setDatabase` wraps that same object as
+ * `DBState.db`. A Svelte 5 `$state` proxy never writes through to its target, so
+ * the object passed in stops being the one the user edits the moment that
+ * wrapping happens -- and it is the wrapper that every mutation in the
+ * application goes through. Binding persistence to it meant commits fired,
+ * returned 200, and carried boot-time values; a message added after boot was not
+ * in the bound object at all, so nothing was written for it.
+ *
+ * The parameter stays because callers legitimately need to name the database
+ * they just opened, and because the storage handle and the database it came from
+ * belong together at this call. Persistence resolves the live graph instead.
+ */
 function activateSqlStorage(storage: ISqlStorage, database: Database): void {
+  void database;
   activeSqlStorage = storage;
-  activateSqlPersistenceRuntime(storage, database);
+  activateSqlPersistenceRuntime(storage, resolveLiveDatabase);
 }
 
 /** Open an already-migrated SQL graph before touching its legacy projection. */
@@ -228,8 +245,12 @@ export function getActiveSqlStorage(): ISqlStorage | null {
 /** Serialize row-level commits so all writers share one monotonic revision. */
 export function syncActiveSqlDatabase(database: Database): Promise<void> {
   // Kept as a compatibility facade for callers outside the normal mutation
-  // path. Normal persistence is registry-driven and holds the live reference.
-  if (activeSqlStorage) activateSqlPersistenceRuntime(activeSqlStorage, database);
+  // path. The live graph wins over the argument: a caller reaching this facade
+  // with a database object has the same raw/proxy hazard as boot did, and the
+  // argument is only worth using when there is no live graph to prefer.
+  if (activeSqlStorage) {
+    activateSqlPersistenceRuntime(activeSqlStorage, () => resolveLiveDatabase() ?? database);
+  }
   return flushSqlDirtyChanges();
 }
 

@@ -19,6 +19,7 @@ import { normalizeTranslatorPresetState, type TranslatorPreset } from '../transl
 import { safeStructuredClone } from '../polyfill';
 import { v4 as uuidv4 } from 'uuid';
 import { isRootKeyDeferred } from './sql/deferredRootKeys';
+import { publishLiveDatabase } from './sql/liveDatabase';
 import { applyModelPresetDefaults } from '../preset/dbDefaults';
 import type { ApiKeyPoolEntry, ModelBindingFields, ModelBindingSet, ModelPreset, ModelPresetMigrationSummary, RegistryCache } from '../preset/types';
 import { emptyModelBinding } from '../preset/types';
@@ -960,6 +961,21 @@ export function setDatabase(data:Database){
 export function setDatabaseLite(data:Database){
     DBState.db = data
 }
+
+/**
+ * Tell the SQL layer where the live database is.
+ *
+ * `DBState.db` is a `$state` proxy, and a `$state` proxy never writes through to
+ * the object it wraps. Persistence therefore cannot be handed a database object
+ * -- the one SQL bootstrap has is the raw object that `setDatabase` later
+ * wrapped, and it stops matching the moment the user changes anything. It reads
+ * `DBState.db` through this closure instead, at the moment it builds a commit.
+ *
+ * Registered at module load rather than inside `setDatabaseLite`, so it holds
+ * for every route that installs a database, including the test helpers and the
+ * plugin API paths that assign `DBState.db` without going through here.
+ */
+publishLiveDatabase(() => DBState.db)
 
 interface getDatabaseOptions{
     snapshot?:boolean

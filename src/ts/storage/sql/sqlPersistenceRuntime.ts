@@ -14,7 +14,16 @@ import { v4 as uuidv4 } from 'uuid'
 import { runtimeMetrics } from '../../performance/runtimeMetrics'
 
 let activeStorage: ISqlStorage | null = null
-let activeDatabase: Database | null = null
+/**
+ * How to reach the database to commit -- never the database itself.
+ *
+ * Holding the object was the defect: `activateSqlPersistenceRuntime` runs from
+ * `activateSqlStorage` at boot, before `setDatabase` wraps that same object as
+ * `DBState.db`. A `$state` proxy does not write through to its target, so the
+ * held object stopped matching what the user was editing the instant the proxy
+ * existed, and every commit after that was built from boot-time values.
+ */
+let activeDatabaseSource: SqlDatabaseSource | null = null
 let compatibilityTimer: ReturnType<typeof setTimeout> | undefined
 let compatibilityAuditScheduled = false
 let compatibilityRecurrenceTimer: ReturnType<typeof setTimeout> | undefined
@@ -69,15 +78,35 @@ const registry = new DirtyRegistry(async () => {
     finally { noteCommitActivity(-1) }
 })
 
-/** The active database is deliberately a live reference: normal typing must not clone it. */
-export function activateSqlPersistenceRuntime(storage: ISqlStorage, database: Database): void {
+/**
+ * Where a commit reads the database from.
+ *
+ * A function is the form production uses, because the object that is correct at
+ * boot is not the object the user edits: `setDatabase` wraps it in a `$state`
+ * proxy afterwards and the two never reconverge. A bare `Database` is accepted
+ * for callers that genuinely own a stable object -- tests that build one live
+ * `$state` graph and mutate it directly -- and is resolved as-is.
+ */
+export type SqlDatabaseSource = Database | (() => Database | null)
+
+function resolveActiveDatabase(): Database | null {
+    if (!activeDatabaseSource) return null
+    return typeof activeDatabaseSource === 'function' ? activeDatabaseSource() : activeDatabaseSource
+}
+
+/**
+ * Bind persistence to a database source. Pass a resolver unless you own the
+ * object for the whole of its life: a captured object silently stops being the
+ * one the user is editing as soon as anything wraps it in `$state`.
+ */
+export function activateSqlPersistenceRuntime(storage: ISqlStorage, database: SqlDatabaseSource): void {
     activeStorage = storage
-    activeDatabase = database
+    activeDatabaseSource = database
 }
 
 export function deactivateSqlPersistenceRuntime(): void {
     activeStorage = null
-    activeDatabase = null
+    activeDatabaseSource = null
 }
 
 /**
@@ -183,6 +212,26 @@ function scheduleDirtyFlush(immediate: boolean): void {
     else registry.schedule(350)
 }
 
+/**
+ * Said once, not every five seconds.
+ *
+ * Normal boot passes through the unresolved window in milliseconds and this
+ * never fires. If it keeps firing, persistence is bound to storage that has no
+ * live database to read -- the retry loop will keep the user's edits marked, but
+ * nothing will ever be written, and that has to be visible rather than inferred
+ * from a save indicator that never settles.
+ */
+let unresolvedDatabaseReported = false
+
+function reportUnresolvedDatabase(): void {
+    if (unresolvedDatabaseReported) return
+    unresolvedDatabaseReported = true
+    console.warn(
+        '[SQL dirty commit] SQL storage is active but no live database has been installed yet; ' +
+        'pending changes stay marked and will be retried.',
+    )
+}
+
 function scheduleDirtyRetry(): void {
     if (dirtyRetryTimer !== undefined) return
     dirtyRetryTimer = setTimeout(() => {
@@ -218,8 +267,19 @@ function reportRefusedMessages(refused: RefusedMessage[], error: unknown): void 
 
 async function commitDirtyScopes(): Promise<void> {
     const storage = activeStorage
-    const database = activeDatabase
-    if (!storage || !database) return
+    const database = resolveActiveDatabase()
+    if (!storage) return
+    // Resolved fresh on every flush, never cached across one. A null resolution
+    // means storage is bound but the live graph is not installed yet -- the
+    // window between `activateSqlStorage` and `setDatabase`. Returning without
+    // acknowledging keeps every mark, and the retry is what makes those marks
+    // reach a commit: without it they would wait for the user's next edit, and a
+    // flush that fired in that window would look like it had succeeded.
+    if (!database) {
+        reportUnresolvedDatabase()
+        scheduleDirtyRetry()
+        return
+    }
     const snapshot = registry.takeSnapshot()
     const refused: RefusedMessage[] = []
     let lastRefusal: unknown
@@ -563,5 +623,6 @@ export function resetSqlPersistenceRuntimeForTesting(): void {
     compatibilityAuditScheduled = false
     metadataRuntimeStarted = false
     compatibilityBaseline = null
+    unresolvedDatabaseReported = false
     deactivateSqlPersistenceRuntime()
 }
