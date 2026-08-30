@@ -3,7 +3,7 @@ import * as fflate from "fflate";
 import { createBotPresetTemplate, getDatabase, type Database } from "./database.svelte";
 import { forageStorage } from "../globalApi.svelte";
 import { chatToStub } from "./chatStorage";
-import { isRootKeyDeferred } from "./sql/deferredRootKeys";
+import { clearDeferredRootKey, isRootKeyDeferred } from "./sql/deferredRootKeys";
 import {
     checkRisuSaveHeader,
     RISU_SAVE_MAGIC_COMPRESSED_HEADER,
@@ -19,8 +19,21 @@ import {
  * persistence is off, where nothing is ever deferred, so this is a backstop
  * that must be loud rather than lenient.
  */
-function assertPluginStorageEncodable(): void {
+function assertPluginStorageEncodable(value: unknown): void {
     if (!isRootKeyDeferred('pluginCustomStorage')) return
+    // A deferred mark says the rows are in storage but not in memory. It does
+    // not survive contact with a database that carries them anyway: importing a
+    // backup decodes a complete legacy save, and the mark left over from the
+    // SQL bootstrap earlier in the same session is then simply stale. Refusing
+    // on the mark alone blocked the save that follows an import, with an error
+    // describing a state the database was not in.
+    //
+    // The value is the fact; the mark is bookkeeping about it. Clear the mark
+    // and encode, so whatever consults it next agrees with what is here.
+    if (value !== undefined) {
+        clearDeferredRootKey('pluginCustomStorage')
+        return
+    }
     throw new Error(
         'Refusing to encode a save block for pluginCustomStorage while it is deferred: its rows '
         + 'exist in storage but are not loaded, so the block would record them as absent.',
@@ -187,7 +200,7 @@ export class RisuSaveEncoder {
             type: RisuSaveType.PLUGINS,
             name: 'plugins'
         });
-        assertPluginStorageEncodable();
+        assertPluginStorageEncodable(data.pluginCustomStorage);
         this.blocks['pluginStorage'] = await this.encodeBlock({
             compression,
             data: JSON.stringify(data.pluginCustomStorage),
@@ -308,7 +321,7 @@ export class RisuSaveEncoder {
         }
 
         if(toSave.pluginCustomStorage){
-            assertPluginStorageEncodable();
+            assertPluginStorageEncodable(data.pluginCustomStorage);
             this.blocks['pluginStorage'] = await this.encodeBlock({
                 compression: this.compression,
                 data: JSON.stringify(data.pluginCustomStorage),
