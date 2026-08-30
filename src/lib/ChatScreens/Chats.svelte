@@ -396,6 +396,22 @@
     export const getAnchorId = (): string | null => anchorId;
 
     let previousLength = 0;
+    let previousLastMessageId: string | null = null;
+    /**
+     * Every id this screen has already seen sitting at the newest end of this
+     * chat.
+     *
+     * Needed because the newest end can come back after having been taken away.
+     * Residency trimming releases the tail of a long chat once the resident
+     * slice passes its bound, and `loadNewestChatMessages` later splices that
+     * whole window back on -- which grows the array and moves the last id, the
+     * exact shape of a message arriving. The difference is not structural, it
+     * is historical: a restored tail ends on a message that was the newest one
+     * before, and this set is the only thing that remembers that. Growth is by
+     * one id per genuinely new tail, so it stays the size of a conversation's
+     * arrivals, not of its history.
+     */
+    let seenNewestMessageIds = new Set<string>();
     let previousChatRoomId: string | null = null;
 
     // Opening a different chat starts at its newest messages. Kept out of the
@@ -445,11 +461,35 @@
 
         const currentChatRoomId = getCurrentChatRoomId();
         const isSameChat = currentChatRoomId === previousChatRoomId;
+        if (!isSameChat) seenNewestMessageIds.clear();
 
-        // Only auto-scroll if it's the same chat and new messages were added
-        if(isSameChat && messages.length > previousLength){
-            const lastMsg = messages[messages.length - 1];
-            if(lastMsg && lastMsg.role === 'char' && DBState.db.autoScrollToNewMessage){
+        const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+        const lastMessageId = lastMsg ? stableMessageId(lastMsg) : null;
+
+        /**
+         * A message actually arrived at the newest end.
+         *
+         * The array growing is not that fact and never was. Scroll-driven
+         * loading splices an older page in at the *front*, so `length` jumps by
+         * a page while the newest message is the same one the reader has
+         * already read; a length test calls that an arrival, arms "new
+         * message", and every further page back re-arms it. What changes only
+         * when something lands at the newest end is the identity of the last
+         * message, so that is what is compared -- against both the previous
+         * tail and every tail this chat has had, so that a tail restored after
+         * residency trimming is recognised as history rather than news.
+         *
+         * Growth is still required, and is what keeps a reroll quiet: it
+         * rewrites the last message in place, leaving the length alone.
+         */
+        const arrivedAtNewestEnd = isSameChat
+            && lastMessageId !== null
+            && messages.length > previousLength
+            && lastMessageId !== previousLastMessageId
+            && !seenNewestMessageIds.has(lastMessageId);
+
+        if(arrivedAtNewestEnd){
+            if(lastMsg.role === 'char' && DBState.db.autoScrollToNewMessage){
                 if(wasAtBottom || DBState.db.alwaysScrollToNewMessage){
                     setTimeout(() => {
                         scrollLatestIntoChatScreen();
@@ -459,7 +499,9 @@
                 }
             }
         }
+        if (lastMessageId !== null) seenNewestMessageIds.add(lastMessageId);
         previousLength = messages.length;
+        previousLastMessageId = lastMessageId;
         previousChatRoomId = currentChatRoomId;
     })
 
