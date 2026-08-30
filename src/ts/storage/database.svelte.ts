@@ -20,6 +20,7 @@ import { safeStructuredClone } from '../polyfill';
 import { v4 as uuidv4 } from 'uuid';
 import { isRootKeyDeferred } from './sql/deferredRootKeys';
 import { publishLiveDatabase } from './sql/liveDatabase';
+import { replaceChatSlotCarryingSqlRuntimeFields } from './sql/sqlRuntimeWindow';
 import { applyModelPresetDefaults } from '../preset/dbDefaults';
 import type { ApiKeyPoolEntry, ModelBindingFields, ModelBindingSet, ModelPreset, ModelPresetMigrationSummary, RegistryCache } from '../preset/types';
 import { emptyModelBinding } from '../preset/types';
@@ -1025,10 +1026,28 @@ export function getCurrentChat(){
     return char?.chats[char.chatPage]
 }
 
-export function setCurrentChat(chat:Chat){
+/**
+ * Replace the open chat wholesale, and return the object that is actually in
+ * the slot afterwards.
+ *
+ * Every caller of this is a trigger write-back, and `runTrigger` hands back a
+ * `safeStructuredClone` of the chat it was given. Two things follow, and both
+ * are handled here rather than at three call sites:
+ *
+ *  - `char.chats` is a `$state` array, so the slot ends up holding a PROXY of
+ *    the value assigned. A caller that keeps the value it passed in is holding a
+ *    detached object: writes to it reach neither the screen nor storage. The
+ *    return value is the slot, so `x = setCurrentChat(x)` is always correct;
+ *  - the clone dropped every symbol-keyed SQL runtime mark. Carrying them keeps
+ *    an appended message persistable and keeps a partially resident history from
+ *    being read as a whole one. See
+ *    `replaceChatSlotCarryingSqlRuntimeFields`.
+ */
+export function setCurrentChat(chat:Chat):Chat{
     const char = getCurrentCharacter()
-    char.chats[char.chatPage] = normalizeChat(chat)
+    const live = replaceChatSlotCarryingSqlRuntimeFields(char.chats, char.chatPage, normalizeChat(chat))
     setCurrentCharacter(char)
+    return live
 }
 
 /**

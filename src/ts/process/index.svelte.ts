@@ -82,7 +82,7 @@ import {
 } from '../risubard/wikiPromptPreset';
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
 import { saveChatToServer } from '../storage/chatStorage';
-import { hasNewerSqlMessages, isSqlWindowPartial } from '../storage/sql/sqlRuntimeWindow';
+import { hasNewerSqlMessages, isSqlWindowPartial, replaceChatSlotCarryingSqlRuntimeFields } from '../storage/sql/sqlRuntimeWindow';
 import {
     createWikiRebootJob,
     nextWikiRebootBatch,
@@ -1831,8 +1831,13 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
     const triggerResult = await runTrigger(currentChar, 'start', {chat: currentChat})
     if(triggerResult){
-        currentChat = triggerResult.chat
-        setCurrentChat(currentChat)
+        // `setCurrentChat` returns the object that is in the slot, not the raw
+        // clone the trigger built: `chats` is a `$state` array, so keeping the
+        // clone would leave every later statement in this function -- and the
+        // request it builds -- editing a detached object. It also carries the
+        // symbol-keyed SQL runtime marks the clone dropped, which is what keeps
+        // the reply this send is about to produce persistable.
+        currentChat = setCurrentChat(triggerResult.chat)
         ms = makeMs(currentChat)
         currentTokens += triggerResult.tokens
         if(triggerResult.stopSending){
@@ -2796,14 +2801,24 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 if (realChatId) clearPendingSend(realChatId)
                 return false
             }
-            character.chats[chatIndex] = normalizeChat(triggerResult.chat)
             // Read the slot back. `runTrigger` returns a `safeStructuredClone`
             // of the chat, so what is assigned here is a RAW object; `chats` is
             // a `$state` array, so the slot now holds a PROXY of it and the two
             // can never agree again. `currentChat` is handed to the
             // `chatOutput` plugin hook below -- a plugin writing to a detached
             // clone is a write that reaches neither the screen nor storage.
-            currentChat = character.chats[chatIndex]
+            //
+            // The clone also dropped every symbol-keyed SQL runtime mark, so the
+            // replacement arrives with no hydration window and no canonical
+            // message positions. Carrying them onto the slot is what keeps an
+            // appended reply persistable and keeps a partially resident history
+            // from being read as a whole one; see
+            // `replaceChatSlotCarryingSqlRuntimeFields`.
+            currentChat = replaceChatSlotCarryingSqlRuntimeFields(
+                character.chats,
+                chatIndex,
+                normalizeChat(triggerResult.chat),
+            )
         }
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true
@@ -2908,12 +2923,17 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
         const triggerResult = await runTrigger(currentChar, 'output', {chat:currentChat})
         if(triggerResult && triggerResult.chat){
-            DBState.db.characters[selectedChar].chats[selectedChat] = normalizeChat(triggerResult.chat)
             // Same as the streaming branch: the trigger's chat is a structured
             // clone, so re-read the slot rather than keeping the raw object the
-            // `$state` array wrapped. Two lines above already does this for the
-            // non-trigger case; this branch did not.
-            currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
+            // `$state` array wrapped, and carry the symbol-keyed SQL runtime
+            // marks the clone dropped onto whatever the slot then holds. Two
+            // lines above already re-reads for the non-trigger case; this
+            // branch did not.
+            currentChat = replaceChatSlotCarryingSqlRuntimeFields(
+                DBState.db.characters[selectedChar].chats,
+                selectedChat,
+                normalizeChat(triggerResult.chat),
+            )
         }
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true

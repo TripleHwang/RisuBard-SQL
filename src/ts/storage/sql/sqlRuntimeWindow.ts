@@ -190,6 +190,127 @@ export function clearSqlPosition(message: MessageLike): void {
   delete (message as PositionCarrier)[SQL_POSITION_KEY];
 }
 
+type CarriableChat = ChatLike & { message?: unknown };
+
+/** The resident message array of a chat-shaped value, or `[]`. */
+function residentMessages(chat: ChatLike | null | undefined): MessageLike[] {
+  if (!chat || typeof chat !== "object") return [];
+  const messages = (chat as CarriableChat).message;
+  return Array.isArray(messages) ? (messages as MessageLike[]) : [];
+}
+
+/**
+ * Carry the runtime hydration marks from a chat that is being replaced onto the
+ * chat that replaces it.
+ *
+ * The marks are symbol-keyed, which is what keeps them out of `JSON.stringify`,
+ * `structuredClone` and `$state.snapshot` -- and therefore out of every wire
+ * format and every database row. The cost of that guarantee is that they do not
+ * survive a clone either, and the application clones chats. `runTrigger`
+ * (process/triggers.ts) works on `safeStructuredClone(arg.chat)` and both output
+ * trigger call sites assign the result back over the live slot, because a
+ * trigger may legitimately add, remove, edit and reorder messages and wholesale
+ * replacement is the semantics triggers are written against.
+ *
+ * Without this carry, the replacement silently destroys storage bookkeeping the
+ * chat still needs:
+ *
+ *  - the chat loses its hydration window, so `allocateAppendedPositions` has no
+ *    `nextPosition` to hand out, the appended reply reaches
+ *    `canonicalMessagePosition` with no canonical position, and the row is
+ *    refused and retried forever without ever being written. The user watches
+ *    the message on screen and it is not in the database;
+ *  - `hasOlderSqlMessages` goes false on a chat that genuinely has older
+ *    messages on disk, so the greeting gate opens over a partial history and
+ *    scroll-driven loading stops asking for older pages.
+ *
+ * What is carried and what is not:
+ *
+ *  - the window is copied whole, and only when the replacement has none of its
+ *    own. It describes the persisted extent of the chat, which a trigger cannot
+ *    change;
+ *  - a canonical position is carried only to a message the replacement holds
+ *    under the same `chatId`. Positions are canonical SQL positions, not array
+ *    indices, so matching by id is what makes this correct across a reorder;
+ *  - a message the trigger ADDED matches nothing and is left unmarked on
+ *    purpose. It is a new row, and `allocateAppendedPositions` is what assigns
+ *    positions to new rows. Inventing one here would write it over an existing
+ *    row's position;
+ *  - a message the trigger DELETED simply does not match anything in the
+ *    replacement, so nothing is carried for it.
+ *
+ * Call it with the value read back OUT of the slot after the assignment, never
+ * with the raw object on its way in. `DBState.db` is a Svelte 5 `$state` proxy
+ * and a `$state` proxy never writes through to the object it wraps (`proxy.js`'s
+ * `set` trap has no `Reflect.set`), so the object in the slot after an
+ * assignment is a *proxy of* the value assigned, and that proxy is what every
+ * reader in the application sees. Marking the raw object first happens to work
+ * -- the proxy's `get` trap falls through to the target for a key it has no
+ * source for -- but only while nothing has read the key through the proxy
+ * first: the very first read of an absent key installs a source pinned to
+ * `UNINITIALIZED`, and from that moment writes to the raw target are invisible.
+ * Writing through the slot has no such ordering condition.
+ */
+export function carrySqlRuntimeFields(
+  from: ChatLike | null | undefined,
+  to: ChatLike | null | undefined,
+): void {
+  if (!from || !to || typeof from !== "object" || typeof to !== "object") return;
+  // Nothing was actually replaced -- the slot still holds the same object, marks
+  // included. Copying onto itself would be harmless but the early return keeps
+  // the no-replacement path free of proxy writes that would notify subscribers.
+  if (from === to) return;
+
+  const window = getSqlWindow(from);
+  if (window && !getSqlWindow(to)) setSqlWindow(to, window);
+
+  const carried = new Map<string, number>();
+  for (const message of residentMessages(from)) {
+    const id = (message as { chatId?: unknown }).chatId;
+    if (typeof id !== "string" || id.length === 0) continue;
+    const position = getSqlPosition(message);
+    if (Number.isSafeInteger(position) && position! >= 0) carried.set(id, position!);
+  }
+  if (carried.size === 0) return;
+
+  for (const message of residentMessages(to)) {
+    const id = (message as { chatId?: unknown }).chatId;
+    if (typeof id !== "string" || id.length === 0) continue;
+    // Never overwrite a position the replacement already carries. A caller that
+    // handed us a chat whose messages are already marked knows something we do
+    // not, and a position written over a good one is the one failure mode
+    // `setSqlPosition` cannot detect.
+    if (getSqlPosition(message) !== undefined) continue;
+    const position = carried.get(id);
+    if (position !== undefined) setSqlPosition(message, position);
+  }
+}
+
+/**
+ * Put `nextChat` into `chats[index]` and carry the runtime hydration marks of
+ * the chat it displaces onto whatever the slot then holds.
+ *
+ * This is the whole of the output-trigger write-back, in one place, so that the
+ * ordering it depends on is written down once rather than at each call site.
+ * `chats` is a `$state` array in the running application: assigning stores a
+ * *proxy of* `nextChat`, and reading the slot back is the only way to reach the
+ * object the rest of the application will see. The returned value is that
+ * object, and callers must keep it rather than the value they passed in -- a
+ * plugin or a later statement writing to the detached raw object is a write
+ * that reaches neither the screen nor storage.
+ */
+export function replaceChatSlotCarryingSqlRuntimeFields<T extends ChatLike>(
+  chats: T[],
+  index: number,
+  nextChat: T,
+): T {
+  const previous = chats[index];
+  chats[index] = nextChat;
+  const live = chats[index];
+  carrySqlRuntimeFields(previous, live);
+  return live;
+}
+
 /**
  * Remove every runtime hydration mark from a value on its way to storage.
  *

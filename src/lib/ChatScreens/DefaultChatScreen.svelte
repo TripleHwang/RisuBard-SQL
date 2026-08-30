@@ -32,7 +32,7 @@
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
     import { loadNewestChatMessages, loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
-    import { hasNewerSqlMessages, hasOlderSqlMessages } from '../../ts/storage/sql/sqlRuntimeWindow';
+    import { carrySqlRuntimeFields, hasNewerSqlMessages, hasOlderSqlMessages } from '../../ts/storage/sql/sqlRuntimeWindow';
     import { sleep } from "../../ts/util";
     import { language } from "../../lang";
     import { isExpTranslator, translate } from "../../ts/translator/translator";
@@ -603,7 +603,26 @@ import { isMobile } from 'src/ts/platform'
         messageInput = ''
         messageInputTranslate = ''
         removeChatDraft(draftChaId, draftChatId)
-        DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].message = cha
+        const liveChatSlot = DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage]
+        // The `input` trigger above hands back a `safeStructuredClone` of the
+        // chat, and `cha` becomes that clone's message array. Assigning it
+        // replaces every resident message object with one that carries no
+        // canonical SQL position -- symbols do not survive a clone. Left
+        // uncarried, `allocateAppendedPositions` would then see a chat whose
+        // messages are ALL unpositioned, decide the whole resident slice is an
+        // append, and renumber it past the end of its own history. Measured on
+        // a 40-message chat with 8 resident: every edited resident message is
+        // rewritten at 40..47 -- it JUMPS to the end of the conversation on the
+        // next reload -- and the user's new message lands at 48, behind a gap.
+        //
+        // Hold the array that is being displaced and carry the marks by message
+        // id. The chat object itself is not replaced here, so its window is
+        // untouched and only the positions need carrying; when `cha` is still
+        // the live array (no trigger ran) `carrySqlRuntimeFields` sees the same
+        // messages and there is nothing to do.
+        const displacedMessages = liveChatSlot.message
+        liveChatSlot.message = cha
+        carrySqlRuntimeFields({ message: displacedMessages }, liveChatSlot)
         // Sending is a jump to the end of the conversation, wherever the reader
         // had scrolled to.
         chatsInstance?.scrollToLatestMessage()
@@ -676,7 +695,30 @@ import { isMobile } from 'src/ts/platform'
 
         // Generate new response
         // Preserve trailing comment/disabled messages (e.g. branch comments)
-        let cha = safeStructuredClone(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message)
+        //
+        // Every assignment below replaces the live message ARRAY wholesale with
+        // one built by `safeStructuredClone`, and the canonical SQL positions
+        // that page hydration attached to each resident message are symbol-keyed
+        // -- they survive neither `structuredClone` nor the `rfdc` fallback it
+        // takes on a `$state` proxy. The chat object is not replaced, so its
+        // hydration window survives; the messages do not. That combination is
+        // the damaging one: `allocateAppendedPositions` sees a window still
+        // saying `nextPosition: 40` over a resident slice where nothing carries
+        // a position, reads the whole slice as an append, and renumbers it past
+        // the end of its own history. Only the rows that happen to be dirty are
+        // then written at the new numbers, so the resident slice is left split
+        // across two ranges and the stored order scrambles.
+        //
+        // Hold the live array and carry the marks back by message id after each
+        // replacement. The messages this function pops match nothing, and the
+        // regenerated reply is a new row that must stay unmarked so the
+        // allocator assigns it.
+        const rerollChatSlot = () => {
+            const rerollCharacter = DBState.db.characters[$selectedCharID]
+            return rerollCharacter.chats[rerollCharacter.chatPage]
+        }
+        const displacedMessages = rerollChatSlot().message
+        let cha = safeStructuredClone(displacedMessages)
         const originalMessages = safeStructuredClone(cha)
         if(cha.length === 0) return
         openMenu = false
@@ -697,21 +739,35 @@ import { isMobile } from 'src/ts/platform'
             let msg = cha.pop()
             if(!msg) return
         }
-        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = cha
+        const slotBeforeSend = rerollChatSlot()
+        slotBeforeSend.message = cha
+        carrySqlRuntimeFields({ message: displacedMessages }, slotBeforeSend)
         const generated = await sendChatMain()
 
-        const currentMsgs = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message
+        // Re-read the slot: an `output` trigger inside `sendChatMain` may have
+        // replaced the whole chat object by now.
+        const currentMsgs = rerollChatSlot().message
 
         // If generation failed, restore original messages
         if (!generated) {
-            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = originalMessages
+            const restoredSlot = rerollChatSlot()
+            restoredSlot.message = originalMessages
+            carrySqlRuntimeFields({ message: displacedMessages }, restoredSlot)
             return
         }
 
         // Restore trailing comments after the new message
         if (trailingComments.length > 0) {
             currentMsgs.push(...trailingComments)
-            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = currentMsgs
+            const trailingSlot = rerollChatSlot()
+            trailingSlot.message = currentMsgs
+            // The trailing comments came off the clone, so they are stored rows
+            // that lost their positions. Carrying them back is right, and it
+            // leaves the regenerated reply un-positionable for as long as a
+            // positioned comment sits behind it -- `allocateAppendedPositions`
+            // only allocates a contiguous tail. That refusal is loud and
+            // reversible; renumbering the slice instead would move stored rows.
+            carrySqlRuntimeFields({ message: displacedMessages }, trailingSlot)
         }
 
         // Save new response to swipes
