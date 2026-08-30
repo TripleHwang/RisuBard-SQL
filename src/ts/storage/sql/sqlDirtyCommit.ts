@@ -129,6 +129,26 @@ export function buildSqlDirtyCommit(
       continue;
     }
     const [currentCharacter, position] = found;
+    // A character that has not been hydrated is a bootstrap summary: name,
+    // image, chat list, timestamps -- and no description, no first message, no
+    // lorebook, no scripts. Writing one back replaces the real record with it.
+    //
+    // Reachable on any ordinary launch, because auditSqlCompatibilityDatabase
+    // marks EVERY character dirty when the character order changes
+    // (sqlPersistenceRuntime.ts:352), summaries included. The user opens the
+    // app, something reorders, and each character that had not been opened yet
+    // loses everything but its name.
+    //
+    // Skipped rather than thrown: this builder runs inside a retry loop, so
+    // throwing would stop characters, chats and messages from ever persisting.
+    if ((currentCharacter as { detailsLoaded?: boolean }).detailsLoaded === false) {
+      console.error(
+        `[SQL dirty commit] refusing to write character ${characterId} from a bootstrap summary: ` +
+        "its description, first message, lorebook and scripts are not loaded, so this write " +
+        "would replace the stored record with a stub. The character stays as storage has it.",
+      );
+      continue;
+    }
     commit.characters.push({ id: characterId, position, data: sqlCharacterData(currentCharacter) });
   }
 

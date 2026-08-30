@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { DirtySnapshot } from "./dirtyRegistry";
 import { buildSqlDirtyCommit } from "./sqlDirtyCommit";
@@ -246,5 +246,51 @@ describe("row-scoped SQL dirty commits", () => {
     dirty.messageManifestChatIds = ["chat-a"];
 
     expect(buildSqlDirtyCommit(db, dirty, 7).messageManifests).toEqual([]);
+  });
+});
+
+describe("a character that is still a bootstrap summary", () => {
+  // The summary carries name, image, chat list and timestamps -- and no
+  // description, first message, lorebook or scripts. Writing one back replaces
+  // the stored record with it. This is reachable on an ordinary launch:
+  // auditSqlCompatibilityDatabase marks EVERY character dirty when the
+  // character order changes, summaries included, so a user who reorders loses
+  // everything but the name of each character they had not opened yet.
+  const summaryDatabase = () => ({
+    characters: [{
+      chaId: "character-1",
+      name: "Alice",
+      image: "assets/alice.png",
+      detailsLoaded: false,
+      chats: [],
+      chatPage: 0,
+    }],
+    botPresets: [],
+    pluginCustomStorage: {},
+  }) as any;
+
+  it("is never written back over the stored record", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const commit = buildSqlDirtyCommit(summaryDatabase(), {
+      ...cleanDirty(), characterIds: ["character-1"],
+    }, 1);
+
+    expect(commit.characters).toEqual([]);
+    expect(commit.characterDeletes ?? []).toEqual([]);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("is written normally once it has been hydrated", () => {
+    const database = summaryDatabase();
+    database.characters[0].detailsLoaded = true;
+    database.characters[0].desc = "the description the summary does not carry";
+
+    const commit = buildSqlDirtyCommit(database, {
+      ...cleanDirty(), characterIds: ["character-1"],
+    }, 1);
+
+    expect(commit.characters).toHaveLength(1);
+    expect((commit.characters[0].data as any).desc).toBe("the description the summary does not carry");
   });
 });
