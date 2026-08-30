@@ -1,5 +1,10 @@
 import type { Chat, Database, character } from '../database.svelte'
-import { isChatHydrationActive, isHydrationActive } from '../hydrationState'
+import {
+    deferUntilHydrationApplied,
+    isChatHydrationApplying,
+    isHydrationActive,
+    isHydrationApplying,
+} from '../hydrationState'
 import { isRootKeyDeferred } from './deferredRootKeys'
 import type { ISqlStorage } from './ISqlStorage'
 import { DirtyRegistry, type DirtySnapshot } from './dirtyRegistry'
@@ -47,10 +52,32 @@ export function deactivateSqlPersistenceRuntime(): void {
     activeDatabase = null
 }
 
+/**
+ * Suppression is scoped to the apply window and defers rather than discards.
+ *
+ * The previous form asked `isChatHydrationActive`, which is true for the whole
+ * of a page fetch, and returned. During a fetch hydration has not written a
+ * single byte into the chat, so there was nothing to protect and the only marks
+ * in that window belonged to the user: a reply that arrived while an older page
+ * was in the air lost its mark, never entered a commit, and was gone after a
+ * reload with nothing logged and nothing shown. Scroll-driven loading holds
+ * that window open on almost every gesture, which is what turned a latent hole
+ * into a reproducible loss.
+ *
+ * Inside the real apply window the mark is parked, not dropped. Hydration
+ * itself never marks anything, so a mark arriving there is still somebody
+ * else's edit; the queue drains as soon as the apply finishes.
+ */
+function whenMarkable(chatId: string, mark: () => void): void {
+    deferUntilHydrationApplied(() => isChatHydrationApplying(chatId), mark)
+}
+
 export function markSqlMessageDirty(chatId: string, messageId: string, immediate = false): void {
-    if (!chatId || !messageId || isChatHydrationActive(chatId)) return
-    registry.markMessage(chatId, messageId)
-    scheduleDirtyFlush(immediate)
+    if (!chatId || !messageId) return
+    whenMarkable(chatId, () => {
+        registry.markMessage(chatId, messageId)
+        scheduleDirtyFlush(immediate)
+    })
 }
 
 /**
@@ -70,24 +97,36 @@ export function isSqlMessageDirty(chatId: string, messageId: string): boolean {
 }
 
 export function markSqlMessageDeleted(chatId: string, messageId: string): void {
-    if (!chatId || !messageId || isChatHydrationActive(chatId)) return
-    registry.markMessageDeleted(chatId, messageId)
-    scheduleDirtyFlush(false)
+    if (!chatId || !messageId) return
+    whenMarkable(chatId, () => {
+        registry.markMessageDeleted(chatId, messageId)
+        scheduleDirtyFlush(false)
+    })
 }
 
 export function markSqlMessageManifestDirty(chatId: string): void {
-    if (!chatId || isChatHydrationActive(chatId)) return
-    registry.markMessageManifest(chatId)
-    scheduleDirtyFlush(false)
+    if (!chatId) return
+    whenMarkable(chatId, () => {
+        registry.markMessageManifest(chatId)
+        scheduleDirtyFlush(false)
+    })
 }
 
 export function markSqlChatDirty(characterId: string, chatId: string, manifest = false): void {
-    if (!characterId || !chatId || isHydrationActive(`${characterId}/${chatId}`)) return
-    registry.markChat(characterId, chatId, manifest)
-    scheduleDirtyFlush(false)
+    if (!characterId || !chatId) return
+    const key = `${characterId}/${chatId}`
+    deferUntilHydrationApplied(() => isHydrationApplying(key), () => {
+        registry.markChat(characterId, chatId, manifest)
+        scheduleDirtyFlush(false)
+    })
 }
 
 export function markSqlCharacterDirty(characterId: string): void {
+    // Left reading the wide predicate on purpose. Nothing registers a bare
+    // character id -- `beginHydration` is only ever called with a
+    // `characterId/chatId` key -- so this check does not currently fire, and
+    // narrowing a condition that is already never true would only make it look
+    // as though character hydration had been reasoned about here. It has not.
     if (!characterId || isHydrationActive(characterId)) return
     registry.markCharacter(characterId)
     scheduleDirtyFlush(false)
@@ -129,31 +168,71 @@ export async function flushSqlDirtyChanges(): Promise<void> {
     await registry.flushNow()
 }
 
+/**
+ * Rows this flush could not position, kept out of the commit so the rest of it
+ * can go, and re-marked afterwards so they are not acknowledged away.
+ *
+ * Refusing a row is not the same as writing it. It stays dirty, it retries, and
+ * if its position never appears it never persists -- but that was already true
+ * before, and before, it also took every other chat's writes with it.
+ */
+type RefusedMessage = { chatId: string; messageId: string }
+
+function reportRefusedMessages(refused: RefusedMessage[], error: unknown): void {
+    if (refused.length === 0) return
+    console.error(
+        `[SQL dirty commit] refused ${refused.length} message(s) with no canonical position; ` +
+        `they stay dirty and will be retried: ` +
+        refused.map(entry => `${entry.chatId}/${entry.messageId}`).join(', '),
+        error,
+    )
+}
+
 async function commitDirtyScopes(): Promise<void> {
     const storage = activeStorage
     const database = activeDatabase
     if (!storage || !database) return
     const snapshot = registry.takeSnapshot()
-    let commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision())
+    const refused: RefusedMessage[] = []
+    let lastRefusal: unknown
+    const refuse = (chatId: string, messageId: string, error: unknown) => {
+        refused.push({ chatId, messageId })
+        lastRefusal = error
+    }
+    // Re-marking is what keeps a refused row dirty. `acknowledge` only clears a
+    // scope whose generation matches the one the snapshot recorded, and
+    // `markMessage` takes a fresh, higher generation -- so a re-mark placed
+    // after the acknowledge survives it, and the row is picked up by the next
+    // flush instead of being dropped on the floor.
+    const retainRefused = () => {
+        for (const entry of refused) registry.markMessage(entry.chatId, entry.messageId)
+        reportRefusedMessages(refused, lastRefusal)
+    }
+    let commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse)
     if (!hasSqlCommitChanges(commit)) {
         registry.acknowledge(snapshot)
+        retainRefused()
         return
     }
     try {
         await commitWithMetrics(storage, commit)
         registry.acknowledge(snapshot)
+        retainRefused()
     } catch (error) {
         if (!(error instanceof SqlRevisionConflictError)) throw error
         // Targeted reads are observability-only: local dirty intent is
         // last-local-wins and must never be overwritten before the retry.
         await rebaseDirtyScopes(storage, snapshot)
-        commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision())
+        refused.length = 0
+        commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse)
         if (!hasSqlCommitChanges(commit)) {
             registry.acknowledge(snapshot)
+            retainRefused()
             return
         }
         await commitWithMetrics(storage, commit)
         registry.acknowledge(snapshot)
+        retainRefused()
     }
 }
 
@@ -325,6 +404,51 @@ function deleteMissing(
     for (const id of prior.order) if (!current.values.has(id)) markSqlMessageDeleted(chatId, id)
 }
 
+/**
+ * True when two partial snapshots of one chat's message order cannot be
+ * reconciled without knowing every message's persisted position.
+ *
+ * Two things make a partial diff unreconcilable:
+ *
+ *   - the ids both snapshots know changed their order relative to each other;
+ *   - a new id appeared *between* two ids the baseline already knew, so the
+ *     audit cannot tell where in the persisted history it belongs.
+ *
+ * Everything else is safe, and one case in particular has to be: new ids
+ * arriving at the *front*. That is exactly what `loadOlderChatMessages` does --
+ * it splices an older page onto the start of the resident slice -- and the
+ * previous rule required the shared ids to still be the first N of the current
+ * order, which is true of an append and false of every prepend there has ever
+ * been. So the first time a reader scrolled back, this chat was declared
+ * unreconcilable, its baseline was pinned to the pre-scroll snapshot, and it
+ * stayed pinned: the same comparison failed identically on every later audit.
+ * From that moment the audit could no longer see a message arrive in that chat
+ * at all, which is the second chance a dropped dirty mark depends on.
+ *
+ * The middle-insertion case this exists for still trips it: an id spliced
+ * between two known ones lands inside the shared span and is caught below.
+ */
+function hasUnreconcilablePartialOrder(
+    prior: { order: string[]; values: Map<string, string> },
+    current: { order: string[]; values: Map<string, string> },
+    currentPrior: string[],
+): boolean {
+    const survivingPrior = prior.order.filter(id => current.values.has(id))
+    if (survivingPrior.join('\u0000') !== currentPrior.join('\u0000')) return true
+    const first = current.order.findIndex(id => prior.values.has(id))
+    // No shared id at all: there is no known span for anything to be inserted
+    // into, so nothing here can be misplaced relative to the baseline.
+    if (first < 0) return false
+    let last = first
+    for (let index = current.order.length - 1; index > first; index -= 1) {
+        if (prior.values.has(current.order[index])) { last = index; break }
+    }
+    for (let index = first; index <= last; index += 1) {
+        if (!prior.values.has(current.order[index])) return true
+    }
+    return false
+}
+
 /** Idle compatibility audit: baseline first, then only explicitly changed scopes. */
 export function auditSqlCompatibilityDatabase(database: Database): void {
     const next = snapshotCompatibility(database)
@@ -360,12 +484,9 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
             if (current.complete) markSqlMessageManifestDirty(chatId)
             continue
         }
-        const survivingPrior = prior.order.filter(id => current.values.has(id))
         const currentPrior = current.order.filter(id => prior.values.has(id))
-        const unsafePartialOrder = !prior.complete && !current.complete && (
-            survivingPrior.join('\u0000') !== currentPrior.join('\u0000') ||
-            current.order.slice(0, currentPrior.length).join('\u0000') !== currentPrior.join('\u0000')
-        )
+        const unsafePartialOrder = !prior.complete && !current.complete &&
+            hasUnreconcilablePartialOrder(prior, current, currentPrior)
         if (unsafePartialOrder) {
             console.warn(`[SQL compatibility audit] deferred unsafe middle message insertion/reorder in partial chat ${chatId}; hydrate it before retrying`)
             // Keep this chat's old baseline so a later full hydration can safely

@@ -104,6 +104,13 @@ export function buildSqlDirtyCommit(
   database: Database,
   dirty: DirtySnapshot,
   baseRevision: number,
+  /**
+   * Called instead of throwing when one dirty message cannot be given a
+   * canonical position. Omit it and the throw stands; pass it and the row is
+   * left out of this commit and reported, so it cannot take the rest of the
+   * transaction -- every other chat included -- down with it.
+   */
+  onRefusedMessage?: (chatId: string, messageId: string, error: unknown) => void,
 ): SqlCommit {
   const commit = createEmptySqlCommit(baseRevision, "dirty-sync");
 
@@ -190,10 +197,31 @@ export function buildSqlDirtyCommit(
       const current = lookup.get(messageId);
       if (!current) continue;
       const { message, localPosition } = current;
+      let position: number;
+      try {
+        position = canonicalMessagePosition(runtimeChat, message, localPosition);
+      } catch (error) {
+        // Without `onRefusedMessage` this still throws, and the throw is right:
+        // a dirty row in a partial window with no canonical position must never
+        // be written at a guessed one. What was wrong was where the throw
+        // landed. `commitDirtyScopes` builds outside its try, so one such row
+        // aborted the ENTIRE commit -- every other chat's pending edits with
+        // it -- and the 5s retry rebuilt the same snapshot and threw again,
+        // every five seconds, forever, with nothing but console output. One
+        // un-positionable message meant nothing in the application ever
+        // persisted again.
+        //
+        // Refusing just this row keeps that invariant and costs it only itself:
+        // the caller leaves it dirty so it retries, and everything else in the
+        // flush gets written.
+        if (!onRefusedMessage) throw error;
+        onRefusedMessage(group.chatId, messageId, error);
+        continue;
+      }
       commit.messages.push({
         id: messageId,
         chatId: group.chatId,
-        position: canonicalMessagePosition(runtimeChat, message, localPosition),
+        position,
         data: sqlMessageData(message),
       });
     }

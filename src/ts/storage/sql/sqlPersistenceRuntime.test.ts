@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ISqlStorage } from './ISqlStorage'
-import { beginHydration, endHydration } from '../hydrationState'
+import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from '../hydrationState'
 import { SqlRevisionConflictError } from './sqlCommit'
+import { setSqlPosition, setSqlWindow } from './sqlRuntimeWindow'
 import {
     activateSqlPersistenceRuntime,
     auditSqlCompatibilityDatabase,
     flushSqlDirtyChanges,
     initializeSqlCompatibilityBaseline,
+    isSqlMessageDirty,
     markSqlMessageDirty,
     startSqlMetadataPersistence,
     startSqlCompatibilityAuditLoop,
@@ -86,14 +88,136 @@ describe('SQL persistence runtime', () => {
         expect(keepalive).not.toHaveBeenCalled()
     })
 
-    it('does not mark a message while its character/chat hydration is active', async () => {
+    /**
+     * This used to assert the opposite, and it is why the loss below survived
+     * 2900 tests: it opened `beginHydration` -- the flag that spans a whole page
+     * REQUEST -- and required the mark to be discarded. During a request
+     * hydration has not written anything into the chat, so the only marks in
+     * that window belong to the user. A reply that arrived while an older page
+     * was being fetched lost its mark, never reached a commit, and was gone
+     * after a reload with nothing logged.
+     */
+    it('marks a message edited while a page request is in the air', async () => {
         const storage = fakeStorageAtRevision(3)
         activateSqlPersistenceRuntime(storage, fixtureDatabaseWithMessages(1))
         beginHydration('character-a/chat-a')
         markSqlMessageDirty('chat-a', 'm-0', true)
-        await Promise.resolve()
+        await flushSqlDirtyChanges()
         endHydration('character-a/chat-a')
+        expect(storage.commit).toHaveBeenCalledTimes(1)
+    })
+
+    /**
+     * The apply window is the real one: hydration is writing the fetched page
+     * into the live chat, and a mark made there could be hydration's own write
+     * being read back. It is parked rather than dropped -- nothing in hydration
+     * marks anything, so the mark still belongs to somebody -- and it runs the
+     * moment the apply closes.
+     */
+    it('defers a mark made mid-apply and commits it once the apply ends', async () => {
+        const storage = fakeStorageAtRevision(3)
+        activateSqlPersistenceRuntime(storage, fixtureDatabaseWithMessages(1))
+        beginHydrationApply('character-a/chat-a')
+        markSqlMessageDirty('chat-a', 'm-0', true)
+        await flushSqlDirtyChanges()
         expect(storage.commit).not.toHaveBeenCalled()
+
+        endHydrationApply('character-a/chat-a')
+        await flushSqlDirtyChanges()
+        expect(storage.commit).toHaveBeenCalledTimes(1)
+    })
+
+    /**
+     * One chat's apply window must not park another chat's mark.
+     *
+     * A parked mark is invisible to `isSqlMessageDirty`, and that predicate is
+     * what residency trimming and `loadNewestChatMessages` ask before releasing
+     * a message from memory. A mark hidden there is an edit released and never
+     * written -- the same silent loss, arrived at from the other side. Which
+     * means the deferral has to be gated per chat and not on "is any hydration
+     * applying"; a global gate passes every test above and loses data here.
+     */
+    it('leaves a mark for another chat visible while one chat is mid-apply', async () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = fixtureDatabaseWithMessages(1)
+        database.characters[0].chats.push({ id: 'chat-b', message: [{ chatId: 'b-0', role: 'char', data: 'b' }] })
+        activateSqlPersistenceRuntime(storage, database)
+
+        beginHydrationApply('character-a/chat-a')
+        // `finally`, because the apply counters live in a module-level map that
+        // no `afterEach` here clears: a count leaked by a failing assertion
+        // parks every later test's marks and reports this one defect as seven.
+        try {
+            markSqlMessageDirty('chat-b', 'b-0', true)
+
+            expect(isSqlMessageDirty('chat-b', 'b-0')).toBe(true)
+            expect(isSqlMessageDirty('chat-a', 'm-0')).toBe(false)
+
+            await flushSqlDirtyChanges()
+            expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({
+                messages: [expect.objectContaining({ id: 'b-0', chatId: 'chat-b' })],
+            }))
+        } finally {
+            endHydrationApply('character-a/chat-a')
+        }
+    })
+
+    /**
+     * One message with no canonical position must not stop every other chat
+     * from being written.
+     *
+     * `commitDirtyScopes` builds its commit outside the try, so a build that
+     * threw aborted the whole transaction -- not just the offending row, not
+     * just its chat, but every pending edit in the application. The 5s retry
+     * then rebuilt the same snapshot and threw again, every five seconds, for
+     * the rest of the session, reporting nothing but a console line. That is
+     * the same silent total data loss as the dropped dirty mark, reached from
+     * the other end, and it was live in the tree.
+     */
+    it('commits every other chat when one message has no canonical position', async () => {
+        const storage = fakeStorageAtRevision(3)
+        // A partial window (`messagesFullyLoaded: false`) with no SQL window at
+        // all, so `allocateAppendedPositions` has no `nextPosition` to hand out
+        // and the row can never be positioned.
+        const broken = {
+            id: 'chat-broken', messagesLoaded: true, messagesFullyLoaded: false,
+            message: [{ chatId: 'orphan', role: 'char', data: 'no position' }],
+        }
+        const database = fixtureDatabaseWithMessages(1)
+        database.characters[0].chats.push(broken)
+        activateSqlPersistenceRuntime(storage, database)
+
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+        markSqlMessageDirty('chat-broken', 'orphan')
+        markSqlMessageDirty('chat-a', 'm-0')
+        await flushSqlDirtyChanges()
+
+        expect(storage.commit).toHaveBeenCalledWith(expect.objectContaining({
+            messages: [expect.objectContaining({ id: 'm-0', chatId: 'chat-a' })],
+        }))
+        expect(error).toHaveBeenCalledWith(
+            expect.stringContaining('chat-broken/orphan'),
+            expect.anything(),
+        )
+        error.mockRestore()
+
+        // Refused is not written, and refused is not forgotten: the row stays
+        // dirty, which is also what stops residency trimming releasing it.
+        expect(isSqlMessageDirty('chat-broken', 'orphan')).toBe(true)
+        expect(isSqlMessageDirty('chat-a', 'm-0')).toBe(false)
+
+        // And it really is retried, not merely remembered: give the row the
+        // position it was missing and the next ordinary flush writes it. This
+        // also drains the mark, which matters -- the dirty registry is module
+        // state that `resetSqlPersistenceRuntimeForTesting` does not clear, so
+        // a test that leaves one behind leaves it for every test after it.
+        setSqlPosition(broken.message[0], 5)
+        await flushSqlDirtyChanges()
+
+        expect(storage.commit).toHaveBeenLastCalledWith(expect.objectContaining({
+            messages: [expect.objectContaining({ id: 'orphan', chatId: 'chat-broken', position: 5 })],
+        }))
+        expect(isSqlMessageDirty('chat-broken', 'orphan')).toBe(false)
     })
 
     it('retries a conflict without replacing the dirty local append', async () => {
@@ -221,5 +345,128 @@ describe('an unloaded chat is not a chat whose messages were deleted', () => {
         await flushSqlDirtyChanges()
 
         expect(messageDeletesOf(storage)).toEqual(['m-1'])
+    })
+})
+
+/**
+ * The idle audit is the second chance a dropped dirty mark depends on: it
+ * diffs the live graph every few seconds and re-marks anything it finds
+ * changed. It used to lose that ability permanently the first time a reader
+ * scrolled back in a chat.
+ */
+describe('the idle audit over a chat that has been scrolled back', () => {
+    /** A partial window, as `loadOlderChatMessages` leaves one. */
+    function windowedChat(count: number, startPosition: number) {
+        const chat: any = {
+            id: 'chat-a', message: [], messagesLoaded: true, messagesFullyLoaded: false,
+        }
+        for (let index = 0; index < count; index += 1) {
+            const message = { chatId: `m-${startPosition + index}`, role: 'char', data: `d${startPosition + index}` }
+            setSqlPosition(message, startPosition + index)
+            chat.message.push(message)
+        }
+        setSqlWindow(chat, {
+            before: null, nextBefore: startPosition, total: 100, hasOlder: true,
+            hasNewer: false, nextAfter: null, nextPosition: 100,
+        })
+        return {
+            characters: [{ chaId: 'character-a', chats: [chat] }],
+            botPresets: [], pluginCustomStorage: {},
+        } as any
+    }
+
+    /** What `loadOlderChatMessages` does: splice an older page onto the front. */
+    function prependOlderPage(chat: any, from: number, to: number): void {
+        const older: any[] = []
+        for (let position = from; position < to; position += 1) {
+            const message = { chatId: `m-${position}`, role: 'char', data: `d${position}` }
+            setSqlPosition(message, position)
+            older.push(message)
+        }
+        chat.message.splice(0, 0, ...older)
+    }
+
+    it('still notices an appended message after an older page was prepended', () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = windowedChat(20, 80)
+        const chat = database.characters[0].chats[0]
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        prependOlderPage(chat, 60, 80)
+        chat.message.push({ chatId: 'reply', role: 'char', data: 'the reply' })
+
+        auditSqlCompatibilityDatabase(database)
+
+        expect(isSqlMessageDirty('chat-a', 'reply')).toBe(true)
+    })
+
+    it('adopts the prepended page as the baseline instead of pinning to the old one', () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = windowedChat(20, 80)
+        const chat = database.characters[0].chats[0]
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        prependOlderPage(chat, 60, 80)
+        auditSqlCompatibilityDatabase(database)
+
+        // The baseline used to be pinned to the pre-scroll snapshot, so this
+        // second audit compared against it again and failed the same way, for
+        // the rest of the session.
+        chat.message.push({ chatId: 'reply', role: 'char', data: 'the reply' })
+        auditSqlCompatibilityDatabase(database)
+
+        expect(isSqlMessageDirty('chat-a', 'reply')).toBe(true)
+    })
+
+    /**
+     * The other half of the guard, and the half nothing covered: the shared ids
+     * themselves changing order. Widening the rule to let prepends through must
+     * not also let a reorder through.
+     *
+     * What the deferral withholds is the *order*, not the row edits -- the
+     * branch deliberately still marks a changed row dirty, because a row's
+     * canonical position is attached to the message and does not move when the
+     * array does. So the observable difference is the decision itself: the chat
+     * is declared unreconcilable, warned about, and its baseline held for a
+     * later full hydration to settle. Assert that, because asserting the marks
+     * would pass either way and prove nothing.
+     */
+    it('still declares a reorder of known ids unreconcilable', () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = windowedChat(20, 80)
+        const chat = database.characters[0].chats[0]
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const [moved] = chat.message.splice(5, 1)
+        chat.message.splice(12, 0, moved)
+        auditSqlCompatibilityDatabase(database)
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('unsafe middle message insertion/reorder in partial chat chat-a'))
+
+        // Held, not adopted: a second audit that changes nothing further still
+        // sees the same disagreement against the pre-reorder baseline.
+        warn.mockClear()
+        auditSqlCompatibilityDatabase(database)
+        expect(warn).toHaveBeenCalledTimes(1)
+        warn.mockRestore()
+    })
+
+    it('still refuses a message inserted between two known ones in a partial window', () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = windowedChat(20, 80)
+        const chat = database.characters[0].chats[0]
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        chat.message.splice(10, 0, { chatId: 'wedged', role: 'char', data: 'wedged' })
+        auditSqlCompatibilityDatabase(database)
+        warn.mockRestore()
+
+        expect(isSqlMessageDirty('chat-a', 'wedged')).toBe(false)
     })
 })

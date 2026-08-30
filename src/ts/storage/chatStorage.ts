@@ -506,9 +506,11 @@ export async function ensureChatHydrated(
             beginHydrationApply(key)
             chats[currentIndex] = full
 
-            // Wait one tick so Svelte reactivity settles before allowing dirty tracking
-            await tick()
-            endHydrationApply(key)
+            // Wait one tick so Svelte reactivity settles before allowing dirty
+            // tracking. In a `finally`: a leaked apply count leaves this chat's
+            // dirty marks deferred against a window that never closes, which is
+            // the same silent loss as dropping them.
+            try { await tick() } finally { endHydrationApply(key) }
 
             await touchHydratedChat(chaId, chats, currentIndex)
 
