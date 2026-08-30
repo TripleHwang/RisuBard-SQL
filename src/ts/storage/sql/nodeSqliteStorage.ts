@@ -1089,6 +1089,23 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
       typeof page.hasMore !== "boolean") {
       throw new Error("Invalid SQL message page payload");
     }
+    // The reverse-page cursor contract, checked at the transport boundary so a
+    // server that breaks it is named here rather than three layers up as an
+    // opaque "boundary is noncontiguous" in front of the user.
+    //
+    // `before` echoes the cursor this page was requested at (`null` for the
+    // newest page). `nextBefore` is the cursor for the *next* page: a real
+    // position while `hasMore`, and `null` once the start of history is
+    // reached. A cursor that does not move backwards would page forever.
+    if (page.before !== null && (!Number.isSafeInteger(page.before) || page.before < 0)) {
+      throw new Error("Invalid SQL message page cursor");
+    }
+    if (page.hasMore
+      ? !Number.isSafeInteger(page.nextBefore) || (page.nextBefore as number) < 0 ||
+        (page.before !== null && (page.nextBefore as number) >= page.before)
+      : page.nextBefore !== null) {
+      throw new Error("Invalid SQL message page cursor");
+    }
     this.acceptReadRevision(page.revision);
     return page;
     } finally {
@@ -1731,6 +1748,10 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     const page = await this.loadChatMessageReversePage(chatId, before, limit);
     return {
       messages: page.messages,
+      // `SqlMessagePage.offset` is where this window starts, in the
+      // `webSqliteStorage` sense of `hasMore: offset > 0`. A terminal page
+      // starts at the beginning, and `nextBefore` is `null` there, so the
+      // fallback is the terminal answer rather than a papered-over gap.
       offset: page.nextBefore ?? 0,
       total: page.total,
       hasMore: page.hasMore,

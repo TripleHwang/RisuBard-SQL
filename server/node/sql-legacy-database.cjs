@@ -200,10 +200,24 @@ function readAllChatMessages(relationalSql, chatId, label) {
                 `chat ${label} reported more messages to come but returned an empty page.`,
             );
         }
+        // A page that still has more to give must carry the cursor for the next
+        // one. `nextBefore` is only ever `null` on the terminal page, which the
+        // `hasMore` break above already took, so reaching here without an
+        // integer is the backend breaking its own contract.
         if (!Number.isSafeInteger(page.nextBefore)) {
             throw incomplete(
                 `chat ${label} reported more messages to come without a usable page cursor ` +
                 `(nextBefore = ${JSON.stringify(page.nextBefore)}).`,
+            );
+        }
+        // The page budget below would eventually catch a cursor that stops
+        // moving, but only after re-reading the same page ~n times and then
+        // blaming the page count. A cursor must walk strictly backwards, so say
+        // so at the first page that fails to.
+        if (before !== undefined && page.nextBefore >= before) {
+            throw incomplete(
+                `chat ${label} did not advance its page cursor (it asked before ${before} and was ` +
+                `told to ask before ${page.nextBefore} next).`,
             );
         }
         before = page.nextBefore;

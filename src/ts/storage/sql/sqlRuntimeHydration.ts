@@ -265,6 +265,8 @@ function validateOlderReversePage(
   page: Awaited<ReturnType<SqlBootstrapStorage["loadChatMessageReversePage"]>>,
   window: SqlHydrationWindow,
   knownIds: Set<string | undefined>,
+  /** Resident messages that carry a canonical position, i.e. that storage holds. */
+  persistedResidentCount: number,
 ): void {
   // `before` and `nextPosition` are the boundary contract: the page must start
   // exactly where this window said it would. `total` is not part of it. It is a
@@ -294,15 +296,31 @@ function validateOlderReversePage(
     throw new Error("Reverse page boundary is noncontiguous")
   }
   // Coverage counts resident ids against the persisted total, so it only means
-  // anything while the window still holds the newest end -- `knownIds` is then
-  // everything from this page to the end of the history. Once residency
+  // anything while the window still holds the newest end -- the resident set is
+  // then everything from this page to the end of the history. Once residency
   // trimming has released messages from the newest end the resident count is
   // deliberately smaller than the history, and this rule would reject the last
   // page of every trimmed chat, stranding the start of its history behind a
   // throw. Nothing is lost by skipping it: the rule exists to stop a short
   // terminal page from marking a chat complete, and a trimmed window is never
   // marked complete -- `hasNewer` holds `messagesFullyLoaded` at false.
-  if (!page.hasMore && !window.hasNewer && knownIds.size + seen.size !== page.total) {
+  //
+  // `persistedResidentCount`, not the whole resident set, is what may be
+  // measured against `page.total`. A message the user has just sent is resident
+  // and carries no canonical position, because nothing has written it yet; it
+  // is not part of the history this page's COUNT(*) describes. Counting it made
+  // every terminal page throw for a reader who sent a message while scrolling
+  // back -- "이전 메시지를 불러오지 못했습니다" at the top of the scrollback,
+  // and, because the throw leaves `hasOlder` true, the greeting hidden for the
+  // rest of the session.
+  //
+  // `<` rather than `!==` for the same reason `total` was already dropped from
+  // the boundary contract: the count is a snapshot. A commit that lands between
+  // the server taking it and this check can leave a resident message both
+  // positioned and outside `total`. Being over the count is a race; being under
+  // it is a page that did not deliver the history it claimed, which is what
+  // this guards.
+  if (!page.hasMore && !window.hasNewer && persistedResidentCount + seen.size < page.total) {
     throw new Error("Reverse page terminal coverage is incomplete")
   }
 }
@@ -397,8 +415,11 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
       (current as HydratableChat).messagesFullyLoaded = fullyLoaded;
       setSqlWindow(current, window);
       beginHydrationApply(key);
-      await tick();
-      endHydrationApply(key);
+      // `endHydrationApply` in a `finally`: an apply count that leaks is a chat
+      // whose dirty marks are deferred against a window that never closes, and
+      // a deferred mark that never runs is the same silent loss as a dropped
+      // one.
+      try { await tick(); } finally { endHydrationApply(key); }
       return current;
     } finally {
       endHydration(key);
@@ -434,7 +455,11 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
         { offset: 0, total: page.total, messages: page.messages },
         { offset: page.messages.length, total: window.total, ids: [...known].filter((id): id is string => !!id) },
       );
-      validateOlderReversePage(page, window, known);
+      const persistedResidentCount = current.message.reduce(
+        (count, message) => count + (Number.isSafeInteger(getSqlPosition(message)) ? 1 : 0),
+        0,
+      );
+      validateOlderReversePage(page, window, known, persistedResidentCount);
       const olderPairs = page.messages.flatMap((message, index) =>
         !known.has(message.chatId) ? [{ message, position: page.positions?.[index] }] : [],
       );
@@ -474,8 +499,11 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore && !boundedWindow.hasNewer;
       setSqlWindow(current, boundedWindow);
       beginHydrationApply(key);
-      await tick();
-      endHydrationApply(key);
+      // `endHydrationApply` in a `finally`: an apply count that leaks is a chat
+      // whose dirty marks are deferred against a window that never closes, and
+      // a deferred mark that never runs is the same silent loss as a dropped
+      // one.
+      try { await tick(); } finally { endHydrationApply(key); }
       return current;
     } finally {
       endHydration(key);
@@ -606,8 +634,11 @@ export async function loadNewestChatMessages(character: character, chatIndex: nu
       (current as HydratableChat).messagesFullyLoaded = !page.hasMore && current.message.length >= page.total;
       setSqlWindow(current, restoredWindow);
       beginHydrationApply(key);
-      await tick();
-      endHydrationApply(key);
+      // `endHydrationApply` in a `finally`: an apply count that leaks is a chat
+      // whose dirty marks are deferred against a window that never closes, and
+      // a deferred mark that never runs is the same silent loss as a dropped
+      // one.
+      try { await tick(); } finally { endHydrationApply(key); }
       return current;
     } finally {
       endHydration(key);

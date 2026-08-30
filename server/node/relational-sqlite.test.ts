@@ -163,6 +163,7 @@ describe('server relational SQLite', () => {
       messages: [{ chatId: 'message-1' }, { chatId: 'message-2' }],
       positions: [0, 1],
       nextPosition: 10,
+      nextBefore: null,
       hasMore: false,
     })
   })
@@ -181,12 +182,37 @@ describe('server relational SQLite', () => {
   it('echoes the effective cursor while paging older messages in ascending order', () => {
     const storage = seededReaderStorage()
 
+    // `nextBefore` is the cursor for the page *after* this one. This page
+    // reached the start of the history, so there is no next page and no cursor.
+    // It used to answer `0` here -- the minimum position of its own rows -- and
+    // that made the client reject the terminal page of every multi-page chat.
     expect(storage.loadChatMessages('chat-1', 2, 40)).toMatchObject({
       before: 2,
       messages: [{ chatId: 'message-1' }, { chatId: 'message-2' }],
-      nextBefore: 0,
+      nextBefore: null,
       hasMore: false,
     })
+  })
+
+  it('stops offering a page cursor once the start of history is reached', () => {
+    const storage = seededReaderStorage()
+
+    // Walk a real chat to its start one page at a time, the way the chat screen
+    // and the backup export both do, and assert the cursor contract at every
+    // step: an integer strictly behind the last one while there is more, then
+    // `null` exactly once, on the page that has no successor.
+    const cursors: (number | null)[] = []
+    let before: number | undefined
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = storage.loadChatMessages('chat-1', before, 1)
+      cursors.push(page.nextBefore)
+      if (!page.hasMore) break
+      expect(Number.isSafeInteger(page.nextBefore)).toBe(true)
+      expect(page.nextBefore).toBeLessThan(page.before)
+      before = page.nextBefore
+    }
+
+    expect(cursors).toEqual([2, 1, null])
   })
 
   it('clamps page limit to 100 and rejects invalid cursors', () => {

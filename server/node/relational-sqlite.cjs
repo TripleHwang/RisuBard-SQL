@@ -587,7 +587,22 @@ function createRelationalSqlite(options) {
                 ...(rebuildRelationalValue(byId.get(row.id) || []) || {}), chatId: row.id,
             }));
             const positions = rows.map((row) => Number(row.position));
-            const nextBefore = rows.length ? Math.min(...rows.map((row) => Number(row.position))) : null;
+            // `nextBefore` is the cursor for the *next* page, not a description
+            // of this one: it is the `before` value a caller passes to keep
+            // walking backwards. When `extraRow` is absent this page reached the
+            // start of the history, there is no next page, and there is no
+            // cursor -- so it is `null`, exactly as `SqlHydrationWindow`
+            // documents ("`null` at the start of history").
+            //
+            // It used to be the minimum position of the returned rows whether or
+            // not another page existed, which made the terminal page of every
+            // chat longer than one page fail the client's boundary check and
+            // surface as "이전 메시지를 불러오지 못했습니다" at the top of the
+            // scrollback -- and, because the throw left `hasOlder` stuck true,
+            // permanently hid the greeting as well.
+            const nextBefore = extraRow && rows.length
+                ? Math.min(...rows.map((row) => Number(row.position)))
+                : null;
             return {
                 revision: revision(), chatId, messages, positions, nextPosition, before: normalizedBefore, nextBefore, total,
                 hasMore: Boolean(extraRow),
