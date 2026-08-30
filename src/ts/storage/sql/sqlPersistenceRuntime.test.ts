@@ -15,6 +15,7 @@ import {
     startSqlCompatibilityAuditLoop,
     resetSqlPersistenceRuntimeForTesting,
     scheduleSqlCompatibilityAudit,
+    onSqlCommitActivity,
 } from './sqlPersistenceRuntime'
 
 function fixtureDatabaseWithMessages(count: number) {
@@ -468,5 +469,31 @@ describe('the idle audit over a chat that has been scrolled back', () => {
         warn.mockRestore()
 
         expect(isSqlMessageDirty('chat-a', 'wedged')).toBe(false)
+    })
+})
+
+describe('the saving indicator in SQL mode', () => {
+    it('reports a commit as active while it runs and inactive once it lands', async () => {
+        const states: boolean[] = []
+        let release: (() => void) | null = null
+        const storage = fakeStorageAtRevision(3)
+        ;(storage.commit as any).mockImplementation(
+            () => new Promise<void>((resolve) => { release = () => resolve() }),
+        )
+        activateSqlPersistenceRuntime(storage, fixtureDatabaseWithMessages(2))
+        onSqlCommitActivity((active) => states.push(active))
+
+        markSqlMessageDirty('chat-a', 'm-1')
+        const flushed = flushSqlDirtyChanges()
+        await Promise.resolve()
+        await Promise.resolve()
+        // `saveDb` drove this indicator and the SQL path never calls it, so
+        // without a writer here the screen says nothing whether saving works or
+        // not -- and this path has already shipped a save that failed in silence.
+        expect(states).toEqual([true])
+
+        release?.()
+        await flushed
+        expect(states).toEqual([true, false])
     })
 })

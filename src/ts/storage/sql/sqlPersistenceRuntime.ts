@@ -36,9 +36,37 @@ type CompatibilityBaseline = {
 }
 let compatibilityBaseline: CompatibilityBaseline | null = null
 
+/**
+ * Whether a commit is in flight, for the saving indicator.
+ *
+ * The legacy path drove that indicator from inside `saveDb`, which the SQL path
+ * never calls -- so in SQL mode the corner of the screen went quiet and stayed
+ * quiet, and there was no way to tell a working save from a silent one. Given
+ * this path has already shipped a silent save failure, having no writer at all
+ * here is its own defect.
+ *
+ * Counted rather than set, because an immediate flush can overlap a scheduled
+ * one and the first to finish would otherwise report the second as done.
+ */
+let commitsInFlight = 0
+let commitActivityListener: ((active: boolean) => void) | null = null
+
+export function onSqlCommitActivity(listener: ((active: boolean) => void) | null): void {
+    commitActivityListener = listener
+}
+
+function noteCommitActivity(delta: 1 | -1): void {
+    const wasActive = commitsInFlight > 0
+    commitsInFlight = Math.max(0, commitsInFlight + delta)
+    const isActive = commitsInFlight > 0
+    if (isActive !== wasActive) commitActivityListener?.(isActive)
+}
+
 const registry = new DirtyRegistry(async () => {
+    noteCommitActivity(1)
     try { await commitDirtyScopes() }
     catch (error) { scheduleDirtyRetry(); throw error }
+    finally { noteCommitActivity(-1) }
 })
 
 /** The active database is deliberately a live reference: normal typing must not clone it. */
@@ -524,6 +552,8 @@ export function startSqlMetadataPersistence(
 }
 
 export function resetSqlPersistenceRuntimeForTesting(): void {
+    commitsInFlight = 0
+    commitActivityListener = null
     if (compatibilityTimer !== undefined) clearTimeout(compatibilityTimer)
     if (compatibilityRecurrenceTimer !== undefined) clearTimeout(compatibilityRecurrenceTimer)
     if (dirtyRetryTimer !== undefined) clearTimeout(dirtyRetryTimer)

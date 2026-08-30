@@ -35,7 +35,7 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
+import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, onSqlCommitActivity, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 import { collectDatabaseAssetReferences } from './storage/assetRefs'
 import { isRootKeyDeferred } from './storage/sql/deferredRootKeys'
 
@@ -1193,6 +1193,10 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
 
 /** Installs reactive persistence without encoding metadata-only SQL summaries. */
 export async function startMetadataPersistence() {
+    // The saving indicator is written by `saveDb`, which this mode never calls.
+    // Without this the corner of the screen is silent whether saving works or
+    // not, and the user has no way to tell the difference.
+    onSqlCommitActivity((active) => { saving.state = active })
     startSqlMetadataPersistence(window, () => {
         try { void fetch('/api/db/flush', { method: 'POST', keepalive: true, credentials: 'same-origin' }) } catch { /* best effort */ }
     })
