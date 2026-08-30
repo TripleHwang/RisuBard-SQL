@@ -294,3 +294,88 @@ describe("a character that is still a bootstrap summary", () => {
     expect((commit.characters[0].data as any).desc).toBe("the description the summary does not carry");
   });
 });
+
+describe("a chat that is still a bootstrap summary", () => {
+  // The summary carries name, note, folder and last message time -- the four
+  // real columns on `chats` -- and none of the per-chat settings, which all
+  // live in `chat_extension_nodes`. `replaceNodes` DELETEs a chat's whole node
+  // set before inserting what it is given, so writing a summary does not fail
+  // to update those fields, it destroys them: the lorebook, the alternate
+  // greeting index, the persona/preset bindings, the memory data, the script
+  // state. Reachable without the user opening the chat at all, because the idle
+  // compatibility audit marks chats dirty from a whole-database diff.
+  const summaryDatabase = () => ({
+    characters: [{
+      chaId: "character-1",
+      name: "Alice",
+      chatPage: 0,
+      chats: [{
+        id: "chat-1",
+        name: "Chat 0",
+        note: "",
+        message: [],
+        messagesLoaded: false,
+        detailsLoaded: false,
+      }],
+    }],
+    botPresets: [],
+    pluginCustomStorage: {},
+  }) as any;
+
+  const dirtyChat = () => ({
+    ...cleanDirty(),
+    chats: [{ characterId: "character-1", chatId: "chat-1", manifest: false }],
+  });
+
+  it("is never written back over the stored settings", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const commit = buildSqlDirtyCommit(summaryDatabase(), dirtyChat(), 1);
+
+    expect(commit.chats).toEqual([]);
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("is reported to the caller so the mark can be retained and the chat loaded", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refused: Array<[string, string]> = [];
+
+    buildSqlDirtyCommit(summaryDatabase(), dirtyChat(), 1, undefined,
+      (characterId, chatId) => { refused.push([characterId, chatId]); });
+
+    expect(refused).toEqual([["character-1", "chat-1"]]);
+    consoleError.mockRestore();
+  });
+
+  it("still records the parent character's chat manifest", () => {
+    // The manifest is a fact about the character -- which chats it has, in what
+    // order -- not about this chat's contents. Withholding it would let a real
+    // creation, deletion or reorder go unrecorded because one unopened chat
+    // happened to be in the same flush.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const dirty = dirtyChat();
+    dirty.chats[0].manifest = true;
+
+    const commit = buildSqlDirtyCommit(summaryDatabase(), dirty, 1);
+
+    expect(commit.chats).toEqual([]);
+    expect(commit.chatManifests).toEqual([{ characterId: "character-1", ids: ["chat-1"] }]);
+    consoleError.mockRestore();
+  });
+
+  it("is written normally once its own fields have been hydrated", () => {
+    const database = summaryDatabase();
+    database.characters[0].chats[0].detailsLoaded = true;
+    database.characters[0].chats[0].bindedPersona = "the persona a summary does not carry";
+    database.characters[0].chats[0].localLore = [{ key: "per-chat-lore" }];
+
+    const commit = buildSqlDirtyCommit(database, dirtyChat(), 1);
+
+    expect(commit.chats).toHaveLength(1);
+    expect((commit.chats[0].data as any).bindedPersona).toBe("the persona a summary does not carry");
+    expect((commit.chats[0].data as any).localLore).toEqual([{ key: "per-chat-lore" }]);
+    // The marker itself is never stored; the server synthesises it per read.
+    expect((commit.chats[0].data as any).detailsLoaded).toBeUndefined();
+  });
+});

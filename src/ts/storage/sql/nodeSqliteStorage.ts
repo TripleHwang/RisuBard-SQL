@@ -1046,6 +1046,32 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
   }
 
   /**
+   * Fetches one chat's own stored fields over `GET /api/sql/chats/:chatId`.
+   *
+   * Rejects on every failure that is not a 404. A caller that cannot tell "this
+   * chat has no extension data" from "this read did not happen" will mark a
+   * summary as loaded and then write it back over the stored row, which is the
+   * defect this whole path exists to close. 404 -- and only 404 -- is `null`.
+   */
+  async loadChatHydration(chatId: string): Promise<Chat | null> {
+    const metric = runtimeMetrics.start("chat-detail-hydration");
+    try {
+      const response = await this.request(`/api/sql/chats/${encodeURIComponent(chatId)}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`SQL chat load failed (${response.status})`);
+      const payload = await response.json() as { revision: number; chat: Chat };
+      if (!Number.isSafeInteger(payload.revision) || payload.revision < 0 ||
+        !payload.chat || typeof payload.chat !== "object" || Array.isArray(payload.chat)) {
+        throw new Error("Invalid SQL chat payload");
+      }
+      this.acceptReadRevision(payload.revision);
+      return payload.chat;
+    } finally {
+      runtimeMetrics.end(metric);
+    }
+  }
+
+  /**
    * Fetches one deferred root key's real value.
    *
    * Every failure path rejects. Nothing here returns a fallback, and nothing
@@ -1722,18 +1748,22 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return await this.loadCharacterHydration(characterId);
   }
 
+  /**
+   * One chat, read from the server.
+   *
+   * This used to dig the chat out of `this.current()` -- which is
+   * `loadDatabase({ shallow: true })`, i.e. the bootstrap, i.e. a *summary*. It
+   * therefore returned a chat carrying its name, note, folder and last message
+   * time and none of its own settings, and it never contacted the server at
+   * all. Every caller that asked this for a chat got the four columns back and
+   * had no way to know the rest existed.
+   */
   async loadChat(chatId: string, options?: { messageLimit?: number }): Promise<Chat | null> {
-    for (const character of (await this.current()).characters ?? []) {
-      const chat = character.chats?.find((item) => item.id === chatId);
-      if (chat) {
-        if (options?.messageLimit) {
-          const page = await this.loadChatMessageReversePage(chatId, undefined, options.messageLimit);
-          return { ...chat, message: page.messages };
-        }
-        return chat;
-      }
-    }
-    return null;
+    const chat = await this.loadChatHydration(chatId);
+    if (!chat) return null;
+    if (!options?.messageLimit) return chat;
+    const page = await this.loadChatMessageReversePage(chatId, undefined, options.messageLimit);
+    return { ...chat, message: page.messages };
   }
 
   async loadChatMessages(chatId: string): Promise<Message[]> {

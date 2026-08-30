@@ -111,6 +111,17 @@ export function buildSqlDirtyCommit(
    * transaction -- every other chat included -- down with it.
    */
   onRefusedMessage?: (chatId: string, messageId: string, error: unknown) => void,
+  /**
+   * Called when a dirty chat is refused because it is still a bootstrap
+   * summary. The row is left out of this commit; the caller keeps it dirty and
+   * loads the chat's own fields so the next flush can write the whole record
+   * instead of a stub.
+   *
+   * Without it the refusal is final: `acknowledge` clears the mark and an edit
+   * made to an unopened chat -- a rename from the chat list is the easy one --
+   * would be dropped rather than deferred.
+   */
+  onRefusedChat?: (characterId: string, chatId: string) => void,
 ): SqlCommit {
   const commit = createEmptySqlCommit(baseRevision, "dirty-sync");
 
@@ -172,6 +183,46 @@ export function buildSqlDirtyCommit(
       continue;
     }
     const [, chat, , position] = found;
+    // The same refusal as the character loop above, for the same reason, and
+    // for a longer list of fields.
+    //
+    // A chat that has not been hydrated is a bootstrap summary: `name`, `note`,
+    // `folderId` and `lastDate` -- the four real columns on the `chats` table --
+    // and nothing else. Everything else on the `Chat` shape lives in
+    // `chat_extension_nodes`: the per-chat lorebook, which alternate greeting
+    // this chat uses, the bound persona, prompt preset and model preset, the
+    // memory data, the bookmarks, the script state, the per-chat variables.
+    //
+    // `replaceNodes` DELETEs a chat's whole node set before inserting what it is
+    // given, so writing a summary does not merely fail to update those fields --
+    // it destroys them. And the write is easy to reach: `auditSqlCompatibilityDatabase`
+    // marks chats dirty from a whole-database diff, so a chat the user never
+    // opened is written back the first time anything about it looks changed.
+    // That is why the reported bindings were gone after the FIRST refresh.
+    //
+    // Skipped rather than thrown for the same reason as the character guard:
+    // this builder runs inside a retry loop, and throwing would stop every other
+    // chat and message from ever persisting.
+    if ((chat as { detailsLoaded?: boolean }).detailsLoaded === false) {
+      console.error(
+        `[SQL dirty commit] refusing to write chat ${dirtyChat.chatId} from a bootstrap summary: ` +
+        "its lorebook, greeting index, persona/preset bindings, memory data and script state are " +
+        "not loaded, so this write would replace the stored settings with a stub. The chat stays " +
+        "as storage has it.",
+      );
+      onRefusedChat?.(dirtyChat.characterId, dirtyChat.chatId);
+      // The manifest is still pushed. It is the parent character's list of chat
+      // IDs -- a fact about the character, not about this chat's contents -- and
+      // withholding it would let a genuine creation, deletion or reorder go
+      // unrecorded because one unopened chat happened to be in the same flush.
+      if (dirtyChat.manifest) {
+        commit.chatManifests.push({
+          characterId: dirtyChat.characterId,
+          ids: (found[0].chats ?? []).map((item) => item.id).filter((id): id is string => Boolean(id)),
+        });
+      }
+      continue;
+    }
     commit.chats.push({
       id: dirtyChat.chatId,
       characterId: dirtyChat.characterId,

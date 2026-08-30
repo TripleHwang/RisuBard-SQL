@@ -17,7 +17,11 @@ import {
 
 export type { SqlHydrationWindow } from "./sqlRuntimeWindow";
 type HydratableCharacter = character & { detailsLoaded?: boolean };
-type HydratableChat = Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean };
+type HydratableChat = Chat & {
+  messagesLoaded?: boolean;
+  messagesFullyLoaded?: boolean;
+  detailsLoaded?: boolean;
+};
 
 /**
  * Metadata bootstrap deliberately does not mutate partial character summaries.
@@ -61,6 +65,15 @@ function getNodeBootstrapStorage(): SqlBootstrapStorage | null {
   if (storage?.backendKind !== "server-sql" ||
       typeof (storage as Partial<SqlBootstrapStorage>).loadCharacterHydration !== "function" ||
       typeof (storage as Partial<SqlBootstrapStorage>).loadChatMessageReversePage !== "function") {
+    return null;
+  }
+  return storage as SqlBootstrapStorage;
+}
+
+function getChatDetailStorage(): SqlBootstrapStorage | null {
+  const storage = getActiveSqlStorage();
+  if (storage?.backendKind !== "server-sql" ||
+      typeof (storage as Partial<SqlBootstrapStorage>).loadChatHydration !== "function") {
     return null;
   }
   return storage as SqlBootstrapStorage;
@@ -362,6 +375,153 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
     }
   })();
   characterHydrations.set(characterId, hydration);
+  return hydration;
+}
+
+/**
+ * Everything a bootstrap chat summary already carries, plus the two runtime
+ * flags that describe *this process* rather than the user's data.
+ *
+ * A summary is `summaryChat()` in `relational-sqlite.cjs`: `id`, `name`, `note`,
+ * `folderId`, `lastDate` (the five that are real columns on the `chats` table),
+ * an empty `message`, and the residency bookkeeping. Every one of them is
+ * already correct on the live slot, from the bootstrap, so re-applying them
+ * from a detail response could only overwrite a rename or a folder move the
+ * user made while the request was in the air. They are skipped.
+ *
+ * `isStreaming` and `activeStreamingDisplayOptimizationMode` are skipped for a
+ * different reason: `sqlChatData` does not strip them, so a chat whose process
+ * died mid-stream has `isStreaming: true` sitting in `chat_extension_nodes`
+ * forever. `setDatabase` clears that for chats present at boot; a chat hydrated
+ * later would otherwise re-import it and be stuck showing a stream that no one
+ * is writing.
+ *
+ * Everything NOT in this set is what was being lost: `localLore`, `fmIndex`,
+ * `firstMessageDisabled`, `scriptstate`, `modules`, `hypaV3Data`, `supaMemory`,
+ * `bookmarks`, `bookmarkNames`, `useLocallySetGlobalVariables`,
+ * `GLGlobalVariables`, `savedToggleValues`, `useModelPreset`, `modelBinding`,
+ * `usePromptPresetParams`, `bindedBotPreset`, `bindedPersona`, `sdData`,
+ * `suggestMessages`, and the four `risuBard*` fields.
+ */
+const SUMMARY_ONLY_CHAT_KEYS: ReadonlySet<string> = new Set([
+  "id",
+  "name",
+  "note",
+  "folderId",
+  "lastDate",
+  "message",
+  "messageTotal",
+  "messagesLoaded",
+  "messagesFullyLoaded",
+  "detailsLoaded",
+  "_placeholder",
+  "_stub",
+  "isStreaming",
+  "activeStreamingDisplayOptimizationMode",
+]);
+
+const chatDetailHydrations = new Map<string, Promise<Chat | null>>();
+
+/**
+ * Fill in one chat's own stored settings.
+ *
+ * The bootstrap ships chats as summaries -- four columns and nothing else --
+ * and until this existed nothing ever fetched the rest. `chat_extension_nodes`
+ * was written on every commit and read by nobody, so a per-chat lorebook, an
+ * alternate-greeting index, a bound persona or preset survived only until the
+ * next flush, at which point `sqlChatData` serialised the client's summary and
+ * `replaceNodes` deleted the stored rows and inserted that in their place.
+ *
+ * Three properties this has to hold, each of which has burned this codebase
+ * before:
+ *
+ *  - the fields are applied INTO the live slot, never by replacing it. `chats`
+ *    is a `$state` array; assigning a rebuilt object stores a *proxy of* it, so
+ *    the object the caller built is not the object the application then reads,
+ *    and it would also drop the symbol-keyed hydration window and every
+ *    canonical message position along with the resident messages themselves;
+ *  - `message` is never touched. The detail response's `message` is `[]` by
+ *    construction and the resident window is the caller's;
+ *  - `detailsLoaded` becomes `true` only after the fields are in. A read that
+ *    404s or throws leaves it `false`, which is what keeps
+ *    `buildSqlDirtyCommit`'s guard refusing to write the chat. "Could not load"
+ *    must never be storable as "has nothing".
+ *
+ * A key the slot already owns is left alone. A summary owns none of these keys,
+ * so an own key here means something wrote it locally after boot -- a toggle
+ * flipped while the request was in the air -- and the live value is newer than
+ * the stored one.
+ */
+export async function ensureChatDetailsHydrated(
+  chats: Chat[],
+  chatIndex: number,
+  chaId: string,
+): Promise<Chat | null> {
+  const initial = chats[chatIndex];
+  if (!initial) return null;
+  // `!== false` rather than `!`: a chat created in this session has no
+  // `detailsLoaded` key at all and is already its own complete record. Only the
+  // explicit `false` a bootstrap summary carries means "there is more in
+  // storage than is here".
+  if ((initial as HydratableChat).detailsLoaded !== false) return initial;
+  const storage = getChatDetailStorage();
+  if (!storage) return initial;
+  const chatId = initial.id;
+  if (!chatId) return null;
+
+  const key = `${chaId}/${chatId}`;
+  const existing = chatDetailHydrations.get(key);
+  if (existing) return existing;
+
+  const hydration = (async () => {
+    beginHydration(key);
+    try {
+      const stored = await storage.loadChatHydration(chatId);
+      // Re-derive the slot after the await, the same way `ensureCharacterHydrated`
+      // and `loadOlderChatMessages` do: a trigger, a chat deletion or a reorder
+      // may have moved or replaced it while the request was out, and writing
+      // into the object we started from would write into a detached one.
+      const currentIndex = chats.findIndex((chat) => chat?.id === chatId);
+      const current = currentIndex === -1 ? null : chats[currentIndex];
+      if (!current) return null;
+      if ((current as HydratableChat).detailsLoaded !== false) return current;
+      if (!stored) {
+        // The server does not have this chat. That is not "this chat has no
+        // settings", so the marker stays `false` and the commit guard keeps
+        // refusing to write the summary over whatever storage does hold.
+        console.error(
+          `[SQL hydration] chat ${chatId} has a bootstrap summary but no stored row, so its own ` +
+          "settings could not be read. Leaving it marked unloaded; it will not be written back.",
+        );
+        return current;
+      }
+
+      beginHydrationApply(key);
+      try {
+        for (const [name, value] of Object.entries(stored)) {
+          if (SUMMARY_ONLY_CHAT_KEYS.has(name)) continue;
+          if (Object.hasOwn(current, name)) continue;
+          (current as unknown as Record<string, unknown>)[name] = value;
+        }
+        // Last, and only here. Everything above is what makes the claim true.
+        (current as HydratableChat).detailsLoaded = true;
+        // `endHydrationApply` in a `finally` for the same reason every other
+        // apply window here does it: a leaked count defers this chat's dirty
+        // marks against a window that never closes, which loses them.
+        await tick();
+      } finally {
+        endHydrationApply(key);
+      }
+      // Read the slot back. `chats` is a `$state` array and `current` is already
+      // the proxy in it, but returning the indexed read keeps this honest if a
+      // caller ever hands in a plain array.
+      return chats[currentIndex] ?? current;
+    } finally {
+      endHydration(key);
+      chatDetailHydrations.delete(key);
+    }
+  })();
+  chatDetailHydrations.set(key, hydration);
   return hydration;
 }
 

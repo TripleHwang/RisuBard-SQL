@@ -254,6 +254,37 @@ export async function flushSqlDirtyChanges(): Promise<void> {
  * before, and before, it also took every other chat's writes with it.
  */
 type RefusedMessage = { chatId: string; messageId: string }
+/** A chat the commit refused because it is still a bootstrap summary. */
+type RefusedChat = { characterId: string; chatId: string }
+
+/**
+ * Load the settings of every chat a commit refused, so the next flush can write
+ * the whole record.
+ *
+ * Deliberately best effort and deliberately detached from the flush: the marks
+ * are already retained by the time this runs, so a failure here costs a retry,
+ * not an edit. Imported lazily because `sqlRuntimeHydration` imports this
+ * module -- taking the dependency at module scope would close the cycle.
+ */
+async function hydrateRefusedChats(entries: readonly RefusedChat[]): Promise<void> {
+    const database = resolveActiveDatabase()
+    if (!database) return
+    const { ensureChatDetailsHydrated } = await import('./sqlRuntimeHydration')
+    for (const { characterId, chatId } of entries) {
+        const character = (database.characters ?? []).find(item => item?.chaId === characterId)
+        const index = character?.chats?.findIndex(chat => chat?.id === chatId) ?? -1
+        if (!character || index === -1) continue
+        try {
+            await ensureChatDetailsHydrated(character.chats, index, characterId)
+        } catch (error) {
+            console.error(
+                `[SQL dirty commit] could not load the stored settings of refused chat ${chatId}; ` +
+                'it stays dirty and unwritten rather than being written back as a stub.',
+                error,
+            )
+        }
+    }
+}
 
 function reportRefusedMessages(refused: RefusedMessage[], error: unknown): void {
     if (refused.length === 0) return
@@ -287,6 +318,10 @@ async function commitDirtyScopes(): Promise<void> {
         refused.push({ chatId, messageId })
         lastRefusal = error
     }
+    const refusedChats: RefusedChat[] = []
+    const refuseChat = (characterId: string, chatId: string) => {
+        refusedChats.push({ characterId, chatId })
+    }
     // Re-marking is what keeps a refused row dirty. `acknowledge` only clears a
     // scope whose generation matches the one the snapshot recorded, and
     // `markMessage` takes a fresh, higher generation -- so a re-mark placed
@@ -295,8 +330,19 @@ async function commitDirtyScopes(): Promise<void> {
     const retainRefused = () => {
         for (const entry of refused) registry.markMessage(entry.chatId, entry.messageId)
         reportRefusedMessages(refused, lastRefusal)
+        // Same contract for a chat refused as a bootstrap summary: re-mark so
+        // `acknowledge` cannot drop the edit, then go and get the fields that
+        // make the chat writable. Without the second half the mark would be
+        // retained forever against a chat nothing was ever going to hydrate --
+        // a rename made from the chat list, on a chat the user never opened,
+        // would sit dirty and be refused on every flush for the rest of the
+        // session.
+        for (const entry of refusedChats) {
+            registry.markChat(entry.characterId, entry.chatId)
+        }
+        if (refusedChats.length > 0) void hydrateRefusedChats(refusedChats)
     }
-    let commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse)
+    let commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse, refuseChat)
     if (!hasSqlCommitChanges(commit)) {
         registry.acknowledge(snapshot)
         retainRefused()
@@ -312,6 +358,7 @@ async function commitDirtyScopes(): Promise<void> {
         // last-local-wins and must never be overwritten before the retry.
         await rebaseDirtyScopes(storage, snapshot)
         refused.length = 0
+        refusedChats.length = 0
         commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse)
         if (!hasSqlCommitChanges(commit)) {
             registry.acknowledge(snapshot)

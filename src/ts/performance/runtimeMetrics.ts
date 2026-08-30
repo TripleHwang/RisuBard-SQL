@@ -1,6 +1,9 @@
 export type RuntimeMetricName =
     | 'bootstrap'
     | 'character-hydration'
+    // The chat's own settings, which is a different read from its message page:
+    // one bounded request for `chat_extension_nodes`, no history involved.
+    | 'chat-detail-hydration'
     | 'message-page'
     | 'dirty-commit'
     | 'stream-render'

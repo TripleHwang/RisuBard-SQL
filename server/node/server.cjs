@@ -3753,6 +3753,37 @@ app.get('/api/sql/characters/:characterId', sqlReadLimiter, async (req, res, nex
     }
 });
 
+// One chat's own settings -- everything on the `Chat` shape that is not a
+// message and not one of the four columns the bootstrap summary carries.
+//
+// `relationalSql.loadChat` existed and was exported for a long time before this
+// route did, and nothing but the backup exporter called it. The bootstrap ships
+// chat *summaries* (`summaryChat`: name, note, folder, last message time) and
+// the only other chat route serves messages, so a chat's `localLore`,
+// `fmIndex`, `bindedPersona`, `bindedBotPreset`, `modelBinding`, memory data and
+// script state were written to `chat_extension_nodes` on every commit and never
+// read back by the application even once. They then died on the next write,
+// because the client object they were rebuilt from had never held them.
+//
+// `message` is deliberately left as the empty array `summaryChat` puts there:
+// this route is the chat's settings, and the message window is the caller's,
+// served by the page route below. The client applies the fields into the live
+// slot and leaves the resident messages alone.
+app.get('/api/sql/chats/:chatId', sqlReadLimiter, async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    const id = String(req.params.chatId || '');
+    if (!id || id.length > 256) {
+        return res.status(400).json({ error: 'Invalid chat id' });
+    }
+    try {
+        const result = relationalSql.loadChat(id);
+        if (!result) return res.status(404).json({ error: 'Chat not found' });
+        res.set('Cache-Control', 'no-store').json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
 app.get('/api/sql/chats/:chatId/messages', sqlReadLimiter, async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     const id = String(req.params.chatId || '');

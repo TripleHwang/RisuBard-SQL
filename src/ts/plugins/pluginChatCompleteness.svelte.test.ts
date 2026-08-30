@@ -68,3 +68,33 @@ describe("chats offered to plugins", () => {
     expect(isPluginChatComplete({ message: [] })).toBe(true);
   });
 });
+
+describe("a chat whose own settings have not been read", () => {
+  test("is refused even when its whole history is resident", () => {
+    // The bootstrap summary shape: the four real columns on `chats`, a fully
+    // loaded message list, and none of `localLore`, `fmIndex`, the
+    // persona/preset bindings, the memory data or the script state -- all of
+    // which live in `chat_extension_nodes` and arrive only on hydration. A
+    // plugin handed this reads an empty lorebook and no bindings on a chat that
+    // has both.
+    const summary = $state({
+      id: "chat-1", name: "Chat 0", note: "", message: [{ chatId: "m-0" }],
+      messagesLoaded: true, messagesFullyLoaded: true,
+      detailsLoaded: false,
+    });
+
+    expect(isPluginChatComplete(summary)).toBe(false);
+
+    summary.detailsLoaded = true;
+    expect(isPluginChatComplete(summary)).toBe(true);
+  });
+
+  test("a chat created in this session, which never had the flag, is allowed", () => {
+    const fresh = $state({
+      id: "chat-2", name: "New chat", note: "", localLore: [], message: [],
+      messagesLoaded: true, messagesFullyLoaded: true,
+    });
+
+    expect(isPluginChatComplete(fresh)).toBe(true);
+  });
+});

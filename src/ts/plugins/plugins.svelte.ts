@@ -47,7 +47,16 @@ export function assertPluginStorageResident(action: string): void {
 }
 
 export function isPluginChatComplete(chat: any): boolean {
-    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && !isSqlWindowPartial(chat)
+    // `detailsLoaded !== false` is the chat's own settings, and it is a separate
+    // fact from its messages. A bootstrap summary carries `name`, `note`,
+    // `folderId` and `lastDate` -- the four real columns on `chats` -- while
+    // `localLore`, `fmIndex`, the persona/preset bindings, the memory data and
+    // the script state live in `chat_extension_nodes` and arrive only when the
+    // chat is hydrated. Reporting such a chat as complete is the same "partial
+    // record read as a whole one" that every other flag here guards against: a
+    // plugin would see an empty `localLore` and no bindings on a chat that has
+    // them, and act on that.
+    return !!chat && chat._stub !== true && chat._placeholder !== true && chat.detailsLoaded !== false && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && !isSqlWindowPartial(chat)
 }
 
 export function isPluginCharacterComplete(character: any): boolean {

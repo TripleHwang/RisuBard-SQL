@@ -534,7 +534,20 @@ function createRelationalSqlite(options) {
             const character = readNodeValue('character_extension_nodes', 'character_id = ?', [characterId]) || {};
             character.chaId = characterId;
             character.detailsLoaded = true;
-            character.chats = loadChatSummaryRows(characterId).map((row) => summaryChat(row, true));
+            // `false`, because that is what these objects are. `loadCharacter`
+            // reads `character_extension_nodes`; it never touches
+            // `chat_extension_nodes`, so every chat here carries its name, note,
+            // folder and timestamp and NOTHING else -- no `localLore`, no
+            // `fmIndex`, no bound persona or preset, no memory data.
+            //
+            // Answering `true` over that was a second, independent lie of the
+            // same family as the missing chat-detail read: it told the client
+            // "this chat is fully loaded" about a summary, which is exactly the
+            // state `buildSqlDirtyCommit`'s guard exists to refuse. With the
+            // flag at `true` the guard would wave through every chat of any
+            // character the user had opened, and the stub would be written back
+            // over the real row anyway.
+            character.chats = loadChatSummaryRows(characterId).map((row) => summaryChat(row, false));
             return { revision: revision(), character };
         });
     }

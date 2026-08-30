@@ -2,7 +2,7 @@ import { forageStorage } from "../globalApi.svelte"
 import { getDatabase, type Chat, type ChatStub, type ChatOrStub, type character, isChatStub } from "./database.svelte"
 import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
-import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
+import { ensureChatDetailsHydrated, ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
 import { getSqlWindow, isSqlWindowPartial, type SqlHydrationWindow } from "./sql/sqlRuntimeWindow"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
 import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRuntime"
@@ -453,8 +453,14 @@ export async function ensureChatHydrated(
     const slot = chats[index]
     if (!slot) return null
     const activeSql = getActiveSqlStorage()
-    const needsSqlWindow = activeSql?.backendKind === 'server-sql' && (slot as Chat & { messagesLoaded?: boolean }).messagesLoaded === false
-    if (!slot._placeholder && !needsSqlWindow) {
+    const usingServerSql = activeSql?.backendKind === 'server-sql'
+    const needsSqlWindow = usingServerSql && (slot as Chat & { messagesLoaded?: boolean }).messagesLoaded === false
+    // A chat's own settings are a separate read from its messages, and a chat
+    // can need one without the other: the message window is filled on first
+    // open, so a second open finds `messagesLoaded === true` and used to return
+    // here -- with `localLore`, `fmIndex` and every binding still unread.
+    const needsSqlDetails = usingServerSql && (slot as Chat & { detailsLoaded?: boolean }).detailsLoaded === false
+    if (!slot._placeholder && !needsSqlWindow && !needsSqlDetails) {
         await touchHydratedChat(chaId, chats, index)
         return slot
     }
@@ -472,6 +478,24 @@ export async function ensureChatHydrated(
         try {
             const sqlStorage = activeSql
             if (sqlStorage?.backendKind === 'server-sql') {
+                // Two independent reads, and the chat's own settings go first.
+                //
+                // Deliberately tolerant of its own failure: a chat whose detail
+                // read fails is still readable, and `ensureChatDetailsHydrated`
+                // leaves `detailsLoaded === false` behind so the dirty commit
+                // refuses to write the summary over the stored row. Aborting the
+                // open instead would take the conversation away from the user
+                // for a fault that costs them nothing.
+                try {
+                    await ensureChatDetailsHydrated(chats, index, chaId)
+                } catch (error) {
+                    console.error(
+                        `[chatStorage] could not load chat settings for ${key}; the chat opens ` +
+                        'with its stored settings unread, and will not be written back until ' +
+                        'they load.',
+                        error,
+                    )
+                }
                 const hydrated = await hydrateRecentChatPage(chats, index, chaId, 40)
                 if (!hydrated) return null
                 return hydrated

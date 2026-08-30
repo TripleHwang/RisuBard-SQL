@@ -211,6 +211,19 @@ export interface SqlBootstrapStorage extends ISqlStorage {
   loadBootstrap(): Promise<SqlBootstrapPayload>;
   loadRecoverySnapshot(): Promise<SqlLoadDatabaseResult | null>;
   loadCharacterHydration(characterId: string): Promise<character | null>;
+  /**
+   * Fetch one chat's own stored fields -- everything on the `Chat` shape except
+   * its messages.
+   *
+   * `null` means the server does not have this chat, and only that. Every other
+   * failure rejects: a chat whose read failed must stay marked
+   * `detailsLoaded: false`, because the alternative is a summary that claims to
+   * be complete and is then written back over the stored row.
+   *
+   * The returned `message` array is always empty. Messages come from
+   * {@link loadChatMessageReversePage}; this call is the settings.
+   */
+  loadChatHydration(chatId: string): Promise<Chat | null>;
   loadChatMessageReversePage(
     chatId: string,
     before: number | undefined,
