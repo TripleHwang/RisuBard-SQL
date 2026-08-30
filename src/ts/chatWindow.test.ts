@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
     getChatWindow,
     estimateSpacerHeight,
-    restoreMessageAnchor,
+    stepChatWindowCenter,
     isCurrentChatWindowRequest,
     validateOlderMessagePage,
     reverseSpacerOrder,
@@ -18,12 +18,19 @@ describe('chat DOM window', () => {
         expect(estimateSpacerHeight([20, 30], 5, 24)).toBe(125)
     })
 
-    it('restores a visible message anchor by its top delta', () => {
-        const scroller = { scrollTop: 100 } as HTMLElement
-        const anchor = { id: 'm-1', top: 40 }
-        const element = { getBoundingClientRect: () => ({ top: 68 }) } as unknown as HTMLElement
-        expect(restoreMessageAnchor(scroller, anchor, element)).toBe(true)
-        expect(scroller.scrollTop).toBe(128)
+    it('steps the window half a screen at a time, and reports when it cannot', () => {
+        const middle = getChatWindow({ total: 400, anchorIndex: 200, limit: 60 })
+        expect(stepChatWindowCenter(middle, 400, 60, -1)).toBe(169)
+        expect(stepChatWindowCenter(middle, 400, 60, 1)).toBe(229)
+
+        // At either extreme the step resolves to the window it was given, which
+        // is how the caller learns to ask storage instead of sliding further.
+        const oldest = getChatWindow({ total: 400, anchorIndex: 0, limit: 60 })
+        expect(getChatWindow({ total: 400, anchorIndex: stepChatWindowCenter(oldest, 400, 60, -1), limit: 60 }))
+            .toMatchObject({ start: oldest.start, end: oldest.end })
+        const newest = getChatWindow({ total: 400, anchorIndex: 399, limit: 60 })
+        expect(getChatWindow({ total: 400, anchorIndex: stepChatWindowCenter(newest, 400, 60, 1), limit: 60 }))
+            .toMatchObject({ start: newest.start, end: newest.end })
     })
 
     it('places reverse-flex spacers on their visual sides', () => {

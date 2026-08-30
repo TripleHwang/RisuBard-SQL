@@ -9,15 +9,9 @@
     import { selectedCharID, PlaygroundStore, createSimpleCharacter, hypaV3ModalOpen, ScrollToMessageStore, additionalChatMenu, additionalFloatingActionButtons, chatDeselected, chatPanelStore } from "../../ts/stores.svelte";
     import { tick, untrack } from 'svelte';
     import Chat from "./Chat.svelte";
-    import {
-        DEFAULT_CHAT_PAGE_SIZE,
-        getChatPageBounds,
-        getChatPageCount,
-        getChatPageForMessage,
-        getLatestChatPage,
-        normalizeChatPageSize,
-    } from 'src/ts/chatPagination';
+    import { normalizeChatPageSize } from 'src/ts/chatPagination';
     import { isCurrentChatWindowRequest } from 'src/ts/chatWindow';
+    import { createOlderMessageLoader } from 'src/ts/chatScrollPaging';
     import { loadChatViewSession, saveChatViewSession, type ChatViewSession } from 'src/ts/chatViewSession'
     import { type Chat as ChatData, type Message } from "../../ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
@@ -118,12 +112,13 @@ import { isMobile } from 'src/ts/platform'
     let messageInputTranslate:string = $state('')
     let openMenu = $state(false)
     let memoryWikiOpen = $state(false)
-    let chatPage = $state(0)
     let paginationKey = $state('')
-    // Cancels DOM restoration when a different chat becomes active mid-fetch.
+    // Cancels a late response when a different chat becomes active mid-fetch.
     let chatWindowVersion = $state(0)
-    let paginationMessageCount = $state(0)
-    let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
+    /** What Chats.svelte reports about the window it currently has mounted. */
+    let atOldestEnd = $state(true)
+    let atNewestEnd = $state(true)
+    let loadingOlderMessages = $state(false)
     let doingChatInputTranslate = false
     let toggleStickers:boolean = $state(false)
     let fileInput:string[] = $state([])
@@ -154,10 +149,17 @@ import { isMobile } from 'src/ts/platform'
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
+    /** How many messages one older page carries. */
     let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
-    let chatBounds = $derived(getChatPageBounds(currentChat.length, chatPageSize, chatPage))
 
     async function restoreChatViewScroll(key: string, savedView: ChatViewSession) {
+        await tick()
+        if (paginationKey !== key || !chatScrollContainer) return
+        // The anchor is a message id, so it survives an older page arriving
+        // between leaving this chat and coming back to it. A message that is no
+        // longer resident is simply not restored; the chat opens at its newest
+        // end, which is where it opens anyway.
+        chatsInstance?.revealMessageById(savedView.anchorId)
         await tick()
         if (paginationKey !== key || !chatScrollContainer) return
         chatScrollContainer.scrollTop = savedView.scrollTop
@@ -165,45 +167,19 @@ import { isMobile } from 'src/ts/platform'
 
     $effect(() => {
         const nextKey = `${currentCharacter?.chaId ?? ''}/${currentChatSlot?.id ?? ''}`
-        const messageCount = currentChat.length
-        const nextPageCount = getChatPageCount(messageCount, chatPageSize)
-        const latestPage = nextPageCount - 1
-
-        if (nextKey !== paginationKey) {
-            paginationKey = nextKey
-            // Switching chats invalidates any in-flight lazy window request; bump
-            // first so a late response for the previous chat is discarded.
-            chatWindowVersion += 1
-            // getChatPageBounds clamps to the message count actually in memory, so a
-            // saved page beyond the loaded window resolves to the nearest real page
-            // instead of an empty one.
-            const savedView = loadChatViewSession(nextKey)
-            if (savedView) {
-                chatPage = getChatPageBounds(messageCount, chatPageSize, savedView.page).page
-                void restoreChatViewScroll(nextKey, savedView)
-            } else {
-                chatPage = latestPage
-            }
-        } else if (chatPageSize !== paginationPageSize) {
-            const anchorIndex = chatPage * paginationPageSize
-            chatPage = getChatPageForMessage(anchorIndex, messageCount, chatPageSize)
-        } else {
-            const previousLatestPage = getLatestChatPage(paginationMessageCount, paginationPageSize)
-            if (chatPage === previousLatestPage && messageCount > paginationMessageCount) {
-                chatPage = latestPage
-            } else if (chatPage > latestPage) {
-                chatPage = latestPage
-            }
-        }
-
-        paginationMessageCount = messageCount
-        paginationPageSize = chatPageSize
+        if (nextKey === paginationKey) return
+        paginationKey = nextKey
+        // Switching chats invalidates any in-flight lazy window request; bump
+        // first so a late response for the previous chat is discarded.
+        chatWindowVersion += 1
+        const savedView = loadChatViewSession(nextKey)
+        if (savedView) void restoreChatViewScroll(nextKey, savedView)
     })
 
     $effect(() => {
         const foldedIndex = chatFoldedStateMessageIndex.index
         if (foldedIndex >= 0) {
-            chatPage = getChatPageForMessage(foldedIndex, currentChat.length, chatPageSize)
+            chatsInstance?.revealMessage(foldedIndex)
         }
     })
 
@@ -350,93 +326,61 @@ import { isMobile } from 'src/ts/platform'
         scrollWithinContainer(messages[0].el, container, { block: 'start', behavior: 'smooth' })
     }
 
-    async function selectChatPage(page: number, scrollToLatest = false) {
-        // A manual page move wins over any in-flight reverse-page anchor.
-        chatWindowVersion += 1
-        chatPage = getChatPageBounds(currentChat.length, chatPageSize, page).page
-        chatFoldedState.data = null
-        await tick()
-        if (scrollToLatest) chatsInstance?.scrollToLatestMessage()
-        else scrollToLoadedTop()
-    }
-
-    async function selectPreviousChatPage() {
-        if (chatPage > 0) return selectChatPage(chatPage - 1)
-        const chat = currentCharacter?.chats[currentCharacter.chatPage]
-        if (!hasOlderSqlMessages(chat) || !currentCharacter) return
-        const container = document.querySelector('.default-chat-screen') as HTMLElement | null
-        const firstVisible = container
-            ? Array.from(container.querySelectorAll<HTMLElement>('[data-chat-id]'))
-                .map((element) => ({ element, top: element.getBoundingClientRect().top }))
-                .filter(({ element }) => element.getBoundingClientRect().bottom >= container.getBoundingClientRect().top)
-                .sort((left, right) => left.top - right.top)[0]
-            : undefined
-        const anchor = firstVisible?.element.dataset.chatId
-            ? { id: firstVisible.element.dataset.chatId, top: firstVisible.top }
-            : null
-        const requestKey = paginationKey
-        const requestVersion = chatWindowVersion
-        const formerFirstId = currentChat[0]?.chatId
-        try {
-            await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
-        } catch (error) {
-            // The click handler discards this promise (`void ...`), so a
-            // rejection here became an unhandled rejection: the button appeared
-            // to do nothing and the user was told nothing. `loadOlderChatMessages`
+    /**
+     * The only caller of `loadOlderChatMessages` in the app, driven now by the
+     * scroll rather than by a button.
+     *
+     * Scrolling asks far more often than a button ever did, so the loader
+     * coalesces a burst into one fetch and refuses to raise a loading state for
+     * the case where there is simply nothing older left. Both matter here: two
+     * fetches in flight would splice into the same message array, and the start
+     * of a conversation is a place readers reach constantly.
+     */
+    const olderMessageLoader = createOlderMessageLoader({
+        hasOlder: () => hasOlderSqlMessages(currentCharacter?.chats?.[currentCharacter.chatPage]),
+        load: async () => {
+            const character = currentCharacter
+            if (!character) return
+            await loadOlderChatMessages(character, character.chatPage, chatPageSize)
+        },
+        onLoadingChange: (loading) => { loadingOlderMessages = loading },
+        onError: (error) => {
+            // Nothing awaits this, so a swallowed rejection would be the screen
+            // silently refusing to go further back. `loadOlderChatMessages`
             // rejects on a page that fails its contiguity/identity validation,
             // which is precisely the case a user must be able to report.
-            console.error('[DefaultChatScreen] loading the previous page of messages failed; the visible history is unchanged.', error)
+            console.error('[DefaultChatScreen] loading earlier messages failed; the visible history is unchanged.', error)
             alertError(`${language.lazyLoad.olderMessagesFailed}: ${error instanceof Error ? error.message : String(error)}`)
-            return
-        }
-        // The fetch may finish after selection changed. It may update its old
-        // object, but must never mutate this screen's scroll position.
-        if (!isCurrentChatWindowRequest(
-            { key: requestKey, version: requestVersion },
-            { key: paginationKey, version: chatWindowVersion },
-        )) return
-        const anchorIndex = formerFirstId ? currentChat.findIndex((message) => message.chatId === formerFirstId) : 0
-        chatPage = getChatPageForMessage(Math.max(0, anchorIndex), currentChat.length, chatPageSize)
-        await tick()
-        if (container && anchor) {
-            const restored = container.querySelector<HTMLElement>(`[data-chat-id="${CSS.escape(anchor.id)}"]`)
-            if (restored) container.scrollTop += restored.getBoundingClientRect().top - anchor.top
-        } else {
-            scrollToLoadedTop()
-        }
-    }
+        },
+    })
 
     /**
-     * The "latest" control, which now has one more thing it can mean.
+     * The way back to the newest messages, which scrolling cannot always
+     * provide.
      *
      * Residency trimming releases the newest end of a long chat once the
-     * resident slice passes its bound, so "the last resident page" and "the
-     * latest messages" stop being the same place. Jumping to the last resident
-     * page then shows a conversation that appears to stop mid-history, which
-     * reads as data loss. Restoring the newest window first is what makes the
-     * release reversible from the UI.
-     *
-     * Nothing else about how loading is triggered changes: this is still the
-     * same button, pressed by the user.
+     * resident slice passes its bound, and the backend has no "after" query --
+     * so there is no forward page to scroll into, only a wholesale restore of
+     * the newest window. This is why a control survives at all, and why it is
+     * rendered outside the scroll container: the nav it replaces lived inside
+     * `flex-col-reverse` content and scrolled permanently out of reach the first
+     * time it was used.
      */
-    async function selectLatestChatPage() {
+    async function jumpToLatestMessages() {
         const chat = currentCharacter?.chats[currentCharacter.chatPage]
         if (currentCharacter && hasNewerSqlMessages(chat)) {
             chatWindowVersion += 1
             const requestKey = paginationKey
             const requestVersion = chatWindowVersion
             try {
-                await loadNewestChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+                await loadNewestChatMessages(currentCharacter, currentCharacter.chatPage, chatPageSize)
             } catch (error) {
-                // Same rule as the previous-page control above: the click
-                // handler discards this promise, so a rejection here would be an
-                // unhandled one -- the button appears to do nothing and the user
-                // is told nothing. `loadNewestChatMessages` rejects rather than
-                // release a message that is still dirty or has no canonical
-                // position, so this fires exactly when a user's unsaved edit is
-                // what stopped the jump. Falling through to `selectChatPage`
-                // would then scroll to the end of a slice that is NOT the latest
-                // messages while the control says it is.
+                // `loadNewestChatMessages` rejects rather than release a message
+                // that is still dirty or has no canonical position, so this
+                // fires exactly when a user's unsaved edit is what stopped the
+                // jump. Scrolling to the end of the resident slice anyway would
+                // land on messages that are NOT the latest while the control
+                // says they are.
                 console.error('[DefaultChatScreen] returning to the latest messages failed; the visible history is unchanged.', error)
                 alertError(`${language.lazyLoad.newestMessagesFailed}: ${error instanceof Error ? error.message : String(error)}`)
                 return
@@ -448,7 +392,9 @@ import { isMobile } from 'src/ts/platform'
                 { key: paginationKey, version: chatWindowVersion },
             )) return
         }
-        await selectChatPage(getLatestChatPage(currentChat.length, chatPageSize), true)
+        chatFoldedState.data = null
+        await tick()
+        chatsInstance?.scrollToLatestMessage()
     }
 
     // Literal bottom of the scroll (end of the latest message).
@@ -520,7 +466,7 @@ import { isMobile } from 'src/ts/platform'
     async function scrollToMessage(index: number){
         isScrollingToMessage = true
         try {
-            chatPage = getChatPageForMessage(index, currentChat.length, chatPageSize)
+            chatsInstance?.revealMessage(index)
             await tick()
 
             let element: Element | null = null;
@@ -658,7 +604,9 @@ import { isMobile } from 'src/ts/platform'
         messageInputTranslate = ''
         removeChatDraft(draftChaId, draftChatId)
         DBState.db.characters[selectedChar].chats[DBState.db.characters[selectedChar].chatPage].message = cha
-        chatPage = getLatestChatPage(cha.length, chatPageSize)
+        // Sending is a jump to the end of the conversation, wherever the reader
+        // had scrolled to.
+        chatsInstance?.scrollToLatestMessage()
 
         await sleep(10)
         updateInputSizeAll()
@@ -1113,7 +1061,7 @@ import { isMobile } from 'src/ts/platform'
             }
 
             if(mergedCanvas){
-                await downloadFile(`chat-page-${chatBounds.page + 1}-${v4()}.png`, Buffer.from(mergedCanvas.toDataURL('png').split(',').at(-1), 'base64'))
+                await downloadFile(`chat-view-${v4()}.png`, Buffer.from(mergedCanvas.toDataURL('png').split(',').at(-1), 'base64'))
                 mergedCanvas.remove();
             }
             notifySuccess(language.screenshotSaved)
@@ -1169,6 +1117,31 @@ import { isMobile } from 'src/ts/platform'
                 </button>
             {/if}
         </div>
+    {/if}
+
+    <!-- The one control that survived the previous/next nav, and the reason it
+         had to move out here.
+
+         Scrolling covers going backwards, but it cannot always cover coming
+         back: residency trimming releases the newest end of a long chat, and
+         the backend has no "after" query, so the latest messages have to be
+         restored wholesale rather than scrolled into. Sitting in `main`, which
+         is `relative`, it is reachable from any scroll position -- unlike the
+         nav it replaces, which lived inside the `flex-col-reverse` content and
+         scrolled permanently out of view the first time it was used. -->
+    {#if currentChatReady && (!atNewestEnd || hasNewerSqlMessages(currentChatSlot))}
+        <button
+            data-chat-jump-latest
+            class="absolute right-3 z-40 flex items-center gap-1 rounded-full border border-darkborderc border-opacity-30 bg-bgcolor/80 px-3 py-2 text-sm text-textcolor shadow-lg backdrop-blur-sm transition-colors hover:bg-darkbg/60"
+            class:bottom-16={DBState.db.nodeOnlyScrollButtonType === 'off'}
+            class:bottom-40={DBState.db.nodeOnlyScrollButtonType === 'two'}
+            class:bottom-56={DBState.db.nodeOnlyScrollButtonType !== 'off' && DBState.db.nodeOnlyScrollButtonType !== 'two'}
+            aria-label={language.chatPageLatest}
+            onclick={() => void jumpToLatestMessages()}
+        >
+            <ChevronsDownIcon size={16} />
+            <span>{language.chatPageLatest}</span>
+        </button>
     {/if}
 
     {#if showNewMessageButton}
@@ -1592,7 +1565,7 @@ import { isMobile } from 'src/ts/platform'
             const chatTarget = e.target as HTMLElement;
             if (paginationKey) {
                 saveChatViewSession(paginationKey, {
-                    page: chatBounds.page,
+                    anchorId: chatsInstance?.getAnchorId() ?? null,
                     scrollTop: chatTarget.scrollTop,
                 })
             }
@@ -1624,53 +1597,21 @@ import { isMobile } from 'src/ts/platform'
             {#if chatFoldedStateMessageIndex.index !== -1}
                 <button class="w-full flex justify-center max-w-full p-4">
                     <Button className="max-w-xl w-full" onclick={() => {
-                        void selectChatPage(getLatestChatPage(currentChat.length, chatPageSize), true)
+                        void jumpToLatestMessages()
                     }}>
                         {language.loadMore}
                     </Button>
                 </button>
             {/if}
 
-            <!-- chatBounds counts RESIDENT messages, so a freshly hydrated chat
-                 holding its newest window is one page even when hundreds more sit
-                 on disk. Gating the nav on that alone hides the previous-page
-                 button, which is the only caller of loadOlderChatMessages in the
-                 app -- older history becomes unreachable while appearing complete. -->
-            {#if chatBounds.pageCount > 1 || hasOlderSqlMessages(currentChatSlot) || hasNewerSqlMessages(currentChatSlot)}
-                <nav
-                    data-chat-pagination
-                    class="mx-auto my-3 flex max-w-xl items-center justify-center gap-2 rounded-full border border-darkborderc bg-darkbg/90 px-3 py-2 text-sm text-textcolor shadow-sm"
-                    aria-label={language.chatPageNavigation}
-                >
-                    <button
-                        data-chat-page-previous
-                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page === 0 && !hasOlderSqlMessages(currentChatSlot)}
-                        onclick={() => void selectPreviousChatPage()}
-                    >{language.chatPagePrevious}</button>
-                    <span class="min-w-20 text-center tabular-nums">
-                        {chatBounds.page + 1} / {chatBounds.pageCount}
-                    </span>
-                    <button
-                        data-chat-page-next
-                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page >= chatBounds.pageCount - 1}
-                        onclick={() => void selectChatPage(chatBounds.page + 1, chatBounds.page + 1 >= chatBounds.pageCount - 1)}
-                    >{language.chatPageNext}</button>
-                    <button
-                        data-chat-page-latest
-                        class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page >= chatBounds.pageCount - 1 && !hasNewerSqlMessages(currentChatSlot)}
-                        onclick={() => void selectLatestChatPage()}
-                    >{language.chatPageLatest}</button>
-                </nav>
-            {/if}
-            
             <Chats
                 bind:this={chatsInstance}
                 messages={currentChat}
-                pageStart={chatBounds.start}
-                pageEnd={chatBounds.end}
+                onReachOldestMounted={() => void olderMessageLoader.request()}
+                onWindowChange={(state) => {
+                    atOldestEnd = state.atOldestEnd
+                    atNewestEnd = state.atNewestEnd
+                }}
                 saverMode={$saverModeStore}
                 onReroll={reroll}
                 onNextSwipe={nextSwipe}
@@ -1684,7 +1625,18 @@ import { isMobile } from 'src/ts/platform'
                 bind:hasNewUnreadMessage={showNewMessageButton}
             />
 
-            {#if chatBounds.page === 0}
+            {#if loadingOlderMessages}
+                <div data-chat-older-loading class="w-full flex justify-center py-3 text-textcolor2 italic">
+                    {language.lazyLoad.loading}
+                </div>
+            {/if}
+
+            <!-- The greeting is the top of the conversation, so it may only be
+                 drawn once the top of the conversation is what is on screen:
+                 the mounted window reaches the oldest resident message AND
+                 storage holds nothing older. Drawing it while earlier messages
+                 are still out on disk claims a partial history is a whole one. -->
+            {#if atOldestEnd && !hasOlderSqlMessages(currentChatSlot)}
                 <Chat
                     character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
                     name={DBState.db.characters[$selectedCharID].name}

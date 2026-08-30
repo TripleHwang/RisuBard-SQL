@@ -23,18 +23,27 @@ export function estimateSpacerHeight(measured: number[], count: number, fallback
     return average * Math.max(0, count)
 }
 
-export type MessageAnchor = { id: string, top: number }
+/**
+ * The index the DOM window should centre on one step older (`-1`) or newer
+ * (`+1`) than `current`.
+ *
+ * Half a window per step: the newly mounted rows land entirely outside the
+ * viewport, so the step is invisible, and the sentinel that triggered it moves
+ * out of range instead of firing again. Clamping to the last index rather than
+ * to `end` is what makes a step at either extreme return the window it was
+ * given, which is how the caller knows there is nowhere left to slide and it is
+ * time to ask storage instead.
+ */
+export function stepChatWindowCenter(current: ChatWindow, total: number, limit: 60 | 40, direction: -1 | 1): number {
+    const step = Math.max(1, Math.floor(limit / 2))
+    const centre = Math.floor((current.start + current.end - 1) / 2)
+    return Math.max(0, Math.min(Math.max(0, total - 1), centre + direction * step))
+}
 
 export type ChatWindowRequest = { key: string, version: number }
 
 export function isCurrentChatWindowRequest(request: ChatWindowRequest, current: ChatWindowRequest): boolean {
     return request.key === current.key && request.version === current.version
-}
-
-export function restoreMessageAnchor(scroller: HTMLElement, anchor: MessageAnchor | null, element: HTMLElement | null): boolean {
-    if (!anchor || !element) return false
-    scroller.scrollTop += element.getBoundingClientRect().top - anchor.top
-    return true
 }
 
 export type ReverseMessagePage<T extends { chatId?: string }> = {

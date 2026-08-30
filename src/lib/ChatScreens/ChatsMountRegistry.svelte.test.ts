@@ -53,7 +53,7 @@ afterEach(() => {
     resetMountedMessageRegistryForTesting()
 })
 
-function render(messages: any[], pageStart: number, pageEnd: number) {
+function render(messages: any[]) {
     const currentCharacter = buildCharacter(messages)
     DBState.db.characters = [currentCharacter]
     selectedCharID.set(0)
@@ -68,8 +68,6 @@ function render(messages: any[], pageStart: number, pageEnd: number) {
             unReroll: () => {},
             currentUsername: 'user',
             userIcon: '',
-            pageStart,
-            pageEnd,
         },
     })
     flushSync()
@@ -79,7 +77,7 @@ function render(messages: any[], pageStart: number, pageEnd: number) {
 describe('the mount registry describes what the chat screen actually mounted', () => {
     it('publishes exactly the rows present in the DOM', () => {
         const messages = buildMessages(400)
-        const container = render(messages, 0, 30)
+        const container = render(messages)
 
         const rows = Array.from(container.querySelectorAll('[data-chat-row]'))
             .map(element => element.getAttribute('data-chat-row')!)
@@ -96,7 +94,7 @@ describe('the mount registry describes what the chat screen actually mounted', (
     })
 
     it('reports nothing once the screen is destroyed', () => {
-        render(buildMessages(120), 0, 30)
+        render(buildMessages(120))
         expect(getMountedMessageCount()).toBeGreaterThan(0)
 
         unmount(mounted!)
