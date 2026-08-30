@@ -152,6 +152,16 @@ export class SaverModeCoordinator {
         this.visibleFocusedSince = null
         try {
             await this.enter(_reason)
+            // `enter` returns early when the app is already in saver mode, and
+            // that early return skips the flush. Saver mode is entered on
+            // background/long-task signals and only leaves after 30s of
+            // continuous focus, so an export started inside that window read
+            // storage without the rows the user had just written -- a backup
+            // short by the last few messages, reported as a success. The whole
+            // point of this scope is that what is on disk is what gets read,
+            // so it flushes for itself rather than depending on a transition
+            // that may not happen.
+            await this.actions.flush()
             return await operation()
         } finally {
             this._scopeCount -= 1

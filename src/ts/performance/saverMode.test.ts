@@ -104,6 +104,27 @@ describe('SaverModeCoordinator', () => {
         expect(saver.scopeCount).toBe(0)
     })
 
+    it('flushes before the scoped operation even when saver mode is already on', async () => {
+        const calls: string[] = []
+        const saver = new SaverModeCoordinator({
+            flush: async () => { calls.push('flush') },
+            evictChats: async () => undefined,
+            setWindow: () => undefined,
+            clearCaches: () => undefined,
+        })
+        // Backgrounding the app enters saver mode, and leaving it needs 30
+        // continuous visible+focused seconds. An export started inside that
+        // window used to reach `enter`'s early return, which skips the flush --
+        // so the backup was written from storage that did not yet hold the
+        // messages the user had just sent, and reported success.
+        await saver.enter('background')
+        calls.length = 0
+
+        await saver.withScope('export', async () => { calls.push('export') })
+
+        expect(calls).toEqual(['flush', 'export'])
+    })
+
     it('cancels a pending leave when a new pressure signal arrives', async () => {
         let now = 0
         const scheduled: Array<() => void> = []

@@ -454,11 +454,15 @@ export async function CleanupMigratedFiles() {
 export async function SaveServerBackup() {
     try {
         alertWait(language.serverBackupSaving)
-        const result = await forageStorage.saveServerBackup((current, total, bytes) => {
+        // Same scope the download path uses. The server builds this backup from
+        // SQL, so anything the client is still holding dirty would be missing
+        // from it -- and a server backup is the one you restore from, which
+        // resets the relational store and rebuilds it from the file.
+        const result = await withSaverScope('export', () => forageStorage.saveServerBackup((current, total, bytes) => {
             const pct = total > 0 ? ((current / total) * 100).toFixed(1) : '0'
             const bytesStr = formatBytes(bytes)
             alertWait(`${language.serverBackupSaving} (${pct}% - ${bytesStr})`)
-        })
+        }))
         notifySuccess(language.serverBackupSaveSuccess(result.filename, formatBytes(result.size)))
     } catch (error) {
         console.error(error)
