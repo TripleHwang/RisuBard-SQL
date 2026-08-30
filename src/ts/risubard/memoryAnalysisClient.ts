@@ -725,6 +725,7 @@ export function createStoredResponseMemoryAnalysis(
             type: 'character' | 'location' | 'scene' | 'faction' | 'item'
                 | 'concept' | 'other'
             title: string
+            aliases?: string[]
             sourceMessageIds: string[]
             markdown: string
             expectedContentHash?: string
@@ -745,7 +746,7 @@ export function createStoredResponseMemoryAnalysis(
             append?: boolean
             writingLanguage?: WikiWritingLanguage
         }) {
-            return await readJson(await postJson(
+            const document = await readJson(await postJson(
                 options.fetchImpl,
                 options.createAuth,
                 '/api/risubard/memory/wiki/save',
@@ -753,6 +754,10 @@ export function createStoredResponseMemoryAnalysis(
             )) as import('./memoryWiki').NarrativeMemoryWikiMarkdown[
                 'documents'
             ][number]
+            return {
+                ...document,
+                aliases: document.aliases ?? [],
+            }
         },
         async recordRebootBatchReceipt(input: {
             characterId: string
@@ -807,9 +812,11 @@ export function createStoredResponseMemoryAnalysis(
                         schema: request.format === 'memory-draft'
                             ? memoryWriterDraftSchema
                             : request.format === 'reboot-batch'
-                                ? rebootBatchDraftSchema
+                                ? request.responseSchema
+                                    ?? rebootBatchDraftSchema
                             : request.format === 'canonical-batch'
-                                ? canonicalBatchSchema
+                                ? request.responseSchema
+                                    ?? canonicalBatchSchema
                                 : request.schemaVersion === 2
                                     ? narrativeGraphDeltaSchema
                                     : memoryDeltaSchema,

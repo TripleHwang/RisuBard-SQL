@@ -1,22 +1,124 @@
 <script lang="ts">
+    import { tick } from 'svelte'
     import {
+        ListTreeIcon,
         LoaderCircleIcon,
         PlayIcon,
-        ShieldAlertIcon,
         SquareTerminalIcon,
+        XIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
-    import type { DirectWikiCommandResult } from 'src/ts/risubard/directWikiCommand'
+    import { BARDCHAT_COMMAND_TEMPLATES } from 'src/ts/risubard/bardChatCommandTemplates'
+    import type {
+        DirectWikiCommandResult,
+        DirectWikiContextSelection,
+    } from 'src/ts/risubard/directWikiCommand'
 
     interface Props {
-        onExecute: (instruction: string) => Promise<DirectWikiCommandResult>
+        onExecute: (
+            instruction: string,
+            contextSelection: DirectWikiContextSelection
+        ) => Promise<DirectWikiCommandResult>
+        contextSelection?: DirectWikiContextSelection
+        onContextSelectionChange?: (
+            selection: DirectWikiContextSelection
+        ) => void
     }
 
-    let { onExecute }: Props = $props()
+    const DEFAULT_CONTEXT_SELECTION: DirectWikiContextSelection = {
+        wiki: true,
+        chat: false,
+        systemPrompt: false,
+        characterDescription: false,
+        persona: false,
+        characterLorebook: false,
+        moduleLorebook: false,
+    }
+    const contextOptions: Array<{
+        key: keyof DirectWikiContextSelection
+        label: string
+        title: string
+    }> = [
+        { key: 'wiki', label: '위키', title: '현재 BardWiki 문서' },
+        { key: 'chat', label: '챗', title: '설정된 개수의 최근 사용자·AI 메시지' },
+        { key: 'systemPrompt', label: '시스템', title: '현재 시스템 프롬프트' },
+        { key: 'characterDescription', label: '캐릭터', title: '캐릭터 설명·성격·시나리오' },
+        { key: 'persona', label: '페르소나', title: '현재 챗에 연결된 페르소나' },
+        { key: 'characterLorebook', label: '캐릭터 로어', title: '명령에 반응한 캐릭터 로어북' },
+        { key: 'moduleLorebook', label: '모듈 로어', title: '활성 모듈 로어북' },
+    ]
+    let {
+        onExecute,
+        contextSelection = DEFAULT_CONTEXT_SELECTION,
+        onContextSelectionChange,
+    }: Props = $props()
+    let selection = $state<DirectWikiContextSelection>({
+        ...DEFAULT_CONTEXT_SELECTION,
+    })
+    let loadedSelectionKey = ''
     let instruction = $state('')
     let running = $state(false)
     let error = $state('')
     let result = $state<DirectWikiCommandResult | null>(null)
+    let textareaElement = $state<HTMLTextAreaElement>()
+    let templatesOpen = $state(false)
+    let selectedTemplateId = $state(BARDCHAT_COMMAND_TEMPLATES[0].id)
+    let rememberedSelectionStart = $state(0)
+    let rememberedSelectionEnd = $state(0)
+    const selectedTemplate = $derived(
+        BARDCHAT_COMMAND_TEMPLATES.find((template) =>
+            template.id === selectedTemplateId
+        ) ?? BARDCHAT_COMMAND_TEMPLATES[0]
+    )
+
+    $effect(() => {
+        const key = JSON.stringify(contextSelection)
+        if (key === loadedSelectionKey) return
+        selection = { ...contextSelection }
+        loadedSelectionKey = key
+    })
+
+    function setContext(
+        key: keyof DirectWikiContextSelection,
+        checked: boolean
+    ) {
+        selection = { ...selection, [key]: checked }
+        onContextSelectionChange?.({ ...selection })
+    }
+
+    function openTemplates() {
+        rememberedSelectionStart = textareaElement?.selectionStart
+            ?? instruction.length
+        rememberedSelectionEnd = textareaElement?.selectionEnd
+            ?? rememberedSelectionStart
+        templatesOpen = true
+    }
+
+    function closeTemplates() {
+        templatesOpen = false
+    }
+
+    async function applyTemplate(mode: 'insert' | 'replace') {
+        let caret = selectedTemplate.prompt.length
+        if (mode === 'insert') {
+            const start = Math.min(rememberedSelectionStart, instruction.length)
+            const end = Math.min(
+                Math.max(rememberedSelectionEnd, start),
+                instruction.length
+            )
+            instruction = instruction.slice(0, start)
+                + selectedTemplate.prompt
+                + instruction.slice(end)
+            caret = start + selectedTemplate.prompt.length
+        }
+        else {
+            instruction = selectedTemplate.prompt
+        }
+        templatesOpen = false
+        await tick()
+        textareaElement?.focus()
+        textareaElement?.setSelectionRange(caret, caret)
+    }
 
     async function run() {
         const command = instruction.trim()
@@ -25,7 +127,7 @@
         error = ''
         result = null
         try {
-            result = await onExecute(command)
+            result = await onExecute(command, { ...selection })
         }
         catch (cause) {
             error = cause instanceof Error ? cause.message : String(cause)
@@ -38,18 +140,45 @@
 
 <section class="command-terminal" data-wiki-command-terminal>
     <header>
-        <span class="terminal-mark"><SquareTerminalIcon size={17} /></span>
-        <div>
-            <strong>위키 관리자 명령</strong>
-            <small>사용자 지시를 최우선으로 현재 Memory Wiki를 직접 편집합니다.</small>
+        <div class="terminal-title">
+            <span class="terminal-mark"><SquareTerminalIcon size={17} /></span>
+            <strong>BARDCHAT</strong>
         </div>
-        <span class="authority"><ShieldAlertIcon size={13} /> DIRECT</span>
+        <div class="terminal-toolbar">
+            <fieldset class="context-toolbar" aria-label="BARDCHAT 주입 정보">
+                {#each contextOptions as option}
+                    <label
+                        class:active={selection[option.key]}
+                        title={option.title}
+                    >
+                        <input
+                            type="checkbox"
+                            data-bardchat-context={option.key}
+                            checked={selection[option.key]}
+                            disabled={running}
+                            onchange={(event) => setContext(
+                                option.key,
+                                event.currentTarget.checked
+                            )}
+                        />
+                        <span>{option.label}</span>
+                    </label>
+                {/each}
+            </fieldset>
+            <button
+                type="button"
+                class="template-open"
+                data-bardchat-template-open
+                onclick={openTemplates}
+            ><ListTreeIcon size={14} /><span>명령어 리스트</span></button>
+        </div>
     </header>
 
     <div class="terminal-body">
         <span class="prompt" aria-hidden="true">›</span>
         <textarea
             data-wiki-command-input
+            bind:this={textareaElement}
             bind:value={instruction}
             rows="4"
             maxlength="8000"
@@ -61,6 +190,21 @@
                 }
             }}
         ></textarea>
+        <ShButton
+            variant="primary"
+            size="sm"
+            data-wiki-command-run
+            onclick={run}
+            disabled={running || !instruction.trim()}
+        >
+            {#if running}
+                <LoaderCircleIcon class="animate-spin" size={14} />
+                실행 중
+            {:else}
+                <PlayIcon size={14} />
+                지시 실행
+            {/if}
+        </ShButton>
     </div>
 
     <footer>
@@ -81,23 +225,92 @@
                 <span>Ctrl+Enter로 실행 · 변경 전 history/trash와 hash 충돌 검사는 유지됩니다.</span>
             {/if}
         </div>
-        <ShButton
-            variant="primary"
-            size="sm"
-            data-wiki-command-run
-            onclick={run}
-            disabled={running || !instruction.trim()}
-        >
-            {#if running}
-                <LoaderCircleIcon class="animate-spin" size={14} />
-                실행 중
-            {:else}
-                <PlayIcon size={14} />
-                지시 실행
-            {/if}
-        </ShButton>
     </footer>
 </section>
+
+{#if templatesOpen}
+    <div
+        class="template-backdrop"
+        role="presentation"
+        onclick={(event) => {
+            if (event.target === event.currentTarget) closeTemplates()
+        }}
+        onkeydown={(event) => {
+            if (event.key === 'Escape') closeTemplates()
+        }}
+    >
+        <div
+            class="template-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bardchat-template-title"
+            tabindex="-1"
+            data-bardchat-template-dialog
+        >
+            <header class="template-dialog-header">
+                <div>
+                    <span class="dialog-kicker">BARDCHAT / COMMAND LIBRARY</span>
+                    <h2 id="bardchat-template-title">명령어 리스트</h2>
+                    <p>계약을 지키는 명령을 골라 필요한 대상만 수정한 뒤 실행하세요.</p>
+                </div>
+                <button
+                    type="button"
+                    class="dialog-close-icon"
+                    aria-label="명령어 리스트 닫기"
+                    onclick={closeTemplates}
+                ><XIcon size={18} /></button>
+            </header>
+
+            <div class="template-grid">
+                <nav class="template-list" aria-label="BARDCHAT 명령어" data-template-list-pane>
+                    {#each BARDCHAT_COMMAND_TEMPLATES as template}
+                        <button
+                            type="button"
+                            class:active={template.id === selectedTemplateId}
+                            data-bardchat-template-option={template.id}
+                            onclick={() => selectedTemplateId = template.id}
+                        >
+                            <span class="command-code">{template.command}</span>
+                            <strong>{template.title}</strong>
+                            <small>{template.description}</small>
+                        </button>
+                    {/each}
+                </nav>
+                <article class="template-preview" data-template-prompt-pane>
+                    <div class="preview-heading">
+                        <span>{selectedTemplate.command}</span>
+                        <strong>{selectedTemplate.title}</strong>
+                    </div>
+                    <pre data-bardchat-template-preview>{selectedTemplate.prompt}</pre>
+                </article>
+            </div>
+
+            <footer class="template-dialog-footer">
+                <span>삽입은 터미널에서 마지막으로 선택한 위치를 사용합니다.</span>
+                <div>
+                    <ShButton
+                        variant="soft-primary"
+                        size="sm"
+                        data-bardchat-template-insert
+                        onclick={() => applyTemplate('insert')}
+                    >삽입</ShButton>
+                    <ShButton
+                        variant="primary"
+                        size="sm"
+                        data-bardchat-template-replace
+                        onclick={() => applyTemplate('replace')}
+                    >교체</ShButton>
+                    <ShButton
+                        variant="outline"
+                        size="sm"
+                        data-bardchat-template-close
+                        onclick={closeTemplates}
+                    >닫기</ShButton>
+                </div>
+            </footer>
+        </div>
+    </div>
+{/if}
 
 <style>
     .command-terminal {
@@ -115,25 +328,43 @@
             color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor));
         box-shadow: inset 3px 0 0 color-mix(in srgb, var(--risu-theme-primary) 70%, transparent);
     }
-    header, footer {
+    .command-terminal > header,
+    .command-terminal > footer {
         display: flex;
         align-items: center;
         gap: .65rem;
         padding: .62rem .75rem;
     }
-    header { border-bottom: 1px solid var(--terminal-line); }
-    footer {
-        justify-content: space-between;
+    .command-terminal > header {
+        display: grid;
+        gap: .35rem;
+        padding-block: .48rem;
+        border-bottom: 1px solid var(--terminal-line);
+    }
+    .command-terminal > footer {
+        min-height: 1.85rem;
+        box-sizing: border-box;
+        padding-block: .28rem;
         border-top: 1px solid var(--terminal-line);
         background: color-mix(in srgb, var(--risu-theme-primary) 5%, transparent);
     }
-    header > div { display: grid; flex: 1; gap: .06rem; min-width: 0; }
-    header strong {
+    .terminal-title,
+    .terminal-toolbar {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+    }
+    .terminal-title { gap: .5rem; }
+    .terminal-toolbar {
+        flex-wrap: wrap;
+        gap: .28rem .4rem;
+    }
+    .terminal-title strong {
         color: var(--risu-theme-textcolor);
         font: 700 .82rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
         letter-spacing: .02em;
     }
-    header small, .terminal-status {
+    .terminal-status {
         color: var(--risu-theme-textcolor2);
         font-size: .68rem;
     }
@@ -147,21 +378,68 @@
         color: var(--risu-theme-primary);
         background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent);
     }
-    .authority {
+    .context-toolbar {
+        display: flex;
+        flex: 1 1 32rem;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        gap: .22rem;
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+        border: 0;
+    }
+    .context-toolbar label {
         display: inline-flex;
         align-items: center;
-        gap: .25rem;
-        padding: .2rem .38rem;
-        border: 1px solid color-mix(in srgb, var(--risu-theme-draculared) 45%, transparent);
-        border-radius: .25rem;
-        color: color-mix(in srgb, var(--risu-theme-draculared) 86%, var(--color-textcolor));
-        font: 700 .58rem/1 ui-monospace, monospace;
-        letter-spacing: .08em;
+        gap: .24rem;
+        min-height: 1.45rem;
+        padding: .12rem .32rem;
+        border: 1px solid var(--terminal-line);
+        border-radius: .24rem;
+        color: var(--risu-theme-textcolor2);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, transparent);
+        font: 650 .58rem/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+        cursor: pointer;
+        user-select: none;
+    }
+    .context-toolbar label.active {
+        border-color: color-mix(in srgb, var(--risu-theme-primary) 60%, var(--terminal-line));
+        color: var(--risu-theme-primary);
+        background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent);
+    }
+    .context-toolbar input {
+        width: .72rem;
+        height: .72rem;
+        margin: 0;
+        accent-color: var(--risu-theme-primary);
+    }
+    .context-toolbar input:disabled { opacity: .55; }
+    .template-open {
+        display: inline-flex;
+        align-items: center;
+        gap: .34rem;
+        min-height: 1.85rem;
+        padding: .3rem .52rem;
+        border: 1px solid var(--terminal-line);
+        border-radius: .35rem;
+        color: var(--risu-theme-textcolor);
+        background: color-mix(in srgb, var(--risu-theme-primary) 8%, transparent);
+        font-size: .68rem;
+        font-weight: 700;
+        cursor: pointer;
+    }
+    .template-open:hover,
+    .template-open:focus-visible {
+        border-color: var(--risu-theme-primary);
+        color: var(--risu-theme-primary);
+        outline: 0;
     }
     .terminal-body {
         display: grid;
         flex: 1;
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: stretch;
         gap: .55rem;
         min-height: 0;
         padding: .75rem;
@@ -190,16 +468,248 @@
         border-left-color: var(--risu-theme-primary);
         background: color-mix(in srgb, var(--risu-theme-primary) 3%, transparent);
     }
+    .terminal-body :global(button) {
+        align-self: end;
+        min-width: 6.6rem;
+        min-height: 2.5rem;
+        justify-content: center;
+    }
     .terminal-status {
         display: grid;
         gap: .12rem;
         min-width: 0;
     }
     .failure { color: var(--risu-theme-draculared); }
-    @media (orientation: portrait) {
-        header small, .authority { display: none; }
-        footer { align-items: stretch; flex-direction: column; }
-        footer :global(button) { justify-content: center; }
+
+    .template-backdrop {
+        position: fixed;
+        z-index: 10000;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 1.25rem;
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, transparent);
+        backdrop-filter: blur(7px);
+    }
+    .template-dialog {
+        --dialog-line: color-mix(in srgb, var(--risu-theme-primary) 28%, var(--risu-theme-darkborderc));
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        width: min(62rem, 94vw);
+        height: min(44rem, 86vh);
+        overflow: hidden;
+        border: 1px solid var(--dialog-line);
+        border-radius: .75rem;
+        color: var(--risu-theme-textcolor);
+        background:
+            linear-gradient(135deg, color-mix(in srgb, var(--risu-theme-primary) 7%, transparent), transparent 42%),
+            var(--risu-theme-darkbg);
+        box-shadow: 0 1.4rem 4rem color-mix(in srgb, var(--color-darkbg) 55%, transparent);
+    }
+    .template-dialog-header,
+    .template-dialog-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: .8rem 1rem;
+        border-color: var(--dialog-line);
+    }
+    .template-dialog-header { border-bottom: 1px solid var(--dialog-line); }
+    .template-dialog-header > div { display: grid; gap: .12rem; }
+    .template-dialog-header h2 {
+        margin: 0;
+        font-size: 1rem;
+        line-height: 1.2;
+    }
+    .template-dialog-header p,
+    .template-dialog-footer > span {
+        margin: 0;
+        color: var(--risu-theme-textcolor2);
+        font-size: .68rem;
+    }
+    .dialog-kicker {
+        color: var(--risu-theme-primary);
+        font: 700 .56rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+        letter-spacing: .12em;
+    }
+    .dialog-close-icon {
+        display: grid;
+        place-items: center;
+        width: 2rem;
+        height: 2rem;
+        border: 1px solid transparent;
+        border-radius: .35rem;
+        color: var(--risu-theme-textcolor2);
+        background: transparent;
+        cursor: pointer;
+    }
+    .dialog-close-icon:hover,
+    .dialog-close-icon:focus-visible {
+        border-color: var(--dialog-line);
+        color: var(--risu-theme-textcolor);
+        outline: 0;
+    }
+    .template-grid {
+        display: grid;
+        grid-template-columns: minmax(14rem, 32%) minmax(0, 1fr);
+        min-height: 0;
+    }
+    .template-list {
+        min-height: 0;
+        overflow-y: auto;
+        padding: .6rem;
+        border-right: 1px solid var(--dialog-line);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--color-bgcolor));
+    }
+    .template-list button {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        width: 100%;
+        gap: .12rem .5rem;
+        padding: .58rem .62rem;
+        border: 1px solid transparent;
+        border-radius: .42rem;
+        color: var(--risu-theme-textcolor);
+        text-align: left;
+        background: transparent;
+        cursor: pointer;
+    }
+    .template-list button:hover { background: color-mix(in srgb, var(--risu-theme-primary) 6%, transparent); }
+    .template-list button.active {
+        border-color: var(--dialog-line);
+        background: color-mix(in srgb, var(--risu-theme-primary) 11%, transparent);
+        box-shadow: inset 2px 0 0 var(--risu-theme-primary);
+    }
+    .template-list strong { align-self: center; font-size: .75rem; }
+    .template-list small {
+        grid-column: 2;
+        color: var(--risu-theme-textcolor2);
+        font-size: .64rem;
+        line-height: 1.4;
+    }
+    .command-code {
+        align-self: center;
+        padding: .16rem .28rem;
+        border-radius: .22rem;
+        color: var(--risu-theme-primary);
+        background: color-mix(in srgb, var(--risu-theme-primary) 10%, transparent);
+        font: 700 .53rem/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+        letter-spacing: .06em;
+    }
+    .template-preview {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-width: 0;
+        min-height: 0;
+        padding: 1rem;
+    }
+    .preview-heading {
+        display: flex;
+        align-items: baseline;
+        gap: .55rem;
+        padding: 0 .15rem .65rem;
+    }
+    .preview-heading span {
+        color: var(--risu-theme-primary);
+        font: 800 .65rem/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+        letter-spacing: .08em;
+    }
+    .preview-heading strong { font-size: .82rem; }
+    .template-preview pre {
+        min-width: 0;
+        min-height: 0;
+        margin: 0;
+        overflow: auto;
+        white-space: pre-wrap;
+        padding: .85rem .9rem;
+        border: 1px solid var(--dialog-line);
+        border-radius: .5rem;
+        color: var(--risu-theme-textcolor);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 88%, var(--color-darkbg));
+        font: .74rem/1.65 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    .template-dialog-footer {
+        border-top: 1px solid var(--dialog-line);
+        background: color-mix(in srgb, var(--risu-theme-primary) 4%, transparent);
+    }
+    .template-dialog-footer > div { display: flex; gap: .45rem; }
+
+    @container (max-width: 46rem) {
+        .command-terminal {
+            border-inline: 0;
+            border-bottom: 0;
+            border-radius: 0;
+            box-shadow: none;
+        }
+        .command-terminal > header {
+            display: grid;
+            gap: .3rem;
+            padding: .4rem .45rem;
+        }
+        .terminal-title { display: none; }
+        .terminal-toolbar { flex-wrap: wrap; }
+        .context-toolbar {
+            flex: 1 1 100%;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+            min-width: 0;
+        }
+        .context-toolbar label {
+            flex: 0 0 auto;
+            min-height: 2.25rem;
+            padding-inline: .5rem;
+        }
+        .template-open {
+            min-height: 2.25rem;
+            justify-content: center;
+            padding-inline: .55rem;
+        }
+        .terminal-body { gap: .35rem; padding: .45rem .5rem; }
+        .prompt { padding-top: .55rem; }
         textarea { font-size: 1rem; }
+        .command-terminal > footer {
+            gap: .5rem;
+            padding: .4rem .5rem;
+        }
+        .terminal-status {
+            flex: 1;
+            max-height: 2.5rem;
+            overflow: hidden;
+            line-height: 1.35;
+        }
+        .terminal-body :global(button) {
+            min-height: 2.75rem;
+        }
+    }
+
+    @media (max-width: 46rem) {
+        .template-backdrop { padding: .55rem; }
+        .template-dialog { width: 100%; height: min(48rem, 92dvh); }
+        .template-dialog-header p,
+        .template-dialog-footer > span { display: none; }
+        .template-grid { grid-template-columns: 42% minmax(0, 1fr); }
+        .template-list { padding: .35rem; }
+        .template-list button { grid-template-columns: 1fr; padding: .5rem; }
+        .template-list small { display: none; }
+        .template-list strong { font-size: .72rem; }
+        .command-code { justify-self: start; }
+        .template-preview { padding: .55rem; }
+        .template-preview pre { padding: .65rem; font-size: .69rem; }
+        .template-dialog-footer { align-items: stretch; }
+        .template-dialog-footer > div { width: 100%; }
+        .template-dialog-footer :global(button) { flex: 1; }
+    }
+
+    @media (max-width: 30rem) {
+        .template-dialog { height: calc(100dvh - 1rem); }
+        .template-grid {
+            grid-template-columns: minmax(0, 1fr);
+            grid-template-rows: minmax(7rem, 34%) minmax(0, 1fr);
+        }
+        .template-list {
+            border-right: 0;
+            border-bottom: 1px solid var(--dialog-line);
+        }
     }
 </style>

@@ -460,27 +460,22 @@
     </div>
 
 {:else if $alertStore.type === 'cardexport'}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div  class="risu-modal-overlay fixed top-0 left-0 h-full w-full bg-overlay/50 flex flex-col z-50 items-center justify-center" role="button" tabindex="0" onclick={close}>
-        <div class="risu-modal-surface bg-darkbg rounded-md p-4 max-w-full flex flex-col w-2xl" role="button" tabindex="0" onclick={(e) => {
-            e.stopPropagation()
-        }}>
-            <h1 class="font-bold text-2xl w-full">
-                <span>
-                    {language.shareExport}
-                </span>
-                <button class="float-right text-textcolor2 hover:text-primary" onclick={() => {
-                    alertStore.set({
-                        type: 'none',
-                        msg: JSON.stringify({
-                            type: 'cancel',
-                            type2: cardExportType2
-                        })
-                    })
-                }}>
-                    <XIcon />
-                </button>
-            </h1>
+    <ShDialog
+        open={true}
+        size="lg"
+        tier="alert"
+        closeOnEscape={true}
+        onOpenChange={(open) => {
+            if (!open && $alertStore.type === 'cardexport') {
+                alertStore.set({
+                    type: 'none',
+                    msg: JSON.stringify({ type: 'cancel', type2: cardExportType2 })
+                })
+            }
+        }}
+    >
+        {#snippet title()}{language.shareExport}{/snippet}
+        <div class="flex flex-col">
             <span class="text-textcolor mt-4">{language.type}</span>
             {#if cardExportType === ''}
                 {#if $alertStore.submsg === 'module'}
@@ -506,13 +501,13 @@
                 {#if $alertStore.submsg === 'preset'}
                     <button class="bg-bgcolor px-2 py-4 rounded-lg flex-1" class:ring-1={cardExportType === ''} onclick={() => {cardExportType = ''}}>Risupreset</button>
                 {:else if $alertStore.submsg === 'module'}
-                    <button class="bg-bgcolor px-2 py-4 rounded-lg flex-1" class:ring-1={cardExportType === ''} onclick={() => {cardExportType = ''}}>RisuM</button>
+                    <button type="button" class="bg-bgcolor px-2 py-4 rounded-lg flex-1" class:ring-1={cardExportType === ''} onclick={() => {cardExportType = ''}}>RisuM</button>
                 {:else}
-                    <button class="bg-bgcolor px-2 py-4 rounded-lg flex-1" class:ring-1={cardExportType === ''} onclick={() => {
+                    <button type="button" class="bg-bgcolor px-2 py-4 rounded-lg flex-1" class:ring-1={cardExportType === ''} onclick={() => {
                         cardExportType = ''
                         cardExportType2 = 'charxJpeg'
                     }}>Character Card V3</button>
-                    <button class="bg-bgcolor px-2 py-4 rounded-lg ml-2 flex-1" class:ring-1={cardExportType === 'ccv2'} onclick={() => {cardExportType = 'ccv2'}}>Character Card V2</button>
+                    <button type="button" class="bg-bgcolor px-2 py-4 rounded-lg ml-2 flex-1" class:ring-1={cardExportType === 'ccv2'} onclick={() => {cardExportType = 'ccv2'}}>Character Card V2</button>
                 {/if}
             </div>
             {#if $alertStore.submsg === '' && cardExportType === ''}
@@ -524,7 +519,9 @@
                     <OptionInput value="json">JSON</OptionInput>
                 </SelectInput>
             {/if}
-            <Button className="mt-4" onclick={() => {
+        </div>
+        {#snippet footer()}
+            <Button onclick={() => {
                 alertStore.set({
                     type: 'none',
                     msg: JSON.stringify({
@@ -533,8 +530,8 @@
                     })
                 })
             }}>{language.export}</Button>
-        </div>
-    </div>
+        {/snippet}
+    </ShDialog>
 
 {:else if $alertStore.type === 'selectModule'}
     <ModuleChatMenu alertMode close={(d) => {

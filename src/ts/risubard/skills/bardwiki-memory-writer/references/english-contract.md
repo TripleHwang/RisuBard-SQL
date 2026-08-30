@@ -13,6 +13,7 @@ Distinguish first registration from updates to existing canon. Return exactly on
 
 - Register an important participant without individual canon as soon as confirmed text establishes a durable role, relationship, ability, goal or knowledge. Include participating leaders, companions, opponents and relationship partners without waiting for a complete profile, changed state or several turns.
 - A mention in an event or another character's canon does not replace individual canon. Avoid creating duplicate aliases.
+- If a subject matches an existing canonical title or alias, use update instead of creating another document. Put only alternate names or forms of address explicitly present in confirmed evidence into aliases; never infer aliases.
 - Exclude one-off participants and name-only mentions. Apply the same rule to durable locations, factions, items and concepts. Do not fill gaps from the entire lorebook, external canon or guesses.
 
 ### Existing updates (update)
@@ -24,6 +25,11 @@ Distinguish first registration from updates to existing canon. Return exactly on
 
 - Check every important participant against individual canon or candidates using characterKnowledge, stateChanges, persistentFacts and openContinuity. The protagonist's document must not replace companions' memories.
 - Prioritize costly omissions and first registration over minor history updates. Merge candidates for the same entity. Never fill the candidate budget with guesses. Return an empty array only when neither creation nor update is warranted; do not add output fields.
+
+### Reserved story arc plot
+
+- `Story Arc Plot` is a reserved `other` canon document supplied by the program at the configured confirmed-event checkpoint. Do not propose this title during semantic analysis or update it every turn.
+- Keep event-level detail in establishedEvents and event documents. The reserved plot is written only during a program-requested canonical rewrite as a compact routing aid and never replaces primary evidence.
 
 ## Evidence boundaries
 
@@ -45,6 +51,6 @@ Distinguish first registration from updates to existing canon. Return exactly on
 - characterKnowledge: character, fact, stance; knows means directly known, believes means a belief regardless of objective truth.
 - persistentFacts: current facts expected to remain true in later scenes.
 - openContinuity: unresolved questions, promises or risks needed for continuity.
-- canonicalUpdateCandidates: type, title, reason, action, targetDocumentId and confidence. These are proposals, not automatic save commands. Use create with null targetDocumentId, or update with an ID actually supplied in existingNotes. A different title can still refer to the same existing document. Confidence ranges from 0 to 1.
+- canonicalUpdateCandidates: type, title, aliases, reason, action, targetDocumentId and confidence. aliases is an array of alternate names explicitly present in confirmed evidence, or an empty array. These are proposals, not automatic save commands. Use create with null targetDocumentId, or update with an ID actually supplied in existingNotes. A different title can still refer to the same existing document. Confidence ranges from 0 to 1.
 
 Keep item strings within 500 characters and avoid unnecessary duplication across arrays. If nothing warrants recording, return empty semantic arrays rather than fabricating a saveable draft. The program may reject it or treat it as no change.

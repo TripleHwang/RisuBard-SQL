@@ -1,8 +1,13 @@
+// @vitest-environment happy-dom
+
 import { describe, expect, test } from 'vitest'
 import {
     buildArcaLogClipboardHtml,
     buildArcaLogPlainText,
+    getArcaLogTurnCount,
+    hasVisibleArcaLogContent,
     selectArcaLogMessages,
+    summarizeArcaLogMessages,
     type ArcaLogRenderedMessage,
 } from './arcaChatLog'
 
@@ -27,23 +32,41 @@ describe('Arca chat log message selection', () => {
         ])
     })
 
-    test('range mode uses inclusive one-based numbers after filtering', () => {
-        const selected = selectArcaLogMessages(messages, { mode: 'range', start: 2, end: 3 })
+    test('page range uses source indices and keeps the greeting on page one only', () => {
+        const paged = [
+            { data: 'greeting', role: 'char' as const, sourceIndex: -1 },
+            { data: 'u1', role: 'user' as const, sourceIndex: 0 },
+            { data: 'c1', role: 'char' as const, sourceIndex: 1 },
+            { data: 'u2', role: 'user' as const, sourceIndex: 2 },
+            { data: 'c2', role: 'char' as const, sourceIndex: 3 },
+        ]
+        const first = selectArcaLogMessages(paged, { mode: 'page', start: 1, end: 1, pageSize: 2 })
+        const second = selectArcaLogMessages(paged, { mode: 'page', start: 2, end: 2, pageSize: 2 })
 
-        expect(selected.map(item => [item.number, item.message.data])).toEqual([
-            [2, 'hello'],
-            [3, 'answer'],
-        ])
+        expect(first.map(item => item.message.data)).toEqual(['greeting', 'u1', 'c1'])
+        expect(second.map(item => item.message.data)).toEqual(['u2', 'c2'])
     })
 
-    test('range values are clamped and reversed input is normalized', () => {
-        const selected = selectArcaLogMessages(messages, { mode: 'range', start: 99, end: -4 })
+    test('turn range groups each user message with following character responses', () => {
+        const selected = selectArcaLogMessages(messages, { mode: 'turn', start: 2, end: 2 })
 
         expect(selected.map(item => item.message.data)).toEqual([
-            'greeting',
             'hello',
             'answer',
-            'follow-up',
+        ])
+        expect(getArcaLogTurnCount(messages)).toBe(3)
+    })
+
+    test('can exclude user messages without changing whole-chat numbering', () => {
+        const selected = selectArcaLogMessages(
+            messages,
+            { mode: 'all' },
+            { includeUserMessages: false },
+        )
+
+        expect(selected.map(item => [item.number, item.message.data])).toEqual([
+            [1, 'greeting'],
+            [3, 'answer'],
         ])
     })
 
@@ -56,6 +79,33 @@ describe('Arca chat log message selection', () => {
         ], { mode: 'all' })
 
         expect(selected.map(item => item.message.data)).toEqual(['visible'])
+    })
+})
+
+describe('Arca chat log selection summary', () => {
+    test('counts visible characters and HTML or Markdown images', () => {
+        expect(summarizeArcaLogMessages([
+            { data: '가나다' },
+            { data: '![사진](a.png)라마' },
+            { data: '<img src="b.png" alt="">바' },
+        ])).toEqual({ characters: 6, images: 2 })
+    })
+})
+
+describe('Arca chat log render readiness', () => {
+    test('ignores invisible AI metadata until visible text or visual content exists', () => {
+        const body = document.createElement('div')
+        body.textContent = '\u200B\u200C\u200D\uFEFF\u2060\u180E'
+        expect(hasVisibleArcaLogContent(body)).toBe(false)
+
+        body.innerHTML = '<p>실제 메시지</p>'
+        expect(hasVisibleArcaLogContent(body)).toBe(true)
+
+        body.innerHTML = '<img src="data:image/png;base64,AAA" alt="">'
+        expect(hasVisibleArcaLogContent(body)).toBe(true)
+
+        body.innerHTML = '<div style="height:48px"><div style="animation:spin 1s linear infinite"></div></div>'
+        expect(hasVisibleArcaLogContent(body)).toBe(false)
     })
 })
 

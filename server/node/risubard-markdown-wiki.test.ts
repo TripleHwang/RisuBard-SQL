@@ -321,6 +321,7 @@ describe('Markdown narrative wiki', () => {
             chatId: 'chat',
             type: 'faction',
             title: '은촛대 수도회',
+            aliases: [' 은촛대 ', '실버 캔들', '은촛대', '은촛대 수도회'],
             markdown: '# 은촛대 수도회\n\n사용자가 직접 기록했다.',
         })
 
@@ -331,6 +332,7 @@ describe('Markdown narrative wiki', () => {
             created: '2026-08-08T06:07:08.000Z',
             updated: '2026-08-08T06:07:08.000Z',
             authoring: 'manual',
+            aliases: ['은촛대', '실버 캔들'],
             relativePath: expect.stringMatching(/^factions\//),
         }))
         const workspace = resolveMarkdownWikiWorkspace(root, 'character', 'chat')
@@ -341,6 +343,7 @@ describe('Markdown narrative wiki', () => {
         expect(contents).toContain(`id: ${JSON.stringify(created.id)}`)
         expect(contents).toContain('type: faction')
         expect(contents).toContain('authoring: manual')
+        expect(contents).toContain('aliases:\n  - "은촛대"\n  - "실버 캔들"')
         expect(contents).toContain('created: "2026-08-08T06:07:08.000Z"')
     })
 
@@ -359,6 +362,35 @@ describe('Markdown narrative wiki', () => {
             '## 라비안\n\n### 현재 상태\n\n기사다.'
         )
         expect(created.content).not.toMatch(/^#\s/m)
+    })
+
+    test('resolves only unique aliases in wiki health links', async () => {
+        const root = await fs.mkdtemp(join(tmpdir(), 'risubard-md-wiki-'))
+        temporaryDirectories.push(root)
+        const wiki = createMarkdownNarrativeWiki(root)
+        await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '김철수', aliases: ['대장'], markdown: '## 김철수\n\n동부대 지휘관.',
+        })
+        const second = await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'character',
+            title: '이영희', markdown: '## 이영희\n\n서부대 지휘관.',
+        })
+        await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', type: 'faction',
+            title: '경비대', markdown: '## 경비대\n\n[[대장]]이 지휘한다.',
+        })
+
+        expect((await wiki.loadView('character', 'chat')).health.danglingLinks)
+            .toEqual([])
+
+        await wiki.saveManualDocument({
+            characterId: 'character', chatId: 'chat', documentId: second.id,
+            type: 'character', title: '이영희', aliases: ['대장'],
+            markdown: '## 이영희\n\n서부대 지휘관.',
+        })
+        expect((await wiki.loadView('character', 'chat')).health.danglingLinks)
+            .toEqual([expect.objectContaining({ target: '대장' })])
     })
 
     test('projects legacy H1 files as nested headings when loading them', async () => {
@@ -577,6 +609,7 @@ describe('Markdown narrative wiki', () => {
         })
 
         expect(renamed.id).toBe(created.id)
+        expect(renamed.aliases).toContain('라비안')
         expect(renamed.relativePath).toMatch(/^locations\//)
         expect(renamed.relativePath).not.toBe(created.relativePath)
         const view = await wiki.loadView('character', 'chat')

@@ -32,6 +32,8 @@ export interface ChatRequestEvidenceEntry {
     reasoningTokens?: number
     injectionManifest?: RequestInjectionManifest
     selectedHistoryMessageCount?: number
+    failureCategory?: 'timeout' | 'rate-limit' | 'authentication'
+        | 'server' | 'network' | 'provider'
 }
 
 export interface ChatRequestEvidence {
@@ -82,6 +84,18 @@ const injectionLabels: Record<RequestInjectionKind, string> = {
 
 const number = (value: number | undefined) => value?.toLocaleString('ko-KR') ?? '확인 불가'
 
+const failureLabels: Record<
+    NonNullable<ChatRequestEvidenceEntry['failureCategory']>,
+    string
+> = {
+    timeout: '타임아웃',
+    'rate-limit': '호출 제한',
+    authentication: '인증 오류',
+    server: '공급자 서버 오류',
+    network: '네트워크 오류',
+    provider: '공급자 응답 오류',
+}
+
 function localTimeZone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 }
@@ -127,6 +141,29 @@ function sum(entries: RequestLogEntry[], key: 'inputTokens' | 'outputTokens' | '
     return entries.reduce((total, entry) => total + Math.max(0, entry[key] ?? 0), 0)
 }
 
+function requestFailureCategory(
+    entry: RequestLogEntry
+): ChatRequestEvidenceEntry['failureCategory'] | undefined {
+    if (entry.success && !entry.aborted) return undefined
+    const message = (entry.errorMessage ?? '').toLocaleLowerCase()
+    if (entry.status === 408 || entry.status === 504
+        || /timed?\s*out|timeout|시간.*초과/u.test(message)) return 'timeout'
+    if (entry.status === 429
+        || /rate.?limit|resource exhausted|quota/u.test(message)) return 'rate-limit'
+    if (entry.status === 401 || entry.status === 403
+        || /unauthor|forbidden|authentication|api.?key/u.test(message)) {
+        return 'authentication'
+    }
+    if ((entry.status ?? 0) >= 500
+        || /bad gateway|service unavailable|internal server/u.test(message)) {
+        return 'server'
+    }
+    if (/network|fetch|econn|enotfound|socket|connection|proxy/u.test(message)) {
+        return 'network'
+    }
+    return 'provider'
+}
+
 export function buildChatRequestEvidence(
     chatId: string,
     entries: RequestLogEntry[],
@@ -153,6 +190,9 @@ export function buildChatRequestEvidence(
         ...(entry.outputTokens !== undefined ? { outputTokens: entry.outputTokens } : {}),
         ...(entry.cachedTokens !== undefined ? { cachedTokens: entry.cachedTokens } : {}),
         ...(entry.reasoningTokens !== undefined ? { reasoningTokens: entry.reasoningTokens } : {}),
+        ...(requestFailureCategory(entry) ? {
+            failureCategory: requestFailureCategory(entry),
+        } : {}),
         ...(entry.injectionManifest ? {
             injectionManifest: reconcileInjectionManifest(
                 entry.injectionManifest,
@@ -335,6 +375,12 @@ export function formatChatRequestEvidenceMarkdown(evidence: ChatRequestEvidence)
             `| 모델 | ${escapeTable(request.model)} |`,
             `| 공급자 | ${escapeTable(request.provider)} |`,
             `| 결과 | ${request.outcome} |`,
+            ...(request.status === undefined ? [] : [
+                `| HTTP 상태 | ${request.status} |`,
+            ]),
+            ...(request.failureCategory === undefined ? [] : [
+                `| 오류 유형 | ${failureLabels[request.failureCategory]} |`,
+            ]),
             `| 경과 시간 | ${durationLabel(request.durationMs)} |`,
             `| 첫 토큰 | ${durationLabel(request.firstTokenMs)} |`,
             `| 입력 토큰 | ${number(request.inputTokens)} |`,

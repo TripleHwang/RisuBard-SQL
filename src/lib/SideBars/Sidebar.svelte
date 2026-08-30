@@ -115,6 +115,16 @@
   type sortTypeNormal = { type:'normal',id:string,img: string, index: number, name:string, isNew:boolean }
   type sortType =  sortTypeNormal|{type:'folder',folder:sortTypeNormal[],id:string, name:string, color:string, img?:string}
   let charImages: sortType[] = $state([]);
+  const sidebarImageCache = new Map<string, Promise<string>>()
+
+  function sidebarCharacterImage(image: string): Promise<string> {
+    const key = `${DBState.db.hideAllImages ? 'hidden' : 'shown'}:${image}`
+    const cached = sidebarImageCache.get(key)
+    if (cached) return cached
+    const request = getCharImage(image, 'plain').then((source) => source || '/none.webp')
+    sidebarImageCache.set(key, request)
+    return request
+  }
   // Recently interacted characters for the home sidebar. Character-level
   // `lastInteraction` is already in memory (no chat hydration needed), so this
   // sort is cheap; the $derived is only read while on the home screen.
@@ -384,6 +394,12 @@
   let touchDragTimer = 0
   let touchStartPos = { x: 0, y: 0 }
   let suppressNextClick = false
+
+  function selectPinnedCharacterOnMouse(event: PointerEvent, item: sortType) {
+    if (isTouchDevice || item.type !== 'normal'
+      || event.button !== 0 || suppressNextClick) return
+    selectCharacter(item.index)
+  }
 
   function onTouchDragStart(data: DragData, e: TouchEvent & { currentTarget: HTMLElement }) {
     const touch = e.touches[0]
@@ -778,9 +794,10 @@
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="relative"
             role="button" tabindex="0"
+            onpointerdown={(event) => selectPinnedCharacterOnMouse(event, char)}
             onclick={() => {
               if(suppressNextClick) return
-              if(char.type === "normal"){
+              if(isTouchDevice && char.type === "normal"){
                 selectCharacter(char.index);
               }
             }}
@@ -793,8 +810,8 @@
             }}
           >
           {#if char.type === 'normal'}
-            <SidebarAvatar 
-              src={char.img ? getCharImage(char.img, "plain") : "/none.webp"} 
+            <SidebarAvatar
+              src={char.img ? sidebarCharacterImage(char.img) : "/none.webp"}
               size="56" 
               rounded={IconRounded} 
               name={char.name}
@@ -808,7 +825,7 @@
           {:else if char.type === "folder"}
             {#key char.color}
             {#key char.name}
-              <SidebarAvatar src="slot" size="56" rounded={IconRounded} bordered name={char.name} color={char.color} backgroundimg={char.img ? getCharImage(char.img, "plain") : ""}
+              <SidebarAvatar src="slot" size="56" rounded={IconRounded} bordered name={char.name} color={char.color} backgroundimg={char.img ? sidebarCharacterImage(char.img) : ""}
               oncontextmenu={async (e) => {
                 e.preventDefault()
                 const folderIndex = getFolderIndex(char.id)
@@ -957,9 +974,10 @@
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <div class="relative"
                   role="button" tabindex="0"
+                  onpointerdown={(event) => selectPinnedCharacterOnMouse(event, char2)}
                   onclick={() => {
                     if(suppressNextClick) return
-                    if(char2.type === "normal"){
+                    if(isTouchDevice && char2.type === "normal"){
                       selectCharacter(char2.index);
                     }
                   }}
@@ -971,8 +989,8 @@
                     }
                   }}
                 >
-                <SidebarAvatar 
-                  src={char2.img ? getCharImage(char2.img, "plain") : "/none.webp"} 
+                <SidebarAvatar
+                  src={char2.img ? sidebarCharacterImage(char2.img) : "/none.webp"}
                   size="56" 
                   rounded={IconRounded} 
                   name={char2.name}
@@ -1198,7 +1216,7 @@
             >
               <div class="shrink-0">
                 <SidebarAvatar
-                  src={rc.image ? getCharImage(rc.image, "plain") : "/none.webp"}
+                  src={rc.image ? sidebarCharacterImage(rc.image) : "/none.webp"}
                   size="36"
                   rounded={IconRounded}
                   name={rc.name}

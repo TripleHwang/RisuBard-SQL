@@ -6,9 +6,14 @@ import { normalizeNarrativeWorkingMessageLimit } from 'src/ts/risubard/narrative
 const chatPagePath = resolve(process.cwd(), 'src/lib/Setting/Pages/RisuBardChatSettings.svelte')
 const commonPagePath = resolve(process.cwd(), 'src/lib/Setting/Pages/RisuBardCommonSettings.svelte')
 const settingsDataPath = resolve(process.cwd(), 'src/ts/setting/risuBardCommonSettingsData.ts')
+const arcPlotterPresetPath = resolve(
+    process.cwd(),
+    'src/lib/Setting/Pages/RisuBardArcPlotterPresets.svelte'
+)
 const memoryWikiPath = resolve(process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte')
 const commonPage = existsSync(commonPagePath) ? readFileSync(commonPagePath, 'utf8') : ''
 const settingsData = readFileSync(settingsDataPath, 'utf8')
+const arcPlotterPreset = readFileSync(arcPlotterPresetPath, 'utf8')
 const memoryWiki = readFileSync(memoryWikiPath, 'utf8')
 const workspace = readFileSync(
     resolve(process.cwd(), 'src/lib/Setting/Settings.svelte'),
@@ -87,10 +92,11 @@ describe('RisuBard mode settings', () => {
         expect(workspace).not.toContain('RisuBardChatSettings')
     })
 
-    test('orders the unified page by chat, analysis, writing, saves, then Arca export', () => {
+    test('orders the unified page by chat, analysis, Archplotter, writing, saves, then Arca export', () => {
         const sectionIds = [
             'risubard.common.chatResponse',
             'risubard.common.wikiAnalysis',
+            'risubard.common.arcPlotter',
             'risubard.common.wikiWriting',
             'risubard.common.saveAndLoad',
             'risubard.common.arcaChatExporter',
@@ -99,10 +105,24 @@ describe('RisuBard mode settings', () => {
         expect(sectionIds.map((id) => settingsData.indexOf(`id: '${id}'`)))
             .toEqual([...sectionIds.map((id) => settingsData.indexOf(`id: '${id}'`))].sort((a, b) => a - b))
         expect(sectionIds.every((id) => settingsData.includes(`id: '${id}'`))).toBe(true)
+        expect(commonPage).toContain('risuBardArcPlotterSettingsItems')
+        expect(commonPage).not.toContain('layout="stacked"')
+        expect(settingsData).toContain("componentId: 'RisuBardArcPlotterPresets'")
+        expect(settingsData).toContain("helpKey: 'risuBardArcPlotter'")
+        expect(arcPlotterPreset).toContain('data-setting-row')
+        expect(arcPlotterPreset).not.toContain('w-full justify-center')
+        expect(arcPlotterPreset.indexOf('ARC_PLOTTER_BUILT_IN_PRESETS'))
+            .toBeLessThan(arcPlotterPreset.indexOf('value="__separator"'))
+        expect(arcPlotterPreset).toContain('disabled={!selectedCustomPreset}')
+        expect(databaseSource).toContain('risuBardArcPlotterCustomPresets?:')
+        expect(databaseSource).toContain('normalizeArcPlotterCustomPresets(')
+        expect(processSource).toContain(
+            'arcPlotterSettings: resolvedArcPlotterSettings()'
+        )
     })
 
     test('exposes one shared canonical writing style page', () => {
-        expect(commonPage).toContain('risuBardCommonSettingsItems')
+        expect(commonPage).toContain('risuBardCommonSettingsAfterArcPlotterItems')
         expect(databaseSource).toContain('risuBardCanonicalWritingStyle?:')
         expect(databaseSource).toContain('risuBardCanonicalCustomStyle?: string')
         expect(settingsData).toContain("bindKey: 'risuBardCanonicalWritingStyle'")
@@ -132,11 +152,15 @@ describe('RisuBard mode settings', () => {
         expect(databaseSource).toContain('risuBardArcaChatParagraphSpacingPercent?: number')
         expect(databaseSource).toContain('risuBardArcaChatShowTitleImage?: boolean')
         expect(databaseSource).toContain('risuBardArcaChatTitleImageStyle?:')
+        expect(databaseSource).toContain('risuBardArcaChatIncludeUserMessages?: boolean')
+        expect(databaseSource).toContain('risuBardArcaChatDialogSize?:')
         expect(databaseSource).toContain('normalizeArcaChatImageWidthPercent(')
         expect(databaseSource).toContain('normalizeArcaChatFontSizePx(')
         expect(databaseSource).toContain('normalizeArcaChatParagraphSpacingPercent(')
         expect(databaseSource).toContain('normalizeArcaChatShowTitleImage(')
         expect(databaseSource).toContain('normalizeArcaChatTitleImageStyle(')
+        expect(databaseSource).toContain('normalizeArcaChatIncludeUserMessages(')
+        expect(databaseSource).toContain('normalizeArcaChatDialogSize(')
         expect(settingsData).toContain("id: 'risubard.common.arcaChatExporter'")
         expect(settingsData).toContain("type: 'header'")
         expect(settingsData).toContain("bindKey: 'risuBardArcaChatImageWidthPercent'")

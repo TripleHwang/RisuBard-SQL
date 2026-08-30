@@ -1,4 +1,4 @@
-import { NodeStorage, type PatchItemResult, type ExportBackupOptions } from "./nodeStorage"
+import { NodeStorage, type PatchItemResult, type ExportBackupOptions, type BackupImportPhase } from "./nodeStorage"
 
 export class AutoStorage{
     isAccount:boolean = false
@@ -56,7 +56,7 @@ export class AutoStorage{
         return this.realStorage.settingsBackupEstimate()
     }
 
-    async importBackup(file: Blob, onProgress?: (loaded: number, total: number) => void) {
+    async importBackup(file: Blob, onProgress?: (loaded: number, total: number, phase?: BackupImportPhase) => void) {
         await this.Init()
         return this.realStorage.importBackup(file, onProgress)
     }
@@ -90,7 +90,7 @@ export class AutoStorage{
     // ── Server-side backup ─────────────────────────────────────────────────────
     async saveServerBackup(onProgress?: (current: number, total: number, bytes: number, totalBytes: number) => void) { await this.Init(); return this.realStorage.saveServerBackup(onProgress) }
     async listServerBackups() { await this.Init(); return this.realStorage.listServerBackups() }
-    async restoreServerBackup(filename: string, onProgress?: (bytes: number, totalBytes: number) => void) { await this.Init(); return this.realStorage.restoreServerBackup(filename, onProgress) }
+    async restoreServerBackup(filename: string, onProgress?: (bytes: number, totalBytes: number, phase?: BackupImportPhase) => void) { await this.Init(); return this.realStorage.restoreServerBackup(filename, onProgress) }
     async deleteServerBackup(filename: string) { await this.Init(); return this.realStorage.deleteServerBackup(filename) }
     async downloadServerBackup(filename: string) { await this.Init(); return this.realStorage.downloadServerBackup(filename) }
 

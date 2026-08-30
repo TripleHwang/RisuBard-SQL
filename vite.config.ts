@@ -9,6 +9,8 @@ const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'));
 
 // https://vitejs.dev/config/
 export default defineConfig(({command, mode}) => {
+  const nodeServerTarget = process.env.RISU_DEV_SERVER_TARGET || 'http://localhost:6001';
+  const nodeProxy = { target: nodeServerTarget, changeOrigin: true, secure: false };
   return {
     define: {
       '__APP_VERSION__': JSON.stringify(pkg.version),
@@ -24,6 +26,15 @@ export default defineConfig(({command, mode}) => {
       }),
       tailwindcss(),
       wasm(),
+      command === 'serve' ? {
+        name: 'risubard-node-dev-globals',
+        transformIndexHtml(html: string) {
+          return html.replace(
+            '<head>',
+            '<head><script>globalThis.__NODE__ = true; globalThis.__PATCH_SYNC__ = true</script>',
+          );
+        },
+      } : null,
       command === 'build' ? strip({
         include: '**/*.(mjs|js|svelte|ts)',
         functions: ['console.log', 'console.debug', 'console.table', 'assert.*'],
@@ -39,6 +50,13 @@ export default defineConfig(({command, mode}) => {
       port: 5174,
       strictPort: true,
       // hmr: false,
+      proxy: command === 'serve' ? {
+        '/proxy-stream-jobs': { ...nodeProxy, ws: true },
+        '/hub-proxy': nodeProxy,
+        '/proxy2': nodeProxy,
+        '/proxy': nodeProxy,
+        '/api': nodeProxy,
+      } : undefined,
     },
     // to make use of `TAURI_ENV_DEBUG` and other env variables
     // https://v2.tauri.app/reference/environment-variables/

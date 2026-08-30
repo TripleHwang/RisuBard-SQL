@@ -2276,7 +2276,7 @@ async function validateStagedBackupDatabase(databasePath) {
 
 // ─── Shared backup import logic ─────────────────────────────────────────────
 // Accepts any async iterable of Buffer chunks (HTTP request body, file stream, etc.)
-async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0, onProgress = null } = {}) {
+async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0, onProgress = null, onPhase = null } = {}) {
     let hasDatabase = false;
     let databaseEntryPath = null;
     let encryptionMetadataPath = null;
@@ -2458,9 +2458,11 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
             },
         });
         bytesReceived = staged.bytesReceived;
+        if (onProgress) onProgress(bytesReceived, totalBytes);
         if (!hasDatabase) {
             throw new Error('Backup does not contain database.risudat');
         }
+        if (onPhase) onPhase('validating');
         if (encryptionMetadataPath) {
             await decryptAccountBackupDatabase(databaseEntryPath, encryptionMetadataPath);
         }
@@ -2470,6 +2472,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 writeStagingSidecarSync(id, info);
             }
         }
+        if (onPhase) onPhase('publishing');
         await kvReplacePrefixesFromFilesAsync(stagedKvEntries, [
             'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
             'coldstorage/', 'drafts/', 'remotes/', REMOTE_MIGRATION_MARKER_KEY,
@@ -2505,6 +2508,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
     await fs.rm(entryStagingDir, { recursive: true, force: true }).catch(() => {});
 
+    if (onPhase) onPhase('finalizing');
     await ensureInlayDir();
     try {
         if (existsSync(inlayDir)) {
@@ -4423,9 +4427,12 @@ app.post('/api/backup/import', async (req, res, next) => {
                 totalBytes,
                 onProgress: (received, total) => {
                     const now = Date.now();
-                    if (now - lastProgressWrite < 200) return;
+                    if (received < total && now - lastProgressWrite < 200) return;
                     lastProgressWrite = now;
                     res.write(JSON.stringify({ type: 'progress', bytes: received, totalBytes: total }) + '\n');
+                },
+                onPhase: phase => {
+                    res.write(JSON.stringify({ type: 'phase', phase, bytes: totalBytes, totalBytes }) + '\n');
                 },
             });
             res.write(JSON.stringify({
@@ -4678,9 +4685,12 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
             totalBytes: fileStat.size,
             onProgress: (received, total) => {
                 const now = Date.now();
-                if (now - lastProgressWrite < 200) return;
+                if (received < total && now - lastProgressWrite < 200) return;
                 lastProgressWrite = now;
                 res.write(JSON.stringify({ type: 'progress', bytes: received, totalBytes: total }) + '\n');
+            },
+            onPhase: phase => {
+                res.write(JSON.stringify({ type: 'phase', phase, bytes: fileStat.size, totalBytes: fileStat.size }) + '\n');
             },
         });
         res.write(JSON.stringify({

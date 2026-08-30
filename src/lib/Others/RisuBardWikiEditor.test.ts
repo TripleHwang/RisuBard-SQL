@@ -40,6 +40,7 @@ const documents = [{
     type: 'character' as const,
     status: 'active' as const,
     title: '라비안',
+    aliases: ['기사님'],
     relativePath: 'characters/라비안.md',
     sourceMessageIds: [],
     updated: '2026-08-08T00:00:00.000Z',
@@ -52,6 +53,7 @@ const documents = [{
     type: 'event' as const,
     status: 'active' as const,
     title: '전투',
+    aliases: [],
     relativePath: 'events/turn-1.md',
     sourceMessageIds: ['assistant-1'],
     updated: '2026-08-08T00:01:00.000Z',
@@ -225,7 +227,7 @@ describe('RisuBardWikiEditor', () => {
         )?.value).toBe(previewDocuments[0].content)
     })
 
-    it('exposes collapsible portrait panels, touch resizing, and editor focus', async () => {
+    it('opens the responsive document sidebar on demand and closes it from the scrim', async () => {
         const onFocusModeChange = vi.fn()
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
@@ -240,29 +242,25 @@ describe('RisuBardWikiEditor', () => {
         await tick()
 
         const editor = document.querySelector<HTMLElement>('[data-wiki-editor]')!
-        expect(editor.dataset.treeExpanded).toBe('true')
+        expect(editor.dataset.treeExpanded).toBe('false')
         expect(editor.dataset.editorExpanded).toBe('true')
         expect(editor.dataset.editorFocus).toBe('false')
-        expect(editor.style.getPropertyValue('--wiki-tree-height')).toBe('176px')
-
-        document.querySelector<HTMLButtonElement>(
-            '[data-wiki-tree-resizer]'
-        )?.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'ArrowDown',
-            bubbles: true,
-        }))
-        await tick()
-        expect(editor.style.getPropertyValue('--wiki-tree-height')).toBe('200px')
+        expect(document.querySelector('[data-wiki-tree-scrim]')).toBeNull()
 
         document.querySelector<HTMLButtonElement>(
             '[data-wiki-toggle-tree]'
         )?.click()
-        document.querySelector<HTMLButtonElement>(
-            '[data-wiki-toggle-editor]'
-        )?.click()
+        await tick()
+        expect(editor.dataset.treeExpanded).toBe('true')
+        const scrim = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-tree-scrim]'
+        )
+        expect(scrim?.getAttribute('aria-label')).toBe('문서 목록 닫기')
+
+        scrim?.click()
         await tick()
         expect(editor.dataset.treeExpanded).toBe('false')
-        expect(editor.dataset.editorExpanded).toBe('false')
+        expect(document.querySelector('[data-wiki-tree-scrim]')).toBeNull()
 
         document.querySelector<HTMLButtonElement>(
             '[data-wiki-editor-focus]'
@@ -271,6 +269,18 @@ describe('RisuBardWikiEditor', () => {
         expect(editor.dataset.editorFocus).toBe('true')
         expect(editor.dataset.editorExpanded).toBe('true')
         expect(onFocusModeChange).toHaveBeenLastCalledWith(true)
+    })
+
+    it('uses a container-responsive overlay drawer instead of stacking the tree above the editor', () => {
+        const source = readFileSync(
+            'src/lib/Others/RisuBardWikiEditor.svelte',
+            'utf8'
+        )
+
+        expect(source).toContain('@container (max-width: 46rem)')
+        expect(source).toMatch(/\.file-tree\s*\{[^}]*position:\s*absolute[^}]*transform:\s*translateX\(-100%\)/s)
+        expect(source).toContain('.wiki-editor:not(.tree-collapsed) .file-tree')
+        expect(source).toContain('.tree-scrim')
     })
 
     it('copies a saved wiki document into the character lorebook without AI', async () => {
@@ -382,6 +392,32 @@ describe('RisuBardWikiEditor', () => {
                 })
             )
         })
+    })
+
+    it('edits aliases as comma-separated document metadata', async () => {
+        mocks.saveManualWikiDocument.mockResolvedValue(documents[0])
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: { characterId: 'character', chatId: 'chat', documents },
+        })
+        await tick()
+
+        const aliases = document.querySelector<HTMLInputElement>(
+            '[aria-label="별칭"]'
+        )!
+        expect(aliases.value).toBe('기사님')
+        aliases.value = '기사님, 북방의 검'
+        aliases.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-action-toolbar] [aria-label="저장"]'
+        )!.click()
+
+        await vi.waitFor(() => expect(mocks.saveManualWikiDocument)
+            .toHaveBeenCalledWith(expect.objectContaining({
+                documentId: 'character.lavian',
+                aliases: ['기사님', '북방의 검'],
+            })))
     })
 
     it('navigates to the selected document source from the left toolbar action', async () => {

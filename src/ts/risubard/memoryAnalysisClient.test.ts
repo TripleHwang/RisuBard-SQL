@@ -674,6 +674,84 @@ describe('stored response memory analysis', () => {
         }
     })
 
+    test('passes an exact one-turn reboot schema to the model provider', async () => {
+        const modelCalls: MemoryAnalysisModelCall[] = []
+        const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {
+            modelCalls.push(request)
+            return {
+                type: 'success' as const,
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    turns: [{ title: '탈출', establishedEvents: [] }],
+                    stateChanges: [],
+                    characterKnowledge: [],
+                    persistentFacts: [],
+                    openContinuity: [],
+                    canonicalUpdateCandidates: [],
+                }),
+            }
+        })
+        const fetchImpl = vi.fn(async (input, init) => {
+            const url = String(input)
+            if (url.endsWith('/view')) {
+                return new Response(JSON.stringify({
+                    mode: 'markdown', wikiPath: 'wiki', documents: [],
+                    health: { danglingLinks: [], unlinkedDocumentIds: [] },
+                }))
+            }
+            if (url.endsWith('/inquiry')) {
+                return new Response(JSON.stringify({
+                    mode: 'v2-current', graphRevision: 0, indexRevision: 0,
+                    cacheStatus: 'current', sources: [], metrics: {
+                        candidateCount: 0, inspectedNodeCount: 0,
+                        inspectedEdgeCount: 0, selectedNodeCount: 0,
+                        selectedTokens: 0, hopCount: 0,
+                        auxiliaryModelCalls: 0,
+                    },
+                }))
+            }
+            if (url.endsWith('/wiki/reboot/begin')) {
+                return new Response(JSON.stringify({ canonicalCount: 0 }))
+            }
+            if (url.endsWith('/wiki/reboot/record')) {
+                return new Response(JSON.stringify(
+                    JSON.parse(String(init?.body)).receipt
+                ))
+            }
+            throw new Error(`Unexpected request: ${url}`)
+        }) as unknown as typeof fetch
+        const analysis = createStoredResponseMemoryAnalysis({
+            requestModel,
+            fetchImpl,
+            createAuth: async () => 'test-jwt',
+            onError: vi.fn(),
+            nativeV2Analysis: true,
+        })
+
+        await analysis.confirm({
+            characterId: 'character',
+            chatId: 'reboot-job',
+            messages: [{
+                messageId: 'assistant-1',
+                role: 'assistant',
+                content: '창고를 나섰다.',
+            }],
+            rebootTurns: [{
+                assistantMessageId: 'assistant-1',
+                sourceMessageIds: ['assistant-1'],
+            }],
+        })
+
+        expect(modelCalls).toHaveLength(1)
+        const schema = JSON.parse(modelCalls[0].schema ?? '{}')
+        expect(schema.properties.turns).toMatchObject({
+            minItems: 1,
+            maxItems: 1,
+        })
+        expect(schema.properties.turns.items.properties)
+            .not.toHaveProperty('assistantMessageId')
+    })
+
     test('falls back to the main model only when the memory binding is unset', async () => {
         const modes: string[] = []
         const requestModel = vi.fn(async (
@@ -1319,6 +1397,19 @@ describe('stored response memory analysis', () => {
         expect(modelCalls[1].schema).toContain('candidateIndex')
         expect(modelCalls[1].schema).toContain('sections')
         expect(modelCalls[1].schema).not.toContain('markdown')
+        for (const call of modelCalls.filter((item) =>
+            item.logPurpose === 'bardwiki-canonical-update'
+        )) {
+            const targetCount = JSON.parse(call.formated[1].content)
+                .targets.length
+            const schema = JSON.parse(call.schema ?? '{}')
+            expect(schema.properties.documents).toMatchObject({
+                minItems: targetCount,
+                maxItems: targetCount,
+            })
+            expect(schema.properties.documents.items.properties
+                .candidateIndex.maximum).toBe(targetCount - 1)
+        }
         expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
         expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
         expect(modelCalls[0].maxTokens).toBe(analysisTokenLimit)

@@ -65,6 +65,7 @@
     let creating = $state(false)
     let type = $state<MarkdownWikiDocumentType>('character')
     let title = $state('')
+    let aliasesText = $state('')
     let markdown = $state('')
     let saving = $state(false)
     let error = $state('')
@@ -73,17 +74,18 @@
     let loadedContentHash = $state('')
     let loadedType = $state<MarkdownWikiDocumentType>('character')
     let loadedTitle = $state('')
+    let loadedAliasesText = $state('')
     let loadedMarkdown = $state('')
     let contextDocumentId = $state('')
     let contextX = $state(0)
     let contextY = $state(0)
     let wikiEditorElement = $state<HTMLElement | null>(null)
-    let treeExpanded = $state(true)
+    let treeExpanded = $state(false)
     let editorExpanded = $state(true)
     let editorFocus = $state(false)
     let markdownPreview = $state(false)
     let treeHeight = $state(normalizeMemoryWikiTreeHeight(undefined))
-    let restoredTreeExpanded = true
+    let restoredTreeExpanded = false
     let restoredEditorExpanded = true
 
     const markdownRenderer = markdownit({
@@ -108,6 +110,7 @@
     let dirty = $derived(creating
         ? title.trim().length > 0 || markdown.trim().length > 0
         : !!selected && (title !== loadedTitle
+            || aliasesText !== loadedAliasesText
             || type !== loadedType
             || markdown !== loadedMarkdown))
 
@@ -116,11 +119,13 @@
         creating = false
         type = document.type
         title = document.title
+        aliasesText = (document.aliases ?? []).join(', ')
         markdown = document.content
         loadedDocumentId = document.id
         loadedContentHash = document.contentHash
         loadedType = document.type
         loadedTitle = document.title
+        loadedAliasesText = aliasesText
         loadedMarkdown = document.content
         error = ''
         notice = ''
@@ -139,6 +144,7 @@
         creating = true
         type = 'character'
         title = ''
+        aliasesText = ''
         markdown = ''
         error = ''
         notice = ''
@@ -289,6 +295,13 @@
                 } : {}),
                 type,
                 title,
+                aliases: Array.from(new Map(aliasesText
+                    .split(/[,\n]/)
+                    .map((alias) => alias.trim())
+                    .filter(Boolean)
+                    .map((alias) => [
+                        alias.normalize('NFKC').toLocaleLowerCase(), alias,
+                    ])).values()).slice(0, 32),
                 markdown,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
@@ -454,6 +467,7 @@
         if (creating || !current) return
         const incomingType = current.type
         const matchesIncoming = title === current.title
+            && aliasesText === (current.aliases ?? []).join(', ')
             && type === incomingType
             && markdown === current.content
         if (current.id !== selectedId
@@ -490,6 +504,15 @@
             <ChevronDownIcon size={18} class={treeExpanded ? '' : 'collapsed'} />
         </button>
     </div>
+    {#if treeExpanded}
+        <button
+            type="button"
+            class="tree-scrim"
+            data-wiki-tree-scrim
+            aria-label="문서 목록 닫기"
+            onclick={() => treeExpanded = false}
+        ></button>
+    {/if}
     <nav id="risubard-wiki-file-tree" class="file-tree" aria-label="위키 파일 트리">
         <div class="tree-toolbar">
             <strong>WIKI</strong>
@@ -627,6 +650,10 @@
                     <span>이름</span>
                     <input aria-label="항목 이름" bind:value={title} maxlength="160" readonly={readOnly} />
                 </label>
+                <label class="aliases-field">
+                    <span>별칭</span>
+                    <input aria-label="별칭" bind:value={aliasesText} maxlength="3000" readonly={readOnly} placeholder="쉼표로 구분" />
+                </label>
             </div>
             <div class="editor-actions" data-wiki-action-toolbar>
                 {#if selected && selected.sourceMessageIds.length > 0 && onNavigateSource}
@@ -743,7 +770,7 @@
 
 <style>
     .wiki-editor { display: grid; grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr); min-height: 27rem; border-bottom: 1px solid var(--risu-theme-darkborderc); }
-    .portrait-panel-header, .editor-section-resizer { display: none; }
+    .portrait-panel-header, .editor-section-resizer, .tree-scrim { display: none; }
     .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor)); }
     .tree-toolbar, .editor-title-row { display: flex; align-items: center; gap: .5rem; }
     .tree-toolbar { justify-content: space-between; padding: .2rem .25rem .6rem; }
@@ -769,6 +796,7 @@
     .editor-title-row label:first-child { flex: 0 0 5.5rem; }
     .editor-title-row select, .editor-title-row input { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
     .title-field { flex: 1 1 12rem; }
+    .aliases-field { flex: 1 1 12rem; }
     .editor-actions { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: .25rem; overflow-x: auto; padding: .45rem .75rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
     .editor-source-action { display: inline-flex; flex: 0 0 auto; margin-right: auto; }
     .markdown-preview-toggle { display: inline-flex; flex: 0 0 auto; min-height: 2rem; align-items: center; gap: .32rem; padding: 0 .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .34rem; color: var(--risu-theme-textcolor2); font: 700 .67rem/1 ui-monospace, monospace; cursor: pointer; user-select: none; }
@@ -836,28 +864,27 @@
         .editor-actions .editor-source-action :global(button) { width: auto; padding-inline: .55rem; }
         .editor-actions [data-wiki-action-label] { display: none; }
     }
-    @media (orientation: portrait) {
+    @container (max-width: 46rem) {
         .wiki-editor {
+            position: relative;
             grid-template-columns: minmax(0, 1fr);
-            grid-template-rows:
-                2.75rem
-                minmax(0, var(--wiki-tree-height))
-                .8rem
-                2.75rem
-                minmax(0, 1fr);
+            grid-template-rows: 2.75rem minmax(0, 1fr);
             height: 100%;
             min-height: 0;
             overflow: hidden;
+            isolation: isolate;
         }
-        .portrait-panel-header {
+        .tree-panel-header {
+            z-index: 32;
             display: flex;
+            grid-row: 1;
             min-width: 0;
             border-bottom: 1px solid var(--risu-theme-darkborderc);
             background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
         }
-        .portrait-panel-header > button {
+        .tree-panel-header > button {
             display: flex;
-            width: auto;
+            width: 100%;
             min-height: 2.75rem;
             align-items: center;
             gap: .6rem;
@@ -868,95 +895,88 @@
             text-align: left;
             touch-action: manipulation;
         }
-        .portrait-panel-header > .panel-toggle { flex: 1 1 auto; min-width: 0; }
-        .portrait-panel-header > .panel-focus { flex: 0 0 2.75rem; justify-content: center; padding-inline: 0; }
-        .portrait-panel-header > button:active {
+        .tree-panel-header > button:active {
             background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent);
         }
-        .portrait-panel-header > button:focus-visible {
+        .tree-panel-header > button:focus-visible {
             outline: 2px solid var(--risu-theme-primary);
             outline-offset: -2px;
         }
-        .portrait-panel-header button > span {
+        .tree-panel-header button > span {
             display: flex;
             flex: 1;
             min-width: 0;
             align-items: baseline;
             gap: .5rem;
         }
-        .portrait-panel-header strong { font-size: .78rem; }
-        .portrait-panel-header small {
+        .tree-panel-header strong { font-size: .78rem; }
+        .tree-panel-header small {
             overflow: hidden;
             color: var(--risu-theme-textcolor2);
             font-size: .68rem;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
-        .portrait-panel-header :global(svg:last-child) {
+        .tree-panel-header :global(svg:last-child) {
             flex: 0 0 auto;
             transition: transform .18s ease-out;
         }
-        .portrait-panel-header :global(svg:last-child.collapsed) {
+        .tree-panel-header :global(svg:last-child.collapsed) {
             transform: rotate(-90deg);
         }
         .file-tree {
+            position: absolute;
+            z-index: 31;
+            inset: 2.75rem auto 0 0;
+            width: min(20rem, calc(100% - 2.75rem));
             min-height: 0;
-            border-right: 0;
-            border-bottom: 1px solid var(--risu-theme-darkborderc);
+            box-sizing: border-box;
+            border-right: 1px solid color-mix(in srgb, var(--risu-theme-primary) 26%, var(--risu-theme-darkborderc));
             overscroll-behavior: contain;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-100%);
+            transition: transform .18s ease-out, opacity .14s ease-out;
         }
-        .folder-row, .root-file, .folder-children button { min-height: 2.75rem; }
-        .editor-section-resizer {
-            position: relative;
+        .wiki-editor:not(.tree-collapsed) .file-tree {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(0);
+            box-shadow: .8rem 0 2rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
+        }
+        .tree-scrim {
+            position: absolute;
+            z-index: 30;
             display: block;
+            inset: 2.75rem 0 0;
             width: 100%;
-            min-height: .8rem;
             padding: 0;
             border: 0;
-            border-block: 1px solid var(--risu-theme-darkborderc);
-            background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, transparent);
-            cursor: row-resize;
-            touch-action: none;
+            background: color-mix(in srgb, var(--color-shadow) 48%, transparent);
+            cursor: default;
         }
-        .editor-section-resizer::before {
-            position: absolute;
-            z-index: 2;
-            inset: -1.9rem 0 0;
-            content: '';
-        }
-        .editor-section-resizer span {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 3rem;
-            height: .2rem;
-            border-radius: 999px;
-            background: color-mix(in srgb, var(--risu-theme-textcolor2) 58%, transparent);
-            transform: translate(-50%, -50%);
-        }
-        .editor-section-resizer:focus-visible {
-            outline: 2px solid var(--risu-theme-primary);
-            outline-offset: -2px;
-        }
-        .editor-pane { min-height: 0; overflow: hidden; }
+        .folder-row, .root-file, .folder-children button { min-height: 2.75rem; }
+        .editor-section-resizer, .editor-panel-header { display: none; }
+        .editor-pane { display: flex; grid-row: 2; min-height: 0; overflow: hidden; }
         .editor-title-row {
-            flex-wrap: wrap;
-            gap: .6rem;
-            padding: .65rem .75rem;
+            display: grid;
+            grid-template-columns: minmax(6.5rem, .72fr) minmax(0, 1.28fr);
+            gap: .45rem;
+            padding: .5rem .6rem;
         }
-        .editor-title-row label:first-child { flex: 0 0 7.5rem; }
+        .editor-title-row .aliases-field { grid-column: 1 / -1; }
         .editor-title-row select, .editor-title-row input {
             min-height: 2.75rem;
             font-size: 1rem;
         }
-        .title-field { min-width: min(12rem, 100%); }
         .editor-actions {
             width: 100%;
             align-items: center;
             justify-content: flex-end;
-            gap: .5rem;
+            gap: .35rem;
             margin-left: 0;
-            padding: .5rem .75rem;
+            padding: .4rem .6rem;
+            scrollbar-width: thin;
         }
         .editor-actions :global(button) { min-height: 2.75rem; }
         .document-meta { flex-wrap: wrap; gap: .35rem .6rem; }
@@ -967,35 +987,22 @@
             line-height: 1.65;
             overscroll-behavior: contain;
         }
-        .tree-collapsed {
-            grid-template-rows: 2.75rem 0 0 2.75rem minmax(0, 1fr);
-        }
-        .tree-collapsed .file-tree,
-        .tree-collapsed .editor-section-resizer { display: none; }
-        .editor-collapsed {
-            grid-template-rows:
-                2.75rem
-                minmax(0, 1fr)
-                0
-                2.75rem
-                0;
-        }
-        .editor-collapsed .editor-pane,
-        .editor-collapsed .editor-section-resizer { display: none; }
-        .tree-collapsed.editor-collapsed {
-            grid-template-rows: 2.75rem 0 0 2.75rem 0;
-        }
-        .editor-focus {
-            grid-template-rows: 2.75rem minmax(0, 1fr);
-        }
+        .tree-collapsed .file-tree { display: block; }
+        .editor-collapsed .editor-pane { display: flex; }
+        .editor-focus { grid-template-rows: minmax(0, 1fr); }
         .editor-focus .tree-panel-header,
         .editor-focus .file-tree,
-        .editor-focus .editor-section-resizer { display: none; }
-        .editor-focus .editor-panel-header { display: flex; grid-row: 1; }
-        .editor-focus .editor-pane { display: flex; grid-row: 2; }
+        .editor-focus .tree-scrim { display: none; }
+        .editor-focus .editor-pane { grid-row: 1; }
+    }
+
+    @container (max-width: 30rem) {
+        .editor-title-row { grid-template-columns: minmax(0, 1fr); }
+        .editor-title-row .aliases-field { grid-column: auto; }
     }
 
     @media (prefers-reduced-motion: reduce) {
-        .portrait-panel-header :global(svg:last-child) { transition: none; }
+        .tree-panel-header :global(svg:last-child),
+        .file-tree { transition: none; }
     }
 </style>

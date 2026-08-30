@@ -46,7 +46,10 @@
     import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
     import forceUpdateIdle from 'src/assets/risubard-memory/additional-analysis-idle.png'
     import forceUpdateHover from 'src/assets/risubard-memory/additional-analysis-hover.gif'
-    import type { DirectWikiCommandResult } from 'src/ts/risubard/directWikiCommand'
+    import type {
+        DirectWikiCommandResult,
+        DirectWikiContextSelection,
+    } from 'src/ts/risubard/directWikiCommand'
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar'
     import { alertConfirm, alertError } from 'src/ts/alert'
     import {
@@ -54,7 +57,9 @@
         type WikiRebootBatchSize,
         type WikiRebootJob,
     } from 'src/ts/risubard/wikiReboot'
-    import { resolveRisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
+    import {
+        resolveRisuBardChatSettings,
+    } from 'src/ts/risubard/risuBardSettings'
 
     interface Props {
         open?: boolean
@@ -70,7 +75,8 @@
         onResumeWikiReboot?: () => Promise<boolean>
         onCancelWikiReboot?: () => Promise<boolean>
         onExecuteWikiCommand?: (
-            instruction: string
+            instruction: string,
+            contextSelection: DirectWikiContextSelection
         ) => Promise<DirectWikiCommandResult>
         onNavigateStorySource?: (source: StorySourceRef) => void
     }
@@ -94,6 +100,9 @@
     let forceUpdating = $state(false)
     let forceUpdateStatus = $state<'success' | 'empty' | 'failed' | ''>('')
     let forceUpdateError = $state('')
+    let forceUpdateMeta = $state<{ turn: number; completedAt: number } | null>(
+        null
+    )
     let requestSequence = 0
     let loadedScope = ''
     let dockElement = $state<HTMLElement | null>(null)
@@ -136,6 +145,21 @@
             character.chaId === characterId
         )?.chats.find((chat) => chat.id === chatId)
     )
+    let resolvedChatSettings = $derived(resolveRisuBardChatSettings(
+        DBState.db,
+        currentChat?.risuBardSettings
+    ))
+    let bardChatContextSelection = $derived<DirectWikiContextSelection>({
+        wiki: resolvedChatSettings.bardChatIncludeWiki,
+        chat: resolvedChatSettings.bardChatIncludeChat,
+        systemPrompt: resolvedChatSettings.bardChatIncludeSystemPrompt,
+        characterDescription:
+            resolvedChatSettings.bardChatIncludeCharacterDescription,
+        persona: resolvedChatSettings.bardChatIncludePersona,
+        characterLorebook:
+            resolvedChatSettings.bardChatIncludeCharacterLorebook,
+        moduleLorebook: resolvedChatSettings.bardChatIncludeModuleLorebook,
+    })
     let rebootLastChatIndex = $derived((currentChat?.message.length ?? 0) - 1)
     let rebootStartChatIndexValid = $derived(
         Number.isInteger(rebootStartChatIndex)
@@ -276,13 +300,26 @@
 
     async function forceWikiUpdate() {
         if (forceUpdating || rebootJob) return
+        const targetTurn = currentChat?.message.filter((message) =>
+            message.role === 'char'
+            && !message.isComment
+            && !message.disabled
+            && typeof message.chatId === 'string'
+            && message.chatId.trim().length > 0
+        ).length ?? 0
         forceUpdating = true
         forceUpdateStatus = ''
         forceUpdateError = ''
+        forceUpdateMeta = null
         try {
-            forceUpdateStatus = await onForceWikiUpdate?.()
-                ? 'success'
-                : 'empty'
+            const updated = await onForceWikiUpdate?.()
+            forceUpdateStatus = updated ? 'success' : 'empty'
+            if (updated && targetTurn > 0) {
+                forceUpdateMeta = {
+                    turn: targetTurn,
+                    completedAt: Date.now(),
+                }
+            }
         }
         catch (cause) {
             forceUpdateStatus = 'failed'
@@ -308,14 +345,35 @@
     }
 
     async function executeWikiCommand(
-        instruction: string
+        instruction: string,
+        contextSelection: DirectWikiContextSelection
     ): Promise<DirectWikiCommandResult> {
         if (!onExecuteWikiCommand) {
             throw new Error('현재 채팅에서 위키 관리자 명령을 실행할 수 없습니다.')
         }
-        const result = await onExecuteWikiCommand(instruction)
+        const result = await onExecuteWikiCommand(
+            instruction,
+            contextSelection
+        )
         await loadWiki()
         return result
+    }
+
+    function setBardChatContextSelection(
+        selection: DirectWikiContextSelection
+    ) {
+        if (!currentChat) return
+        currentChat.risuBardSettings ??= {}
+        Object.assign(currentChat.risuBardSettings, {
+            bardChatIncludeWiki: selection.wiki,
+            bardChatIncludeChat: selection.chat,
+            bardChatIncludeSystemPrompt: selection.systemPrompt,
+            bardChatIncludeCharacterDescription:
+                selection.characterDescription,
+            bardChatIncludePersona: selection.persona,
+            bardChatIncludeCharacterLorebook: selection.characterLorebook,
+            bardChatIncludeModuleLorebook: selection.moduleLorebook,
+        })
     }
 
     async function replaceText(input: {
@@ -710,13 +768,27 @@
                 data-force-update-status={forceUpdateStatus}
                 aria-live="polite"
             >
-                {forceUpdateStatus === 'failed' && forceUpdateError
-                    ? forceUpdateError
-                    : forceUpdateStatus === 'success'
-                    ? language.risuBardMemoryForceUpdateDone
-                    : forceUpdateStatus === 'empty'
-                        ? language.risuBardMemoryForceUpdateEmpty
-                        : language.risuBardMemoryForceUpdateFailed}
+                <span>
+                    {forceUpdateStatus === 'failed' && forceUpdateError
+                        ? forceUpdateError
+                        : forceUpdateStatus === 'success'
+                        ? language.risuBardMemoryForceUpdateDone
+                        : forceUpdateStatus === 'empty'
+                            ? language.risuBardMemoryForceUpdateEmpty
+                            : language.risuBardMemoryForceUpdateFailed}
+                </span>
+                {#if forceUpdateStatus === 'success' && forceUpdateMeta}
+                    <span class="force-update-meta" data-force-update-meta>
+                        {language.risuBardMemoryForceUpdateMeta(
+                            forceUpdateMeta.turn,
+                            new Intl.DateTimeFormat(undefined, {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: false,
+                            }).format(forceUpdateMeta.completedAt)
+                        )}
+                    </span>
+                {/if}
             </div>
         {/if}
         {#if wiki?.observability}
@@ -816,16 +888,15 @@
                                     onclick={() => commandExpanded = !commandExpanded}
                                 >
                                     <SquareTerminalIcon size={17} />
-                                    <span>
-                                        <strong>위키 관리자 명령</strong>
-                                        <small>자연어로 Memory Wiki 편집</small>
-                                    </span>
+                                    <strong>BARDCHAT</strong>
                                     <ChevronDownIcon size={18} class={commandExpanded ? '' : 'collapsed'} />
                                 </button>
                             </header>
                             <div id="risubard-wiki-command-terminal" class="command-terminal-region">
                                 <RisuBardWikiCommandTerminal
                                     onExecute={executeWikiCommand}
+                                    contextSelection={bardChatContextSelection}
+                                    onContextSelectionChange={setBardChatContextSelection}
                                 />
                             </div>
                         </article>
@@ -1082,8 +1153,8 @@
     .dock-header {
         display: flex;
         flex-direction: column;
-        gap: .45rem;
-        padding: .5rem .65rem .6rem .8rem;
+        gap: .3rem;
+        padding: .4rem .5rem .45rem .65rem;
         border-bottom: 1px solid var(--risu-theme-darkborderc);
         background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
     }
@@ -1131,7 +1202,7 @@
         color: var(--risu-theme-primary);
         background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent);
     }
-    .dock-views { display: flex; flex-wrap: wrap; width: 100%; min-height: 52px; align-items: center; gap: .45rem; padding: .45rem .48rem; border-radius: .58rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
+    .dock-views { display: flex; flex-wrap: wrap; width: 100%; min-height: 44px; align-items: center; gap: .3rem; padding: .3rem .35rem; border-radius: .48rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
     .dock-view-actions { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; margin-left: auto; }
     .reboot-progress {
         flex: 1 0 100%;
@@ -1425,11 +1496,21 @@
         border-color: color-mix(in srgb, var(--risu-theme-primary) 45%, var(--risu-theme-darkborderc));
     }
     .force-update-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: .25rem 1rem;
         padding: .42rem 1rem;
         border-bottom: 1px solid color-mix(in srgb, var(--risu-theme-success) 28%, var(--risu-theme-darkborderc));
         color: color-mix(in srgb, var(--risu-theme-success) 78%, var(--risu-theme-textcolor));
         background: color-mix(in srgb, var(--risu-theme-success) 8%, var(--risu-theme-darkbg));
         font-size: .7rem;
+    }
+    .force-update-meta {
+        margin-left: auto;
+        white-space: nowrap;
+        color: color-mix(in srgb, currentColor 78%, transparent);
     }
     .force-update-status.failed {
         border-bottom-color: color-mix(in srgb, var(--risu-theme-draculared) 35%, var(--risu-theme-darkborderc));
@@ -1474,6 +1555,9 @@
             minmax(13rem, 1fr);
         overflow: hidden;
     }
+    .workspace-split > .wiki-editor-region { grid-row: 1; }
+    .workspace-split > .workspace-resizer { grid-row: 2; }
+    .workspace-split > .markdown-command-pane { grid-row: 3; }
     .markdown-wiki.workspace-split.editor-focus {
         grid-template-rows: minmax(0, 1fr);
     }
@@ -1542,6 +1626,8 @@
         background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent);
     }
     .markdown-command-pane {
+        position: relative;
+        z-index: 6;
         min-height: 0;
         overflow: hidden;
         padding: .65rem .75rem .75rem;
@@ -1549,27 +1635,21 @@
     .portrait-command-header { display: none; }
     .command-terminal-region { height: 100%; min-height: 0; }
 
-    @media (orientation: portrait) {
+    @container (max-width: 46rem) {
         .markdown-wiki.workspace-split {
-            grid-template-rows:
-                minmax(0, min(
-                    var(--wiki-workspace-height),
-                    calc(100% - 13.8rem)
-                ))
-                .8rem
-                minmax(13rem, 1fr);
+            grid-template-rows: minmax(0, 1fr) 0 minmax(12rem, 42%);
         }
         .markdown-wiki.workspace-split.command-collapsed {
-            grid-template-rows: minmax(0, 1fr) 0 2.75rem;
+            grid-template-rows: minmax(0, 1fr) 0 3rem;
         }
-        .workspace-split.command-collapsed > .workspace-resizer { display: none; }
-        .workspace-resizer { min-height: .8rem; }
+        .workspace-resizer { display: none; }
         .markdown-command-pane {
             display: grid;
-            grid-template-rows: 2.75rem minmax(0, 1fr);
+            grid-template-rows: 3rem minmax(0, 1fr);
             padding: 0;
             border-top: 1px solid var(--risu-theme-darkborderc);
             background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, var(--color-bgcolor));
+            box-shadow: 0 -.6rem 1.8rem color-mix(in srgb, var(--color-shadow) 16%, transparent);
         }
         .portrait-command-header {
             display: block;
@@ -1579,7 +1659,7 @@
         .portrait-command-header > button {
             display: flex;
             width: 100%;
-            min-height: 2.75rem;
+            min-height: 3rem;
             align-items: center;
             gap: .6rem;
             padding: .35rem .75rem;
@@ -1596,20 +1676,10 @@
             outline: 2px solid var(--risu-theme-primary);
             outline-offset: -2px;
         }
-        .portrait-command-header button > span {
-            display: flex;
+        .portrait-command-header strong {
             flex: 1;
             min-width: 0;
-            align-items: baseline;
-            gap: .5rem;
-        }
-        .portrait-command-header strong { font-size: .78rem; }
-        .portrait-command-header small {
-            overflow: hidden;
-            color: var(--risu-theme-textcolor2);
-            font-size: .68rem;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            font-size: .78rem;
         }
         .portrait-command-header :global(svg:last-child) {
             flex: 0 0 auto;
@@ -1618,7 +1688,7 @@
         .portrait-command-header :global(svg:last-child.collapsed) {
             transform: rotate(-90deg);
         }
-        .command-terminal-region { padding: .65rem .75rem .75rem; }
+        .command-terminal-region { padding: .45rem .55rem .55rem; }
         .markdown-command-pane.collapsed .command-terminal-region { display: none; }
         .markdown-wiki.workspace-split.editor-focus {
             grid-template-rows: minmax(0, 1fr);
@@ -1630,8 +1700,46 @@
         to { opacity: 1; transform: translateX(0); }
     }
 
-    @container (max-width: 36rem) {
-        .dock-views button { width: 2rem; padding-inline: .35rem; }
+    @container (max-width: 46rem) {
+        .dock-views {
+            flex-wrap: nowrap;
+            overflow-x: auto;
+            overscroll-behavior-inline: contain;
+            scrollbar-width: thin;
+        }
+        .dock-views button,
+        .dock-views summary {
+            width: 2.75rem;
+            min-height: 2.75rem;
+            padding-inline: .45rem;
+        }
+        .dock-views .force-update-button,
+        .dock-views .find-replace-button {
+            width: 2.75rem;
+            min-width: 2.75rem;
+            height: 2.75rem;
+            justify-content: center;
+            padding-inline: 0;
+        }
+        .dock-views .force-update-button span,
+        .dock-views .find-replace-button span {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+        }
+        .dock-views .reboot-button,
+        .dock-views .reboot-cancel-button {
+            min-width: auto;
+            height: 2.75rem;
+            padding-inline: .6rem;
+        }
+        .dock-view-actions {
+            flex: 0 0 auto;
+            margin-left: auto;
+        }
     }
 
     @media (max-width: 840px) {

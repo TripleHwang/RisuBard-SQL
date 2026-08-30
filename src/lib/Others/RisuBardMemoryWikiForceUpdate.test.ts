@@ -38,6 +38,9 @@ describe('BardWiki additional analysis control', () => {
         expect(korean).toContain(
             'risuBardMemoryForceUpdateEmpty: "추가 분석할 최신 AI 응답이 없습니다."'
         )
+        expect(korean).toContain(
+            'risuBardMemoryForceUpdateMeta: (turn: number, time: string) => `분석 기준: ${turn.toLocaleString()}턴 · 갱신: ${time}`'
+        )
         expect(english).toContain('risuBardMemoryForceUpdate: "Additional analysis"')
     })
 })

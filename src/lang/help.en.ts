@@ -447,6 +447,20 @@ export const helpEn = {
             "Maximum extra wiki searches when the first analysis does not find enough canonical candidates.",
         risuBardCanonicalTargetLimit:
             "Maximum canonical documents created or updated by one automatic analysis.",
+        risuBardArcPlotter:
+            "Whenever the configured number of confirmed events accumulates, the existing BardWiki writer updates the reserved Story Arc Plot document. The plot keeps only arcs, turning points, open threads, and representative event links instead of repeating the full chat or character histories, providing a route back to relevant past events in very long chats. It adds no embedding or separate AI call. Event documents and retrieved source chat remain the authority for exact details.",
+        risuBardArcPlotterEnabled:
+            "When disabled, new confirmed events do not create or update the Story Arc Plot automatically. Any existing plot document is preserved.",
+        risuBardArcPlotterCheckpointSize:
+            "Number of new confirmed events grouped into one plot update. Lower values update more often; higher values reduce writer calls.",
+        risuBardArcPlotterMaxArcs:
+            "Maximum chronological bullets retained in Arc Overview. Older adjacent arcs are merged when the limit is exceeded.",
+        risuBardArcPlotterMaxTurningPoints:
+            "Maximum bullets retained for major events that changed the direction of the story.",
+        risuBardArcPlotterMaxOpenThreads:
+            "Maximum unresolved promises, dangers, clues, and goals retained. Zero allows this list to remain empty.",
+        risuBardArcPlotterMaxCharacters:
+            "Maximum characters in the complete reserved plot Markdown. Higher values preserve more threads but can enlarge canonical-writer input and later search candidates.",
         risuBardResponseExcludeUsers:
             "Exclude earlier user messages from response context. The current user request is always retained.",
         customBackground: "A custom image used as the chat background.",

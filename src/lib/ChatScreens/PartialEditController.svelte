@@ -834,7 +834,7 @@
         padding: 20px;
         width: 50vw;
         max-width: 500px;
-        min-width: 320px;
+        min-width: min(320px, calc(100vw - 2rem));
         display: flex;
         flex-direction: column;
         gap: 16px;
@@ -866,7 +866,7 @@
         padding: 20px;
         width: 50vw;
         max-width: 1600px;
-        min-width: 400px;
+        min-width: min(400px, calc(100vw - 2rem));
         display: flex;
         flex-direction: column;
         gap: 12px;
@@ -941,7 +941,7 @@
         padding: 20px;
         width: 50vw;
         max-width: 1600px;
-        min-width: 400px;
+        min-width: min(400px, calc(100vw - 2rem));
         max-height: 80vh;
         display: flex;
         flex-direction: column;
@@ -1051,7 +1051,7 @@
         padding: 20px;
         width: 50vw;
         max-width: 1200px;
-        min-width: 400px;
+        min-width: min(400px, calc(100vw - 2rem));
         max-height: 80vh;
         display: flex;
         flex-direction: column;

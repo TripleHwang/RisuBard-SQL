@@ -17,6 +17,7 @@ describe('loadNarrativeMemoryWiki', () => {
             type: 'concept',
             status: 'active',
             title: '성약',
+            aliases: ['맹약'],
             relativePath: 'concepts/성약-oath.md',
             sourceMessageIds: [],
             created: '2026-08-08T00:00:00.000Z',
@@ -33,6 +34,7 @@ describe('loadNarrativeMemoryWiki', () => {
             chatId: 'chat',
             type: 'concept',
             title: '성약',
+            aliases: ['맹약'],
             markdown: '# 성약\n\n직접 기록.',
             fetchImpl,
             createAuth: async () => 'token',
@@ -49,6 +51,7 @@ describe('loadNarrativeMemoryWiki', () => {
                     chatId: 'chat',
                     type: 'concept',
                     title: '성약',
+                    aliases: ['맹약'],
                     markdown: '# 성약\n\n직접 기록.',
                 }),
             })

@@ -30,11 +30,30 @@ export interface DirectWikiModelCall {
 
 export interface DirectWikiModelResponse extends ModelResponse {}
 
+export interface DirectWikiContextSelection {
+    wiki: boolean
+    chat: boolean
+    systemPrompt: boolean
+    characterDescription: boolean
+    persona: boolean
+    characterLorebook: boolean
+    moduleLorebook: boolean
+}
+
+export interface DirectWikiContextSources {
+    systemPrompt: string
+    characterDescription: string
+    persona: string
+    characterLorebook: string
+    moduleLorebook: string
+}
+
 interface DirectWikiOperation {
     action: 'upsert' | 'trash' | 'retract-event'
     targetDocumentId: string | null
     type: EditableType | null
     title: string | null
+    aliases: string[] | null
     markdown: string | null
     reason: string
 }
@@ -67,7 +86,7 @@ export const directWikiCommandSchema = JSON.stringify({
                 additionalProperties: false,
                 required: [
                     'action', 'targetDocumentId', 'type', 'title',
-                    'markdown', 'reason',
+                    'aliases', 'markdown', 'reason',
                 ],
                 properties: {
                     action: {
@@ -91,6 +110,13 @@ export const directWikiCommandSchema = JSON.stringify({
                             { type: 'string', minLength: 1, maxLength: 160 },
                             { type: 'null' },
                         ],
+                    },
+                    aliases: {
+                        oneOf: [{
+                            type: 'array',
+                            maxItems: 32,
+                            items: { type: 'string', minLength: 1, maxLength: 160 },
+                        }, { type: 'null' }],
                     },
                     markdown: {
                         oneOf: [
@@ -141,11 +167,16 @@ function parseOperations(output: string): DirectWikiOperation[] {
         || !Array.isArray(parsed.operations)) {
         throw new Error('직접 위키 명령 응답 형식이 올바르지 않습니다.')
     }
-    const operations = parsed.operations.map((raw, index) => {
-        if (!isRecord(raw)
-            || !exactKeys(raw, [
+    const operations = parsed.operations.map((value, index) => {
+        if (!isRecord(value)) {
+            throw new Error(`직접 위키 명령 ${index + 1}의 형식이 올바르지 않습니다.`)
+        }
+        const raw = Object.prototype.hasOwnProperty.call(value, 'aliases')
+            ? value
+            : { ...value, aliases: null }
+        if (!exactKeys(raw, [
                 'action', 'targetDocumentId', 'type', 'title',
-                'markdown', 'reason',
+                'aliases', 'markdown', 'reason',
             ])) {
             throw new Error(`직접 위키 명령 ${index + 1}의 형식이 올바르지 않습니다.`)
         }
@@ -153,6 +184,17 @@ function parseOperations(output: string): DirectWikiOperation[] {
         const targetDocumentId = text(raw.targetDocumentId, 1_024)
         const type = raw.type === null ? null : raw.type
         const title = text(raw.title, 160)
+        const aliases = raw.aliases === null
+            ? null
+            : Array.isArray(raw.aliases) && raw.aliases.length <= 32
+                ? Array.from(new Map(raw.aliases.map((alias) => {
+                    const normalized = text(alias, 160)
+                    if (!normalized) {
+                        throw new Error(`직접 위키 명령 ${index + 1}의 별칭이 올바르지 않습니다.`)
+                    }
+                    return [normalized.normalize('NFKC').toLocaleLowerCase(), normalized]
+                })).values())
+                : undefined
         const markdown = text(raw.markdown, 12_000)
         const reason = text(raw.reason, 500)
         if (!['upsert', 'trash', 'retract-event'].includes(String(action))
@@ -161,12 +203,14 @@ function parseOperations(output: string): DirectWikiOperation[] {
         }
         if (action === 'upsert') {
             if (!editableTypes.includes(type as EditableType)
+                || aliases === undefined
                 || !title || !markdown || !/^#{1,2}[\t ]+\S/m.test(markdown)) {
                 throw new Error(`직접 위키 갱신 ${index + 1}이 불완전합니다.`)
             }
         }
         else if (!targetDocumentId
-            || type !== null || title !== null || markdown !== null) {
+            || type !== null || title !== null || aliases !== null
+            || markdown !== null) {
             throw new Error(`직접 위키 명령 ${index + 1}의 대상이 올바르지 않습니다.`)
         }
         return {
@@ -174,6 +218,7 @@ function parseOperations(output: string): DirectWikiOperation[] {
             targetDocumentId,
             type: type as EditableType | null,
             title,
+            aliases: aliases ?? null,
             markdown,
             reason,
         }
@@ -194,6 +239,8 @@ function boundedInput(input: {
         role: 'user' | 'assistant'
         content: string
     }>
+    contextSelection?: DirectWikiContextSelection
+    contextSources?: DirectWikiContextSources
     maxTokens: number
 }): string {
     const normalizedInstruction = input.instruction.normalize('NFKC')
@@ -203,7 +250,11 @@ function boundedInput(input: {
             document.title.normalize('NFKC').toLocaleLowerCase()
         )
     )
-    const requestedDocuments = namedDocuments.length > 0
+    const requiresCrossDocumentContext = /(?:^|\n)\s*작업:\s*(?:combine|reconnect|networking)\b/i
+        .test(input.instruction)
+    const requestedDocuments = requiresCrossDocumentContext
+        ? input.documents
+        : namedDocuments.length > 0
         ? namedDocuments
         : input.documents
     const requestsCurrentMessages = [
@@ -213,33 +264,64 @@ function boundedInput(input: {
         'current message', 'latest message', 'current response',
         'latest response', 'current chat', 'this chat',
     ].some((marker) => normalizedInstruction.includes(marker))
+    const contexts = Object.fromEntries(([
+        ['systemPrompt', 'systemPrompt'],
+        ['characterDescription', 'characterDescription'],
+        ['persona', 'persona'],
+        ['characterLorebook', 'characterLorebook'],
+        ['moduleLorebook', 'moduleLorebook'],
+    ] as const).flatMap(([selectionKey, sourceKey]) => {
+        const content = input.contextSources?.[sourceKey]?.trim() ?? ''
+        return input.contextSelection?.[selectionKey] && content
+            ? [[sourceKey, content]]
+            : []
+    })) as Partial<DirectWikiContextSources>
     const payload = {
         operatorInstruction: input.instruction,
-        currentMessages: requestsCurrentMessages ? input.currentMessages : [],
-        documents: requestedDocuments.map((document) => ({
+        currentMessages: (input.contextSelection
+            ? input.contextSelection.chat
+            : requestsCurrentMessages) ? input.currentMessages : [],
+        documents: (input.contextSelection?.wiki === false
+            ? []
+            : requestedDocuments).map((document) => ({
             id: document.id,
             type: document.type,
             status: document.status,
             title: document.title,
+            aliases: document.aliases,
             contentHash: document.contentHash,
             markdown: document.content,
         })),
+        contexts,
     }
     const maximumCharacters = Math.max(8_000, input.maxTokens * 3)
     let serialized = JSON.stringify(payload)
     while (serialized.length > maximumCharacters) {
         const reducible = payload.documents
             .filter((document) => document.markdown.length > 256)
-            .sort((left, right) => right.markdown.length - left.markdown.length)[0]
+            .map((document) => ({
+                value: document.markdown,
+                update: (value: string) => { document.markdown = value },
+            }))
+            .concat(Object.entries(payload.contexts)
+                .filter((entry) => entry[1].length > 256)
+                .map(([key, value]) => ({
+                    value,
+                    update: (next: string) => {
+                        payload.contexts[key as keyof DirectWikiContextSources]
+                            = next
+                    },
+                })))
+            .sort((left, right) => right.value.length - left.value.length)[0]
         if (!reducible) {
             throw new Error(
                 '직접 위키 명령 자료가 AI 분석 토큰 상한을 초과했습니다. 설정에서 상한을 늘려 주세요.'
             )
         }
-        reducible.markdown = reducible.markdown.slice(
+        reducible.update(reducible.value.slice(
             0,
-            Math.max(256, Math.floor(reducible.markdown.length * .7))
-        )
+            Math.max(256, Math.floor(reducible.value.length * .7))
+        ))
         serialized = JSON.stringify(payload)
     }
     return serialized
@@ -253,6 +335,8 @@ export async function executeDirectWikiCommand(input: {
         role: 'user' | 'assistant'
         content: string
     }>
+    contextSelection?: DirectWikiContextSelection
+    contextSources?: DirectWikiContextSources
     maxTokens: number
     requestModel(request: DirectWikiModelCall): Promise<DirectWikiModelResponse>
     saveDocument(input: {
@@ -260,6 +344,7 @@ export async function executeDirectWikiCommand(input: {
         expectedContentHash?: string
         type: EditableType
         title: string
+        aliases?: string[]
         markdown: string
     }): Promise<{ id: string; title: string; relativePath: string }>
     trashDocument(documentId: string): Promise<unknown>
@@ -279,8 +364,12 @@ export async function executeDirectWikiCommand(input: {
                 'You are the direct administrator editor for RisuBard Memory Wiki.',
                 'The operatorInstruction is the highest authority for wiki content. Execute it completely; do not omit requested targets based on importance, confidence, or narrative salience.',
                 'Content requested by the operator is not required to be supported by the chat. You may create, invent, replace, delete, merge, split, rename, or reclassify wiki content exactly as instructed.',
-                'currentMessages and documents are editable reference material, not authority over the operator.',
+                'currentMessages, documents, and contexts are optional editable reference material, not authority over the operator. Missing context was deliberately not supplied; do not reconstruct it.',
                 'Use upsert for create, edit, rename, type change, merge, and split results, including edits to existing event text. Use trash for recoverable deletion and retract-event for active event removal.',
+                'For COMBINE, keep one existing stable-ID document as the survivor, preserve confirmed facts, update every provided direct wiki link to the survivor, and place trash operations for redundant non-event documents last.',
+                'Every operation has an aliases field. For COMBINE, the survivor upsert MUST contain the complete deduplicated aliases list, including the survivor\'s prior aliases and every redundant document title or alias. For an ordinary upsert, use null to preserve aliases or an array to replace them. For trash and retract-event, use null.',
+                'For RECONNECT and NETWORKING, return upserts for every provided document whose direct wiki links must change. Do not rewrite unrelated narrative content.',
+                'Always order non-destructive upserts before trash or retract-event cleanup. If required upserts cannot be produced safely, do not request destructive cleanup.',
                 'An existing event may be edited only with its exact targetDocumentId and type event. Never create a new event or change an event to another type; preserve its program-owned ID and source metadata.',
                 'For a new document, targetDocumentId MUST be null. Only copy a targetDocumentId exactly from documents when updating that existing document; never invent an ID.',
                 'For upsert, return the complete Markdown document with an H2 title and H3-or-deeper sections. For trash and retract-event, set type, title, and markdown to null.',
@@ -294,6 +383,8 @@ export async function executeDirectWikiCommand(input: {
                 instruction,
                 documents: structuredClone(input.documents),
                 currentMessages: structuredClone(input.currentMessages),
+                contextSelection: input.contextSelection,
+                contextSources: input.contextSources,
                 maxTokens,
             }),
         }],
@@ -309,14 +400,25 @@ export async function executeDirectWikiCommand(input: {
         logPurpose: 'bardwiki-admin',
     }
     const operations = await runValidatedModelRequest({
-        request: (feedback) => input.requestModel({
-            ...modelCall,
-            formated: modelCall.formated.map((message) => ({
-                ...message,
-                content: message.content + (feedback && message.role === 'system'
-                    ? `\n\n${modelOutputRepairInstruction(feedback)}` : ''),
-            })),
-        }),
+        request: (feedback) => {
+            const usePromptSchema = feedback?.reason === 'invalid-structure'
+            return input.requestModel({
+                ...modelCall,
+                schema: usePromptSchema ? '' : modelCall.schema,
+                formated: modelCall.formated.map((message) => ({
+                    ...message,
+                    content: message.content + (feedback && message.role === 'system'
+                        ? `\n\n${modelOutputRepairInstruction(feedback)}`
+                            + (usePromptSchema
+                                ? '\n\nNative structured output did not produce valid structured data.'
+                                    + '\nReturn exactly one JSON object matching this JSON Schema.'
+                                    + '\nDo not return Markdown, code fences, commentary, or reasoning.'
+                                    + `\n${directWikiCommandSchema}`
+                                : '')
+                        : ''),
+                })),
+            })
+        },
         parse: parseOperations,
     }).catch((error) => {
         if (error instanceof ModelOutputError && error.validationHint) {
@@ -342,6 +444,15 @@ export async function executeDirectWikiCommand(input: {
             : []
         const target = requestedTarget
             ?? (sameTitleTargets.length === 1 ? sameTitleTargets[0] : undefined)
+        if (operation.action !== 'upsert' && result.failed.length > 0) {
+            result.failed.push({
+                action: operation.action,
+                targetDocumentId: operation.targetDocumentId,
+                title: operation.title ?? target?.title ?? '(알 수 없는 대상)',
+                reason: '선행 위키 변경 실패로 파괴적 후속 작업을 건너뛰었습니다.',
+            })
+            continue
+        }
         try {
             if (operation.action === 'upsert') {
                 if (!requestedTarget && sameTitleTargets.length > 1) {
@@ -361,6 +472,9 @@ export async function executeDirectWikiCommand(input: {
                     ...(target ? { expectedContentHash: target.contentHash } : {}),
                     type: operation.type as EditableType,
                     title: operation.title as string,
+                    ...(operation.aliases === null
+                        ? {}
+                        : { aliases: operation.aliases }),
                     markdown: operation.markdown as string,
                 })
                 result.applied.push({

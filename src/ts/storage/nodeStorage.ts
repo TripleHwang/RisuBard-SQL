@@ -85,6 +85,8 @@ export interface SettingsBackupEstimate {
     moduleAssets: { count: number, bytes: number, moduleCount: number }
 }
 
+export type BackupImportPhase = 'validating' | 'publishing' | 'finalizing'
+
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 50
 
@@ -555,7 +557,7 @@ export class NodeStorage{
 
     async importBackup(
         file: Blob,
-        onProgress?: (loaded: number, total: number) => void
+        onProgress?: (loaded: number, total: number, phase?: BackupImportPhase) => void
     ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number}> {
         await this.prepareImport(file.size)
         const authHeader = await this.createAuth()
@@ -599,6 +601,8 @@ export class NodeStorage{
                         // After upload finishes, surface server-side processing
                         // progress through the same callback for UI continuity.
                         onProgress?.(msg.bytes, msg.totalBytes)
+                    } else if (msg.type === 'phase') {
+                        onProgress?.(msg.bytes, msg.totalBytes, msg.phase)
                     } else if (msg.type === 'done') {
                         result = msg
                     } else if (msg.type === 'error') {
@@ -682,7 +686,7 @@ export class NodeStorage{
 
     async restoreServerBackup(
         filename: string,
-        onProgress?: (bytes: number, totalBytes: number) => void
+        onProgress?: (bytes: number, totalBytes: number, phase?: BackupImportPhase) => void
     ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number}> {
         const da = await this.authFetch('/api/backup/server/restore', {
             method: 'POST',
@@ -715,6 +719,8 @@ export class NodeStorage{
                 const msg = JSON.parse(line)
                 if (msg.type === 'progress') {
                     onProgress?.(msg.bytes, msg.totalBytes)
+                } else if (msg.type === 'phase') {
+                    onProgress?.(msg.bytes, msg.totalBytes, msg.phase)
                 } else if (msg.type === 'done') {
                     result = msg
                 } else if (msg.type === 'error') {

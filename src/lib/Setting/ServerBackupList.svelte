@@ -48,7 +48,19 @@
         if (!(await alertConfirm(language.backupLoadConfirm2))) return;
         alertWait(language.serverBackupRestoring);
         try {
-            const result = await forageStorage.restoreServerBackup(backup.filename, (bytes, totalBytes) => {
+            const result = await forageStorage.restoreServerBackup(backup.filename, (bytes, totalBytes, phase) => {
+                if (phase === 'validating') {
+                    alertWait(`${language.serverBackupRestoring} (Validating backup)`);
+                    return;
+                }
+                if (phase === 'publishing') {
+                    alertWait(`${language.serverBackupRestoring} (Publishing restored data)`);
+                    return;
+                }
+                if (phase === 'finalizing') {
+                    alertWait(`${language.serverBackupRestoring} (Finalizing restore)`);
+                    return;
+                }
                 if (totalBytes > 0) {
                     const pct = ((bytes / totalBytes) * 100).toFixed(1);
                     alertWait(`${language.serverBackupRestoring} (${pct}%)`);

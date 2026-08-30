@@ -48,7 +48,10 @@ import {
     createStructuredOutputFallbackMessage,
     sendWithStructuredOutputFallback,
 } from './structuredOutputFallback';
-import { createPluginRequestEvidenceRecorder } from './pluginRequestEvidence';
+import {
+    createPluginRequestEvidenceRecorder,
+    formatPluginProviderFailure,
+} from './pluginRequestEvidence';
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, requestLogEnabled, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from "src/ts/requestPurpose";
@@ -1826,6 +1829,7 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
         }
     } catch (error) {
         console.error(error)
+        const failureMessage = formatPluginProviderFailure(model, error)
         if(reportStatus) safeStatus(() => endStatus(genId, 'failed', {
             now: Date.now(), error: error instanceof Error ? error.message : String(error),
         }))
@@ -1836,7 +1840,7 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
         })
         return {
             type: 'fail',
-            result: `Plugin Error from ${db.currentPluginProvider}: ` + JSON.stringify(error),
+            result: failureMessage,
             model: responseModel
         }
     }

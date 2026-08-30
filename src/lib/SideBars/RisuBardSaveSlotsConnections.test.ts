@@ -227,6 +227,7 @@ describe('chat file save slot connections', () => {
         expect(dialogSource).toContain('height: 91vh')
         expect(dialogSource).toContain('width: 100dvw')
         expect(dialogSource).toContain('height: 100dvh')
+        expect(dialogSource).toContain('translate: none')
         expect(dialogSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
         expect(dialogSource).toContain('@media (max-width: 767px)')
         expect(dialogSource).not.toContain('height: 70vh')

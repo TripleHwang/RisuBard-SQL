@@ -28,6 +28,13 @@ export interface RisuBardChatSettings {
     risuBardCanonicalWritingStyle?: RisuBardCanonicalWritingStyle
     risuBardCanonicalCustomStyle?: string
     risuBardWikiWritingLanguage?: WikiWritingLanguage
+    bardChatIncludeWiki?: boolean
+    bardChatIncludeChat?: boolean
+    bardChatIncludeSystemPrompt?: boolean
+    bardChatIncludeCharacterDescription?: boolean
+    bardChatIncludePersona?: boolean
+    bardChatIncludeCharacterLorebook?: boolean
+    bardChatIncludeModuleLorebook?: boolean
 }
 
 export interface ResolvedRisuBardChatSettings {
@@ -44,6 +51,13 @@ export interface ResolvedRisuBardChatSettings {
     risuBardCanonicalWritingStyle: RisuBardCanonicalWritingStyle
     risuBardCanonicalCustomStyle: string
     risuBardWikiWritingLanguage: WikiWritingLanguage
+    bardChatIncludeWiki: boolean
+    bardChatIncludeChat: boolean
+    bardChatIncludeSystemPrompt: boolean
+    bardChatIncludeCharacterDescription: boolean
+    bardChatIncludePersona: boolean
+    bardChatIncludeCharacterLorebook: boolean
+    bardChatIncludeModuleLorebook: boolean
 }
 
 function boundedInteger(
@@ -97,6 +111,17 @@ export function resolveRisuBardChatSettings(
             value('risuBardCanonicalCustomStyle')
         ),
         risuBardWikiWritingLanguage: normalizeWikiWritingLanguage(value('risuBardWikiWritingLanguage')),
+        bardChatIncludeWiki: value('bardChatIncludeWiki') !== false,
+        bardChatIncludeChat: value('bardChatIncludeChat') === true,
+        bardChatIncludeSystemPrompt:
+            value('bardChatIncludeSystemPrompt') === true,
+        bardChatIncludeCharacterDescription:
+            value('bardChatIncludeCharacterDescription') === true,
+        bardChatIncludePersona: value('bardChatIncludePersona') === true,
+        bardChatIncludeCharacterLorebook:
+            value('bardChatIncludeCharacterLorebook') === true,
+        bardChatIncludeModuleLorebook:
+            value('bardChatIncludeModuleLorebook') === true,
     }
 }
 

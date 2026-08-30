@@ -100,6 +100,7 @@ describe('Markdown wiki writer', () => {
             expect(JSON.parse(String(init?.body))).toMatchObject({
                 type: 'character',
                 title: '라비안',
+                aliases: ['기사님'],
                 sourceMessageIds: ['user-1', 'assistant-1'],
                 reviewStatus: 'unreviewed',
                 ...(writingLanguage ? { writingLanguage } : {}),
@@ -109,6 +110,7 @@ describe('Markdown wiki writer', () => {
                 type: 'character',
                 status: 'active',
                 title: '라비안',
+                aliases: ['기사님'],
                 relativePath: 'characters/라비안.md',
                 sourceMessageIds: ['user-1', 'assistant-1'],
                 updated: '2026-08-08T00:00:00.000Z',
@@ -125,6 +127,7 @@ describe('Markdown wiki writer', () => {
             chatId: 'chat',
             type: 'character',
             title: '라비안',
+            aliases: ['기사님'],
             sourceMessageIds: ['user-1', 'assistant-1'],
             markdown: '# 라비안\n\n현재 상태.',
             reviewStatus: 'unreviewed',
@@ -132,7 +135,8 @@ describe('Markdown wiki writer', () => {
             fetchImpl,
             createAuth: async () => 'jwt',
         })).resolves.toMatchObject({
-            id: 'character.lavian', reviewStatus: 'unreviewed',
+            id: 'character.lavian', aliases: ['기사님'],
+            reviewStatus: 'unreviewed',
         })
         expect(fetchImpl).toHaveBeenCalledOnce()
     })

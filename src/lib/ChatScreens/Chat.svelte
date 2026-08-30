@@ -4,6 +4,7 @@
     import { buildArcaClipboardHtml, exportArcaHtml, resolveArcaImageSource } from 'src/ts/arcaExport'
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName, forageStorage, requestImmediateSave } from "src/ts/globalApi.svelte"
     import { retractWikiEventsBySourceMessages } from "src/ts/risubard/memoryWiki"
+    import { announceRisuBardMemoryUpdated } from "src/ts/risubard/memoryEvents"
     import { completeMemoryWikiFork, forkMemoryWiki } from "src/ts/risubard/memoryWikiFork"
     import { canBranchFromMessage, isHistoricalBranch } from "src/ts/risubard/chatHistoryPolicy"
     import { resetImportedBardWikiState } from "src/ts/risubard/chatImportMemory"
@@ -154,13 +155,19 @@
         ).map((message) => message.chatId as string)
         if(sourceMessageIds.length > 0 && currentCharacter.chaId && currentChat.id){
             try {
-                await retractWikiEventsBySourceMessages({
+                const { retractedIds } = await retractWikiEventsBySourceMessages({
                     characterId: currentCharacter.chaId,
                     chatId: currentChat.id,
                     sourceMessageIds,
                     fetchImpl: fetch,
                     createAuth: () => forageStorage.createAuth(),
                 })
+                if(retractedIds.length > 0){
+                    announceRisuBardMemoryUpdated({
+                        characterId: currentCharacter.chaId,
+                        chatId: currentChat.id,
+                    })
+                }
             }
             catch(error){
                 notifyInfo(`연결된 BardWiki 사건을 철회하지 못해 메시지 삭제를 중단했습니다: ${error instanceof Error ? error.message : String(error)}`)

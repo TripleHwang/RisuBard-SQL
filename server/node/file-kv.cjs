@@ -5,7 +5,6 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
-const { pipeline } = require('stream/promises');
 const { atomicWriteJson, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
 
 const MANIFEST_PATH = 'kv/manifest.json';
@@ -19,10 +18,14 @@ async function digestAsync(data) {
     return Buffer.from(await crypto.webcrypto.subtle.digest('SHA-256', data)).toString('hex');
 }
 
-async function digestFileAsync(filePath) {
+async function inspectFileAsync(filePath) {
     const hash = crypto.createHash('sha256');
-    for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
-    return hash.digest('hex');
+    let size = 0;
+    for await (const chunk of fs.createReadStream(filePath)) {
+        hash.update(chunk);
+        size += chunk.length;
+    }
+    return { hash: hash.digest('hex'), size };
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -98,39 +101,32 @@ async function writeObjectAsync(dataRoot, hash, data) {
 async function writeObjectFromFileAsync(dataRoot, sourcePath) {
     const directory = path.join(dataRoot, 'kv', 'objects');
     await fsp.mkdir(directory, { recursive: true });
-    const temp = path.join(directory, `.${crypto.randomUUID()}.import`);
-    const hash = crypto.createHash('sha256');
-    let size = 0;
-    const input = fs.createReadStream(sourcePath);
-    input.on('data', chunk => {
-        hash.update(chunk);
-        size += chunk.length;
-    });
+    const handle = await fsp.open(sourcePath, 'r+');
     try {
-        await pipeline(input, fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
-        const handle = await fsp.open(temp, 'r+');
-        try { await handle.sync(); } finally { await handle.close(); }
-        const digestValue = hash.digest('hex');
-        if (await digestFileAsync(temp) !== digestValue) {
-            throw new Error(`Content object checksum verification failed: ${digestValue}`);
-        }
-        const target = path.join(directory, digestValue);
-        try {
-            await fsp.rename(temp, target);
-        } catch (error) {
-            try {
-                await fsp.access(target);
-                await fsp.unlink(temp);
-            } catch {
-                throw error;
-            }
-        }
-        await fsp.unlink(sourcePath).catch(() => {});
-        return { hash: digestValue, size };
-    } catch (error) {
-        await fsp.rm(temp, { force: true }).catch(() => {});
-        throw error;
+        await handle.sync();
+    } finally {
+        await handle.close();
     }
+
+    const inspected = await inspectFileAsync(sourcePath);
+    const target = path.join(directory, inspected.hash);
+    try {
+        await fsp.access(target);
+        await fsp.unlink(sourcePath);
+        return inspected;
+    } catch {}
+
+    try {
+        await fsp.rename(sourcePath, target);
+    } catch (error) {
+        try {
+            await fsp.access(target);
+            await fsp.unlink(sourcePath);
+        } catch {
+            throw error;
+        }
+    }
+    return inspected;
 }
 
 function createFileKv(options = {}) {

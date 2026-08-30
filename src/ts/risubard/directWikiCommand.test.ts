@@ -9,19 +9,19 @@ type WikiDocument = NarrativeMemoryWikiMarkdown['documents'][number]
 
 const documents: WikiDocument[] = [{
     id: 'character.existing', type: 'character', status: 'active',
-    title: '기존 인물', relativePath: 'characters/existing.md',
+    title: '기존 인물', aliases: ['옛 이름'], relativePath: 'characters/existing.md',
     sourceMessageIds: ['assistant-old'], updated: 'now',
     content: '# 기존 인물\n\n이전 설정.', links: [], contextMode: 'auto',
     contentHash: 'hash-existing',
 }, {
     id: 'concept.crawler', type: 'concept', status: 'active',
-    title: '크롤러', relativePath: 'concepts/crawler.md',
+    title: '크롤러', aliases: [], relativePath: 'concepts/crawler.md',
     sourceMessageIds: ['assistant-old'], updated: 'now',
     content: '# 크롤러', links: [], contextMode: 'auto',
     contentHash: 'hash-crawler',
 }, {
     id: 'event.turn', type: 'event', status: 'active',
-    title: '기존 사건', relativePath: 'events/turn.md',
+    title: '기존 사건', aliases: [], relativePath: 'events/turn.md',
     sourceMessageIds: ['assistant-old'], updated: 'now',
     content: '# 기존 사건', links: [], contextMode: 'auto',
     contentHash: 'hash-event',
@@ -42,6 +42,41 @@ describe('direct wiki command', () => {
         })
         await executeDirectWikiCommand({ instruction: '갱신해.', documents, currentMessages: [], maxTokens: 12000,
             requestModel, saveDocument, trashDocument: vi.fn(), retractEvent: vi.fn() })
+        expect(requestModel).toHaveBeenCalledTimes(2)
+        expect(saveDocument).toHaveBeenCalledTimes(1)
+    })
+
+    test('falls back to a prompt schema after native structured output is ignored', async () => {
+        const requestModel = vi.fn(async (request: DirectWikiModelCall) => {
+            if (requestModel.mock.calls.length === 1) {
+                expect(request.schema).not.toBe('')
+                return { type: 'success', result: '잘 정리했습니다.' }
+            }
+            expect(request.schema).toBe('')
+            expect(request.formated[0].content).toContain(
+                'Return exactly one JSON object matching this JSON Schema.'
+            )
+            expect(request.formated[0].content).toContain(
+                '"required":["schemaVersion","operations"]'
+            )
+            return {
+                type: 'success',
+                result: JSON.stringify({ schemaVersion: 1, operations: [{
+                    action: 'upsert', targetDocumentId: 'character.existing', type: 'character',
+                    title: '기존 인물', markdown: '## 기존 인물\n\n완전한 문서.', reason: '갱신',
+                }] }),
+            }
+        })
+        const saveDocument = vi.fn(async () => ({
+            id: 'character.existing', title: '기존 인물',
+            relativePath: 'characters/existing.md',
+        }))
+
+        await executeDirectWikiCommand({
+            instruction: '갱신해.', documents, currentMessages: [], maxTokens: 12_000,
+            requestModel, saveDocument, trashDocument: vi.fn(), retractEvent: vi.fn(),
+        })
+
         expect(requestModel).toHaveBeenCalledTimes(2)
         expect(saveDocument).toHaveBeenCalledTimes(1)
     })
@@ -451,5 +486,202 @@ describe('direct wiki command', () => {
         expect(result.applied).toEqual([expect.objectContaining({
             title: '이유진',
         })])
+    })
+
+    test.each(['COMBINE', 'RECONNECT', 'NETWORKING'])(
+        'exposes the whole wiki to cross-document %s commands',
+        async (command) => {
+            let submitted: DirectWikiModelCall | undefined
+            await executeDirectWikiCommand({
+                instruction: `작업: ${command}\n대상: 기존 인물`,
+                documents,
+                currentMessages: [],
+                maxTokens: 12_000,
+                requestModel: async (request) => {
+                    submitted = structuredClone(request)
+                    return {
+                        type: 'success',
+                        result: JSON.stringify({
+                            schemaVersion: 1,
+                            operations: [{
+                                action: 'upsert',
+                                targetDocumentId: 'character.existing',
+                                type: 'character',
+                                title: '기존 인물',
+                                markdown: '## 기존 인물\n\n변경 없음.',
+                                reason: '교차 문서 작업',
+                            }],
+                        }),
+                    }
+                },
+                saveDocument: vi.fn(async (input) => ({
+                    id: input.documentId!, title: input.title,
+                    relativePath: 'characters/existing.md',
+                })),
+                trashDocument: vi.fn(),
+                retractEvent: vi.fn(),
+            })
+
+            const payload = JSON.parse(
+                submitted?.formated[1].content ?? '{}'
+            ) as { documents?: Array<{ id: string }> }
+            expect(payload.documents?.map((document) => document.id)).toEqual(
+                documents.map((document) => document.id)
+            )
+        }
+    )
+
+    test('serializes only explicitly selected BARDCHAT context sources', async () => {
+        let submitted: DirectWikiModelCall | undefined
+        await executeDirectWikiCommand({
+            instruction: '새 인물을 만들어.',
+            documents,
+            currentMessages: [{
+                messageId: 'assistant-1', role: 'assistant', content: 'CHAT',
+            }],
+            contextSelection: {
+                wiki: false,
+                chat: false,
+                systemPrompt: true,
+                characterDescription: false,
+                persona: true,
+                characterLorebook: false,
+                moduleLorebook: false,
+            },
+            contextSources: {
+                systemPrompt: 'SYSTEM',
+                characterDescription: 'CHARACTER',
+                persona: 'PERSONA',
+                characterLorebook: 'CHARACTER LORE',
+                moduleLorebook: 'MODULE LORE',
+            },
+            maxTokens: 12_000,
+            requestModel: async (request) => {
+                submitted = structuredClone(request)
+                return {
+                    type: 'success',
+                    result: JSON.stringify({
+                        schemaVersion: 1,
+                        operations: [{
+                            action: 'upsert', targetDocumentId: null,
+                            type: 'character', title: '새 인물', aliases: null,
+                            markdown: '## 새 인물\n\n생성.', reason: '사용자 지시',
+                        }],
+                    }),
+                }
+            },
+            saveDocument: vi.fn(async (input) => ({
+                id: 'character.new', title: input.title,
+                relativePath: 'characters/new.md',
+            })),
+            trashDocument: vi.fn(),
+            retractEvent: vi.fn(),
+        })
+
+        const payload = JSON.parse(
+            submitted?.formated[1].content ?? '{}'
+        ) as Record<string, unknown>
+        expect(payload.documents).toEqual([])
+        expect(payload.currentMessages).toEqual([])
+        expect(payload.contexts).toEqual({
+            systemPrompt: 'SYSTEM',
+            persona: 'PERSONA',
+        })
+    })
+
+    test('passes COMBINE survivor aliases through the save contract', async () => {
+        const saveDocument = vi.fn(async (input) => ({
+            id: input.documentId!, title: input.title,
+            relativePath: 'characters/existing.md',
+        }))
+        await executeDirectWikiCommand({
+            instruction: '작업: COMBINE\n대상: 기존 인물, 크롤러',
+            documents,
+            currentMessages: [],
+            maxTokens: 12_000,
+            requestModel: async () => ({
+                type: 'success',
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    operations: [{
+                        action: 'upsert',
+                        targetDocumentId: 'character.existing',
+                        type: 'character', title: '기존 인물',
+                        aliases: ['옛 이름', '크롤러'],
+                        markdown: '## 기존 인물\n\n병합했다.',
+                        reason: '존속 문서에 별칭 상속',
+                    }],
+                }),
+            }),
+            saveDocument,
+            trashDocument: vi.fn(),
+            retractEvent: vi.fn(),
+        })
+
+        expect(saveDocument).toHaveBeenCalledWith(expect.objectContaining({
+            documentId: 'character.existing',
+            aliases: ['옛 이름', '크롤러'],
+        }))
+    })
+
+    test('skips destructive cleanup after a prior write failure', async () => {
+        const saveDocument = vi.fn(async (input) => {
+            if (input.documentId === 'character.existing') {
+                throw new Error('hash conflict')
+            }
+            return {
+                id: input.documentId!, title: input.title,
+                relativePath: 'concepts/crawler.md',
+            }
+        })
+        const trashDocument = vi.fn()
+        const retractEvent = vi.fn()
+
+        const result = await executeDirectWikiCommand({
+            instruction: '작업: COMBINE\n대상: 기존 인물, 크롤러',
+            documents,
+            currentMessages: [],
+            maxTokens: 12_000,
+            requestModel: async () => ({
+                type: 'success',
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    operations: [{
+                        action: 'upsert',
+                        targetDocumentId: 'character.existing',
+                        type: 'character', title: '기존 인물',
+                        markdown: '## 기존 인물\n\n병합.', reason: '존속 문서 갱신',
+                    }, {
+                        action: 'upsert',
+                        targetDocumentId: 'concept.crawler',
+                        type: 'concept', title: '크롤러',
+                        markdown: '## 크롤러\n\n링크 갱신.', reason: '안전한 후속 갱신',
+                    }, {
+                        action: 'trash',
+                        targetDocumentId: 'concept.crawler',
+                        type: null, title: null, markdown: null,
+                        reason: '중복 문서 정리',
+                    }, {
+                        action: 'retract-event',
+                        targetDocumentId: 'event.turn',
+                        type: null, title: null, markdown: null,
+                        reason: '사건 정리',
+                    }],
+                }),
+            }),
+            saveDocument,
+            trashDocument,
+            retractEvent,
+        })
+
+        expect(saveDocument).toHaveBeenCalledTimes(2)
+        expect(result.applied).toEqual([expect.objectContaining({
+            action: 'upsert', documentId: 'concept.crawler',
+        })])
+        expect(trashDocument).not.toHaveBeenCalled()
+        expect(retractEvent).not.toHaveBeenCalled()
+        expect(result.failed.filter((item) =>
+            item.reason.includes('선행 위키 변경 실패')
+        )).toHaveLength(2)
     })
 })

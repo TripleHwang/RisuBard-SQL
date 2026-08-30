@@ -32,6 +32,14 @@ describe('confirmed message deletion', () => {
         expect(english).toContain('Other canonical documents are not rolled back')
         expect(english).toContain('Wiki Reboot')
     })
+
+    test('refreshes an open Memory Wiki after linked events are removed', () => {
+        expect(source).toContain('announceRisuBardMemoryUpdated')
+        expect(source.indexOf('announceRisuBardMemoryUpdated({'))
+            .toBeGreaterThan(source.indexOf('await retractWikiEventsBySourceMessages'))
+        expect(source.indexOf('announceRisuBardMemoryUpdated({'))
+            .toBeLessThan(source.indexOf('msg.splice(idx, 1)'))
+    })
 })
 
 describe('confirmed message editing', () => {

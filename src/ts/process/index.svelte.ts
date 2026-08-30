@@ -29,7 +29,7 @@ import { dispatchCommittedChatOutput } from "../plugins/pluginChatOutput";
 import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
-import { getModuleAssets, getModuleToggles } from "./modules";
+import { getModuleAssets, getModuleLorebooksWithSources, getModuleToggles } from "./modules";
 import { forageStorage, readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
@@ -69,14 +69,23 @@ import {
 import { announceRisuBardMemoryUpdated } from '../risubard/memoryEvents';
 import {
     executeDirectWikiCommand,
+    type DirectWikiContextSelection,
+    type DirectWikiContextSources,
     type DirectWikiCommandResult,
 } from '../risubard/directWikiCommand';
+import {
+    collectPersonaBuilderSources,
+    matchPersonaBuilderCharacterLorebook,
+} from '../personaBuilder';
 import { shouldAutomaticallyConfirmNarrativeTurn } from '../risubard/automaticWikiConfirmation';
 import {
     compileWikiPromptGuide,
     resolveWikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
+import { findHistoricalSourceMatches } from '../risubard/historicalSourceRecall';
+import { normalizeArcPlotterRuntimeSettings } from '../risubard/arcPlotterSettings';
+import { canonicalTurnNeedsRetry } from '../risubard/canonicalTurnReceipt';
 import { saveChatToServer } from '../storage/chatStorage';
 import {
     createWikiRebootJob,
@@ -100,6 +109,17 @@ import {
 
 function resolvedRisuBardSettings(chat?: Chat) {
     return resolveRisuBardChatSettings(DBState.db, chat?.risuBardSettings)
+}
+
+function resolvedArcPlotterSettings() {
+    return normalizeArcPlotterRuntimeSettings({
+        enabled: DBState.db.risuBardArcPlotterEnabled,
+        checkpointSize: DBState.db.risuBardArcPlotterCheckpointSize,
+        maxArcs: DBState.db.risuBardArcPlotterMaxArcs,
+        maxTurningPoints: DBState.db.risuBardArcPlotterMaxTurningPoints,
+        maxOpenThreads: DBState.db.risuBardArcPlotterMaxOpenThreads,
+        maxCharacters: DBState.db.risuBardArcPlotterMaxCharacters,
+    })
 }
 
 function findRisuBardChat(chatId?: string): Chat | undefined {
@@ -174,6 +194,7 @@ async function confirmProjectedNarrativeTurn(input: {
             canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
             canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
             wikiWritingLanguage: settings.risuBardWikiWritingLanguage,
+            arcPlotterSettings: resolvedArcPlotterSettings(),
             ...(compiledWikiPromptGuide ? {
                 wikiPromptGuide: {
                     analysis: compiledWikiPromptGuide.analysis,
@@ -202,7 +223,12 @@ async function confirmProjectedNarrativeTurn(input: {
         if (message
             && accepted?.role === 'assistant'
             && message.data === accepted.content) {
-            message.risubardMemoryConfirmed = true
+            if (receipt && canonicalTurnNeedsRetry(receipt)) {
+                delete message.risubardMemoryConfirmed
+            }
+            else {
+                message.risubardMemoryConfirmed = true
+            }
             if (receipt) message.risubardCanonicalReceipt = receipt
         }
         return true
@@ -496,6 +522,7 @@ async function runWikiReboot(
                 canonicalWritingStyle: settings.risuBardCanonicalWritingStyle,
                 canonicalCustomStyle: settings.risuBardCanonicalCustomStyle,
                 wikiWritingLanguage: job.writingLanguage ?? 'ko',
+                arcPlotterSettings: resolvedArcPlotterSettings(),
                 ...(compiledWikiPromptGuide ? {
                     wikiPromptGuide: {
                         analysis: compiledWikiPromptGuide.analysis,
@@ -636,34 +663,77 @@ export async function cancelCurrentWikiReboot(): Promise<boolean> {
 }
 
 export async function executeCurrentNarrativeWikiCommand(
-    instruction: string
+    instruction: string,
+    requestedContextSelection?: DirectWikiContextSelection
 ): Promise<DirectWikiCommandResult> {
     const character = DBState.db.characters[get(selectedCharID)]
     const chat = character?.chats[character.chatPage]
     if (!character || !chat) {
         throw new Error('현재 채팅을 찾을 수 없습니다.')
     }
-    const target = chat.message.findLast((message) =>
-        message.role === 'char'
-        && !message.isComment
-        && !message.disabled
-        && typeof message.chatId === 'string'
-        && message.chatId.trim().length > 0
-    )
-    if (!target?.chatId) {
-        throw new Error('명령에 참고할 현재 AI 응답이 없습니다.')
-    }
-    const projected = projectConfirmedMemoryTurn(
-        chat.message,
-        target.chatId,
-        { includeConfirmed: true }
-    )
-    if (!projected) {
-        throw new Error('현재 메시지를 위키 명령 자료로 준비할 수 없습니다.')
-    }
     const characterId = character.chaId
     const chatId = ensureNarrativeSessionChatId(chat, v4)
     const settings = resolvedRisuBardSettings(chat)
+    const contextSelection = requestedContextSelection ?? {
+        wiki: settings.bardChatIncludeWiki,
+        chat: settings.bardChatIncludeChat,
+        systemPrompt: settings.bardChatIncludeSystemPrompt,
+        characterDescription: settings.bardChatIncludeCharacterDescription,
+        persona: settings.bardChatIncludePersona,
+        characterLorebook: settings.bardChatIncludeCharacterLorebook,
+        moduleLorebook: settings.bardChatIncludeModuleLorebook,
+    }
+    let currentMessages: MemoryAnalysisMessage[] = []
+    if (contextSelection.chat) {
+        const target = chat.message.findLast((message) =>
+            message.role === 'char'
+            && !message.isComment
+            && !message.disabled
+            && typeof message.chatId === 'string'
+            && message.chatId.trim().length > 0
+        )
+        if (!target?.chatId) {
+            throw new Error('명령에 참고할 현재 AI 응답이 없습니다.')
+        }
+        currentMessages = projectRecentMemoryMessages(
+            chat.message,
+            normalizeNarrativeWorkingMessageLimit(
+                settings.risuBardRecentMessageCount
+            ),
+            target.chatId,
+        )
+        if (currentMessages.length === 0) {
+            throw new Error('현재 메시지를 위키 명령 자료로 준비할 수 없습니다.')
+        }
+    }
+    const needsBuilderSources = contextSelection.systemPrompt
+        || contextSelection.characterDescription
+        || contextSelection.characterLorebook
+        || contextSelection.moduleLorebook
+    const builderSources = needsBuilderSources
+        ? collectPersonaBuilderSources({
+            database: DBState.db,
+            character,
+            moduleLorebooks: contextSelection.moduleLorebook
+                ? getModuleLorebooksWithSources()
+                : [],
+        })
+        : undefined
+    let characterLorebook = ''
+    if (contextSelection.characterLorebook) {
+        characterLorebook = (await matchPersonaBuilderCharacterLorebook({
+            character,
+            userInstruction: instruction,
+            draft: '',
+        })).content
+    }
+    const contextSources: DirectWikiContextSources = {
+        systemPrompt: builderSources?.systemPrompt ?? '',
+        characterDescription: builderSources?.characterDescription ?? '',
+        persona: contextSelection.persona ? getPersonaPrompt() : '',
+        characterLorebook,
+        moduleLorebook: builderSources?.moduleLorebook ?? '',
+    }
     const createAuth = () => forageStorage.createAuth()
     const wiki = await loadNarrativeMemoryWiki({
         characterId,
@@ -687,7 +757,9 @@ export async function executeCurrentNarrativeWikiCommand(
         const result = await executeDirectWikiCommand({
             instruction,
             documents: wiki.documents,
-            currentMessages: projected.messages,
+            currentMessages,
+            contextSelection,
+            contextSources,
             maxTokens: settings.risuBardAnalysisTokenLimit,
             requestModel: (request) => requestChatData(
                 {
@@ -1313,14 +1385,22 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 && currentInput.trim().length > 0) {
                 const inquiryStartedAt = performance.now()
                 try {
+                    const inquirySettings = resolvedRisuBardSettings(currentChat)
                     const inquiry = await loadNarrativeInquiry({
                         characterId: currentChar.chaId,
                         chatId: narrativeSessionChatId,
                         currentInput,
                         tokenBudget: {
-                            target: resolvedRisuBardSettings(currentChat).risuBardInquiryTargetTokenBudget,
-                            maximum: resolvedRisuBardSettings(currentChat).risuBardInquiryMaximumTokenBudget,
+                            target: inquirySettings.risuBardInquiryTargetTokenBudget,
+                            maximum: inquirySettings.risuBardInquiryMaximumTokenBudget,
                         },
+                        sourceMatches: findHistoricalSourceMatches({
+                            currentInput,
+                            messages: currentChat.message,
+                            excludeRecentMessages: normalizeNarrativeWorkingMessageLimit(
+                                inquirySettings.risuBardResponseMessageCount
+                            ),
+                        }),
                         fetchImpl: fetch,
                         createAuth: () => forageStorage.createAuth(),
                     })

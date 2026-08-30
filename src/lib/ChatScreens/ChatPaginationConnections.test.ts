@@ -39,4 +39,23 @@ describe('bounded chat-page UI connections', () => {
         expect(source).not.toContain('loadPages = Infinity')
         expect(source).toContain('chat-page-${chatBounds.page + 1}')
     })
+
+    it('pins the first message to every chat page and defaults later pages to collapsed', () => {
+        const source = screen()
+        expect(source).toContain('let firstMessageCollapsed = $state(true)')
+        expect(source).toContain('firstMessageCollapsed = true')
+        expect(source).toContain('data-chat-pinned-first-message')
+        expect(source).toContain('{#if chatBounds.page === 0 || !firstMessageCollapsed}')
+    })
+
+    it('places the later-page first-message toggle after the message content', () => {
+        const source = screen()
+        expect(source).toContain('{#if chatBounds.page > 0}')
+        expect(source).toContain('data-chat-first-message-toggle')
+        expect(source).toContain('aria-expanded={!firstMessageCollapsed}')
+        expect(source).toContain('firstMessageCollapsed = !firstMessageCollapsed')
+        expect(source.indexOf('id="chat-pinned-first-message-content"')).toBeLessThan(
+            source.indexOf('data-chat-first-message-toggle')
+        )
+    })
 })

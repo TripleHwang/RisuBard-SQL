@@ -15,4 +15,20 @@ describe('RisuBard common Arca settings', () => {
             expect(item?.setValue).toBeUndefined()
         }
     })
+
+    it('protects built-in Archplotter presets while keeping user presets editable', () => {
+        const checkpoint = risuBardCommonSettingsItems.find((candidate) =>
+            candidate.id === 'risubard.arcPlotter.checkpointSize')
+        const builtInContext = {
+            db: { risuBardArcPlotterPresetId: 'novella' },
+        } as any
+        checkpoint?.onChange?.(4, builtInContext)
+        expect(builtInContext.db.risuBardArcPlotterPresetId).toBe('custom')
+
+        const userContext = {
+            db: { risuBardArcPlotterPresetId: 'user:test' },
+        } as any
+        checkpoint?.onChange?.(5, userContext)
+        expect(userContext.db.risuBardArcPlotterPresetId).toBe('user:test')
+    })
 })

@@ -37,6 +37,22 @@ describe('model response quality', () => {
         expect(request).toHaveBeenCalledTimes(2)
     })
 
+    it('keeps bounded validator feedback private for repair prompts', async () => {
+        const request = vi.fn(async () => ({
+            type: 'success',
+            result: '{"private story text":true}',
+        }))
+        const parse = vi.fn(() => {
+            throw new Error('Unexpected field: private story text')
+        })
+
+        const error = await runValidatedModelRequest({ request, parse })
+            .catch((caught) => caught as ModelOutputError)
+        expect(error.validationHint)
+            .toBe('Unexpected field: private story text')
+        expect(error.message).not.toContain('private story text')
+    })
+
     it('retries a typed output failure raised at the request boundary', async () => {
         const request = vi.fn(async (feedback?: ModelOutputError) => {
             if (!feedback) throw new ModelOutputError('truncated')

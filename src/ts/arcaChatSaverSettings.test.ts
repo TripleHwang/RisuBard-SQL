@@ -5,10 +5,13 @@ import {
     DEFAULT_ARCA_CHAT_PARAGRAPH_SPACING_PERCENT,
     DEFAULT_ARCA_CHAT_SHOW_TITLE_IMAGE,
     DEFAULT_ARCA_CHAT_TITLE_IMAGE_STYLE,
+    DEFAULT_ARCA_CHAT_INCLUDE_USER_MESSAGES,
+    normalizeArcaChatDialogSize,
     normalizeArcaChatFontSizePx,
     normalizeArcaChatImageWidthPercent,
     normalizeArcaChatParagraphSpacingPercent,
     normalizeArcaChatShowTitleImage,
+    normalizeArcaChatIncludeUserMessages,
     normalizeArcaChatTitleImageStyle,
 } from './arcaChatSaverSettings';
 
@@ -40,5 +43,20 @@ describe('Arca chat saver settings', () => {
         expect(normalizeArcaChatTitleImageStyle('square')).toBe('square');
         expect(normalizeArcaChatTitleImageStyle('thumbnail-title')).toBe('thumbnail-title');
         expect(normalizeArcaChatTitleImageStyle('unsupported')).toBe('oval');
+    });
+
+    it('defaults to including user messages and normalizes persisted dialog dimensions', () => {
+        expect(DEFAULT_ARCA_CHAT_INCLUDE_USER_MESSAGES).toBe(true);
+        expect(normalizeArcaChatIncludeUserMessages(undefined)).toBe(true);
+        expect(normalizeArcaChatIncludeUserMessages(false)).toBe(false);
+        expect(normalizeArcaChatDialogSize(undefined)).toBeUndefined();
+        expect(normalizeArcaChatDialogSize({ width: 1200.4, height: 800.6 })).toEqual({
+            width: 1200,
+            height: 801,
+        });
+        expect(normalizeArcaChatDialogSize({ width: 1, height: 9999 })).toEqual({
+            width: 480,
+            height: 1600,
+        });
     });
 });

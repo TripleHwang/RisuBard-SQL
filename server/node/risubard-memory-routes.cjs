@@ -51,6 +51,27 @@ function validSemanticMatches(value) {
         )
 }
 
+function validSourceMatches(value) {
+    return Array.isArray(value)
+        && value.length <= 8
+        && value.every((match) =>
+            hasExactKeys(match, [
+                'messageId', 'role', 'content', 'score', 'occurredAt',
+            ])
+            && hasBoundedId(match.messageId)
+            && (match.role === 'user' || match.role === 'assistant')
+            && typeof match.content === 'string'
+            && match.content.trim().length > 0
+            && match.content.length <= 1_200
+            && Number.isFinite(match.score)
+            && match.score > 0
+            && match.score <= 10_000
+            && Number.isSafeInteger(match.occurredAt)
+            && match.occurredAt >= 0
+            && match.occurredAt <= 10_000_000
+        )
+}
+
 function validRebootSources(body, includeGroups) {
     const groups = body?.eventSourceGroups
     return hasBoundedId(body?.characterId)
@@ -435,6 +456,9 @@ function registerRisuBardMemoryRoutes(app, options) {
                 ...(req.body.semanticMatches === undefined
                     ? []
                     : ['semanticMatches']),
+                ...(req.body.sourceMatches === undefined
+                    ? []
+                    : ['sourceMatches']),
             ])
             if (!validShape
                 || !hasBoundedId(req.body.characterId)
@@ -446,6 +470,8 @@ function registerRisuBardMemoryRoutes(app, options) {
                     && !validInquiryTokenBudget(req.body.tokenBudget))
                 || (req.body.semanticMatches !== undefined
                     && !validSemanticMatches(req.body.semanticMatches))
+                || (req.body.sourceMatches !== undefined
+                    && !validSourceMatches(req.body.sourceMatches))
                 || Buffer.byteLength(JSON.stringify(req.body), 'utf8')
                     > 32 * 1_024) {
                 res.status(400).send({
@@ -588,7 +614,8 @@ function registerRisuBardMemoryRoutes(app, options) {
                     'markdown',
                 ]
                 const optionalKeys = [
-                    'documentId', 'expectedContentHash', 'reviewStatus', 'writingLanguage',
+                    'documentId', 'expectedContentHash', 'reviewStatus',
+                    'writingLanguage', 'aliases',
                 ].filter((key) => req.body?.[key] !== undefined)
                 const validShape = hasExactKeys(req.body, [
                     ...keys, ...optionalKeys,
@@ -612,6 +639,13 @@ function registerRisuBardMemoryRoutes(app, options) {
                     || typeof req.body.title !== 'string'
                     || req.body.title.trim().length === 0
                     || req.body.title.length > 160
+                    || (req.body.aliases !== undefined
+                        && (!Array.isArray(req.body.aliases)
+                            || req.body.aliases.length > 32
+                            || !req.body.aliases.every((alias) =>
+                                typeof alias === 'string'
+                                && alias.trim().length > 0
+                                && alias.length <= 160)))
                     || !Array.isArray(req.body.sourceMessageIds)
                     || req.body.sourceMessageIds.length < 1
                     || !req.body.sourceMessageIds.every(hasBoundedId)
@@ -641,12 +675,12 @@ function registerRisuBardMemoryRoutes(app, options) {
                 const keys = [
                     'characterId', 'chatId', 'type', 'title', 'markdown',
                 ]
-                const validShape = hasExactKeys(req.body, keys)
-                    || hasExactKeys(req.body, [...keys, 'documentId'])
-                    || hasExactKeys(req.body, [...keys, 'expectedContentHash'])
-                    || hasExactKeys(req.body, [
-                        ...keys, 'documentId', 'expectedContentHash',
-                    ])
+                const optionalKeys = [
+                    'documentId', 'expectedContentHash', 'aliases',
+                ].filter((key) => req.body?.[key] !== undefined)
+                const validShape = hasExactKeys(req.body, [
+                    ...keys, ...optionalKeys,
+                ])
                 if (!validShape
                     || !hasBoundedId(req.body.characterId)
                     || !hasBoundedId(req.body.chatId)
@@ -663,6 +697,13 @@ function registerRisuBardMemoryRoutes(app, options) {
                     || typeof req.body.title !== 'string'
                     || req.body.title.trim().length === 0
                     || req.body.title.length > 160
+                    || (req.body.aliases !== undefined
+                        && (!Array.isArray(req.body.aliases)
+                            || req.body.aliases.length > 32
+                            || !req.body.aliases.every((alias) =>
+                                typeof alias === 'string'
+                                && alias.trim().length > 0
+                                && alias.length <= 160)))
                     || typeof req.body.markdown !== 'string'
                     || req.body.markdown.trim().length === 0
                     || req.body.markdown.length > 12_000) {

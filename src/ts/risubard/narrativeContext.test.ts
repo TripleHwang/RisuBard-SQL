@@ -248,6 +248,15 @@ describe('actual narrative inquiry prompt', () => {
                 documentId: 'event-bridge',
                 score: 0.91,
             }],
+            sourceMatches: Array.from({ length: 9 }, (_, index) => ({
+                messageId: `message-${index}`,
+                role: 'assistant' as const,
+                content: index === 0
+                    ? '플러피풋의 사과 에일'
+                    : `과거 원문 ${index}`,
+                score: 9 - index,
+                occurredAt: index,
+            })),
             fetchImpl,
             createAuth: async () => 'auth',
         })
@@ -272,6 +281,15 @@ describe('actual narrative inquiry prompt', () => {
                         documentId: 'event-bridge',
                         score: 0.91,
                     }],
+                    sourceMatches: Array.from({ length: 8 }, (_, index) => ({
+                        messageId: `message-${index}`,
+                        role: 'assistant',
+                        content: index === 0
+                            ? '플러피풋의 사과 에일'
+                            : `과거 원문 ${index}`,
+                        score: 9 - index,
+                        occurredAt: index,
+                    })),
                 }),
             })
         )

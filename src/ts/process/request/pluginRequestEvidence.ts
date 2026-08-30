@@ -30,6 +30,16 @@ interface PluginRequestEvidenceDependencies {
     record(entry: Parameters<typeof recordRequestLog>[0]): void
 }
 
+export function formatPluginProviderFailure(
+    provider: string,
+    error: unknown,
+): string {
+    const raw = error instanceof Error ? error.message : String(error)
+    const reason = raw.replace(/\s+/gu, ' ').trim().slice(0, 512)
+        || 'Unknown plugin error'
+    return `Plugin Error from ${provider}: ${reason}`
+}
+
 export function createPluginRequestEvidenceRecorder(
     input: PluginRequestEvidenceInput,
     dependencies: PluginRequestEvidenceDependencies,

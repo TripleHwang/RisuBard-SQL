@@ -143,4 +143,31 @@ describe('RisuBard analysis settings', () => {
         expect(resolved.risuBardResponseExcludeUserMessages).toBe(true)
         expect(resolved.showRequestStatus).toBe(false)
     })
+
+    test('resolves per-chat BARDCHAT context selections with token-saving defaults', () => {
+        const defaults = resolveRisuBardChatSettings({})
+        expect(defaults).toMatchObject({
+            bardChatIncludeWiki: true,
+            bardChatIncludeChat: false,
+            bardChatIncludeSystemPrompt: false,
+            bardChatIncludeCharacterDescription: false,
+            bardChatIncludePersona: false,
+            bardChatIncludeCharacterLorebook: false,
+            bardChatIncludeModuleLorebook: false,
+        })
+
+        const resolved = resolveRisuBardChatSettings({
+            bardChatIncludeSystemPrompt: true,
+            bardChatIncludeCharacterLorebook: true,
+        }, {
+            bardChatIncludeSystemPrompt: false,
+            bardChatIncludeChat: true,
+        })
+        expect(resolved).toMatchObject({
+            bardChatIncludeWiki: true,
+            bardChatIncludeChat: true,
+            bardChatIncludeSystemPrompt: false,
+            bardChatIncludeCharacterLorebook: true,
+        })
+    })
 })

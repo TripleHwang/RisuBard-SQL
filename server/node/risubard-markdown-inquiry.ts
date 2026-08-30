@@ -14,6 +14,9 @@ const MAX_EDGES_PER_DOCUMENT = 16
 const MAX_INSPECTED_EDGES = 256
 const MAX_HOPS = 2
 const MAX_RESERVED_HISTORICAL_EVENTS = 2
+const MAX_SOURCE_MATCHES = 8
+const MAX_SELECTED_SOURCE_MESSAGES = 2
+const ROUTED_SOURCE_SCORE_BONUS = 12
 const SEMANTIC_RRF_K = 60
 const SEMANTIC_RRF_SCALE = 480
 
@@ -48,6 +51,13 @@ export interface MarkdownInquiryInput {
     semanticMatches?: readonly {
         documentId: string
         score: number
+    }[]
+    sourceMatches?: readonly {
+        messageId: string
+        role: 'user' | 'assistant'
+        content: string
+        score: number
+        occurredAt: number
     }[]
     tokenBudget?: {
         target: number
@@ -90,6 +100,7 @@ interface Candidate {
 
 interface NormalizedDocument {
     title: string
+    aliases: string[]
     content: string
     links: string
     keys: string[]
@@ -153,6 +164,7 @@ function documentKeys(document: MarkdownWikiDocument): string[] {
     const pathWithoutExtension = document.relativePath.replace(/\.md$/i, '')
     return [
         document.title,
+        ...document.aliases,
         pathWithoutExtension,
         basename(pathWithoutExtension),
     ].map(normalized)
@@ -165,6 +177,7 @@ function normalizedDocument(
     if (cached) return cached
     const value = {
         title: normalized(document.title),
+        aliases: document.aliases.map(normalized),
         content: normalized(document.content),
         links: normalized(document.links.join(' ')),
         keys: documentKeys(document),
@@ -179,12 +192,19 @@ function catalogBase(
     const cacheKey = documents as object
     const cached = inquiryCatalogCache.get(cacheKey)
     if (cached) return cached
-    const byTarget = new Map<string, MarkdownWikiDocument>()
+    const possibleTargets = new Map<string, MarkdownWikiDocument | null>()
     for (const document of documents) {
         for (const key of normalizedDocument(document).keys) {
-            byTarget.set(key, document)
+            const existing = possibleTargets.get(key)
+            possibleTargets.set(
+                key,
+                existing && existing.id !== document.id ? null : document
+            )
         }
     }
+    const byTarget = new Map([...possibleTargets.entries()]
+        .filter((entry): entry is [string, MarkdownWikiDocument] =>
+            entry[1] !== null))
     const adjacency = new Map<string, Set<string>>()
     const connect = (left: string, right: string) => {
         if (left === right) return
@@ -223,20 +243,22 @@ function lexicalScore(
     characterAnchorTerms: ReadonlySet<string>,
     termWeights: ReadonlyMap<string, number>
 ): number {
-    const { title, content, links } = normalizedDocument(document)
-    let score = title === normalizedQuery ? 12 : 0
+    const { title, aliases, content, links } = normalizedDocument(document)
+    const identityKeys = [title, ...aliases]
+    let score = identityKeys.includes(normalizedQuery) ? 12 : 0
     if (normalizedQuery.length > 1 && title !== normalizedQuery
-        && (title.includes(normalizedQuery)
-            || normalizedQuery.includes(title))) score += 6
+        && identityKeys.some((key) => key.includes(normalizedQuery)
+            || normalizedQuery.includes(key))) score += 6
     if (normalizedQuery.length > 1 && content.includes(normalizedQuery)) score += 2
     if (normalizedQuery.length > 1 && links.includes(normalizedQuery)) score += 4
     for (const term of terms) {
         if (characterAnchorTerms.has(term)) {
-            if (title === term) score += 4
+            if (identityKeys.includes(term)) score += 4
             continue
         }
         const weight = termWeights.get(term) ?? 1
-        if (title.includes(term) || (title.length > 1 && term.includes(title))) {
+        if (identityKeys.some((key) => key.includes(term)
+            || (key.length > 1 && term.includes(key)))) {
             score += 4 * weight
         }
         if (links.includes(term)) score += 3 * weight
@@ -252,8 +274,9 @@ function queryTermWeights(
     const weights = new Map<string, number>()
     for (const term of terms) {
         const documentFrequency = documents.reduce((count, document) => {
-            const { title, content, links } = normalizedDocument(document)
-            return count + Number(title.includes(term)
+            const { title, aliases, content, links } = normalizedDocument(document)
+            return count + Number([title, ...aliases].some((key) =>
+                key.includes(term))
                 || links.includes(term)
                 || content.includes(term))
         }, 0)
@@ -285,7 +308,8 @@ export function inquireMarkdownDocuments(
         isEligible(document, input))
     const characterTitles = new Set(eligibleDocuments
         .filter((document) => document.type === 'character')
-        .map((document) => normalized(document.title)))
+        .flatMap((document) => [document.title, ...document.aliases]
+            .map(normalized)))
     const characterAnchorTerms = new Set(terms.filter((term) =>
         characterTitles.has(term)))
     const termWeights = queryTermWeights(eligibleDocuments, terms)
@@ -486,7 +510,33 @@ export function inquireMarkdownDocuments(
         ? tokenBudget.maximum
         : tokenBudget.target
     const selected: typeof prepared = []
+    const routedSourceMessageIds = new Set([...candidates.values()]
+        .flatMap((candidate) => candidate.document.sourceMessageIds))
+    const preparedSourceMatches = historicalEvidenceIntent
+        ? (input.sourceMatches ?? []).slice(0, MAX_SOURCE_MATCHES)
+            .map((match) => {
+                const routed = routedSourceMessageIds.has(match.messageId)
+                const content = [
+                    `Original historical chat evidence (${match.role}, order ${match.occurredAt}):`,
+                    match.content,
+                ].join('\n')
+                return {
+                    ...match,
+                    content,
+                    routed,
+                    effectiveScore: match.score
+                        + (routed ? ROUTED_SOURCE_SCORE_BONUS : 0),
+                    tokens: countInquiryTokens(content),
+                }
+            })
+            .sort((left, right) =>
+                right.effectiveScore - left.effectiveScore
+                || right.occurredAt - left.occurredAt
+                || left.messageId.localeCompare(right.messageId))
+        : []
+    const selectedSourceMatches: typeof preparedSourceMatches = []
     const selectedIds = new Set<string>()
+    const selectedSourceIds = new Set<string>()
     let selectedTokens = 0
     for (const candidate of prepared.filter((item) =>
         requiredIds.has(item.document.id))) {
@@ -499,7 +549,8 @@ export function inquireMarkdownDocuments(
     }
     const addOptionalIfFits = (candidate: (typeof prepared)[number]) => {
         if (selectedIds.has(candidate.document.id)
-            || selected.length >= MAX_SELECTED_DOCUMENTS
+            || selected.length + selectedSourceMatches.length
+                >= MAX_SELECTED_DOCUMENTS
             || selectedTokens + candidate.tokens > selectedTokenBudget) {
             return false
         }
@@ -507,6 +558,16 @@ export function inquireMarkdownDocuments(
         selectedIds.add(candidate.document.id)
         selectedTokens += candidate.tokens
         return true
+    }
+    for (const match of preparedSourceMatches) {
+        if (selectedSourceMatches.length >= MAX_SELECTED_SOURCE_MESSAGES
+            || selectedSourceIds.has(match.messageId)
+            || selected.length + selectedSourceMatches.length
+                >= MAX_SELECTED_DOCUMENTS
+            || selectedTokens + match.tokens > selectedTokenBudget) continue
+        selectedSourceMatches.push(match)
+        selectedSourceIds.add(match.messageId)
+        selectedTokens += match.tokens
     }
     if (historicalEvidenceIntent && !chronologyIntent) {
         for (const candidate of prepared.filter((item) =>
@@ -526,22 +587,33 @@ export function inquireMarkdownDocuments(
         graphRevision: input.documents.length,
         indexRevision: input.documents.length,
         cacheStatus: 'current',
-        sources: selected.map((candidate) => ({
-            id: `narrative-memory:wiki:${candidate.document.relativePath}`,
-            kind: 'memory',
-            role: 'system',
-            content: candidate.content,
-            tokens: candidate.tokens,
-            priority: candidate.document.contextMode === 'always'
-                ? 200
-                : 100 + Math.round(candidate.score),
-        })),
+        sources: [
+            ...selected.map((candidate) => ({
+                id: `narrative-memory:wiki:${candidate.document.relativePath}`,
+                kind: 'memory' as const,
+                role: 'system' as const,
+                content: candidate.content,
+                tokens: candidate.tokens,
+                priority: candidate.document.contextMode === 'always'
+                    ? 200
+                    : 100 + Math.round(candidate.score),
+            })),
+            ...selectedSourceMatches.map((match) => ({
+                id: `narrative-memory:source:${encodeURIComponent(match.messageId)}:${match.occurredAt}`,
+                kind: 'memory' as const,
+                role: 'system' as const,
+                content: match.content,
+                tokens: match.tokens,
+                priority: 140 + Math.round(match.effectiveScore),
+                occurredAt: match.occurredAt,
+            })),
+        ],
         entityCandidates: [],
         metrics: {
             candidateCount: candidates.size,
             inspectedNodeCount: eligibleDocuments.length,
             inspectedEdgeCount,
-            selectedNodeCount: selected.length,
+            selectedNodeCount: selected.length + selectedSourceMatches.length,
             selectedTokens,
             semanticCandidateCount: semantic.length,
             hopCount: selected.reduce((maximum, candidate) =>

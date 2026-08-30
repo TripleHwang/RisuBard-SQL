@@ -85,4 +85,28 @@ describe('modal surface contract', () => {
             /:global\(\.save-slot-dialog\)[^}]*background:\s*var\(--color-darkbg\)/,
         )
     })
+
+    test('keeps fixed-width legacy modal surfaces inside narrow viewports', () => {
+        for (const file of [
+            'src/lib/Others/ChatList.svelte',
+            'src/lib/Setting/listedHypaV3Preset.svelte',
+            'src/lib/Setting/listedPersona.svelte',
+            'src/lib/Setting/lorepreset.svelte',
+            'src/lib/Setting/modelpreset.svelte',
+            'src/lib/Setting/modelProfileBrowser.svelte',
+            'src/lib/Setting/themepreset.svelte',
+        ]) {
+            const surface = source(file).split(/\r?\n/)
+                .find((line) => line.includes('risu-modal-surface')) ?? ''
+            expect(surface, file).toContain('max-w-full')
+        }
+    })
+
+    test('bounds partial-edit modal minimum widths by the viewport gutter', () => {
+        const partialEdit = source('src/lib/ChatScreens/PartialEditController.svelte')
+
+        expect(partialEdit).not.toMatch(/min-width:\s*(?:320|400)px/)
+        expect(partialEdit.match(/min-width:\s*min\((?:320|400)px, calc\(100vw - 2rem\)\)/g))
+            .toHaveLength(4)
+    })
 })

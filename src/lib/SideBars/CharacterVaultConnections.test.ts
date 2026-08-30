@@ -162,6 +162,27 @@ describe('Character Vault sidebar integration', () => {
             .toContain("color.startsWith('#') ? color : undefined")
     })
 
+    test('keeps pinned bot images stable across sidebar hover updates', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+
+        expect(sidebar).toContain('const sidebarImageCache = new Map')
+        expect(sidebar).toContain('function sidebarCharacterImage(')
+        expect(sidebar).toContain('src={char.img ? sidebarCharacterImage(char.img) : "/none.webp"}')
+        expect(sidebar).toContain('src={char2.img ? sidebarCharacterImage(char2.img) : "/none.webp"}')
+    })
+
+    test('selects pinned bots on mouse press before native drag can suppress click', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const quickInventory = sidebar.slice(
+            sidebar.indexOf('data-quick-inventory'),
+            sidebar.indexOf('data-sidebar-new-character'),
+        )
+
+        expect(quickInventory).toContain('onpointerdown={(event) => selectPinnedCharacterOnMouse(')
+        expect(quickInventory).toContain('if(isTouchDevice && char.type === "normal")')
+        expect(quickInventory).toContain('if(isTouchDevice && char2.type === "normal")')
+    })
+
     test('resolves quick folder context actions by stable folder id', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         expect(sidebar).toContain('const folderIndex = getFolderIndex(char.id)')

@@ -15,6 +15,7 @@ export interface MarkdownWikiDocument {
     status: 'active' | 'superseded' | 'retracted'
     supersededBy?: string
     title: string
+    aliases: string[]
     relativePath: string
     sourceMessageIds: string[]
     updated: string
@@ -87,6 +88,49 @@ function required(value: string, label: string): string {
         throw new Error(`${label} must not be empty`)
     }
     return value
+}
+
+function normalizeAliases(
+    values: readonly string[] | undefined,
+    title: string
+): string[] {
+    if (values === undefined) return []
+    if (!Array.isArray(values) || values.length > 32) {
+        throw new Error('Wiki aliases must contain at most 32 items')
+    }
+    const titleKey = title.normalize('NFKC').toLocaleLowerCase()
+    const seen = new Set<string>()
+    const aliases: string[] = []
+    for (const value of values) {
+        if (typeof value !== 'string') {
+            throw new Error('Wiki alias must be a string')
+        }
+        const alias = value.trim()
+        if (alias.length === 0 || alias.length > 160) {
+            throw new Error('Wiki alias must contain 1-160 characters')
+        }
+        const key = alias.normalize('NFKC').toLocaleLowerCase()
+        if (key === titleKey || seen.has(key)) continue
+        seen.add(key)
+        aliases.push(alias)
+    }
+    return aliases
+}
+
+function aliasesForSave(input: {
+    aliases?: readonly string[]
+    title: string
+    existing?: Pick<MarkdownWikiDocument, 'title' | 'aliases'>
+}): string[] {
+    const values = input.aliases === undefined
+        ? [...(input.existing?.aliases ?? [])]
+        : [...input.aliases]
+    if (input.existing
+        && input.existing.title.normalize('NFKC').toLocaleLowerCase()
+            !== input.title.normalize('NFKC').toLocaleLowerCase()) {
+        values.push(input.existing.title)
+    }
+    return normalizeAliases(values, input.title)
 }
 
 function yamlString(value: string): string {
@@ -265,11 +309,20 @@ function hashDocumentBytes(contents: string): string {
 }
 
 function prepareDocument(
-    document: Omit<MarkdownWikiDocument, 'contentHash'>
+    document: Omit<MarkdownWikiDocument, 'contentHash' | 'aliases'> & {
+        aliases?: string[]
+    }
 ): { document: MarkdownWikiDocument; contents: string } {
-    const contents = serializeDocument(document)
+    const normalizedDocument: Omit<MarkdownWikiDocument, 'contentHash'> = {
+        ...document,
+        aliases: normalizeAliases(document.aliases, document.title),
+    }
+    const contents = serializeDocument(normalizedDocument)
     return {
-        document: { ...document, contentHash: hashDocumentBytes(contents) },
+        document: {
+            ...normalizedDocument,
+            contentHash: hashDocumentBytes(contents),
+        },
         contents,
     }
 }
@@ -296,6 +349,8 @@ function serializeDocument(
             ? [`review_status: ${document.reviewStatus}`]
             : []),
         `context: ${document.contextMode}`,
+        'aliases:',
+        ...document.aliases.map((alias) => `  - ${yamlString(alias)}`),
         'source_messages:',
         ...document.sourceMessageIds.map((id) => `  - ${yamlString(id)}`),
         'links:',
@@ -382,6 +437,7 @@ function parseDocument(
             ) }
             : {}),
         title: required(storedTitle ?? '', 'Markdown wiki title'),
+        aliases: normalizeAliases(list('aliases'), storedTitle ?? ''),
         relativePath,
         sourceMessageIds: list('source_messages'),
         updated,
@@ -403,14 +459,27 @@ function parseDocument(
 }
 
 function computeHealth(documents: MarkdownWikiDocument[]): MarkdownWikiHealth {
-    const byTarget = new Map<string, MarkdownWikiDocument>()
+    const possibleTargets = new Map<string, MarkdownWikiDocument | null>()
     for (const document of documents) {
         const pathWithoutExtension = document.relativePath.replace(/\.md$/i, '')
         const fileName = basename(pathWithoutExtension)
-        for (const value of [document.title, pathWithoutExtension, fileName]) {
-            byTarget.set(value.normalize('NFKC').toLocaleLowerCase(), document)
+        for (const value of [
+            document.title,
+            ...document.aliases,
+            pathWithoutExtension,
+            fileName,
+        ]) {
+            const key = value.normalize('NFKC').toLocaleLowerCase()
+            const existing = possibleTargets.get(key)
+            possibleTargets.set(
+                key,
+                existing && existing.id !== document.id ? null : document
+            )
         }
     }
+    const byTarget = new Map([...possibleTargets.entries()]
+        .filter((entry): entry is [string, MarkdownWikiDocument] =>
+            entry[1] !== null))
     const connected = new Set<string>()
     const danglingLinks: MarkdownWikiHealth['danglingLinks'] = []
     for (const document of documents) {
@@ -1080,6 +1149,7 @@ export function createMarkdownNarrativeWiki(
                 type: 'event',
                 status: 'active',
                 title: normalized.title,
+                aliases: existingEvent?.aliases ?? [],
                 relativePath: `events/${file}`,
                 sourceMessageIds,
                 updated: operationTime,
@@ -1104,6 +1174,7 @@ export function createMarkdownNarrativeWiki(
             documentId?: string
             type: CanonicalMarkdownWikiDocumentType
             title: string
+            aliases?: string[]
             sourceMessageIds: string[]
             markdown: string
             expectedContentHash?: string
@@ -1209,6 +1280,11 @@ export function createMarkdownNarrativeWiki(
                 type: input.type,
                 status: 'active',
                 title: normalized.title,
+                aliases: aliasesForSave({
+                    aliases: input.aliases,
+                    title: normalized.title,
+                    existing,
+                }),
                 relativePath,
                 sourceMessageIds: [...new Set([
                     ...(existing?.sourceMessageIds ?? []),
@@ -1325,6 +1401,7 @@ export function createMarkdownNarrativeWiki(
             documentId?: string
             type: MarkdownWikiDocumentType
             title: string
+            aliases?: string[]
             markdown: string
             expectedContentHash?: string
         }): Promise<MarkdownWikiDocument> {
@@ -1404,6 +1481,11 @@ export function createMarkdownNarrativeWiki(
                 type: input.type,
                 status: 'active',
                 title,
+                aliases: aliasesForSave({
+                    aliases: input.aliases,
+                    title,
+                    existing,
+                }),
                 relativePath,
                 sourceMessageIds: existing?.sourceMessageIds ?? [],
                 created: existing?.created ?? operationTime,
@@ -1756,6 +1838,13 @@ export function createMarkdownNarrativeWiki(
                 documentId: string
                 score: number
             }[]
+            sourceMatches?: readonly {
+                messageId: string
+                role: 'user' | 'assistant'
+                content: string
+                score: number
+                occurredAt: number
+            }[]
             tokenBudget?: {
                 target: number
                 maximum: number
@@ -1769,6 +1858,9 @@ export function createMarkdownNarrativeWiki(
                 currentInput: input.currentInput,
                 ...(input.semanticMatches
                     ? { semanticMatches: input.semanticMatches }
+                    : {}),
+                ...(input.sourceMatches
+                    ? { sourceMatches: input.sourceMatches }
                     : {}),
                 ...(input.tokenBudget
                     ? { tokenBudget: input.tokenBudget }

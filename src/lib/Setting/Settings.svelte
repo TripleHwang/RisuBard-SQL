@@ -86,7 +86,10 @@
         {/if}
 
         {#if isDesktop || $SettingsMenuIndex !== SettingsRoute.None}
-            <main class="settings-content rs-setting-cont-4">
+            <main
+                class="settings-content rs-setting-cont-4"
+                class:settings-content--mobile-collection={$SettingsMenuIndex === SettingsRoute.Module || $SettingsMenuIndex === SettingsRoute.Plugin}
+            >
                 {#if !isDesktop}
                     <SettingsNavigation
                         {sections}
@@ -328,6 +331,46 @@
 
         .settings-page {
             padding: 1.15rem 1rem max(5rem, env(safe-area-inset-bottom));
+        }
+
+        .settings-content--mobile-collection:has(:global(.settings-standard-page--resizable)) {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .settings-content--mobile-collection:has(:global(.settings-standard-page--resizable)) .settings-page {
+            flex: 1;
+            min-height: 0;
+            padding: 0;
+        }
+
+        .settings-content--mobile-collection :global(.mobile-header) {
+            flex: 0 0 auto;
+        }
+
+        .settings-content--mobile-collection :global(.settings-standard-page--resizable) {
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+            max-height: none;
+            padding-bottom: 0;
+        }
+
+        .settings-content--mobile-collection :global(.settings-standard-page--resizable > .settings-standard-page__header),
+        .settings-content--mobile-collection :global([data-manager-window-resize]) {
+            display: none;
+        }
+
+        .settings-content--mobile-collection :global(.settings-standard-page--resizable > .settings-standard-page__body) {
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .settings-content--mobile-collection :global([data-collection-organizer-list]) {
+            height: 100%;
+            border: 0;
+            border-radius: 0;
         }
 
         :global(.settings-standard-page__header) {

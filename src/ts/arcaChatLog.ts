@@ -6,17 +6,29 @@ import type { ArcaClipboardColors } from './arcaExport'
 
 export type ArcaLogRange =
     | { mode: 'all' }
-    | { mode: 'range'; start: number; end: number }
+    | { mode: 'page'; start: number; end: number; pageSize: number }
+    | { mode: 'turn'; start: number; end: number }
 
 export interface ArcaLogSelectableMessage {
     data?: string
+    role?: 'user' | 'char'
+    sourceIndex?: number
     disabled?: boolean | 'allBefore'
     isComment?: boolean
+}
+
+export interface ArcaLogSelectionOptions {
+    includeUserMessages?: boolean
 }
 
 export interface ArcaLogSelection<T> {
     number: number
     message: T
+}
+
+export interface ArcaLogSelectionSummary {
+    characters: number
+    images: number
 }
 
 export interface ArcaLogRenderedMessage {
@@ -57,26 +69,90 @@ function escapeHtml(value: string): string {
 export function selectArcaLogMessages<T extends ArcaLogSelectableMessage>(
     messages: readonly T[],
     range: ArcaLogRange,
+    options: ArcaLogSelectionOptions = {},
 ): ArcaLogSelection<T>[] {
-    const active = messages.filter((message) => {
-        if (message.disabled || message.isComment) return false
-        if (typeof message.data !== 'string') return true
-        const data = message.data.trim()
-        return data !== '' && data !== '{{none}}' && data !== '{{blank}}'
-    })
-    if (range.mode === 'all' || active.length === 0) {
-        return active.map((message, index) => ({ number: index + 1, message }))
+    const active = messages
+        .map((message, sourceOrder) => ({ message, sourceOrder }))
+        .filter(({ message }) => isSelectableArcaLogMessage(message))
+        .map(({ message, sourceOrder }, index) => ({ number: index + 1, message, sourceOrder }))
+    if (active.length === 0) return []
+
+    let selected = active
+    if (range.mode === 'page') {
+        const pageSize = Math.max(1, Math.trunc(range.pageSize) || 1)
+        const maxSourceIndex = Math.max(0, ...active.map(({ message, sourceOrder }) =>
+            Number.isFinite(message.sourceIndex) ? message.sourceIndex! : sourceOrder))
+        const pageCount = Math.max(1, Math.ceil((maxSourceIndex + 1) / pageSize))
+        const [start, end] = normalizeArcaLogBounds(range.start, range.end, pageCount)
+        selected = active.filter(({ message, sourceOrder }) => {
+            const sourceIndex = Number.isFinite(message.sourceIndex) ? message.sourceIndex! : sourceOrder
+            const page = sourceIndex < 0 ? 1 : Math.floor(sourceIndex / pageSize) + 1
+            return page >= start && page <= end
+        })
+    }
+    else if (range.mode === 'turn') {
+        let turn = 0
+        const turns = active.map((entry, index) => {
+            if (turn === 0 || (index > 0 && entry.message.role === 'user')) turn += 1
+            return { ...entry, turn }
+        })
+        const [start, end] = normalizeArcaLogBounds(range.start, range.end, Math.max(1, turn))
+        selected = turns.filter(entry => entry.turn >= start && entry.turn <= end)
     }
 
-    const clamp = (value: number) => Math.min(active.length, Math.max(1, Math.trunc(value) || 1))
-    const first = clamp(range.start)
-    const last = clamp(range.end)
-    const start = Math.min(first, last)
-    const end = Math.max(first, last)
+    return selected
+        .filter(({ message }) => options.includeUserMessages !== false || message.role !== 'user')
+        .map(({ number, message }) => ({ number, message }))
+}
 
-    return active
-        .slice(start - 1, end)
-        .map((message, index) => ({ number: start + index, message }))
+function isSelectableArcaLogMessage(message: ArcaLogSelectableMessage): boolean {
+    if (message.disabled || message.isComment) return false
+    if (typeof message.data !== 'string') return true
+    const data = message.data.trim()
+    return data !== '' && data !== '{{none}}' && data !== '{{blank}}'
+}
+
+function normalizeArcaLogBounds(startValue: number, endValue: number, maximum: number): [number, number] {
+    const clamp = (value: number) => Math.min(maximum, Math.max(1, Math.trunc(value) || 1))
+    const first = clamp(startValue)
+    const last = clamp(endValue)
+    return [Math.min(first, last), Math.max(first, last)]
+}
+
+export function getArcaLogTurnCount(messages: readonly ArcaLogSelectableMessage[]): number {
+    let turns = 0
+    messages.filter(isSelectableArcaLogMessage).forEach((message, index) => {
+        if (turns === 0 || (index > 0 && message.role === 'user')) turns += 1
+    })
+    return turns
+}
+
+export function summarizeArcaLogMessages(
+    messages: readonly ArcaLogSelectableMessage[],
+): ArcaLogSelectionSummary {
+    let characters = 0
+    let images = 0
+    for (const message of messages) {
+        const data = message.data ?? ''
+        const htmlImages = data.match(/<img\b[^>]*>/gi) ?? []
+        const markdownImages = data.match(/!\[[^\]]*\]\([^)]*\)/g) ?? []
+        images += htmlImages.length + markdownImages.length
+        const visible = data
+            .replace(/<img\b[^>]*>/gi, '')
+            .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+            .replace(/<[^>]*>/g, '')
+            .replace(/[\u180E\u200B-\u200D\u2060\uFEFF]/g, '')
+        characters += Array.from(visible).length
+    }
+    return { characters, images }
+}
+
+export function hasVisibleArcaLogContent(root: HTMLElement): boolean {
+    const visibleText = (root.textContent ?? '')
+        .replace(/[\u180E\u200B-\u200D\u2060\uFEFF]/g, '')
+        .trim()
+    if (visibleText) return true
+    return Boolean(root.querySelector('img,picture,video,audio,canvas,svg,table,hr'))
 }
 
 export function buildArcaLogClipboardHtml(options: ArcaLogClipboardHtmlOptions): string {

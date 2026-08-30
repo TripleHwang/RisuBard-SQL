@@ -5,6 +5,7 @@ export interface AutomaticWikiDocumentDescriptor {
     id: string
     type: AutomaticWikiDocumentType | 'event'
     title: string
+    aliases?: string[]
 }
 
 export interface AutomaticWikiTarget {

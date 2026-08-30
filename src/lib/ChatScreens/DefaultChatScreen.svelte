@@ -119,6 +119,7 @@ import { isMobile } from 'src/ts/platform'
     let memoryWikiOpen = $state(false)
     let arcaChatLogOpen = $state(false)
     let chatPage = $state(0)
+    let firstMessageCollapsed = $state(true)
     let paginationKey = $state('')
     let paginationMessageCount = $state(0)
     let paginationPageSize = $state(DEFAULT_CHAT_PAGE_SIZE)
@@ -169,6 +170,7 @@ import { isMobile } from 'src/ts/platform'
 
         if (nextKey !== paginationKey) {
             paginationKey = nextKey
+            firstMessageCollapsed = true
             const savedView = loadChatViewSession(nextKey)
             if (savedView) {
                 chatPage = getChatPageBounds(messageCount, chatPageSize, savedView.page).page
@@ -1396,7 +1398,7 @@ import { isMobile } from 'src/ts/platform'
                                     class:border-darkborderc={DBState.db.risuBardAutoWikiEnabled === false}
                                     class:bg-bgcolor={DBState.db.risuBardAutoWikiEnabled === false}
                             >
-                                <span class="h-1.5 w-1.5 rounded-full bg-white/90"></span>
+                                <span class="h-1.5 w-1.5 rounded-full bg-on-warning/90"></span>
                             </span>
                         </button>
                     </div>
@@ -1593,40 +1595,66 @@ import { isMobile } from 'src/ts/platform'
                 bind:hasNewUnreadMessage={showNewMessageButton}
             />
 
-            {#if chatBounds.page === 0}
-                <Chat
-                    character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
-                    name={DBState.db.characters[$selectedCharID].name}
-                    message={currentChatFmIndex === -1 ? DBState.db.characters[$selectedCharID].firstMessage :
-                        DBState.db.characters[$selectedCharID].alternateGreetings[currentChatFmIndex]}
-                    role='char'
-                    img={getCharImage(DBState.db.characters[$selectedCharID].image, 'css')}
-                    idx={-1}
-                    altGreeting={DBState.db.characters[$selectedCharID].alternateGreetings.length > 0}
-                    disabled={DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].firstMessageDisabled === true}
-                    largePortrait={DBState.db.characters[$selectedCharID].largePortrait}
-                    firstMessage={true}
-                    onReroll={() => {
-                        const cha = DBState.db.characters[$selectedCharID]
-                        const chat = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
-                        if (chat._placeholder) return
-                        const cur = Number.isFinite(chat.fmIndex as number) ? (chat.fmIndex as number) : -1
-                        chat.fmIndex = (cur >= cha.alternateGreetings.length - 1) ? -1 : cur + 1
-                        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = chat
-                    }}
-                    unReroll={() => {
-                        const cha = DBState.db.characters[$selectedCharID]
-                        const chat = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
-                        if (chat._placeholder) return
-                        const cur = Number.isFinite(chat.fmIndex as number) ? (chat.fmIndex as number) : -1
-                        chat.fmIndex = (cur === -1) ? cha.alternateGreetings.length - 1 : cur - 1
-                        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = chat
-                    }}
-                    isLastMemory={false}
-                    currentPage={(Number.isFinite(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].fmIndex as number) ? (DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].fmIndex as number) : -1) + 2}
-                    totalPages={DBState.db.characters[$selectedCharID].alternateGreetings.length + 1}
+            <section class="w-full" data-chat-pinned-first-message>
+                {#if chatBounds.page === 0 || !firstMessageCollapsed}
+                    <div id="chat-pinned-first-message-content">
+                        <Chat
+                            character={createSimpleCharacter(DBState.db.characters[$selectedCharID])}
+                            name={DBState.db.characters[$selectedCharID].name}
+                            message={currentChatFmIndex === -1 ? DBState.db.characters[$selectedCharID].firstMessage :
+                                DBState.db.characters[$selectedCharID].alternateGreetings[currentChatFmIndex]}
+                            role='char'
+                            img={getCharImage(DBState.db.characters[$selectedCharID].image, 'css')}
+                            idx={-1}
+                            altGreeting={DBState.db.characters[$selectedCharID].alternateGreetings.length > 0}
+                            disabled={DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].firstMessageDisabled === true}
+                            largePortrait={DBState.db.characters[$selectedCharID].largePortrait}
+                            firstMessage={true}
+                            onReroll={() => {
+                                const cha = DBState.db.characters[$selectedCharID]
+                                const chat = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
+                                if (chat._placeholder) return
+                                const cur = Number.isFinite(chat.fmIndex as number) ? (chat.fmIndex as number) : -1
+                                chat.fmIndex = (cur >= cha.alternateGreetings.length - 1) ? -1 : cur + 1
+                                DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = chat
+                            }}
+                            unReroll={() => {
+                                const cha = DBState.db.characters[$selectedCharID]
+                                const chat = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
+                                if (chat._placeholder) return
+                                const cur = Number.isFinite(chat.fmIndex as number) ? (chat.fmIndex as number) : -1
+                                chat.fmIndex = (cur === -1) ? cha.alternateGreetings.length - 1 : cur - 1
+                                DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = chat
+                            }}
+                            isLastMemory={false}
+                            currentPage={(Number.isFinite(DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].fmIndex as number) ? (DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].fmIndex as number) : -1) + 2}
+                            totalPages={DBState.db.characters[$selectedCharID].alternateGreetings.length + 1}
+                        />
+                    </div>
+                {/if}
+                {#if chatBounds.page > 0}
+                    <div class="mx-auto flex w-full max-w-xl justify-end px-4 pt-3">
+                        <button
+                            type="button"
+                            data-chat-first-message-toggle
+                            aria-controls="chat-pinned-first-message-content"
+                            aria-expanded={!firstMessageCollapsed}
+                            class="flex items-center gap-1.5 rounded-full border border-darkborderc bg-darkbg/90 px-3 py-1.5 text-sm text-textcolor shadow-sm transition-colors hover:bg-primary/20"
+                            onclick={() => firstMessageCollapsed = !firstMessageCollapsed}
+                        >
+                            {#if firstMessageCollapsed}
+                                <ChevronDownIcon size={16} />
+                                {language.chatFirstMessageExpand}
+                            {:else}
+                                <ChevronUpIcon size={16} />
+                                {language.chatFirstMessageCollapse}
+                            {/if}
+                        </button>
+                    </div>
+                {/if}
+            </section>
 
-                />
+            {#if chatBounds.page === 0}
                 {#if (aiLawApplies() && DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.length === 0)}
                     <div class="ml-auto mr-auto mt-4 text-textcolor2 italic max-w-2/3 wrap-break-word text-center">
                         {language.aiGenerationWarning}

@@ -32,6 +32,9 @@ const mocks = vi.hoisted(() => ({
                     role: 'user' | 'char'
                     data: string
                     swipes?: string[]
+                    chatId?: string
+                    disabled?: boolean
+                    isComment?: boolean
                 }>
             }>
         }>
@@ -552,6 +555,59 @@ describe('RisuBardMemoryWiki', () => {
         })
     })
 
+    test('shows the analyzed AI turn and completion time after additional analysis', async () => {
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown', wikiPath: 'C:\\wiki', documents: [],
+        })
+        mocks.db.characters = [{
+            chaId: 'character',
+            chats: [{
+                id: 'chat',
+                message: [
+                    { role: 'user', data: '첫 질문', chatId: 'user-1' },
+                    { role: 'char', data: '첫 응답', chatId: 'assistant-1' },
+                    {
+                        role: 'char', data: '비활성 응답', chatId: 'disabled',
+                        disabled: true,
+                    },
+                    {
+                        role: 'char', data: '코멘트', chatId: 'comment',
+                        isComment: true,
+                    },
+                    { role: 'user', data: '둘째 질문', chatId: 'user-2' },
+                    { role: 'char', data: '둘째 응답', chatId: 'assistant-2' },
+                ],
+            }],
+        }]
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: {
+                open: true,
+                characterId: 'character',
+                chatId: 'chat',
+                onForceWikiUpdate: async () => true,
+            },
+        })
+
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-risubard-force-wiki-update]'
+        )).not.toBeNull())
+        document.querySelector<HTMLButtonElement>(
+            '[data-risubard-force-wiki-update]'
+        )?.click()
+
+        await vi.waitFor(() => {
+            const status = document.querySelector(
+                '[data-force-update-status="success"]'
+            )
+            expect(status?.textContent).toContain('Analyzed through AI turn 2')
+            expect(status?.textContent).toMatch(/Updated: \d{2}:\d{2}/)
+            expect(status?.querySelector(
+                '[data-force-update-meta]'
+            )).not.toBeNull()
+        })
+    })
+
     test('exposes the main RisuBard options as current-chat settings', async () => {
         mocks.loadNarrativeMemoryWiki.mockResolvedValue({
             mode: 'markdown',
@@ -654,10 +710,11 @@ describe('RisuBardMemoryWiki', () => {
         expect(source).toMatch(/\.dock-views \.force-update-button,\s*\.dock-views \.find-replace-button,\s*\.dock-views \.reboot-button,\s*\.dock-views \.reboot-cancel-button\s*\{[^}]*height:\s*2\.25rem/s)
         expect(source).toMatch(/\.force-update-button img\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s)
         expect(source).toMatch(/\.dock-views \.force-update-button span,\s*\.dock-views \.find-replace-button span,\s*\.dock-views \.reboot-button span/)
-        expect(source).toMatch(/\.dock-views\s*\{[^}]*min-height:\s*52px[^}]*padding:\s*\.45rem\s+\.48rem/s)
+        expect(source).toMatch(/\.dock-views\s*\{[^}]*min-height:\s*44px[^}]*padding:\s*\.3rem\s+\.35rem/s)
         expect(source).toMatch(/\.dock-identity strong\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
         expect(source).toMatch(/\.settings-popover\s*\{[^}]*background:\s*var\(--risu-theme-bgcolor\)/s)
         expect(source).toMatch(/\.dock-view-actions\s*\{[^}]*margin-left:\s*auto/s)
+        expect(source).toMatch(/@container \(max-width: 46rem\)[\s\S]*\.dock-views\s*\{[^}]*overflow-x:\s*auto/s)
         expect(forceUpdate.compareDocumentPosition(workspace)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
         expect(workspace.compareDocumentPosition(story)
@@ -954,6 +1011,32 @@ describe('RisuBardMemoryWiki', () => {
             expect(split?.style.getPropertyValue('--wiki-workspace-height'))
                 .toBe('484px')
         })
+    })
+
+    test('pins workspace panes to stable rows when the command resizer is hidden', () => {
+        const source = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+        ), 'utf8')
+
+        expect(source).toContain(
+            '.workspace-split > .wiki-editor-region { grid-row: 1; }'
+        )
+        expect(source).toContain(
+            '.workspace-split > .workspace-resizer { grid-row: 2; }'
+        )
+        expect(source).toContain(
+            '.workspace-split > .markdown-command-pane { grid-row: 3; }'
+        )
+    })
+
+    test('keeps the collapsed Bardchat dock reachable in a narrow container', () => {
+        const source = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+        ), 'utf8')
+
+        expect(source).toContain('@container (max-width: 46rem)')
+        expect(source).toMatch(/\.markdown-wiki\.workspace-split\.command-collapsed\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\) 0 3rem/s)
+        expect(source).toMatch(/\.markdown-command-pane\s*\{[^}]*position:\s*relative[^}]*z-index:\s*6/s)
     })
 
     test('stores the selected RisuBard model on the current chat', async () => {
