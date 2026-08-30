@@ -43,6 +43,7 @@
         documents: WikiDocument[]
         health?: NarrativeMemoryWikiMarkdown['health']
         locked?: boolean
+        mobileLayout?: boolean
         selectedId?: string
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
@@ -56,6 +57,7 @@
         documents,
         health = { danglingLinks: [], unlinkedDocumentIds: [] },
         locked = false,
+        mobileLayout = false,
         selectedId = $bindable(''),
         onChanged,
         onSelected,
@@ -484,6 +486,7 @@
     class:tree-collapsed={!treeExpanded}
     class:editor-collapsed={!editorExpanded}
     class:editor-focus={editorFocus}
+    class:mobile-layout={mobileLayout}
     data-wiki-editor
     data-tree-expanded={treeExpanded}
     data-editor-expanded={editorExpanded}
@@ -811,7 +814,7 @@
     .markdown-editor::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--risu-theme-textcolor2) 42%, transparent); }
     .markdown-editor:focus { box-shadow: inset 3px 0 color-mix(in srgb, var(--risu-theme-primary) 60%, transparent); }
     .markdown-editor[readonly] { opacity: .86; }
-    .markdown-preview { flex: 1; min-height: 20rem; margin: 0; overflow: auto; padding: 1rem 1.15rem 2rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); color: var(--risu-theme-textcolor); font-size: .82rem; line-height: 1.7; }
+    .markdown-preview { flex: 1; min-height: 20rem; margin: 0; overflow-x: auto; overflow-y: scroll; padding: 1rem 1.15rem 2rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); color: var(--risu-theme-textcolor); font-size: .82rem; line-height: 1.7; scrollbar-gutter: stable; scrollbar-width: thin; }
     .markdown-preview :global(h1), .markdown-preview :global(h2), .markdown-preview :global(h3), .markdown-preview :global(h4) { margin: 1.2em 0 .5em; color: var(--risu-theme-textcolor); line-height: 1.3; }
     .markdown-preview :global(h1:first-child), .markdown-preview :global(h2:first-child), .markdown-preview :global(h3:first-child) { margin-top: 0; }
     .markdown-preview :global(h1) { font-size: 1.35rem; }
@@ -864,8 +867,7 @@
         .editor-actions .editor-source-action :global(button) { width: auto; padding-inline: .55rem; }
         .editor-actions [data-wiki-action-label] { display: none; }
     }
-    @container (max-width: 46rem) {
-        .wiki-editor {
+    .wiki-editor.mobile-layout {
             position: relative;
             grid-template-columns: minmax(0, 1fr);
             grid-template-rows: 2.75rem minmax(0, 1fr);
@@ -874,7 +876,7 @@
             overflow: hidden;
             isolation: isolate;
         }
-        .tree-panel-header {
+        .wiki-editor.mobile-layout .tree-panel-header {
             z-index: 32;
             display: flex;
             grid-row: 1;
@@ -882,7 +884,7 @@
             border-bottom: 1px solid var(--risu-theme-darkborderc);
             background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
         }
-        .tree-panel-header > button {
+        .wiki-editor.mobile-layout .tree-panel-header > button {
             display: flex;
             width: 100%;
             min-height: 2.75rem;
@@ -895,36 +897,36 @@
             text-align: left;
             touch-action: manipulation;
         }
-        .tree-panel-header > button:active {
+        .wiki-editor.mobile-layout .tree-panel-header > button:active {
             background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent);
         }
-        .tree-panel-header > button:focus-visible {
+        .wiki-editor.mobile-layout .tree-panel-header > button:focus-visible {
             outline: 2px solid var(--risu-theme-primary);
             outline-offset: -2px;
         }
-        .tree-panel-header button > span {
+        .wiki-editor.mobile-layout .tree-panel-header button > span {
             display: flex;
             flex: 1;
             min-width: 0;
             align-items: baseline;
             gap: .5rem;
         }
-        .tree-panel-header strong { font-size: .78rem; }
-        .tree-panel-header small {
+        .wiki-editor.mobile-layout .tree-panel-header strong { font-size: .78rem; }
+        .wiki-editor.mobile-layout .tree-panel-header small {
             overflow: hidden;
             color: var(--risu-theme-textcolor2);
             font-size: .68rem;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
-        .tree-panel-header :global(svg:last-child) {
+        .wiki-editor.mobile-layout .tree-panel-header :global(svg:last-child) {
             flex: 0 0 auto;
             transition: transform .18s ease-out;
         }
-        .tree-panel-header :global(svg:last-child.collapsed) {
+        .wiki-editor.mobile-layout .tree-panel-header :global(svg:last-child.collapsed) {
             transform: rotate(-90deg);
         }
-        .file-tree {
+        .wiki-editor.mobile-layout .file-tree {
             position: absolute;
             z-index: 31;
             inset: 2.75rem auto 0 0;
@@ -938,13 +940,13 @@
             transform: translateX(-100%);
             transition: transform .18s ease-out, opacity .14s ease-out;
         }
-        .wiki-editor:not(.tree-collapsed) .file-tree {
+        .wiki-editor.mobile-layout:not(.tree-collapsed) .file-tree {
             opacity: 1;
             pointer-events: auto;
             transform: translateX(0);
             box-shadow: .8rem 0 2rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
         }
-        .tree-scrim {
+        .wiki-editor.mobile-layout .tree-scrim {
             position: absolute;
             z-index: 30;
             display: block;
@@ -955,21 +957,25 @@
             background: color-mix(in srgb, var(--color-shadow) 48%, transparent);
             cursor: default;
         }
-        .folder-row, .root-file, .folder-children button { min-height: 2.75rem; }
-        .editor-section-resizer, .editor-panel-header { display: none; }
-        .editor-pane { display: flex; grid-row: 2; min-height: 0; overflow: hidden; }
-        .editor-title-row {
+        .wiki-editor.mobile-layout .folder-row,
+        .wiki-editor.mobile-layout .root-file,
+        .wiki-editor.mobile-layout .folder-children button { min-height: 2.75rem; }
+        .wiki-editor.mobile-layout .editor-section-resizer,
+        .wiki-editor.mobile-layout .editor-panel-header { display: none; }
+        .wiki-editor.mobile-layout .editor-pane { display: flex; grid-row: 2; min-height: 0; overflow: hidden; }
+        .wiki-editor.mobile-layout .editor-title-row {
             display: grid;
             grid-template-columns: minmax(6.5rem, .72fr) minmax(0, 1.28fr);
             gap: .45rem;
             padding: .5rem .6rem;
         }
-        .editor-title-row .aliases-field { grid-column: 1 / -1; }
-        .editor-title-row select, .editor-title-row input {
+        .wiki-editor.mobile-layout .editor-title-row .aliases-field { grid-column: 1 / -1; }
+        .wiki-editor.mobile-layout .editor-title-row select,
+        .wiki-editor.mobile-layout .editor-title-row input {
             min-height: 2.75rem;
             font-size: 1rem;
         }
-        .editor-actions {
+        .wiki-editor.mobile-layout .editor-actions {
             width: 100%;
             align-items: center;
             justify-content: flex-end;
@@ -978,23 +984,23 @@
             padding: .4rem .6rem;
             scrollbar-width: thin;
         }
-        .editor-actions :global(button) { min-height: 2.75rem; }
-        .document-meta { flex-wrap: wrap; gap: .35rem .6rem; }
-        .markdown-editor {
+        .wiki-editor.mobile-layout .editor-actions :global(button) { min-height: 2.75rem; }
+        .wiki-editor.mobile-layout .document-meta { flex-wrap: wrap; gap: .35rem .6rem; }
+        .wiki-editor.mobile-layout .markdown-editor,
+        .wiki-editor.mobile-layout .markdown-preview {
             min-height: 0;
             padding: 1rem;
             font-size: 1rem;
             line-height: 1.65;
             overscroll-behavior: contain;
         }
-        .tree-collapsed .file-tree { display: block; }
-        .editor-collapsed .editor-pane { display: flex; }
-        .editor-focus { grid-template-rows: minmax(0, 1fr); }
-        .editor-focus .tree-panel-header,
-        .editor-focus .file-tree,
-        .editor-focus .tree-scrim { display: none; }
-        .editor-focus .editor-pane { grid-row: 1; }
-    }
+        .wiki-editor.mobile-layout.tree-collapsed .file-tree { display: block; }
+        .wiki-editor.mobile-layout.editor-collapsed .editor-pane { display: flex; }
+        .wiki-editor.mobile-layout.editor-focus { grid-template-rows: minmax(0, 1fr); }
+        .wiki-editor.mobile-layout.editor-focus .tree-panel-header,
+        .wiki-editor.mobile-layout.editor-focus .file-tree,
+        .wiki-editor.mobile-layout.editor-focus .tree-scrim { display: none; }
+        .wiki-editor.mobile-layout.editor-focus .editor-pane { grid-row: 1; }
 
     @container (max-width: 30rem) {
         .editor-title-row { grid-template-columns: minmax(0, 1fr); }

@@ -20,6 +20,7 @@
             contextSelection: DirectWikiContextSelection
         ) => Promise<DirectWikiCommandResult>
         contextSelection?: DirectWikiContextSelection
+        mobileLayout?: boolean
         onContextSelectionChange?: (
             selection: DirectWikiContextSelection
         ) => void
@@ -50,6 +51,7 @@
     let {
         onExecute,
         contextSelection = DEFAULT_CONTEXT_SELECTION,
+        mobileLayout = false,
         onContextSelectionChange,
     }: Props = $props()
     let selection = $state<DirectWikiContextSelection>({
@@ -138,7 +140,11 @@
     }
 </script>
 
-<section class="command-terminal" data-wiki-command-terminal>
+<section
+    class="command-terminal"
+    class:mobile-layout={mobileLayout}
+    data-wiki-command-terminal
+>
     <header>
         <div class="terminal-title">
             <span class="terminal-mark"><SquareTerminalIcon size={17} /></span>
@@ -635,53 +641,51 @@
     }
     .template-dialog-footer > div { display: flex; gap: .45rem; }
 
-    @container (max-width: 46rem) {
-        .command-terminal {
+    .command-terminal.mobile-layout {
             border-inline: 0;
             border-bottom: 0;
             border-radius: 0;
             box-shadow: none;
         }
-        .command-terminal > header {
+        .command-terminal.mobile-layout > header {
             display: grid;
             gap: .3rem;
             padding: .4rem .45rem;
         }
-        .terminal-title { display: none; }
-        .terminal-toolbar { flex-wrap: wrap; }
-        .context-toolbar {
+        .mobile-layout .terminal-title { display: none; }
+        .mobile-layout .terminal-toolbar { flex-wrap: wrap; }
+        .mobile-layout .context-toolbar {
             flex: 1 1 100%;
             flex-wrap: wrap;
             justify-content: flex-start;
             min-width: 0;
         }
-        .context-toolbar label {
+        .mobile-layout .context-toolbar label {
             flex: 0 0 auto;
             min-height: 2.25rem;
             padding-inline: .5rem;
         }
-        .template-open {
+        .mobile-layout .template-open {
             min-height: 2.25rem;
             justify-content: center;
             padding-inline: .55rem;
         }
-        .terminal-body { gap: .35rem; padding: .45rem .5rem; }
-        .prompt { padding-top: .55rem; }
-        textarea { font-size: 1rem; }
-        .command-terminal > footer {
+        .mobile-layout .terminal-body { gap: .35rem; padding: .45rem .5rem; }
+        .mobile-layout .prompt { padding-top: .55rem; }
+        .mobile-layout textarea { font-size: 1rem; }
+        .command-terminal.mobile-layout > footer {
             gap: .5rem;
             padding: .4rem .5rem;
         }
-        .terminal-status {
+        .mobile-layout .terminal-status {
             flex: 1;
             max-height: 2.5rem;
             overflow: hidden;
             line-height: 1.35;
         }
-        .terminal-body :global(button) {
+        .mobile-layout .terminal-body :global(button) {
             min-height: 2.75rem;
         }
-    }
 
     @media (max-width: 46rem) {
         .template-backdrop { padding: .55rem; }

@@ -5,6 +5,26 @@ export function normalizeRequestRetryLimit(value: number): number {
     return Number.isFinite(value) ? Math.min(20, Math.max(0, Math.floor(value))) : 0
 }
 
+export function isRetryableTransportError(
+    error: unknown,
+    aborted = false
+): boolean {
+    if (aborted) return false
+    const value = error as { name?: unknown; message?: unknown; code?: unknown }
+    const name = typeof value?.name === 'string' ? value.name : ''
+    if (name === 'AbortError' || name === 'TimeoutError' || name === 'NetworkError') {
+        return true
+    }
+    const code = typeof value?.code === 'string' ? value.code : ''
+    if (/^(?:ECONN|ENET|EHOST|ETIMEDOUT|EAI_AGAIN|UND_ERR_)/.test(code)) {
+        return true
+    }
+    const message = typeof value?.message === 'string'
+        ? value.message
+        : typeof error === 'string' ? error : ''
+    return /failed to fetch|fetch failed|network error|load failed|timed? out|timeout|socket (?:closed|hang up)/i.test(message)
+}
+
 export function filterResponseCharacters<T extends { type: string; result: unknown; noRetry?: boolean; toolExecuted?: boolean }>(response: T, scripts: readonly string[]): T | { type: 'fail'; result: string } {
     if (response.type !== 'success' || typeof response.result !== 'string'
         || response.noRetry || response.toolExecuted) return response

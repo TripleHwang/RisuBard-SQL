@@ -636,6 +636,79 @@ describe('RisuBardMemoryWiki', () => {
             .toHaveLength(4)
     })
 
+    test('toggles the dock and workspace between desktop and mobile layouts from the title', async () => {
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown',
+            wikiPath: 'C:\\wiki',
+            documents: [],
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: {
+                open: true,
+                characterId: 'character',
+                chatId: 'chat',
+                onExecuteWikiCommand: async () => ({ applied: [], failed: [] }),
+            },
+        })
+
+        let dock: HTMLElement | null = null
+        let toggle: HTMLButtonElement | null = null
+        await vi.waitFor(() => {
+            dock = document.querySelector('[data-memory-wiki-dock]')
+            toggle = document.querySelector('[data-memory-layout-toggle]')
+            expect(dock?.dataset.memoryLayout).toBe('desktop')
+            expect(toggle).not.toBeNull()
+            expect(document.querySelector('[data-wiki-editor]')).not.toBeNull()
+            expect(document.querySelector('[data-wiki-command-terminal]'))
+                .not.toBeNull()
+        })
+        if (!dock || !toggle) throw new Error('Layout controls were not rendered')
+
+        toggle.click()
+        await tick()
+
+        expect(dock.dataset.memoryLayout).toBe('mobile')
+        expect(document.querySelector('[data-wiki-editor]')
+            ?.classList.contains('mobile-layout')).toBe(true)
+        expect(document.querySelector('[data-wiki-command-terminal]')
+            ?.classList.contains('mobile-layout')).toBe(true)
+        expect(toggle.getAttribute('aria-label')).toContain('데스크톱')
+
+        toggle.click()
+        await tick()
+        expect(dock.dataset.memoryLayout).toBe('desktop')
+    })
+
+    test('opens current-chat settings outside the scrolling toolbar', async () => {
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown',
+            wikiPath: 'C:\\wiki',
+            documents: [],
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: { open: true, characterId: 'character', chatId: 'chat' },
+        })
+
+        let settings: HTMLButtonElement | null = null
+        await vi.waitFor(() => {
+            settings = document.querySelector('[data-memory-settings]')
+            expect(settings).not.toBeNull()
+        })
+        if (!settings) throw new Error('Settings control was not rendered')
+
+        settings.click()
+        await tick()
+
+        const popover = document.querySelector('[data-memory-settings-popover]')
+        const toolbar = document.querySelector('.dock-views')
+        expect(popover).not.toBeNull()
+        expect(toolbar?.contains(popover)).toBe(false)
+        expect(popover?.parentElement?.classList.contains('dock-header')).toBe(true)
+        expect(settings.getAttribute('aria-expanded')).toBe('true')
+    })
+
     test('uses a separate icon toolbar below the title and moves document count into the sidebar', async () => {
         const source = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
@@ -686,6 +759,7 @@ describe('RisuBardMemoryWiki', () => {
         const actions = document.body.querySelector('.dock-view-actions')!
         const workspace = document.body.querySelector('[data-memory-view="workspace"]')!
         const story = document.body.querySelector('[data-memory-view="story"]')!
+        const arcPlot = document.body.querySelector('[data-memory-view="arc-plot"]')!
         const log = document.body.querySelector('[data-memory-view="log"]')!
         const settings = document.body.querySelector('[data-memory-settings]')!
         expect(forceUpdate.classList.contains('force-update-button')).toBe(true)
@@ -694,6 +768,7 @@ describe('RisuBardMemoryWiki', () => {
         expect(actions.contains(workspace)).toBe(true)
         expect(workspace.querySelector('[data-solar-icon="notebook"]')).not.toBeNull()
         expect(story.querySelector('[data-memory-icon="scroll"]')).not.toBeNull()
+        expect(arcPlot.textContent).toContain('아크 플롯')
         expect(actions.querySelector('[data-memory-view="replace"]')).toBeNull()
         expect(settings.querySelector('[data-solar-icon="settings"]')).not.toBeNull()
         expect(forceUpdate.querySelector('span')?.textContent?.trim())
@@ -714,10 +789,14 @@ describe('RisuBardMemoryWiki', () => {
         expect(source).toMatch(/\.dock-identity strong\s*\{[^}]*font-family:\s*var\(--risu-font-family\)/s)
         expect(source).toMatch(/\.settings-popover\s*\{[^}]*background:\s*var\(--risu-theme-bgcolor\)/s)
         expect(source).toMatch(/\.dock-view-actions\s*\{[^}]*margin-left:\s*auto/s)
-        expect(source).toMatch(/@container \(max-width: 46rem\)[\s\S]*\.dock-views\s*\{[^}]*overflow-x:\s*auto/s)
+        expect(source).toMatch(/\.memory-wiki-dock\.mobile-layout \.dock-views\s*\{[^}]*overflow-x:\s*auto/s)
         expect(forceUpdate.compareDocumentPosition(workspace)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
         expect(workspace.compareDocumentPosition(story)
+            & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+        expect(story.compareDocumentPosition(arcPlot)
+            & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+        expect(arcPlot.compareDocumentPosition(log)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
         expect(story.compareDocumentPosition(log)
             & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
@@ -1029,13 +1108,25 @@ describe('RisuBardMemoryWiki', () => {
         )
     })
 
-    test('keeps the collapsed Bardchat dock reachable in a narrow container', () => {
+    test('lets the Markdown preview shrink inside the split workspace and scroll', () => {
         const source = readFileSync(resolve(
             process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
         ), 'utf8')
 
-        expect(source).toContain('@container (max-width: 46rem)')
-        expect(source).toMatch(/\.markdown-wiki\.workspace-split\.command-collapsed\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\) 0 3rem/s)
+        expect(source).toMatch(
+            /\.workspace-split \.wiki-editor-region :global\(\.markdown-editor\),\s*\.workspace-split \.wiki-editor-region :global\(\.markdown-preview\)\s*\{[^}]*min-height:\s*0/s
+        )
+    })
+
+    test('keeps the collapsed Bardchat dock reachable in mobile layout', () => {
+        const source = readFileSync(resolve(
+            process.cwd(), 'src/lib/Others/RisuBardMemoryWiki.svelte'
+        ), 'utf8')
+
+        expect(source).toContain(
+            '.memory-wiki-dock.mobile-layout .markdown-wiki.workspace-split'
+        )
+        expect(source).toMatch(/\.mobile-layout \.markdown-wiki\.workspace-split\.command-collapsed\s*\{[^}]*grid-template-rows:\s*minmax\(0, 1fr\) 0 3rem/s)
         expect(source).toMatch(/\.markdown-command-pane\s*\{[^}]*position:\s*relative[^}]*z-index:\s*6/s)
     })
 
@@ -1095,6 +1186,101 @@ describe('RisuBardMemoryWiki', () => {
             expect(document.body.querySelector('[data-memory-activity]')).not.toBeNull()
             expect(document.body.querySelector('[data-wiki-editor]')).toBeNull()
         })
+    })
+
+    test('shows checkpoint progress before the first story arc plot exists', async () => {
+        const events = ['출발', '첫 관문', '숲의 밤'].map((title, index) => ({
+            id: `event.${index + 1}`, type: 'event' as const, status: 'active' as const,
+            title, relativePath: `events/${index + 1}.md`, sourceMessageIds: [],
+            created: `2026-08-0${index + 1}T00:00:00.000Z`,
+            updated: `2026-08-0${index + 1}T00:00:00.000Z`,
+            content: `# ${title}`, links: [], contextMode: 'auto' as const,
+            contentHash: `hash-${index + 1}`,
+        }))
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown', wikiPath: 'C:\\wiki',
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+            documents: events,
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: { open: true, characterId: 'character', chatId: 'chat' },
+        })
+
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-memory-view="arc-plot"]'
+        )).not.toBeNull())
+        document.querySelector<HTMLButtonElement>(
+            '[data-memory-view="arc-plot"]'
+        )?.click()
+
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-story-arc-plot]'
+        )).not.toBeNull())
+        expect(document.body.textContent).toContain('확정 사건 3/8개')
+        expect(document.body.textContent).toContain('5개가 더 쌓이면')
+        expect(document.querySelector('[data-story-arc-empty]')).not.toBeNull()
+    })
+
+    test('renders the canonical story arc plot and opens linked documents in the workspace', async () => {
+        const event = {
+            id: 'event.departure', type: 'event' as const, status: 'active' as const,
+            title: '샤이어 출발', relativePath: 'events/departure.md',
+            sourceMessageIds: ['message-5'], created: '2026-08-01T00:00:00.000Z',
+            updated: '2026-08-01T00:00:00.000Z',
+            content: '# 샤이어 출발', links: [], contextMode: 'auto' as const,
+            contentHash: 'event-hash',
+        }
+        const plot = {
+            id: 'other.story-arc', type: 'other' as const, status: 'active' as const,
+            title: '스토리 아크 플롯', relativePath: 'notes/story-arc.md',
+            sourceMessageIds: [], created: '2026-08-02T00:00:00.000Z',
+            updated: '2026-08-02T00:00:00.000Z',
+            content: '# 스토리 아크 플롯\n\n## 첫 번째 아크\n\n- [[샤이어 출발]]에서 여정이 시작됐다.\n\n<!-- risubard-story-arc-checkpoint: event.departure -->',
+            links: [], contextMode: 'auto' as const, contentHash: 'plot-hash',
+        }
+        mocks.loadNarrativeMemoryWiki.mockResolvedValue({
+            mode: 'markdown', wikiPath: 'C:\\wiki',
+            health: { danglingLinks: [], unlinkedDocumentIds: [] },
+            documents: [event, plot],
+        })
+        mounted = mount(RisuBardMemoryWiki, {
+            target: document.body,
+            props: { open: true, characterId: 'character', chatId: 'chat' },
+        })
+
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-memory-view="arc-plot"]'
+        )).not.toBeNull())
+        document.querySelector<HTMLButtonElement>(
+            '[data-memory-view="arc-plot"]'
+        )?.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-story-arc-document="other.story-arc"]'
+        )).not.toBeNull())
+        expect(document.body.textContent).toContain('첫 번째 아크')
+        expect(document.body.textContent).toContain('다음 갱신까지 8개')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-story-arc-link="샤이어 출발"]'
+        )?.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-wiki-editor]'
+        )).not.toBeNull())
+        expect(document.querySelector<HTMLInputElement>(
+            '[aria-label="항목 이름"]'
+        )?.value).toBe('샤이어 출발')
+
+        document.querySelector<HTMLButtonElement>(
+            '[data-memory-view="arc-plot"]'
+        )?.click()
+        await vi.waitFor(() => expect(document.querySelector(
+            '[data-story-arc-edit]'
+        )).not.toBeNull())
+        document.querySelector<HTMLButtonElement>('[data-story-arc-edit]')?.click()
+        await vi.waitFor(() => expect(document.querySelector<HTMLInputElement>(
+            '[aria-label="항목 이름"]'
+        )?.value).toBe('스토리 아크 플롯'))
     })
 
     test('opens story entries in the shared editor and keeps source navigation', async () => {

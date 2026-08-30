@@ -38,7 +38,7 @@ import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
 import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
 import { pumpPresetStream } from "./presetStreamPump";
 import { preparePresetResponse, presetGenerationOverrides } from './presetResponse';
-import { filterResponseCharacters, normalizeRequestRetryLimit, presetFailureRetryPolicy } from './responseRetryPolicy';
+import { filterResponseCharacters, isRetryableTransportError, normalizeRequestRetryLimit, presetFailureRetryPolicy } from './responseRetryPolicy';
 import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
 import { resolveChatModelBinding, resolveRequestModelBindingTarget, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
@@ -227,11 +227,26 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
             }
             
     
-            da = await requestChatDataMain({
-                ...arg,
-                staticModel: fallBackModels[fallbackIndex],
-                tools: tools,
-            }, model, abortSignal)
+            try {
+                da = await requestChatDataMain({
+                    ...arg,
+                    staticModel: fallBackModels[fallbackIndex],
+                    tools: tools,
+                }, model, abortSignal)
+            }
+            catch(error) {
+                if (tools.length === 0
+                    && isRetryableTransportError(error, Boolean(abortSignal?.aborted))) {
+                    da = {
+                        type: 'fail',
+                        result: error instanceof Error ? error.message : String(error),
+                        failByServerError: true,
+                    }
+                }
+                else {
+                    throw error
+                }
+            }
 
             // A ModelPreset response that already executed tools must be returned
             // as-is and NEVER re-run: the side effects (possibly writes) are done.

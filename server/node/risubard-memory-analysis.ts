@@ -60,7 +60,10 @@ import {
     selectMarkdownExcerpt,
     type ExcerptDocumentType,
 } from './risubard-markdown-excerpt'
-import { applyCanonicalSectionPatches } from './risubard-markdown-section-patch'
+import {
+    applyCanonicalSectionPatches,
+    hasCanonicalSection,
+} from './risubard-markdown-section-patch'
 import {
     STORY_ARC_EVENT_EXCERPT_CHARACTERS,
     STORY_ARC_MAX_MARKDOWN_CHARACTERS,
@@ -72,6 +75,12 @@ import {
 } from './risubard-story-arc-writer'
 
 let analysisTokenizer: Tiktoken | undefined
+
+const CHARACTER_CURRENT_STATE_HEADINGS = ['현재 상태', 'Current State'] as const
+
+function hasCharacterCurrentState(markdown: string): boolean {
+    return hasCanonicalSection(markdown, CHARACTER_CURRENT_STATE_HEADINGS)
+}
 
 function countAnalysisTokens(value: string): number {
     analysisTokenizer ??= get_encoding('cl100k_base')
@@ -1085,6 +1094,13 @@ export function createMemoryAnalysisRunner(
                     ],
                 }
             }
+            const characterStructureRepairs = snapshot.additionalAnalysis
+                ? documents.filter((document) => document.type === 'character'
+                    && !hasCharacterCurrentState(document.content))
+                : []
+            for (const document of characterStructureRepairs) {
+                excludedDocumentIds.delete(document.id)
+            }
             draft = {
                 ...draft,
                 // The runtime owns the reserved map and its checkpoint cadence.
@@ -1092,6 +1108,28 @@ export function createMemoryAnalysisRunner(
                 // on every confirmed turn.
                 canonicalUpdateCandidates: draft.canonicalUpdateCandidates
                     .filter((candidate) => !isStoryArcCandidate(candidate)),
+            }
+            if (characterStructureRepairs.length > 0) {
+                const existingTargets = new Set(draft.canonicalUpdateCandidates
+                    .map((candidate) => candidate.targetDocumentId)
+                    .filter((id): id is string => id !== null))
+                draft = {
+                    ...draft,
+                    canonicalUpdateCandidates: [
+                        ...characterStructureRepairs
+                            .filter((document) => !existingTargets.has(document.id))
+                            .map((document) => ({
+                                type: 'character' as const,
+                                title: document.title,
+                                aliases: document.aliases ?? [],
+                                reason: '필수 현재 상태 절이 없는 기존 캐릭터 정본의 구조를 보완한다.',
+                                action: 'update' as const,
+                                targetDocumentId: document.id,
+                                confidence: 1,
+                            })),
+                        ...draft.canonicalUpdateCandidates,
+                    ],
+                }
             }
             if (!hasMemoryWriterContent(draft)) {
                 if (!snapshot.rebootTurns) return emptyNativeState()
@@ -1260,7 +1298,10 @@ export function createMemoryAnalysisRunner(
                                 'For a new document, return every initial section needed to assemble it. Do not return an H1 or H2 title.',
                                 'If an existing target has no verified change after checking the evidence, return an empty sections array so the program skips persistence. A new document must contain at least one section.',
                                 'Use semanticUpdate as a structured coverage checklist, but verify every item against confirmedMessages before applying it.',
-                                'For character documents, keep current identity and current-state facts near the top. Remove superseded facts from current-state sections; retain an old state only as a clearly historical transition when it remains narratively useful.',
+                                snapshot.wikiWritingLanguage === 'en'
+                                    ? 'Every character document requires a self-contained `### Current State` section near the top, using only verified current facts. A structure repair may reorganize existing canon without a new fact.'
+                                    : '모든 캐릭터 정본은 문서 상단에 자족적인 `### 현재 상태` 절을 두고, 확인된 현재 사실만 사용한다. 구조 보완은 새 사실 없이 기존 정본을 재구성할 수 있다.',
+                                'Remove superseded facts from current-state sections; retain an old state only as a clearly historical transition when it remains narratively useful.',
                                 'Preserve unrelated established identity facts, relationships, knowledge, goals, possessions, constraints, and unresolved continuity unless confirmedMessages explicitly change them.',
                                 'Apply the stateChanges.after values and relevant persistentFacts, characterKnowledge, and openContinuity to the correct subject document. Do not copy another character\'s facts into this target.',
                                 'Apply only changes supported by the confirmed messages and event.',
@@ -1343,6 +1384,23 @@ export function createMemoryAnalysisRunner(
                                     const parsed = parseCanonicalBatch(text, targets.length)
                                     if (parsed.documents.length !== targets.length) {
                                         throw new Error('Return exactly one changed-section set for every candidateIndex; no targets may be omitted.')
+                                    }
+                                    for (const document of parsed.documents) {
+                                        const target = targets[document.candidateIndex]
+                                        if (target?.candidate.type !== 'character') continue
+                                        const rewritten = applyCanonicalSectionPatches({
+                                            ...(target.target ? {
+                                                markdown: target.target.content,
+                                            } : {}),
+                                            title: target.target?.title
+                                                ?? target.candidate.title,
+                                            patches: document.sections,
+                                        })
+                                        if (!hasCharacterCurrentState(rewritten)) {
+                                            throw new Error(snapshot.wikiWritingLanguage === 'en'
+                                                ? 'Every character document must include a direct `### Current State` section.'
+                                                : '모든 캐릭터 정본에는 직접 자식 `### 현재 상태` 절이 필요합니다.')
+                                        }
                                     }
                                     return parsed
                                 },

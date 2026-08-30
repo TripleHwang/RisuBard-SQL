@@ -111,6 +111,15 @@ function parseCanonicalMarkdown(markdown: string): ParsedCanonicalMarkdown {
     }
 }
 
+export function hasCanonicalSection(
+    markdown: string,
+    headings: readonly string[],
+): boolean {
+    const expected = new Set(headings.map(normalizeCanonicalSectionHeading))
+    return parseCanonicalMarkdown(markdown).sections.some((section) =>
+        expected.has(normalizeCanonicalSectionHeading(section.text)))
+}
+
 function replacementSection(
     parsed: ParsedCanonicalMarkdown,
     heading: string,

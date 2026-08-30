@@ -72,7 +72,7 @@ describe('BardWiki memory writer skill', () => {
         expect(creation).toContain('주요 인물')
         expect(creation).toContain('사건 문서나 다른 인물의 정본에 이름이 등장하는 것')
         expect(creation).toContain('일회성 인물')
-        expect(updates).toContain('구체적인 지속 변화')
+        expect(updates).toContain('대표되지 않은 지속 변화')
         expect(updates).toContain('사건 문서만으로 충분한 행동')
         expect(updates).toContain('정본 후보를 만들지 마라')
         expect(memoryWriterSystemPrompt).not.toContain(

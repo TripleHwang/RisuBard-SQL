@@ -179,6 +179,14 @@ export const accessibilitySettingsItems: SettingItem[] = [
         keywords: ['translation', 'loading', 'indicator']
     },
     {
+        id: 'acc.preserveChatScrollPosition',
+        type: 'check',
+        labelKey: 'preserveChatScrollPosition',
+        bindKey: 'preserveChatScrollPosition',
+        helpKey: 'preserveChatScrollPosition',
+        keywords: ['preserve', 'scroll', 'position', 'anchor', 'asset', 'layout']
+    },
+    {
         id: 'acc.autoScrollToNewMessage',
         type: 'check',
         labelKey: 'autoScrollToNewMessage',
@@ -335,6 +343,7 @@ export const accessibilityEditingItems = pick([
 ]);
 
 export const accessibilityScrollItems = pick([
+    'acc.preserveChatScrollPosition',
     'acc.autoScrollToNewMessage',
     'acc.alwaysScrollToNewMessage',
     'acc.newMessageButtonStyle',

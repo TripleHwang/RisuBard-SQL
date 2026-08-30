@@ -1,0 +1,254 @@
+<div style="max-width:880px;margin:0 auto;background:linear-gradient(160deg,#f5f8fc,#fbfdff);border:1px solid #bbccdf;color:#29415a;font-family:'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;">
+	<div style="padding:36px 20px 26px;background:linear-gradient(125deg,#e7f0fb,#f7faff);border-top:5px solid #2d629d;border-bottom:1px solid #bbccdf;">
+		<div style="margin:0 0 14px;color:#436a92;font-size:12px;font-weight:800;letter-spacing:2px;line-height:1.6;">RELEASE NOTES
+			<br>
+			<br><span style="font-size:36px;font-weight:900;line-height:1.2;letter-spacing:-2px;color:rgb(34,89,146);">RisuBard (리스바드)</span><span style="font-size:18px;letter-spacing:0;">&nbsp;v0.9.11</span></div>
+
+		<p><img src="//ac.arca.live/20260829sac/fd1d0b874cce5f30cd4b9f5d8f8b16bec70a14521bd961c3c674afac88f4ab82.webp?expires=1788107967&key=plPCPiPgwRJGs9EazW-bag" class="fr-fic fr-dii" uploaded="true" idx="302672780" url="//ac.arca.live/20260829sac/fd1d0b874cce5f30cd4b9f5d8f8b16bec70a14521bd961c3c674afac88f4ab82.webp?expires=1788107967&key=plPCPiPgwRJGs9EazW-bag" originalurl="//ac.arca.live/20260829sac/fd1d0b874cce5f30cd4b9f5d8f8b16bec70a14521bd961c3c674afac88f4ab82.webp?expires=1788107967&key=plPCPiPgwRJGs9EazW-bag"><span style="font-size:18px;letter-spacing:0;"></span>
+			<br>
+		</p>
+
+		<p style="margin:18px 0 8px;color:#173e69;font-size:21px;font-weight:850;line-height:1.6;">장기채팅 기능 강화 테스트판.</p>
+
+		<p style="margin:16px 0 0;color:#29415a;font-size:15px;line-height:1.85;">이번 업데이트는 수백 턴을 건너 과거의 바늘을 찾아가기 위한<strong>&nbsp;&#39;아크플롯&#39;&nbsp;</strong>개념을 추가하고 , 위키를 대화로 직접 정리하는 <strong style="color:#173e69;font-weight:800;">BARDCHAT</strong>, 공유 범위를 세밀하게 고르는 <strong style="color:#173e69;font-weight:800;">아카라이브 챗 로그</strong> 를 추가했습니다. </p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">1. 아크플로터 - 초장기챗에서 과거로 돌아갈 길을 만듭니다</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">천 턴 전의 한 문장을 찾으려면, 먼저 어디를 찾아야 하는지 알아야 합니다</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">대화가 수백 턴을 넘어가면 문제는 단순히 오래된 내용을 잊는 데서 끝나지 않습니다. 인물의 행적과 사건 요약도 계속 길어지므로 매 응답마다 전부 읽힐 수 없고, 최근 대화 범위 밖으로 밀려난 원문은 모델이 스스로 다시 펼쳐 볼 수도 없습니다. 기록이 남아 있어도 <strong style="color:#173e69;font-weight:800;">어디를 찾아야 하는지 모르면 사실상 꺼내 쓸 수 없는 기억</strong>이 됩니다.</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;"><strong>예를 들면:</strong> 5턴에서 두 인물이 &lsquo;플러피풋의 사과 에일&rsquo;을 마셨고, 1000턴에서 한 인물이 마지막으로 마신 에일을 기억하느냐고 묻는 상황을 생각해 볼 수 있습니다. 목표는 995턴 동안 그 문장을 계속 프롬프트에 넣는 것이 아니라, 1000턴의 질문을 단서로 5턴 부근까지 되돌아가 정확한 이름을 다시 찾아오는 것입니다. 이 예시는 기능의 목표를 설명하는 가상 상황이며, 현재 검증된 성공률을 뜻하지는 않습니다.</p>
+
+		<h3 style="margin:24px 0 12px;color:#1a426e;font-size:17px;font-weight:800;line-height:1.55;">목표: 모든 것을 들고 가는 기억이 아니라, 필요할 때 되찾는 기억</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">아크플로터는 AI가 전체 채팅을 영구히 암기하게 만드는 기능이 아닙니다. 확정된 사건을 더 큰 이야기 흐름인 <strong style="color:#173e69;font-weight:800;">스토리 아크 플롯</strong>으로 묶고 대표 사건을 연결해, 현재 장면과 관련된 시기와 사건을 먼저 좁히는 탐색용 플롯을 만듭니다. 그다음 사건 요약과 오래된 원문을 차례로 확인해 정확한 세부사항까지 내려가는 것이 목표입니다.</p>
+
+		<h3 style="margin:24px 0 12px;color:#1a426e;font-size:17px;font-weight:800;line-height:1.55;">구현: 플롯 &rarr; 사건 &rarr; 원문으로 내려가는 단계적 검색</h3>
+
+		<ol>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">이야기 줄기 만들기</strong>: 채팅에서 확정되어 BardWiki 사건으로 기록된 내용이 일정 수 쌓이면, 기존 위키 작성 과정에서 이를 아크&middot;전환점&middot;미해결 줄기로 압축하고 대표 사건으로 돌아갈 링크를 남깁니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">검색 범위 좁히기</strong>: 현재 입력과 관련된 플롯과 사건을 먼저 골라, 긴 이야기 전체에서 어느 시기를 더 살펴볼지 정합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">오래된 원문 대조</strong>: 현재 입력과 현재 채팅에 남아 있는 과거 메시지(삭제되지 않은 메시지)에서 겹치는 단어와 짧은 표현을 프로그램 안에서 비교해, 이름&middot;물건&middot;대사처럼 요약에서 빠지기 쉬운 세부사항이 있는 원문 후보를 다시 찾습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">필요한 부분만 전달</strong>: 최종적으로 관련 있는 사건과 짧은 원문 발췌만 BardWiki 검색에 배정된 토큰 범위 안에서 모델에 전달합니다. 문장의 의미를 별도 벡터로 바꾸는 임베딩 검색이나 보조 AI 호출은 추가하지 않습니다.</p>
+			</li>
+		</ol>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">중요:</strong> 아크 플롯은 &lsquo;어디를 찾아볼지&rsquo; 알려 주는 탐색 경로입니다. 정확한 이름이나 대사처럼 사실 확인이 필요한 내용에서는 플롯의 압축 문장보다 확정 사건과 원문이 우선합니다.</p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">기본 자동 사용</strong>: 별도의 응답 형식을 요구하지 않고, 기존 채팅도 다음 확정 사건이 기록될 때부터 아크 플롯을 쌓기 시작합니다. 과거 원문 검색은 기존 메시지도 대상으로 하지만, 이전 전체 역사를 한 번에 소급해 플롯으로 정리하지는 않습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">작품 길이 프리셋</strong>: 단편소설&middot;중편소설&middot;대하소설에 맞춰 갱신 간격과 플롯 용량을 선택할 수 있습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">사용자 프리셋</strong>: 원하는 설정을 저장하고 덮어쓰거나 삭제할 수 있습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">기존 플롯 연속성</strong>: 이전 이름으로 만든 플롯도 끊지 않고 이어 씁니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:20px 0;color:#5d4820;font-size:15px;line-height:1.85;padding:15px 17px;background:linear-gradient(110deg,#fff5d9,#fffaf0);border-left:3px solid #c28a2c;"><strong style="color:#7a5315;">현재는 실제 초장기챗 검증이 필요한 테스트 단계입니다.</strong> 이론 설계와 기능 구현, 가상 장기채팅 데이터를 사용한 테스트까지는 마쳤습니다. 다만 가상 테스트는 실제 수백~천 턴 사용을 대신하지 않으며, 앞의 &lsquo;1000턴에서 5턴의 에일을 찾는&rsquo; 예시도 아직 성능 보장이 아닙니다. 플롯이 장기간 안정적으로 누적되는지, 오래된 단서를 얼마나 잘 찾거나 놓치는지, 응답 지연과 토큰 사용량이 어느 정도인지는 실제 초장기챗으로 더 확인해야 합니다. 0.9.11에서는 이 부분에 대한 장기 사용 결과와 피드백이 특히 중요합니다.</p>
+
+		<p style="margin:20px 0;text-align:center;padding:44px 16px;border:2px dashed #9bb3cc;background:#f4f8fc;color:#55718e;font-size:14px;line-height:1.7;"><strong style="color:#315f8f;">[스크린샷 첨부 위치]</strong>
+			<br>아크플로터 설정과 작품 길이 프리셋 화면</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">2. 요약에서 빠진 오래된 원문도 다시 찾습니다</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">이름&middot;물건&middot;대사 같은 세부사항을 현재 질문과 직접 대조합니다</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">이 기능은 위에서 설명한 단계 중 <strong style="color:#173e69;font-weight:800;">마지막 원문 대조</strong>를 담당합니다. 아크 플롯이 아직 없거나 관련 사건을 찾지 못한 경우에도, 현재 채팅에 남아 있는 과거 메시지를 현재 질문과 직접 비교합니다. 따라서 기존 채팅의 오래된 메시지도 후보가 될 수 있으며, 사건 요약에는 남지 않았지만 원문에 있던 이름&middot;소지품&middot;표식&middot;대사 같은 세부사항을 다시 찾습니다.</p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">원문 우선 회상</strong>: 정확한 사실은 요약보다 원문과 확정된 사건 기록을 우선합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">별칭 기반 식별</strong>: 이름을 바꾸거나 문서를 합친 뒤에도 이전 이름으로 문서를 찾습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">모호한 연결 방지</strong>: 같은 별칭이 여러 문서에 겹치면 임의로 하나를 고르지 않습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">분석 상태 확인</strong>: 추가 분석 안내에서 마지막으로 분석한 AI 응답과 완료 시각을 확인할 수 있습니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;"><strong>쉽게 말하면:</strong> 줄거리에는 빠졌지만 실제 대화에 남아 있는 단서를 다시 원문에서 찾아오는 장치가 추가됐습니다.</p>
+
+		<p style="margin:20px 0;text-align:center;padding:44px 16px;border:2px dashed #9bb3cc;background:#f4f8fc;color:#55718e;font-size:14px;line-height:1.7;"><strong style="color:#315f8f;">[스크린샷 첨부 위치]</strong>
+			<br>오래된 원문 회상 또는 별칭이 표시된 BardWiki 화면</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">3. BARDCHAT으로 위키를 대화하듯 정리합니다</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">AI에게 지시하고, 전달할 자료는 직접 고릅니다</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">기존 BardWiki 관리자 터미널을 <strong style="color:#173e69;font-weight:800;">BARDCHAT - AI에게 지시를 내리세요</strong>로 정리했습니다. 위키 항목을 합치거나 나누고, 이름을 바꾸고, 중복과 연대기를 정리하는 작업을 자연어로 요청할 수 있습니다.</p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">컨텍스트 선택</strong>: 위키&middot;챗&middot;시스템&middot;캐릭터&middot;페르소나&middot;로어북 중 AI에게 보낼 자료를 채팅별로 고릅니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">토큰 절약 기본값</strong>: 처음에는 위키만 전달하며, 필요한 자료만 추가할 수 있습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">명령어 템플릿</strong>: 결합&middot;분리&middot;요약&middot;링크 재연결&middot;중복 정리&middot;이름 변경&middot;연대기 정리를 현재 지시문에 삽입하거나 전체 교체합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">작업 안전성</strong>: 앞선 쓰기가 실패하면 삭제 같은 후속 처리를 중단하고, 형식을 지키지 않은 응답은 필요한 형식을 붙여 한 번 더 요청합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">반응형 편집 화면</strong>: 데스크톱에서는 문서 트리를 고정하고 좁은 화면에서는 서랍으로 전환합니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:20px 0;text-align:center;padding:44px 16px;border:2px dashed #9bb3cc;background:#f4f8fc;color:#55718e;font-size:14px;line-height:1.7;"><strong style="color:#315f8f;">[스크린샷 첨부 위치]</strong>
+			<br>BARDCHAT 컨텍스트 선택과 위키 명령어 화면</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">4. 아카라이브 챗 로그를 필요한 범위만 공유합니다</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">공유 범위와 출력 모양을 만들기 전에 확인합니다</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">긴 채팅 전체를 무조건 내보내지 않고 <strong style="color:#173e69;font-weight:800;">챗 전체&middot;페이지 범위&middot;턴 범위</strong> 중 필요한 구간을 선택할 수 있습니다. 사용자 메시지를 포함할지 정하고 예상 글자 수와 이미지 수도 미리 확인합니다.</p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">출력 모양 조절</strong>: 폰트 크기, 문단 간격, 이미지 너비와 타이틀 이미지 형식을 미리 조정합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">편집 가능한 본문</strong>: 일반 문장은 HTML 텍스트로 유지하고 특수 배경&middot;상태창&middot;플로팅 버튼만 이미지로 보존합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">작업창 개선</strong>: 창 크기와 사이드바 접힘을 기억하고 좁은 화면에서는 한 열로 전환합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">빈 로그 방지</strong>: 실제 내용이 준비되기 전에 내보내기를 눌러 빈 로그가 만들어지는 문제를 막았습니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:20px 0;text-align:center;padding:44px 16px;border:2px dashed #9bb3cc;background:#f4f8fc;color:#55718e;font-size:14px;line-height:1.7;"><strong style="color:#315f8f;">[스크린샷 첨부 위치]</strong>
+			<br>챗 로그 범위 선택과 출력 미리보기 화면</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">5. 채팅과 설정 화면이 모바일에서도 이어집니다</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">첫 메시지부터 설정 관리까지 화면 밖으로 밀리지 않습니다</h3>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">첫 메시지 유지</strong>: 모든 채팅 페이지 위에 첫 메시지를 표시하고, 연결된 선택 버튼과 사이드 패널도 다음 페이지에서 유지합니다. 2페이지부터는 기본으로 접어 둡니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">모바일 설정 관리</strong>: 모듈과 플러그인을 좁은 인라인 영역이 아닌 설정 상세 화면 전체에서 조작합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">모바일 창 정리</strong>: 세이브/로드, 부분 편집, 프리셋&middot;페르소나&middot;채팅 목록의 주요 버튼이 화면 안에 남습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">봇 카드 조작</strong>: 고정된 봇 카드에 마우스를 올릴 때 이미지가 깜빡이거나 클릭이 무시되던 문제를 수정했습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">캐릭터 엑스포트</strong>: 공유/엑스포트 창에서 Character Card 버전과 포맷을 다시 선택할 수 있습니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:20px 0;text-align:center;padding:44px 16px;border:2px dashed #9bb3cc;background:#f4f8fc;color:#55718e;font-size:14px;line-height:1.7;"><strong style="color:#315f8f;">[스크린샷 첨부 위치]</strong>
+			<br>모바일 채팅 또는 설정 상세 화면</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">6. 실패한 위키 작업과 대용량 백업을 더 안전하게 다룹니다</h2>
+	</div>
+	<div style="padding:27px 20px 30px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">사건 기록은 보존하고, 실패 원인과 복원 단계를 보여 줍니다</h3>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">위키 갱신 자동 복구</strong>: 공급자 타임아웃이나 일시 오류가 나면 사건 기록을 보존하고 일반 채팅에서는 다음 턴에 자동으로 다시 시도합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">리부트 배치 복구</strong>: 실패한 배치를 완료 처리하지 않고 멈춘 뒤, 리부트 계속으로 같은 배치를 다시 처리합니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">오류 진단 개선</strong>: 빈 <code>{}</code> 대신 HTTP 상태와 타임아웃&middot;호출 제한&middot;인증&middot;서버&middot;네트워크 오류 유형을 기록하며 응답 본문과 인증 정보는 노출하지 않습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">삭제 결과 즉시 반영</strong>: 연결된 사건이 제거되면 열려 있는 Memory Wiki 화면도 바로 갱신됩니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">대용량 백업 복원</strong>: 불필요한 임시 파일 재처리를 없애 HDD 같은 저속 저장장치의 병목을 줄였습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">복원 단계 표시</strong>: 백업 검증 &rarr; 복원 적용 &rarr; 마무리 순서를 보여 주며 검증을 마친 백업만 적용합니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:20px 0;text-align:center;padding:44px 16px;border:2px dashed #9bb3cc;background:#f4f8fc;color:#55718e;font-size:14px;line-height:1.7;"><strong style="color:#315f8f;">[스크린샷 첨부 위치]</strong>
+			<br>위키 오류 안내 또는 백업 복원 진행 단계 화면</p>
+
+		<p style="margin:24px 0 0;"><strong><a href="https://github.com/rpaddict/RisuBard/releases/tag/v0.9.11" target="_blank" rel="noopener noreferrer"><span style="font-size:38px;color:#225992;">RisuBard v0.9.11 다운로드</span></a></strong></p>
+	</div>
+	<div style="padding:22px 20px;color:#4b6783;font-size:12px;line-height:1.7;text-align:center;background:linear-gradient(100deg,#e8f0f9,#f4f8fd);">RisuBard &middot; v0.9.11 &middot; BardWiki &middot; BARDCHAT &middot; 창작 작업공간 패치노트</div></div>

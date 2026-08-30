@@ -144,6 +144,9 @@ describe('RisuBardWikiEditor', () => {
         expect(source).toMatch(
             /\.markdown-editor::\-webkit-scrollbar-thumb\s*\{[^}]*background-color:\s*color-mix\(/s
         )
+        expect(source).toMatch(
+            /\.markdown-preview\s*\{[^}]*overflow-y:\s*scroll[^}]*scrollbar-gutter:\s*stable[^}]*scrollbar-width:\s*thin/s
+        )
     })
 
     it('marks dangling-link files red without offering automatic repair', async () => {
@@ -271,15 +274,17 @@ describe('RisuBardWikiEditor', () => {
         expect(onFocusModeChange).toHaveBeenLastCalledWith(true)
     })
 
-    it('uses a container-responsive overlay drawer instead of stacking the tree above the editor', () => {
+    it('uses an explicit mobile overlay drawer instead of stacking the tree above the editor', () => {
         const source = readFileSync(
             'src/lib/Others/RisuBardWikiEditor.svelte',
             'utf8'
         )
 
-        expect(source).toContain('@container (max-width: 46rem)')
-        expect(source).toMatch(/\.file-tree\s*\{[^}]*position:\s*absolute[^}]*transform:\s*translateX\(-100%\)/s)
-        expect(source).toContain('.wiki-editor:not(.tree-collapsed) .file-tree')
+        expect(source).toContain('class:mobile-layout={mobileLayout}')
+        expect(source).toMatch(/\.wiki-editor\.mobile-layout \.file-tree\s*\{[^}]*position:\s*absolute[^}]*transform:\s*translateX\(-100%\)/s)
+        expect(source).toContain(
+            '.wiki-editor.mobile-layout:not(.tree-collapsed) .file-tree'
+        )
         expect(source).toContain('.tree-scrim')
     })
 

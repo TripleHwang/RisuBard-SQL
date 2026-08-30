@@ -247,7 +247,7 @@ export function buildRisuBardCanonicalWritingPolicy(
 ): string {
     if (language === 'en') return [
         buildRisuBardEventWritingPolicy(style, customStyle, language),
-        'Character canon prioritizes current state, relationships, knowledge, goals, possessions and constraints.',
+        'Every character document must summarize verified current facts in a self-contained `### Current State` section near the top.',
         'Every character document must include a `### Story History` section with at most 16 chronological bullets for causally necessary turning points.',
         'Merge older consecutive turning points into larger causal units when necessary; do not accumulate a turn-by-turn action log.',
         'Link corresponding event documents with exact [[event document titles]]. Preserve unrelated established facts.',
@@ -255,7 +255,7 @@ export function buildRisuBardCanonicalWritingPolicy(
     ].join('\n')
     return [
         buildRisuBardEventWritingPolicy(style, customStyle, language),
-        '캐릭터 정본은 현재 상태, 관계, 지식, 목표, 소지품과 제약을 우선한다.',
+        '모든 캐릭터 정본은 문서 상단의 `### 현재 상태` 절에 확인된 현재 사실을 자족적으로 요약한다.',
         '모든 캐릭터 정본에는 `### 작중 행적` 절을 두고, 인과에 필요한 전환점만 시간순으로 최대 16개 글머리표에 압축한다.',
         '새 전환점으로 16개를 넘으면 오래된 연속 전환점을 더 큰 인과 단위로 합치며 턴별 행동 기록을 누적하지 않는다.',
         '대응하는 사건 문서가 있으면 행적 글머리표에 `[[사건 문서 제목]]` 링크를 사용한다.',

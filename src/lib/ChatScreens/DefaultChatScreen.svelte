@@ -48,6 +48,11 @@ import { isMobile } from 'src/ts/platform'
     import MainMenu from '../UI/MainMenu.svelte';
     import AssetInput from './AssetInput.svelte';
     import { scrollWithinContainer } from './scrollWithin';
+    import {
+        captureChatScrollAnchor,
+        restoreChatScrollAnchor,
+        type ChatScrollAnchor,
+    } from './chatScrollAnchor';
     import { aiLawApplies, chatFoldedState, chatFoldedStateMessageIndex, downloadFile } from 'src/ts/globalApi.svelte';
     import { runTrigger } from 'src/ts/process/triggers';
     import { v4 } from 'uuid';
@@ -132,6 +137,13 @@ import { isMobile } from 'src/ts/platform'
     let chatsInstance: any = $state()
     let chatScrollContainer: HTMLElement | undefined = $state()
     let isScrollingToMessage = $state(false)
+    let currentScrollAnchor: ChatScrollAnchor | null = null
+    let scrollAnchorCaptureTimer: ReturnType<typeof setTimeout> | null = null
+    let scrollAnchorRestoreTimers: ReturnType<typeof setTimeout>[] = []
+    let scrollAnchorMutationToken = 0
+    let scrollAnchorFreezeUntil = 0
+    let restoringScrollAnchor = false
+    const SCROLL_ANCHOR_RESTORE_DELAYS = [0, 80, 180, 350, 700, 1300, 2100]
     let {
         openModuleList = $bindable(false),
         openChatList = $bindable(false),
@@ -155,6 +167,121 @@ import { isMobile } from 'src/ts/platform'
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
     let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
     let chatBounds = $derived(getChatPageBounds(currentChat.length, chatPageSize, chatPage))
+
+    function clearScrollAnchorTimers() {
+        if (scrollAnchorCaptureTimer) clearTimeout(scrollAnchorCaptureTimer)
+        scrollAnchorCaptureTimer = null
+        for (const timer of scrollAnchorRestoreTimers) clearTimeout(timer)
+        scrollAnchorRestoreTimers = []
+    }
+
+    function captureCurrentScrollAnchor() {
+        if (
+            !DBState.db.preserveChatScrollPosition
+            || !chatScrollContainer
+            || restoringScrollAnchor
+            || Date.now() < scrollAnchorFreezeUntil
+        ) return
+        currentScrollAnchor = captureChatScrollAnchor(
+            chatScrollContainer,
+            paginationKey,
+            currentChat.length,
+        )
+    }
+
+    function scheduleScrollAnchorCapture(delay = 55) {
+        if (!DBState.db.preserveChatScrollPosition) return
+        if (scrollAnchorCaptureTimer) clearTimeout(scrollAnchorCaptureTimer)
+        scrollAnchorCaptureTimer = setTimeout(() => {
+            scrollAnchorCaptureTimer = null
+            captureCurrentScrollAnchor()
+        }, delay)
+    }
+
+    function queueScrollAnchorRestore() {
+        if (!DBState.db.preserveChatScrollPosition || !currentScrollAnchor) {
+            scheduleScrollAnchorCapture(80)
+            return
+        }
+
+        const snapshot = { ...currentScrollAnchor }
+        const token = ++scrollAnchorMutationToken
+        for (const timer of scrollAnchorRestoreTimers) clearTimeout(timer)
+        scrollAnchorFreezeUntil = Date.now() + SCROLL_ANCHOR_RESTORE_DELAYS.at(-1)! + 50
+        scrollAnchorRestoreTimers = SCROLL_ANCHOR_RESTORE_DELAYS.map((delay, index) =>
+            setTimeout(() => {
+                if (
+                    token !== scrollAnchorMutationToken
+                    || !DBState.db.preserveChatScrollPosition
+                    || !chatScrollContainer
+                ) return
+
+                restoringScrollAnchor = true
+                const result = restoreChatScrollAnchor(
+                    chatScrollContainer,
+                    snapshot,
+                    paginationKey,
+                    currentChat.length,
+                )
+                restoringScrollAnchor = false
+
+                if (result === 'context-changed') {
+                    scrollAnchorMutationToken += 1
+                    return
+                }
+                if (index === SCROLL_ANCHOR_RESTORE_DELAYS.length - 1) {
+                    scrollAnchorFreezeUntil = 0
+                    scheduleScrollAnchorCapture(55)
+                }
+            }, delay),
+        )
+    }
+
+    function handleDirectScrollInteraction() {
+        scrollAnchorMutationToken += 1
+        for (const timer of scrollAnchorRestoreTimers) clearTimeout(timer)
+        scrollAnchorRestoreTimers = []
+        scrollAnchorFreezeUntil = 0
+        captureCurrentScrollAnchor()
+    }
+
+    $effect(() => {
+        const container = chatScrollContainer
+        const enabled = DBState.db.preserveChatScrollPosition
+        const contextKey = paginationKey
+        if (!container || !enabled || !contextKey) {
+            currentScrollAnchor = null
+            clearScrollAnchorTimers()
+            return
+        }
+
+        const observer = new MutationObserver(() => queueScrollAnchorRestore())
+        const handleMediaLoad = (event: Event) => {
+            if (event.target instanceof HTMLImageElement || event.target instanceof HTMLVideoElement) {
+                queueScrollAnchorRestore()
+            }
+        }
+        observer.observe(container, { childList: true, subtree: true })
+        container.addEventListener('load', handleMediaLoad, true)
+        container.addEventListener('pointerdown', handleDirectScrollInteraction)
+        container.addEventListener('wheel', handleDirectScrollInteraction)
+        container.addEventListener('touchstart', handleDirectScrollInteraction)
+        container.addEventListener('keydown', handleDirectScrollInteraction)
+        scheduleScrollAnchorCapture(0)
+
+        return () => {
+            observer.disconnect()
+            container.removeEventListener('load', handleMediaLoad, true)
+            container.removeEventListener('pointerdown', handleDirectScrollInteraction)
+            container.removeEventListener('wheel', handleDirectScrollInteraction)
+            container.removeEventListener('touchstart', handleDirectScrollInteraction)
+            container.removeEventListener('keydown', handleDirectScrollInteraction)
+            scrollAnchorMutationToken += 1
+            currentScrollAnchor = null
+            clearScrollAnchorTimers()
+            scrollAnchorFreezeUntil = 0
+        }
+    })
 
     async function restoreChatViewScroll(key: string, savedView: ChatViewSession) {
         await tick()
@@ -1507,6 +1634,9 @@ import { isMobile } from 'src/ts/platform'
                 bumpScrollNav()
             }
             const chatTarget = e.target as HTMLElement;
+            if (!restoringScrollAnchor && Date.now() >= scrollAnchorFreezeUntil) {
+                scheduleScrollAnchorCapture()
+            }
             if (paginationKey) {
                 saveChatViewSession(paginationKey, {
                     page: chatBounds.page,

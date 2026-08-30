@@ -1333,8 +1333,8 @@ describe('stored response memory analysis', () => {
                         ({ candidateIndex, target }) => ({
                             candidateIndex,
                             sections: [{
-                                heading: '', operation: 'upsert',
-                                content: `${target.title}의 지속 정보.`,
+                                heading: '현재 상태', operation: 'upsert',
+                                content: `- ${target.title}의 지속 정보.`,
                             }],
                         })
                     ),

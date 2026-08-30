@@ -30,14 +30,14 @@ afterEach(async () => {
 })
 
 describe('RisuBardWikiCommandTerminal', () => {
-    test('uses a compact container-responsive control layout', () => {
+    test('uses a compact control layout when mobile layout is selected', () => {
         const source = readFileSync(
             'src/lib/Others/RisuBardWikiCommandTerminal.svelte',
             'utf8'
         )
 
-        expect(source).toContain('@container (max-width: 46rem)')
-        expect(source).toMatch(/@container \(max-width: 46rem\)[\s\S]*?\.context-toolbar\s*\{[^}]*flex-wrap:\s*wrap/s)
+        expect(source).toContain('class:mobile-layout={mobileLayout}')
+        expect(source).toMatch(/\.command-terminal\.mobile-layout[\s\S]*?\.mobile-layout \.context-toolbar\s*\{[^}]*flex-wrap:\s*wrap/s)
         expect(source).not.toContain('ShieldAlertIcon')
         expect(source).not.toContain('DIRECT')
     })
@@ -47,9 +47,9 @@ describe('RisuBardWikiCommandTerminal', () => {
             'src/lib/Others/RisuBardWikiCommandTerminal.svelte',
             'utf8'
         )
-        const compactTerminal = readCssBlock(
-            source,
-            '@container (max-width: 46rem)'
+        const compactTerminal = source.slice(
+            source.indexOf('.command-terminal.mobile-layout'),
+            source.indexOf('@media (max-width: 46rem)')
         )
         const compactViewport = readCssBlock(
             source,

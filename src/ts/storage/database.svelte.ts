@@ -826,6 +826,7 @@ export function setDatabase(data:Database){
     }
     data.autoScrollToNewMessage ??= true
     data.alwaysScrollToNewMessage ??= false
+    data.preserveChatScrollPosition ??= true
     data.newMessageButtonStyle ??= 'bottom-center'
     data.echoMessage ??= "Echo Message"
     data.echoDelay ??= 0
@@ -1895,6 +1896,7 @@ export interface Database{
     hideMessagePageCount?: boolean
     autoScrollToNewMessage?: boolean
     alwaysScrollToNewMessage?: boolean
+    preserveChatScrollPosition?: boolean
     newMessageButtonStyle?: string
     pluginDevelopMode?: boolean
     echoMessage?:string

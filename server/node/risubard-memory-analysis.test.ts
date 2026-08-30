@@ -99,7 +99,7 @@ describe('memory analysis runner', () => {
             }, onError: vi.fn(),
             analyze: async (request) => {
                 systems.push(request.system)
-                if (request.format === 'canonical-batch') return canonicalBatch('## Alice\n\n### Story History\n\n- Arrived.')
+                if (request.format === 'canonical-batch') return canonicalBatch('## Alice\n\n### Current State\n\n- Traveler.\n\n### Story History\n\n- Arrived.')
                 return JSON.stringify({
                     schemaVersion: 1,
                     ...(reboot ? { turns: [{ assistantMessageId: 'turn-en', title: 'Arrival', establishedEvents: ['Alice arrived.'] }] }
@@ -207,7 +207,7 @@ describe('memory analysis runner', () => {
                 systems.push(request.system)
                 responseSchemas.push(request.responseSchema)
                 if (request.format === 'canonical-batch') {
-                    return canonicalBatch('## 라비안\n\n검을 소유한다.')
+                    return canonicalBatch('## 라비안\n\n### 현재 상태\n\n- 검을 소유한다.')
                 }
                 rebootAttempts += 1
                 if (rebootAttempts === 1) {
@@ -476,11 +476,11 @@ describe('memory analysis runner', () => {
             if (targets.length > 1) {
                 if (failure === 'provider') throw new Error('Authentication failed')
                 if (failure === 'truncated') throw new ModelOutputError('truncated')
-                if (failure === 'incomplete') return canonicalBatch('## A\n\nArrived.')
+                if (failure === 'incomplete') return canonicalBatch('## A\n\n### Current State\n\n- Arrived.')
                 return 'not JSON'
             }
             if (failure === 'incomplete-single') return canonicalBatch()
-            return canonicalBatch(`## ${targets[0].target.title}\n\nArrived.`)
+            return canonicalBatch(`## ${targets[0].target.title}\n\n### Current State\n\n- Arrived.`)
         })
         const runner = createMemoryAnalysisRunner({
             memoryService: { loadState: vi.fn(), applyDelta: vi.fn() }, nativeV2Analysis: true,
@@ -662,7 +662,11 @@ describe('memory analysis runner', () => {
                 expect(request.format).toBe('canonical-batch')
                 expect(request.input).toContain('hash-old')
                 calls.push('canonical-draft')
-                return canonicalBatch('# 라비안\n\n현재 케사리아에 있다.')
+                return canonicalPatchBatch([
+                    { heading: '', operation: 'delete', content: '' },
+                    { heading: '현재 상태', operation: 'upsert',
+                        content: '- 현재 케사리아에 있다.' },
+                ])
             },
         })
 
@@ -708,7 +712,7 @@ describe('memory analysis runner', () => {
             characterId: 'character-1', chatId: 'chat-1',
             documentId: 'character.lavian', type: 'character',
             title: '라비안', sourceMessageIds: ['user-2', 'assistant-2'],
-            markdown: '# 라비안\n\n현재 케사리아에 있다.',
+            markdown: '# 라비안\n\n## 현재 상태\n\n- 현재 케사리아에 있다.',
             expectedContentHash: 'hash-old', reviewStatus: 'reviewed',
             writingLanguage: 'ko',
         })
@@ -1126,7 +1130,7 @@ describe('memory analysis runner', () => {
             onError: vi.fn(),
             analyze: async (request) => request.format === 'canonical-batch'
                 ? canonicalBatch(
-                    '# 베로니카 웬저\n\n갱신된 프로필.',
+                    '# 베로니카 웬저\n\n### 현재 상태\n\n- 갱신된 프로필.',
                     '# 케사리아 북문\n\n갱신된 장소.'
                 )
                 : JSON.stringify({
@@ -1207,7 +1211,7 @@ describe('memory analysis runner', () => {
                 const input = JSON.parse(request.input)
                 canonicalBatchSizes.push(input.targets.length)
                 return canonicalBatch(...input.targets.map((entry) =>
-                    `## ${entry.target.title}\n\n갱신됨.`))
+                    `## ${entry.target.title}\n\n### 현재 상태\n\n- 갱신됨.`))
             },
         })
 
@@ -1334,8 +1338,8 @@ describe('memory analysis runner', () => {
             }])
             expect(input.targets).toHaveLength(2)
             return canonicalPatchBatch(
-                [{ heading: '', operation: 'upsert', content: '수석 생물학자다.' }],
-                [{ heading: '', operation: 'upsert', content: '특별 감사관이다.' }],
+                [{ heading: '현재 상태', operation: 'upsert', content: '- 수석 생물학자다.' }],
+                [{ heading: '현재 상태', operation: 'upsert', content: '- 특별 감사관이다.' }],
             )
         })
         const saveCanonicalDocument = vi.fn(async (input) => ({
@@ -1369,12 +1373,12 @@ describe('memory analysis runner', () => {
         expect(saveCanonicalDocument).toHaveBeenCalledTimes(2)
         expect(saveCanonicalDocument.mock.calls.map(([input]) => input.markdown))
             .toEqual([
-                '## 사만다\n\n수석 생물학자다.',
-                '## 아만다\n\n특별 감사관이다.',
+                '## 사만다\n\n### 현재 상태\n\n- 수석 생물학자다.',
+                '## 아만다\n\n### 현재 상태\n\n- 특별 감사관이다.',
             ])
     })
 
-    test('retries a canonical batch that fails semantic validation', async () => {
+    test('retries a new character document that omits current state', async () => {
         let batchAttempts = 0
         const saveCanonicalDocument = vi.fn(async (input) => ({
             ...input,
@@ -1399,16 +1403,10 @@ describe('memory analysis runner', () => {
             }
             batchAttempts += 1
             if (batchAttempts === 1) {
-                return JSON.stringify({
-                    schemaVersion: 1,
-                    documents: [{
-                        candidateIndex: 7,
-                        markdown: '# 사만다\n\n잘못 연결됐다.',
-                    }],
-                })
+                return canonicalBatch('# 사만다\n\n### 작중 행적\n\n- 연구를 계속했다.')
             }
-            expect(request.system).toContain('failed validation')
-            return canonicalBatch('# 사만다\n\n수석 생물학자다.')
+            expect(request.system).toContain('직접 자식 `### 현재 상태` 절이 필요합니다')
+            return canonicalBatch('# 사만다\n\n### 현재 상태\n\n- 수석 생물학자다.')
         })
         const runner = createMemoryAnalysisRunner({
             memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
@@ -1439,7 +1437,7 @@ describe('memory analysis runner', () => {
         const saveCanonicalDocument = vi.fn()
         const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) =>
             request.format === 'canonical-batch'
-                ? canonicalBatch('# 라비안\n\n상태가 바뀌었다.')
+                ? canonicalBatch('# 라비안\n\n### 현재 상태\n\n- 상태가 바뀌었다.')
                 : JSON.stringify({
                 schemaVersion: 1, title: '언급', establishedEvents: ['라비안.'],
                 stateChanges: [], characterKnowledge: [], persistentFacts: [],
@@ -1488,7 +1486,7 @@ describe('memory analysis runner', () => {
         }))
         const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) =>
             request.format === 'canonical-batch'
-                ? canonicalBatch('# 김철수\n\n무한인으로도 불린다.')
+                ? canonicalBatch('# 김철수\n\n### 현재 상태\n\n- 무한인으로도 불린다.')
                 : JSON.stringify({
                     schemaVersion: 1, title: '정체 확인',
                     establishedEvents: ['김군이 자신을 무한인이라고 밝혔다.'],
@@ -1729,6 +1727,72 @@ describe('memory analysis runner', () => {
         expect(saveCanonicalDocument).not.toHaveBeenCalled()
         expect(recordRebootBatchReceipt).not.toHaveBeenCalled()
         expect(result.canonicalReceipt?.changes).toEqual([])
+    })
+
+    test('repairs a missing character current-state section during additional analysis', async () => {
+        const saveCanonicalDocument = vi.fn(async (input) => ({
+            ...input,
+            id: input.documentId,
+            relativePath: 'characters/souma.md',
+            contentHash: 'repaired-hash',
+        }))
+        const analyze = vi.fn(async (request: MemoryAnalysisModelRequest) => {
+            if (request.format === 'memory-draft') {
+                return JSON.stringify({
+                    schemaVersion: 1,
+                    title: '추가 분석',
+                    establishedEvents: ['소우마의 현재 정보가 확인되었다.'],
+                    stateChanges: [],
+                    characterKnowledge: [],
+                    persistentFacts: [],
+                    openContinuity: [],
+                    canonicalUpdateCandidates: [],
+                })
+            }
+            expect(request.input).toContain('character.souma')
+            return canonicalPatchBatch([{
+                heading: '현재 상태',
+                operation: 'upsert',
+                content: '- 2학년 5반으로 전학 온 남학생이다.\n- 페르소나 「청색의 왕」을 지닌다.',
+            }])
+        })
+        const runner = createMemoryAnalysisRunner({
+            memoryService: { loadState: vi.fn(), applyDelta: vi.fn() },
+            nativeV2Analysis: true,
+            markdownWikiService: {
+                inquire: vi.fn(async () => ({ graphRevision: 0, sources: [] })),
+                loadDocuments: vi.fn(async () => [{
+                    id: 'character.souma', type: 'character' as const,
+                    title: '후카미 소우마',
+                    relativePath: 'characters/souma.md',
+                    content: [
+                        '## 후카미 소우마', '',
+                        '### 개요', '', '2학년 5반으로 전학 온 남학생이다.', '',
+                        '### 능력', '', '페르소나 「청색의 왕」을 지닌다.', '',
+                        '### 작중 행적', '', '- 전학 왔다.',
+                    ].join('\n'),
+                    contentHash: 'old-hash', sourceMessageIds: ['assistant-1'],
+                }]),
+                saveConfirmedTurn: vi.fn(async () => undefined),
+                saveCanonicalDocument,
+            },
+            onError: vi.fn(),
+            analyze,
+        })
+
+        await runner.run({
+            characterId: 'character', chatId: 'chat',
+            messages: [{ messageId: 'assistant-1', role: 'assistant',
+                content: '소우마의 현재 정보가 확인되었다.' }],
+            additionalAnalysis: true,
+            excludeCanonicalDocumentIds: ['character.souma'],
+            additionalSearchLimit: 0,
+        })
+
+        expect(saveCanonicalDocument).toHaveBeenCalledWith(expect.objectContaining({
+            documentId: 'character.souma',
+            markdown: expect.stringContaining('### 현재 상태'),
+        }))
     })
 
     test('does not protect an ordinary turn with no durable change', async () => {
