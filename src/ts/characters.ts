@@ -1,7 +1,7 @@
 import { get, writable } from "svelte/store";
 import { saveImage, setDatabase, type character, type Chat, defaultSdDataFunc, type loreBook, getDatabase, getCharacterByIndex, setCharacterByIndex, getCurrentChat, loadTogglesFromChat, normalizeChat, newChatModelDefaults } from "./storage/database.svelte";
 import { ensureChatHydrated, touchHydratedChat } from "./storage/chatStorage";
-import { hasOlderSqlMessages } from "./storage/sql/sqlRuntimeWindow";
+import { isSqlWindowPartial } from "./storage/sql/sqlRuntimeWindow";
 import { ensureCharacterHydrated } from "./storage/sql/sqlRuntimeHydration";
 import { alertAddCharacter, alertConfirm, alertError, alertSelect, alertStore, alertWait, notifySuccess, notifyInfo } from "./alert";
 import { loadingOverlayStore, chatDeselected } from "./stores.svelte";
@@ -202,7 +202,7 @@ export async function exportChat(page:number){
             await ensureChatHydrated(char.chats, page, char.chaId)
         }
         const hydratedChat = char.chats[page] as Chat & { messagesFullyLoaded?: boolean }
-        if(hydratedChat?._placeholder || hydratedChat?.messagesFullyLoaded === false || hasOlderSqlMessages(hydratedChat)){
+        if(hydratedChat?._placeholder || hydratedChat?.messagesFullyLoaded === false || isSqlWindowPartial(hydratedChat)){
             alertError('Load earlier messages before exporting this chat.')
             return
         }
@@ -549,7 +549,7 @@ export async function exportAllChats() {
                 await ensureChatHydrated(char.chats, i, char.chaId)
             }
             const chat = char.chats[i] as Chat & { messagesFullyLoaded?: boolean }
-            if (chat?._placeholder || chat?.messagesFullyLoaded === false || hasOlderSqlMessages(chat)) {
+            if (chat?._placeholder || chat?.messagesFullyLoaded === false || isSqlWindowPartial(chat)) {
                 alertError(`Load earlier messages before exporting "${chat.name}". Export aborted to prevent data loss.`)
                 return
             }

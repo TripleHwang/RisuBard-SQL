@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { downloadRisuHub, getRisuHub, hubAdditionalHTML, type hubType } from 'src/ts/characterCards';
+    import { downloadRisuHub, fetchRisuHubPage, hubAdditionalHTML, type hubType } from 'src/ts/characterCards';
     import { ArrowLeft, ArrowRight, HashIcon, MenuIcon, SearchIcon, SparklesIcon } from '@lucide/svelte';
     import { alertInput } from 'src/ts/alert';
     import { language } from 'src/lang';
@@ -9,9 +9,10 @@
     import ShDialog from '../GUI/ShDialog.svelte';
     import RealmHubIcon from './RealmHubIcon.svelte';
     import RealmPopUp from './RealmPopUp.svelte';
+    import LazyState from '../GUI/LazyState.svelte';
+    import { createLazyResource } from 'src/ts/lazyResource.svelte';
 
     let openedData: null | hubType = $state(null);
-    let charas: hubType[] = $state([]);
     let page = $state(0);
     let sort = $state('recommended');
     let search = $state('');
@@ -42,6 +43,9 @@
         toolsDescription: 'URL 또는 ID로 공유 캐릭터를 가져옵니다.',
         importCharacter: '캐릭터 가져오기',
         importPrompt: 'URL 또는 ID 입력',
+        loadFailed: 'RisuRealm에 연결하지 못했습니다',
+        loadFailedHint: '검색 결과가 없는 것이 아니라, 목록을 받아오지 못한 것입니다.',
+        loading: '불러오는 중…',
     } : {
         title: 'Explore RisuRealm',
         subtitle: 'Search shared characters by name, description, or an exact tag.',
@@ -63,7 +67,52 @@
         toolsDescription: 'Import a shared character directly from its URL or ID.',
         importCharacter: 'Import character',
         importPrompt: 'Input URL or ID',
+        loadFailed: 'Could not reach RisuRealm',
+        loadFailedHint: 'This is not an empty search result. The list could not be fetched.',
+        loading: 'Loading…',
     });
+
+    /**
+     * What the screen is currently asking the hub for.
+     *
+     * The text inputs are deliberately NOT part of this: typing must not fire a
+     * request per keystroke. `submittedSearch` is the committed query, updated
+     * only when the user submits. `requestNonce` is what makes pressing Search
+     * again -- or re-picking "random" -- a real reload even though every other
+     * field is unchanged.
+     */
+    let submittedSearch = $state('');
+    let requestNonce = $state(0);
+    const realmQuery = $derived({ search: submittedSearch, page, nsfw, sort, nonce: requestNonce });
+
+    /**
+     * RisuRealm loads only itself, in its own subtree, and says which of the
+     * three things happened: loading, a real result (possibly empty), or a
+     * failure. The old code collapsed the third into the second -- an
+     * unreachable server rendered as "No RisuRealm characters found." -- so the
+     * user was told something definite about their search that nobody had
+     * actually found out.
+     */
+    const realmPage = createLazyResource<hubType[]>({
+        scope: 'realm-page',
+        key: () => JSON.stringify(realmQuery),
+        load: async (key) => {
+            const query = JSON.parse(key) as typeof realmQuery;
+            return fetchRisuHubPage({
+                search: query.search,
+                page: query.page,
+                nsfw: query.nsfw,
+                sort: query.sort,
+            });
+        },
+    });
+
+    /**
+     * Safe to default here, and only here: these tags are a convenience strip
+     * that is hidden when empty, so an empty list makes no claim. The result
+     * grid and the "no results" message both live behind `realmPage.ready`.
+     */
+    let charas = $derived(realmPage.value ?? []);
 
     let popularTags = $derived.by(() => {
         const counts = new Map<string, number>();
@@ -101,26 +150,20 @@
             .join(' ');
     }
 
-    async function getHub() {
-        charas = await getRisuHub({
-            search: currentSearch(),
-            page,
-            nsfw,
-            sort,
-        });
-    }
-
     function submitSearch(event?: SubmitEvent) {
         event?.preventDefault();
         if (sort === 'random' || sort === 'recommended') sort = '';
         page = 0;
-        void getHub();
+        submittedSearch = currentSearch();
+        requestNonce += 1;
     }
 
     function changeSort(type: string) {
         sort = type;
         page = 0;
-        void getHub();
+        // Re-picking the same sort is still a reload -- "random" is supposed to
+        // re-roll -- so the nonce moves even when nothing else does.
+        requestNonce += 1;
     }
 
     function completeTag(tag: string) {
@@ -162,7 +205,8 @@
         }
     }
 
-    void getHub();
+    // No imperative first fetch: `createLazyResource` requests as soon as the
+    // key exists, which is what "load it when I appear" means here.
 
     $effect(() => {
         if ($RealmInitialOpenChar) {
@@ -277,7 +321,7 @@
         <button
             type="button"
             class="shrink-0 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors {nsfw ? 'border-primary/50 bg-primary/20 text-textcolor' : 'border-darkborderc text-textcolor2 hover:bg-selected/40'}"
-            onclick={() => { nsfw = !nsfw; page = 0; void getHub(); }}
+            onclick={() => { nsfw = !nsfw; page = 0; }}
         >{nsfw ? 'NSFW' : 'SFW'}</button>
         <span class="h-5 border-l border-darkborderc"></span>
         {#each [
@@ -298,17 +342,44 @@
 
 {@html hubAdditionalHTML}
 
-<div class="grid w-full grid-cols-1 gap-3 py-4 lg:grid-cols-2">
-    {#each charas as chara (chara.id)}
-        <RealmHubIcon onClick={() => openedData = chara} {chara} />
-    {/each}
-</div>
+<!-- Results only. The search box, tag input and sort pills above stay mounted
+     and interactive while a page is in flight: this surface loads itself, it
+     does not take the screen hostage. -->
+<LazyState resource={realmPage} failedTitle={ui.loadFailed}>
+    {#snippet loading()}
+        <div role="status" aria-live="polite" class="flex min-h-32 items-center justify-center gap-2 py-4 text-sm text-textcolor2">
+            <svg class="animate-spin" style="will-change: transform;" width="18" height="18" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span>{ui.loading}</span>
+        </div>
+    {/snippet}
+    {#snippet failed(error, retry)}
+        <div role="alert" class="my-4 flex flex-col items-start gap-2 rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+            <span class="font-medium">{ui.loadFailed}</span>
+            <span class="text-xs opacity-70">{ui.loadFailedHint}</span>
+            {#if error instanceof Error && error.message}
+                <span class="break-all text-xs opacity-60">{error.message}</span>
+            {/if}
+            <ShButton variant="outline" size="sm" onclick={retry}>{language.lazyLoad.retry}</ShButton>
+        </div>
+    {/snippet}
 
-{#if charas.length === 0}
-    <div class="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-darkborderc text-sm text-textcolor2">
-        {ui.noResults}
+    <div class="grid w-full grid-cols-1 gap-3 py-4 lg:grid-cols-2">
+        {#each charas as chara (chara.id)}
+            <RealmHubIcon onClick={() => openedData = chara} {chara} />
+        {/each}
     </div>
-{/if}
+
+    <!-- Reachable only from the ready branch, so "no characters" is always a
+         real answer from the hub and never a stand-in for a failed request. -->
+    {#if charas.length === 0}
+        <div class="flex min-h-32 items-center justify-center rounded-2xl border border-dashed border-darkborderc text-sm text-textcolor2">
+            {ui.noResults}
+        </div>
+    {/if}
+</LazyState>
 
 {#if sort !== 'random' && sort !== 'recommended'}
     <nav class="flex w-full justify-center pb-4" aria-label={ui.pages}>
@@ -318,14 +389,14 @@
                 size="icon-sm"
                 aria-label={ui.previousPage}
                 disabled={page === 0}
-                onclick={() => { if (page > 0) { page -= 1; void getHub(); } }}
+                onclick={() => { if (page > 0) page -= 1; }}
             ><ArrowLeft size={18} /></ShButton>
             <span class="min-w-10 text-center text-sm font-medium text-textcolor">{page + 1}</span>
             <ShButton
                 variant="ghost"
                 size="icon-sm"
                 aria-label={ui.nextPage}
-                onclick={() => { page += 1; void getHub(); }}
+                onclick={() => { page += 1; }}
             ><ArrowRight size={18} /></ShButton>
         </div>
     </nav>

@@ -64,7 +64,10 @@ describe('inline collection organizer list', () => {
         expect(page).toContain('CollectionOrganizerList')
         expect(page).toContain('{#snippet itemContent(pluginName)}')
         expect(page).toContain('await updatePlugin(plugin)')
-        expect(page).toContain('notifyError(language.pluginUpdateFailed)')
+        // The failure toast now names which failure it was, so the assertion
+        // pins the reporting call rather than the exact one-size message it
+        // replaced.
+        expect(page).toContain('notifyError(`${language.pluginUpdateFailed}: ${describePluginUpdateFailure(result.failure)}`)')
         expect(page).toContain('assignPluginToFolder')
         expect(page).not.toContain('CollectionOrganizerDialog')
         expect(page).not.toContain('organizerOpen')

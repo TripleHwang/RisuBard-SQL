@@ -10,11 +10,31 @@
     import { findCharacterbyId } from "../../ts/util";
     import TextInput from "../UI/GUI/TextInput.svelte";
     import { changeChatTo, requestImmediateSave } from "src/ts/globalApi.svelte";
+    import { createChatOpener } from "src/ts/chatOpen.svelte";
+    import LazyState from "../UI/GUI/LazyState.svelte";
     import { v4 } from "uuid";
 
     let editMode = $state(false)
     /** @type {{close?: any}} */
     let { close = () => {} } = $props();
+
+    /**
+     * This dialog closes onto the chat only once that chat is really loaded,
+     * and the progress and any failure stay inside the dialog.
+     *
+     * The old handler was `changeChatTo(i); close()`. Both halves were wrong
+     * together: `changeChatTo` raised the app-wide `fixed inset-0` overlay, and
+     * `close()` ran immediately -- so a chat whose history never arrived still
+     * dismissed the list and left the user on an empty conversation, which is
+     * indistinguishable from a chat that only ever had a greeting.
+     */
+    // `close` is read inside the callback rather than captured at construction:
+    // it is a prop, so capturing it would keep calling the first one this dialog
+    // ever received.
+    const chatOpener = createChatOpener((chatIndex) => {
+        changeChatTo(chatIndex, { alreadyLoaded: true })
+        close()
+    })
 </script>
 
 <div class="risu-modal-overlay absolute w-full h-full z-40 bg-overlay/50 flex justify-center items-center">
@@ -27,11 +47,30 @@
                 </button>
             </div>
         </div>
+        <!-- A chat that could not be opened says so, inside this dialog, and the
+             dialog stays open on the list the user clicked in. -->
+        <LazyState resource={chatOpener.resource} inline>
+            {#snippet loading()}
+                <div role="status" aria-live="polite" class="px-1 py-1 text-xs text-textcolor2">
+                    {language.lazyLoad.loading}{chatOpener.openingName ? ` · ${chatOpener.openingName}` : ''}
+                </div>
+            {/snippet}
+            {#snippet failed()}
+                <div role="alert" data-chat-open-failed class="mb-2 flex flex-col gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-xs text-danger">
+                    <span class="font-medium">{language.lazyLoad.chatFailed}{chatOpener.openingName ? `: ${chatOpener.openingName}` : ''}</span>
+                    {#if chatOpener.resource.errorMessage}
+                        <span class="break-all opacity-70">{chatOpener.resource.errorMessage}</span>
+                    {/if}
+                    <button type="button" class="self-start rounded border border-danger-border px-1.5 py-0.5 transition-colors hover:bg-danger/15" onclick={() => chatOpener.retryCurrent()}>
+                        {language.lazyLoad.retry}
+                    </button>
+                </div>
+            {/snippet}
+        </LazyState>
         {#each DBState.db.characters[$selectedCharID].chats as chat, i}
             <button onclick={() => {
                 if(!editMode){
-                    changeChatTo(i)
-                    close()
+                    chatOpener.open(i)
                 }
             }} class="flex items-center text-textcolor border-t-1 border-solid border-0 border-darkborderc p-2 cursor-pointer" class:bg-selected={i === DBState.db.characters[$selectedCharID].chatPage}>
                 {#if editMode}

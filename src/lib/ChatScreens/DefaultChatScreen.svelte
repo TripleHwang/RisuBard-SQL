@@ -37,8 +37,8 @@
     import { abortGeneration, chatGenKey, endGeneration, generationStates, registerAbort } from "../../ts/process/generationState";
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
     import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
-    import { loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
-    import { hasOlderSqlMessages } from '../../ts/storage/sql/sqlRuntimeWindow';
+    import { loadNewestChatMessages, loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
+    import { hasNewerSqlMessages, hasOlderSqlMessages } from '../../ts/storage/sql/sqlRuntimeWindow';
     import { sleep } from "../../ts/util";
     import { language } from "../../lang";
     import { isExpTranslator, translate } from "../../ts/translator/translator";
@@ -276,14 +276,44 @@ import { isMobile } from 'src/ts/platform'
         }
     })
 
-    /** Await hydration of active chat. Returns full Chat or null on failure. */
+    /**
+     * Await hydration of the active chat.
+     *
+     * Every `null` this returns used to be indistinguishable, and the only
+     * caller reacts to `null` by returning. So a hydration that threw, one that
+     * came back empty, and a selection pointing at nothing all produced the
+     * same thing the user saw: pressing send did nothing at all, with nothing
+     * in the console. Each of those is named here before the `null` goes back,
+     * because "could not load" is a different state from "nothing to load" and
+     * only the reader can tell them apart.
+     */
     async function ensureActiveChatReady(selectedChar = $selectedCharID): Promise<ChatData | null> {
         const char = DBState.db.characters[selectedChar]
-        if (!char) return null
+        if (!char) {
+            console.error(`[DefaultChatScreen] no character at index ${selectedChar}; the send was dropped.`)
+            alertError('No character is selected, so there is nothing to send to.')
+            return null
+        }
         const chat = char.chats[char.chatPage]
-        if (!chat) return null
+        if (!chat) {
+            console.error(`[DefaultChatScreen] character ${char.chaId} has no chat at page ${char.chatPage}; the send was dropped.`)
+            alertError('This character has no chat open, so there is nothing to send to.')
+            return null
+        }
         if (!chat._placeholder && (chat as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false) return chat
-        return await ensureCurrentChatReady(char.chats, char.chatPage, char.chaId)
+        try {
+            const hydrated = await ensureCurrentChatReady(char.chats, char.chatPage, char.chaId)
+            if (hydrated) return hydrated
+            // The chat exists but its history did not arrive. Sending now would
+            // append to a history the app cannot see all of.
+            console.error(`[DefaultChatScreen] chat ${chat.id} did not hydrate; the send was dropped rather than appended to a partial history.`)
+            alertError("This chat's history could not be loaded, so nothing was sent. Sending now would append to a history the app cannot see all of.")
+            return null
+        } catch (error) {
+            console.error(`[DefaultChatScreen] hydrating chat ${chat.id} failed; the send was dropped.`, error)
+            alertError(error)
+            return null
+        }
     }
 
     function scrollToBottom() {
@@ -347,7 +377,18 @@ import { isMobile } from 'src/ts/platform'
         const requestKey = paginationKey
         const requestVersion = chatWindowVersion
         const formerFirstId = currentChat[0]?.chatId
-        await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+        try {
+            await loadOlderChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+        } catch (error) {
+            // The click handler discards this promise (`void ...`), so a
+            // rejection here became an unhandled rejection: the button appeared
+            // to do nothing and the user was told nothing. `loadOlderChatMessages`
+            // rejects on a page that fails its contiguity/identity validation,
+            // which is precisely the case a user must be able to report.
+            console.error('[DefaultChatScreen] loading the previous page of messages failed; the visible history is unchanged.', error)
+            alertError(`${language.lazyLoad.olderMessagesFailed}: ${error instanceof Error ? error.message : String(error)}`)
+            return
+        }
         // The fetch may finish after selection changed. It may update its old
         // object, but must never mutate this screen's scroll position.
         if (!isCurrentChatWindowRequest(
@@ -363,6 +404,51 @@ import { isMobile } from 'src/ts/platform'
         } else {
             scrollToLoadedTop()
         }
+    }
+
+    /**
+     * The "latest" control, which now has one more thing it can mean.
+     *
+     * Residency trimming releases the newest end of a long chat once the
+     * resident slice passes its bound, so "the last resident page" and "the
+     * latest messages" stop being the same place. Jumping to the last resident
+     * page then shows a conversation that appears to stop mid-history, which
+     * reads as data loss. Restoring the newest window first is what makes the
+     * release reversible from the UI.
+     *
+     * Nothing else about how loading is triggered changes: this is still the
+     * same button, pressed by the user.
+     */
+    async function selectLatestChatPage() {
+        const chat = currentCharacter?.chats[currentCharacter.chatPage]
+        if (currentCharacter && hasNewerSqlMessages(chat)) {
+            chatWindowVersion += 1
+            const requestKey = paginationKey
+            const requestVersion = chatWindowVersion
+            try {
+                await loadNewestChatMessages(currentCharacter, currentCharacter.chatPage, 40)
+            } catch (error) {
+                // Same rule as the previous-page control above: the click
+                // handler discards this promise, so a rejection here would be an
+                // unhandled one -- the button appears to do nothing and the user
+                // is told nothing. `loadNewestChatMessages` rejects rather than
+                // release a message that is still dirty or has no canonical
+                // position, so this fires exactly when a user's unsaved edit is
+                // what stopped the jump. Falling through to `selectChatPage`
+                // would then scroll to the end of a slice that is NOT the latest
+                // messages while the control says it is.
+                console.error('[DefaultChatScreen] returning to the latest messages failed; the visible history is unchanged.', error)
+                alertError(`${language.lazyLoad.newestMessagesFailed}: ${error instanceof Error ? error.message : String(error)}`)
+                return
+            }
+            // The fetch may finish after the selection changed; a late response
+            // must never move this screen.
+            if (!isCurrentChatWindowRequest(
+                { key: requestKey, version: requestVersion },
+                { key: paginationKey, version: chatWindowVersion },
+            )) return
+        }
+        await selectChatPage(getLatestChatPage(currentChat.length, chatPageSize), true)
     }
 
     // Literal bottom of the scroll (end of the latest message).
@@ -1550,7 +1636,7 @@ import { isMobile } from 'src/ts/platform'
                  on disk. Gating the nav on that alone hides the previous-page
                  button, which is the only caller of loadOlderChatMessages in the
                  app -- older history becomes unreachable while appearing complete. -->
-            {#if chatBounds.pageCount > 1 || hasOlderSqlMessages(currentChatSlot)}
+            {#if chatBounds.pageCount > 1 || hasOlderSqlMessages(currentChatSlot) || hasNewerSqlMessages(currentChatSlot)}
                 <nav
                     data-chat-pagination
                     class="mx-auto my-3 flex max-w-xl items-center justify-center gap-2 rounded-full border border-darkborderc bg-darkbg/90 px-3 py-2 text-sm text-textcolor shadow-sm"
@@ -1574,8 +1660,8 @@ import { isMobile } from 'src/ts/platform'
                     <button
                         data-chat-page-latest
                         class="rounded-full px-3 py-1 transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40"
-                        disabled={chatBounds.page >= chatBounds.pageCount - 1}
-                        onclick={() => void selectChatPage(chatBounds.pageCount - 1, true)}
+                        disabled={chatBounds.page >= chatBounds.pageCount - 1 && !hasNewerSqlMessages(currentChatSlot)}
+                        onclick={() => void selectLatestChatPage()}
                     >{language.chatPageLatest}</button>
                 </nav>
             {/if}

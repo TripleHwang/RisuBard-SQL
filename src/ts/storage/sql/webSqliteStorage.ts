@@ -25,6 +25,7 @@ import type {
   SqlBotChatStats as NodePostgresBotChatStats,
 } from "./ISqlStorage";
 import sqliteSchemaSql from "./sqlite-schema.sql?raw";
+import { checkMessagePositionIntegrity } from "./messagePositionIntegrity";
 import {
   buildSqlReplaceCommit,
   SqlRevisionConflictError,
@@ -140,6 +141,21 @@ export class WebSqliteStorage implements ISqlStorage {
       if (rows.length > 0) {
         this.revision = Number(rows[0].revision) || 0;
       }
+
+      // Stands in for the UNIQUE (chat_id, position) the schema cannot carry --
+      // see messagePositionIntegrity.ts for why. One indexed GROUP BY, once per
+      // session. It reports and never repairs, and a duplicate must not stop the
+      // database from opening: the user still needs to read the chats it names.
+      try {
+        checkMessagePositionIntegrity((sql) => this.selectRows(sql));
+      } catch (error) {
+        console.error(
+          "[SQL integrity] the message-position check did not run, so duplicated message " +
+            "positions are unknown for this session rather than ruled out.",
+          error,
+        );
+      }
+
       this._enabled = true;
       this.initialized = true;
       return this._enabled;

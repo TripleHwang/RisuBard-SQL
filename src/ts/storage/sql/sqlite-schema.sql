@@ -119,6 +119,31 @@ CREATE TABLE IF NOT EXISTS chat_extension_nodes (
 );
 CREATE INDEX IF NOT EXISTS chat_nodes_parent_idx ON chat_extension_nodes (chat_id, parent_node_id, node_order);
 
+-- NOTE: there is deliberately no UNIQUE (chat_id, position) here, and adding
+-- one would break ordinary message editing rather than catch corruption.
+--
+-- `position` is the message's index in `chat.message`, and the delta writer
+-- sends one upsert per changed message followed by the manifest DELETE that
+-- prunes removed ids, so positions collide *within* a single commit:
+--   * deleting a mid-chat message shifts later messages down, so the upsert
+--     into slot N runs while the row being deleted still holds slot N (the
+--     DELETE is the last statement in the transaction);
+--   * inserting a mid-chat message shifts later messages up, and the upserts
+--     run in ascending order, so slot N+1 is still held by the row about to
+--     vacate it. Ascending order breaks inserts, descending breaks deletes --
+--     no statement ordering satisfies both.
+-- SQLite enforces uniqueness per statement and has no deferrable UNIQUE
+-- (defer_foreign_keys covers foreign keys only), so both cases would abort the
+-- commit with "UNIQUE constraint failed: messages.chat_id, messages.position".
+-- Verified against a real database in messagePositionIntegrity.test.ts.
+--
+-- Existing databases are very unlikely to violate the invariant (every writer
+-- derives `position` from an array index and prunes strays by manifest), but
+-- that is not what blocks the constraint; the writer's own transactions are.
+-- The invariant is guarded instead by the startup check in
+-- messagePositionIntegrity.ts, which reports duplicates by chat and never
+-- repairs them silently. See that file for the two-phase-write design that
+-- would be required to make the constraint addable, and why it was not taken.
 CREATE TABLE IF NOT EXISTS messages (
     chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
     id TEXT NOT NULL, position INTEGER NOT NULL CHECK (position >= 0), role TEXT NOT NULL,

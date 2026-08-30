@@ -61,7 +61,7 @@ describe("RisuVault SQL row commits", () => {
     // only on the old property name would pass on a payload that still had
     // them.
     const chat: any = { id: "chat-1", message: [{ chatId: "message-1", role: "user", data: "hello" }] };
-    setSqlWindow(chat, { before: null, nextBefore: 8, total: 10, hasOlder: true, nextPosition: 10 });
+    setSqlWindow(chat, { before: null, nextBefore: 8, total: 10, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 10 });
     setSqlPosition(chat.message[0], 9);
     const database = {
       characters: [{ chaId: "character-1", chats: [chat] }],

@@ -7,6 +7,7 @@
     import { get } from 'svelte/store';
     import { scrollWithinContainer } from './scrollWithin';
     import { estimateSpacerHeight, getChatWindow } from 'src/ts/chatWindow';
+    import { publishMountedMessageIds, releaseMountedMessageIds } from 'src/ts/chatMountRegistry';
     import { updateRuntimeResources } from 'src/ts/performance/performanceReport';
     
     const getCurrentChatRoomId = () => {
@@ -62,6 +63,12 @@
     }
     type MountedChat = { instance: ChatInstance, element: HTMLDivElement, signature: string }
     let mountInstances: Map<string, MountedChat> = new Map();
+    /**
+     * Identity of this screen in the mount registry. Storage-side residency
+     * trimming refuses to release any row published here, so the token has to
+     * outlive every render and be retracted exactly once, on destroy.
+     */
+    const mountRegistryToken = {};
     let measuredRowHeights: number[] = [];
 
     function stableMessageId(message: Message): string {
@@ -209,6 +216,10 @@
                 mountInstances.delete(id);
             }
         }
+        // Published after the sweep, so what the registry holds is what is
+        // actually mounted right now -- never a row this pass just unmounted.
+        // The trimmer refuses to release anything named here.
+        publishMountedMessageIds(mountRegistryToken, mountInstances.keys());
         updateRuntimeResources({ mountedMessages: mountInstances.size });
     };
 
@@ -218,6 +229,7 @@
             unmount(inst);
         });
         mountInstances.clear();
+        releaseMountedMessageIds(mountRegistryToken);
         updateRuntimeResources({ mountedMessages: 0 });
     })
 

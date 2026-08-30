@@ -1748,6 +1748,45 @@ export type hubType = {
 
 export let hubAdditionalHTML = ''
 
+/**
+ * Fetch one page of RisuRealm, reporting failure as failure.
+ *
+ * `getRisuHub` below keeps the old swallow-everything signature for callers
+ * that genuinely only want a best-effort list, but the browse screen must not
+ * use it: an unreachable server there rendered as "No RisuRealm characters
+ * found.", which is a claim about the user's search rather than about the
+ * network, and a user who believes it searches for something else instead of
+ * retrying. Every failure path -- transport error, non-200, a body that is not
+ * a card list -- throws here, so the screen can show that it could not ask.
+ */
+export async function fetchRisuHubPage(arg:{
+    search:string,
+    page:number,
+    nsfw:boolean
+    sort:string
+}):Promise<hubType[]> {
+    const search = arg.search + ' __shared'
+    const stringArg = `search==${search}&&page==${arg.page}&&nsfw==${arg.nsfw}&&sort==${arg.sort}&&web==other`
+
+    const da = await fetch(hubURL + '/realm/' + encodeURIComponent(stringArg), {
+        headers: {
+            "x-risuai-info": appVer + ';node'
+        }
+    })
+    if(da.status !== 200){
+        throw new Error(`RisuRealm responded with HTTP ${da.status}`)
+    }
+    const jso = await da.json()
+    if(Array.isArray(jso)){
+        return jso
+    }
+    hubAdditionalHTML = jso.additionalHTML || hubAdditionalHTML
+    if(!Array.isArray(jso?.cards)){
+        throw new Error('RisuRealm returned a response with no card list')
+    }
+    return jso.cards
+}
+
 export async function getRisuHub(arg:{
     search:string,
     page:number,
@@ -1755,24 +1794,11 @@ export async function getRisuHub(arg:{
     sort:string
 }):Promise<hubType[]> {
     try {
-        arg.search += ' __shared'
-        const stringArg = `search==${arg.search}&&page==${arg.page}&&nsfw==${arg.nsfw}&&sort==${arg.sort}&&web==other`
-
-        const da = await fetch(hubURL + '/realm/' + encodeURIComponent(stringArg), {
-            headers: {
-                "x-risuai-info": appVer + ';node'
-            }
-        })
-        if(da.status !== 200){
-            return []
-        }
-        const jso = await da.json()
-        if(Array.isArray(jso)){
-            return jso
-        }
-        hubAdditionalHTML = jso.additionalHTML || hubAdditionalHTML
-        return jso.cards
+        return await fetchRisuHubPage(arg)
     } catch (error) {
+        // Best-effort callers only. Anything that shows this list to a user
+        // must call `fetchRisuHubPage` and render the failure; see above.
+        console.error('[RisuRealm] hub request failed:', error)
         return[]
     }
 }

@@ -11,6 +11,8 @@
     import { language } from "src/lang";
     import { parseMultilangString } from "src/ts/util";
     import { checkCharOrder } from "src/ts/globalApi.svelte";
+    import LazyState from "../UI/GUI/LazyState.svelte";
+    import { createCharacterOpener } from "src/ts/characterOpen.svelte";
   import MobileCharacters from "../Mobile/MobileCharacters.svelte";
     interface Props {
         endGrid?: any;
@@ -20,9 +22,21 @@
     let search = $state('')
     let selected = $state(3)
 
-    function selectAndClose(index = -1){
+    /**
+     * Same rule as the sidebar: the character is loaded before the catalog
+     * closes onto it, with the progress and any failure shown here rather than
+     * behind the app-wide overlay `changeChar` used to raise. Closing on a
+     * failed load would drop the user on a screen rendering a character nobody
+     * managed to read.
+     */
+    const opener = createCharacterOpener((index) => {
         void changeChar(index)
         endGrid()
+    })
+
+    function selectAndClose(index = -1){
+        if(index < 0) return
+        opener.open(index)
     }
 
     function formatChars(search:string, db:Database, trash = false){
@@ -92,6 +106,24 @@
                 </span>
             </div>
         </div>
+        <LazyState resource={opener.resource}>
+            {#snippet loading()}
+                <div role="status" aria-live="polite" class="mx-4 mb-2 text-sm text-textcolor2">
+                    {language.lazyLoad.loading}{opener.openingName ? ` · ${opener.openingName}` : ''}
+                </div>
+            {/snippet}
+            {#snippet failed()}
+                <div role="alert" class="mx-4 mb-2 flex flex-col gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-sm text-danger">
+                    <span class="font-medium">{language.lazyLoad.characterFailed}{opener.openingName ? `: ${opener.openingName}` : ''}</span>
+                    {#if opener.resource.errorMessage}
+                        <span class="break-all text-xs opacity-70">{opener.resource.errorMessage}</span>
+                    {/if}
+                    <button type="button" class="self-start rounded border border-danger-border px-2 py-0.5 text-xs transition-colors hover:bg-danger/15" onclick={() => opener.retryCurrent()}>
+                        {language.lazyLoad.retry}
+                    </button>
+                </div>
+            {/snippet}
+        </LazyState>
         <div class="flex-1 min-h-0" class:overflow-y-auto={selected !== 3}>
         {#if selected === 0}
             <div class="w-full flex justify-center">

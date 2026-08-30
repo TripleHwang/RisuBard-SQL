@@ -31,6 +31,9 @@
         type PersonaSelection,
     } from 'src/ts/personaScopes'
     import type { RisuPersona } from 'src/ts/storage/database.svelte'
+    import LazyState from 'src/lib/UI/GUI/LazyState.svelte'
+    import { createLazyResource } from 'src/ts/lazyResource.svelte'
+    import { characterRecordNeedsLoad, loadCharacterRecord } from 'src/ts/characterOpen.svelte'
     import { sortableOptions } from 'src/ts/util'
 
     type PersonaManagerScope = 'global' | 'character'
@@ -59,6 +62,36 @@
     let personaBuilderTarget = $state<RisuPersona | null>(null)
 
     const currentCharacter = $derived(DBState.db.characters[$selectedCharID])
+
+    /**
+     * The character tab loads the selected character's record before it will
+     * show a persona list for it.
+     *
+     * `personas` is not part of the bootstrap character summary -- the summary
+     * has the name, the image, the chat list and nothing else -- so reading it
+     * off an unhydrated character yields `undefined`, and this grid rendered
+     * that as zero tiles plus "no personas for this character". Both are
+     * definite claims about data nobody had read. Worse, acting on them writes:
+     * `ensureCharacterPersonas` installs `[]` on the summary, the new persona
+     * goes in alone, and the commit persists one persona where the character
+     * had several.
+     *
+     * The key is null -- so nothing loads and nothing paints -- whenever the
+     * record is already resident, which is the normal case.
+     */
+    const characterRecord = createLazyResource<void>({
+        scope: 'character-record',
+        key: () => (
+            activeScope === 'character'
+            && currentCharacter?.chaId
+            && characterRecordNeedsLoad(currentCharacter)
+        ) ? currentCharacter.chaId : null,
+        load: (chaId) => loadCharacterRecord(chaId),
+    })
+    /** Safe to render the list: either nothing needed loading, or it loaded. */
+    const characterRecordUnknown = $derived(
+        activeScope === 'character' && (characterRecord.loading || characterRecord.failed)
+    )
 
     function activeStore(scope: PersonaScope = activeScope): RisuPersona[] {
         if (scope === 'global') return DBState.db.personas
@@ -406,6 +439,13 @@
     {#if activeScope === 'character' && !currentCharacter}
         <div class="persona-empty">{language.settingsWorkspace.personaManager.noCharacter}</div>
     {:else}
+        <!-- While the character's record is unknown, this tab shows that it is
+             unknown. It does not show an empty grid and a create button: an
+             empty grid claims the character has no personas, and creating one
+             from that state overwrites the personas it actually has. -->
+        {#if characterRecordUnknown}
+            <LazyState resource={characterRecord} failedTitle={language.lazyLoad.personasFailed} />
+        {:else}
         <div class="persona-grid-shell">
             <div data-persona-grid class="persona-grid" style:height={`${personaGridHeight}px`} bind:this={gridElement}>
                 {#each activeStore() as persona, i (persona.id ?? i)}
@@ -443,6 +483,7 @@
 
         {#if activeScope === 'character' && activeStore().length === 0}
             <div class="persona-empty compact">{language.settingsWorkspace.personaManager.noCharacterPersonas}</div>
+        {/if}
         {/if}
 
         {#if editingPersona}

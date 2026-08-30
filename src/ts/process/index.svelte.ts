@@ -82,7 +82,7 @@ import {
 } from '../risubard/wikiPromptPreset';
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
 import { saveChatToServer } from '../storage/chatStorage';
-import { hasOlderSqlMessages } from '../storage/sql/sqlRuntimeWindow';
+import { hasNewerSqlMessages, isSqlWindowPartial } from '../storage/sql/sqlRuntimeWindow';
 import {
     createWikiRebootJob,
     nextWikiRebootBatch,
@@ -845,8 +845,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         alertError('Chat is still loading. Please wait a moment.')
         return false
     }
-    if (hasOlderSqlMessages(selectedConversation)) {
-        alertError('Load earlier messages before generating.')
+    // Either end of the window can be missing: paging back loads older messages,
+    // and residency trimming releases newer ones once the resident slice passes
+    // its bound. Generating against a slice that is missing either end builds a
+    // prompt from a history the user can see is not the whole conversation.
+    if (isSqlWindowPartial(selectedConversation)) {
+        alertError(hasNewerSqlMessages(selectedConversation)
+            ? 'Jump to the latest messages before generating.'
+            : 'Load earlier messages before generating.')
         return false
     }
 

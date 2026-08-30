@@ -72,6 +72,30 @@ describe("SQL delta commits", () => {
     ]);
   });
 
+  it("keeps canonical message rows when residency trimming released the newest end", () => {
+    // The mirror of the case below, and the one trimming actually produces:
+    // nothing older is left to load, but the newest end was released. The
+    // runtime flags are left saying "loaded" so this pins the window predicate
+    // itself; a writer still asking `hasOlderSqlMessages` sees "complete" and
+    // rewrites the manifest from a slice that is missing the end of the chat,
+    // which turns every released message into a deletion.
+    const before = database();
+    const after = structuredClone(before);
+    after.characters[0].chats[0].message = [after.characters[0].chats[0].message[0]];
+    after.characters[0].chats[0].name = "Renamed while trimmed";
+    after.characters[0].chats[0].messagesLoaded = true;
+    after.characters[0].chats[0].messagesFullyLoaded = true;
+    setSqlWindow(after.characters[0].chats[0], {
+      before: null, nextBefore: null, total: 2, hasOlder: false, hasNewer: true, nextAfter: 0, nextPosition: 2,
+    });
+
+    const commit = buildSqlDeltaCommit(before, after, 3)!;
+
+    expect(commit.chats).toEqual([expect.objectContaining({ id: "chat-1" })]);
+    expect(commit.messages).toEqual([]);
+    expect(commit.messageManifests).toEqual([]);
+  });
+
   it("keeps canonical message rows when the current chat is only a partial SQL window", () => {
     const before = database();
     const after = structuredClone(before);
@@ -80,7 +104,7 @@ describe("SQL delta commits", () => {
     after.characters[0].chats[0].messagesLoaded = true;
     after.characters[0].chats[0].messagesFullyLoaded = false;
     setSqlWindow(after.characters[0].chats[0], {
-      before: null, nextBefore: 0, total: 2, hasOlder: true, nextPosition: 2,
+      before: null, nextBefore: 0, total: 2, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 2,
     });
 
     const commit = buildSqlDeltaCommit(before, after, 3)!;

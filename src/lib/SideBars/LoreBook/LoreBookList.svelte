@@ -8,6 +8,7 @@
     import { sleep, sortableOptions } from "src/ts/util";
     import { v4 } from "uuid";
     import { notifyError } from "src/ts/alert";
+    import { SvelteSet } from "svelte/reactivity";
 
     let reinitializeSortable = false;
 
@@ -299,7 +300,11 @@
     onMount(createStb)
 
     let openedDetails = 0  // Count only lorebook details (for drag deactivation)
-    let openedRefs = $state(new Set()) // Track both folders + lorebooks (for UI state)
+    // SvelteSet, not `$state(new Set())`: Svelte's proxy skips built-in
+    // collections, so `.add`/`.delete` on a plain Set signal nothing and the
+    // rebuild-and-reassign below was the only thing keeping `isOpen` and
+    // `openFolders` alive. SvelteSet makes the mutation itself reactive.
+    let openedRefs = $state<Set<unknown>>(new SvelteSet()) // Track both folders + lorebooks (for UI state)
     
     // Derived state to calculate number of open folders
     let openFolders = $derived(() => {
@@ -324,7 +329,6 @@
     }
         if (bookRef) {
             openedRefs.add(bookRef)
-            openedRefs = new Set(openedRefs) // Trigger reactivity
         }
     }
     const onClose = (isDetail: boolean = true, bookRef?: any) => {
@@ -337,7 +341,6 @@
         }
         if (bookRef) {
             openedRefs.delete(bookRef)
-            openedRefs = new Set(openedRefs) // Trigger reactivity
         }
     }
 

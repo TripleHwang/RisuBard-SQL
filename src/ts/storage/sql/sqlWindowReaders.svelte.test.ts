@@ -16,7 +16,7 @@ import { hasOlderSqlMessages, setSqlWindow, type SqlHydrationWindow } from "./sq
  */
 
 const partialWindow: SqlHydrationWindow = {
-  before: null, nextBefore: 360, total: 400, hasOlder: true, nextPosition: 400,
+  before: null, nextBefore: 360, total: 400, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 400,
 };
 
 describe("the previous-page gate reads the live hydration window", () => {

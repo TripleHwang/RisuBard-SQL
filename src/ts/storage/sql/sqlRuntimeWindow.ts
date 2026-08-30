@@ -39,9 +39,13 @@ const SQL_POSITION_KEY = Symbol.for("risuvault.sql.canonicalPosition");
 /**
  * What the runtime knows about the persisted extent of one chat's history.
  *
- * `hasOlder` is the load-bearing field: `true` means messages exist in storage
- * that are not in `chat.message`. Anything that would write the whole message
- * list back, export it, or treat it as the complete history must consult it.
+ * `hasOlder` and `hasNewer` are the load-bearing fields: either being `true`
+ * means messages exist in storage that are not in `chat.message`. Anything that
+ * would write the whole message list back, export it, back it up, or treat it
+ * as the complete history must consult {@link isSqlWindowPartial}, which reads
+ * both. Reading only one of them is how a trimmed slice gets mistaken for a
+ * whole history -- and a whole history is what the idle audit is allowed to
+ * turn absences in into DELETEs.
  */
 export type SqlHydrationWindow = {
   /** Position boundary this page was requested before (`null` for the newest page). */
@@ -52,6 +56,20 @@ export type SqlHydrationWindow = {
   total: number;
   /** True when storage holds messages older than the resident window. */
   hasOlder: boolean;
+  /**
+   * True when storage holds messages *newer* than the resident window.
+   *
+   * Only residency trimming sets this. A window built by hydration always holds
+   * the newest end -- reverse paging walks backwards from it -- so `false` here
+   * is a fact the constructor knows, not a default anyone is guessing at.
+   */
+  hasNewer: boolean;
+  /**
+   * Canonical position of the newest resident message when `hasNewer` is true,
+   * so the released newer end can be found again; `null` when the window still
+   * holds the newest end and there is nothing beyond it to point at.
+   */
+  nextAfter: number | null;
   /** Next free persisted position, used to allocate positions for appended messages. */
   nextPosition: number;
 };
@@ -105,6 +123,38 @@ export function clearSqlWindow(chat: ChatLike): void {
  */
 export function hasOlderSqlMessages(chat: ChatLike | null | undefined): boolean {
   return getSqlWindow(chat)?.hasOlder === true;
+}
+
+/**
+ * True only when a window is present *and* says storage holds newer messages --
+ * the resident slice was trimmed at its newest end to bound memory, so
+ * `chat.message` no longer ends where the history does.
+ *
+ * Same reading as {@link hasOlderSqlMessages}: false for a chat with no window,
+ * because absence of a window is absence of evidence, not evidence that the
+ * newest end is resident. Callers that need "is this the whole history" ask
+ * {@link isSqlWindowPartial} and pair it with `_placeholder` /
+ * `messagesLoaded` / `messagesFullyLoaded`.
+ */
+export function hasNewerSqlMessages(chat: ChatLike | null | undefined): boolean {
+  return getSqlWindow(chat)?.hasNewer === true;
+}
+
+/**
+ * True when the hydration window says storage holds messages the resident array
+ * does not, in either direction.
+ *
+ * This is the predicate every completeness guard must use. `hasOlder` alone was
+ * sufficient only while residency could only grow; once the newest end can be
+ * released too, a check that reads `hasOlder` on a chat paged back to the start
+ * of its history sees `false` and calls a trimmed slice complete. Export,
+ * merge, backup and the dirty-commit manifest all decide whether to copy or
+ * rewrite a whole history from this answer, and the idle audit turns a message
+ * id it cannot see in a "complete" history into a DELETE.
+ */
+export function isSqlWindowPartial(chat: ChatLike | null | undefined): boolean {
+  const window = getSqlWindow(chat);
+  return window?.hasOlder === true || window?.hasNewer === true;
 }
 
 /**

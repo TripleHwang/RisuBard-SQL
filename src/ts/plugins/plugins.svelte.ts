@@ -11,11 +11,12 @@ import { checkCodeSafety } from "./pluginSafety";
 import { SafeDocument, SafeIdbFactory, SafeLocalStorage } from "./pluginSafeClass";
 import { loadV3Plugins } from "./apiV3/v3.svelte";
 import { pluginCodeTranspiler } from "./apiV3/transpiler";
-import { runPluginUpdate } from "./pluginUpdate";
+import { describePluginUpdateFailure, isPluginUpdateRefusal, runPluginUpdate, type PluginImportOutcome, type PluginUpdateResult } from "./pluginUpdate";
+import { v4 } from "uuid";
 import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/pagefold";
 import { PluginChatOutputListeners, V2_CHAT_OUTPUT_OWNER, createV2ChatOutputApi } from "./pluginChatOutput";
 import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
-import { hasOlderSqlMessages } from "../storage/sql/sqlRuntimeWindow";
+import { isSqlWindowPartial } from "../storage/sql/sqlRuntimeWindow";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -46,7 +47,7 @@ export function assertPluginStorageResident(action: string): void {
 }
 
 export function isPluginChatComplete(chat: any): boolean {
-    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && !hasOlderSqlMessages(chat)
+    return !!chat && chat._stub !== true && chat._placeholder !== true && Array.isArray(chat.message) && chat.messagesLoaded !== false && chat.messagesFullyLoaded !== false && !isSqlWindowPartial(chat)
 }
 
 export function isPluginCharacterComplete(character: any): boolean {
@@ -54,6 +55,18 @@ export function isPluginCharacterComplete(character: any): boolean {
 }
 
 interface ProviderPlugin {
+    /**
+     * Stable install identity, minted once and carried across every update.
+     *
+     * The name is the runtime key (permissions, providers, IPC and the
+     * collection organizer are all keyed by it), and it is user-visible, which
+     * means it can change. Resolving an *install* by that name is what let an
+     * update whose source declared a different `//@name` land on a different
+     * plugin's record. Optional in the type only because a database written
+     * before identities existed has none; `ensurePluginIdentities` fills those
+     * in before anything reads them.
+     */
+    id?: string
     name: string
     displayName?: string
     script: string
@@ -104,6 +117,70 @@ const compareVersions = (v1: string, v2: string): 0|1|-1 => {
     return 0;
 }
 
+/**
+ * Cache key and lookup key for one *install*.
+ *
+ * `id` once the plugin has one. The `name:` fallback exists only for the window
+ * between reading a pre-identity database and `ensurePluginIdentities` running
+ * over it, and is prefixed so it can never collide with a UUID.
+ */
+export const pluginIdentityKey = (plugin: { id?: string, name: string }): string =>
+    plugin.id ? plugin.id : `name:${plugin.name}`
+
+/**
+ * Find the installed record for a plugin by identity.
+ *
+ * Falls back to the name only when the target carries no id at all. It never
+ * falls back after an id lookup misses: an id that matches nothing means the
+ * install is gone, and answering with a same-named different plugin is exactly
+ * the defect this function exists to end.
+ */
+export function findInstalledPlugin(
+    plugins: RisuPlugin[] | undefined,
+    target: { id?: string, name: string },
+): RisuPlugin | undefined {
+    if (!plugins) return undefined
+    if (target.id) return plugins.find((candidate) => candidate.id === target.id)
+    return plugins.find((candidate) => !candidate.id && candidate.name === target.name)
+}
+
+/**
+ * Give every installed plugin a stable id, once.
+ *
+ * Returns the number of records changed so the caller can decide whether a save
+ * is owed. It refuses to run while `plugins` is deferred: a deferred key is
+ * "not loaded", not "no plugins", and writing an empty/partial list back would
+ * destroy the user's plugin list -- the exact way a plugin list has been lost
+ * here before.
+ */
+export function ensurePluginIdentities(plugins: RisuPlugin[] | undefined): number {
+    if (isRootKeyDeferred('plugins')) {
+        console.warn(
+            '[Plugin] plugin identities not assigned: the plugin list exists in storage but is not '
+            + 'loaded, and writing to a list that was never read would drop its rows.',
+        )
+        return 0
+    }
+    if (!plugins) return 0
+    const seen = new Set<string>()
+    let changed = 0
+    for (const plugin of plugins) {
+        // A duplicated id is as ambiguous as no id -- two installs answering to
+        // one identity is the same wrong-record lookup by another route -- so
+        // the first holder keeps it and any later one is re-minted.
+        if (plugin.id && !seen.has(plugin.id)) {
+            seen.add(plugin.id)
+            continue
+        }
+        const assigned = v4()
+        console.info(`[Plugin] assigned a stable id to "${plugin.name}" (${assigned}).`)
+        plugin.id = assigned
+        seen.add(assigned)
+        changed += 1
+    }
+    return changed
+}
+
 const updateCache = new Map<string, { version: string, updateURL: string } | undefined>();
 
 export const checkPluginUpdate = async (plugin: RisuPlugin) => {
@@ -112,8 +189,12 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
             return
         }
 
-        if(updateCache.has(plugin.name)){
-            const cached = updateCache.get(plugin.name)
+        // Keyed by install identity, not by name: two plugins may briefly share
+        // a name across a rename, and a name-keyed cache then answers for the
+        // wrong install.
+        const cacheKey = pluginIdentityKey(plugin)
+        if(updateCache.has(cacheKey)){
+            const cached = updateCache.get(cacheKey)
             if(cached
                 && cached.updateURL === plugin.updateURL
                 && compareVersions(cached.version, plugin.versionOfPlugin || '0.0.0') === 1){
@@ -136,7 +217,7 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
             if(match && match[1]){
                 const latestVersion = match[1].trim()
                 if(compareVersions(latestVersion, plugin.versionOfPlugin || '0.0.0') === 1){
-                    updateCache.set(plugin.name, {
+                    updateCache.set(cacheKey, {
                         version: latestVersion,
                         updateURL: plugin.updateURL
                     })
@@ -152,29 +233,39 @@ export const checkPluginUpdate = async (plugin: RisuPlugin) => {
     }
 }
 
-export async function updatePlugin(plugin: RisuPlugin) {
-    const updated = await runPluginUpdate(plugin, {
+export async function updatePlugin(plugin: RisuPlugin): Promise<PluginUpdateResult> {
+    // The identity is resolved once, before the download: `plugin` is the
+    // caller's record and an update may rename it underneath us.
+    const target = { id: plugin.id, name: plugin.name, updateURL: plugin.updateURL }
+    const result = await runPluginUpdate(target, {
         fetcher: (url) => fetchNative(url, { method: 'GET' }),
-        importer: async (source) => {
-            await importPlugin(source, {
-                isUpdate: true,
-                originalPluginName: plugin.name
-            })
-        },
-        readInstalled: (name) => getDatabase().plugins?.find((candidate) => candidate.name === name),
+        importer: (source) => importPlugin(source, {
+            isUpdate: true,
+            originalPluginName: plugin.name,
+            originalPluginId: plugin.id,
+        }),
+        readInstalled: (lookup) => findInstalledPlugin(getDatabase().plugins, lookup),
     })
-    if (updated) {
-        updateCache.delete(plugin.name)
+    if (isPluginUpdateRefusal(result)) {
+        console.error(
+            `[Plugin] updating "${plugin.name}" did not install anything: `
+            + describePluginUpdateFailure(result.failure),
+            result.failure.kind === 'threw' ? result.failure.error : undefined,
+        )
+    } else {
+        updateCache.delete(pluginIdentityKey(target))
     }
-    return updated
+    return result
 }
 
 export async function importPlugin(code:string|null = null, argu:{
     isUpdate?: boolean
     originalPluginName?: string
+    /** Identity of the install being updated. Preferred over the name. */
+    originalPluginId?: string
     isHotReload?: boolean
     isTypescript?: boolean
-} = {}) {
+} = {}): Promise<PluginImportOutcome> {
     try {
         let jsFile = ''
         let db = getDatabase()
@@ -185,7 +276,9 @@ export async function importPlugin(code:string|null = null, argu:{
         if(!code){
             const f = await selectSingleFile(['js','ts'])
             if (!f) {
-                return
+                // The user closed the picker. Not a failure, but still not an
+                // install, and the caller must be able to tell.
+                return { ok: false, reason: 'no file was selected' }
             }
             if(f.name.endsWith('.ts')){
                 isTypescript = true
@@ -206,13 +299,21 @@ export async function importPlugin(code:string|null = null, argu:{
             }
         }
 
-        const showError = (msg: string) => {
+        /**
+         * Report a refusal and hand the caller the same words.
+         *
+         * Returning the outcome (rather than `void`) is what lets
+         * `runPluginUpdate` say why an update installed nothing instead of
+         * reporting a bare `false`.
+         */
+        const showError = (msg: string): PluginImportOutcome => {
             if(argu.isHotReload){
                 console.error(`Hot-reload plugin "${name}" error: ${msg}`)
             }
             else{
                 alertError(msg)
             }
+            return { ok: false, reason: msg }
         }
 
         let displayName: string = undefined
@@ -228,8 +329,7 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@name')) {
                 const provied = line.slice(7)
                 if (provied === '') {
-                    showError('plugin name must be longer than 0, did you put it correctly?')
-                    return
+                    return showError('plugin name must be longer than 0, did you put it correctly?')
                 }
                 name = provied.trim()
             }
@@ -249,8 +349,7 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@display-name')) {
                 const provied = line.slice('//@display-name'.length + 1)
                 if (provied === '') {
-                    showError('plugin display name must be longer than 0, did you put it correctly?')
-                    return
+                    return showError('plugin display name must be longer than 0, did you put it correctly?')
                 }
                 displayName = provied.trim()
             }
@@ -258,12 +357,10 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@link')) {
                 const link = line.split(" ")[1]
                 if (!link || link === '') {
-                    showError('plugin link is empty, did you put it correctly?')
-                    return
+                    return showError('plugin link is empty, did you put it correctly?')
                 }
                 if (!link.startsWith('https')) {
-                    showError('plugin link must start with https, did you check it?')
-                    return
+                    return showError('plugin link must start with https, did you check it?')
                 }
                 const hoverText = line.split(' ').slice(2).join(' ').trim()
                 if (hoverText === '') {
@@ -282,14 +379,12 @@ export async function importPlugin(code:string|null = null, argu:{
             if (line.startsWith('//@risu-arg') || line.startsWith('//@arg')) {
                 const provied = line.trim().split(' ')
                 if (provied.length < 3) {
-                    showError('plugin argument is incorrect, did you put space in argument name?')
-                    return
+                    return showError('plugin argument is incorrect, did you put space in argument name?')
                 }
                 const provKey = provied[1]
 
                 if (provied[2] !== 'int' && provied[2] !== 'string') {
-                    showError(`plugin argument type is "${provied[2]}", which is an unknown type.`)
-                    return
+                    return showError(`plugin argument type is "${provied[2]}", which is an unknown type.`)
                 }
                 if (provied[2] === 'int') {
                     arg[provKey] = 'int'
@@ -326,12 +421,10 @@ export async function importPlugin(code:string|null = null, argu:{
                 try {
                     const url = new URL(updateURL)
                     if(url.protocol !== 'https:'){
-                        showError('plugin update URL must start with https, did you put it correctly?')
-                        return
+                        return showError('plugin update URL must start with https, did you put it correctly?')
                     }
                 } catch (error) {
-                    showError('plugin update URL is not a valid URL, did you put it correctly?')
-                    return
+                    return showError('plugin update URL is not a valid URL, did you put it correctly?')
                 }
             }
 
@@ -341,16 +434,14 @@ export async function importPlugin(code:string|null = null, argu:{
                 const versionLocation = jsFile.indexOf('//@version')
                 const numberOfBytesBefore = new TextEncoder().encode(jsFile.slice(0, versionLocation) + line).length
                 if(numberOfBytesBefore > 500){
-                    showError('plugin version declaration must be within the first 512 Bytes of the file for proper parsing. move //@version line to the top of the file.')
-                    return
+                    return showError('plugin version declaration must be within the first 512 Bytes of the file for proper parsing. move //@version line to the top of the file.')
                 }
             }
 
             if(line.startsWith('//@allowed-ipc')){
                 const provied = line.trim().split(' ')
                 if(provied.length < 2){
-                    showError('plugin allowed IPC declaration is incorrect, did you put space after //@allowed-ipc?')
-                    return
+                    return showError('plugin allowed IPC declaration is incorrect, did you put space after //@allowed-ipc?')
                 }
 
                 const allowedIPCList = provied.slice(1)
@@ -360,8 +451,7 @@ export async function importPlugin(code:string|null = null, argu:{
         }
 
         if (name.length === 0) {
-            showError('plugin name not found, did you put it correctly?')
-            return
+            return showError('plugin name not found, did you put it correctly?')
         }
 
         // PageFold is an application asset. Importing another copy would make
@@ -369,18 +459,15 @@ export async function importPlugin(code:string|null = null, argu:{
         // legacy copies in the database untouched for reversibility, but do
         // not install any new duplicate over the built-in provider.
         if (isBuiltInPluginName(name)) {
-            showError('PageFold is built in and cannot be installed as a separate plugin.')
-            return
+            return showError('PageFold is built in and cannot be installed as a separate plugin.')
         }
 
         if(updateURL && versionOfPlugin.length === 0){
-            showError('plugin version not found, did you put it correctly? It is required when update URL is provided.')
-            return
+            return showError('plugin version not found, did you put it correctly? It is required when update URL is provided.')
         }
 
         if(versionOfPlugin && compareVersions(versionOfPlugin, '0.0.1') === -1){
-            showError('plugin version must be at least 0.0.1')
-            return
+            return showError('plugin version must be at least 0.0.1')
         }
 
         
@@ -388,7 +475,10 @@ export async function importPlugin(code:string|null = null, argu:{
             try {
                 jsFile = await pluginCodeTranspiler(jsFile)                
             } catch (error) {
-                showError('Failed to transpile TypeScript code: ' + error.message)
+                // Installing the untranspiled TypeScript would store a script
+                // that cannot run, under a version number that says it can.
+                console.error('[Plugin] TypeScript transpilation failed', error)
+                return showError('Failed to transpile TypeScript code: ' + error.message)
             }
         }
 
@@ -406,15 +496,14 @@ export async function importPlugin(code:string|null = null, argu:{
                 }
 
                 if(pluginAlertModalStore.errors.length > 0){
-                    return
+                    return { ok: false, reason: 'the code-safety warnings were not accepted' }
                 }
             }
             apiInternalVersion = '2.1'
         }
         else if(apiVersion === '2.0'){
             if(!DBState.db.allowV2Plugin){
-                showError('Your code does not include //@api or specifies API version 2.0, which is outdated. Please update your plugin to use at least API version 2.1.')
-                return
+                return showError('Your code does not include //@api or specifies API version 2.0, which is outdated. Please update your plugin to use at least API version 2.1.')
             }
             apiInternalVersion = 2
         }
@@ -423,8 +512,7 @@ export async function importPlugin(code:string|null = null, argu:{
         }
 
         if(apiInternalVersion !== '3.0' && argu.isHotReload){
-            showError('Only API version 3.0 plugins can be hot-reloaded.')
-            return
+            return showError('Only API version 3.0 plugins can be hot-reloaded.')
         }
         
         let pluginData: RisuPlugin = {
@@ -444,26 +532,65 @@ export async function importPlugin(code:string|null = null, argu:{
 
         db.plugins ??= []
 
-        const oldPluginIndex = db.plugins.findIndex((p: RisuPlugin) => p.name === pluginData.name);
+        // Which installed record is this import for?
+        //
+        // An explicit update target resolves by IDENTITY, so the source is free
+        // to change its `//@name`: that renames one install instead of
+        // redirecting the update onto whatever other plugin now answers to the
+        // new name -- which is how `risu_multiagent` once received
+        // `flashback_memory`. A plain import, and a hot reload (which names no
+        // target), still match by name; that is what makes "you already have
+        // this plugin, replace it?" work.
+        const hasUpdateTarget = !!(argu.originalPluginId || originalPluginName)
+        const targeted = hasUpdateTarget
+            ? findInstalledPlugin(db.plugins, { id: argu.originalPluginId, name: originalPluginName })
+            : undefined
+        const oldPluginIndex = hasUpdateTarget
+            ? (targeted ? db.plugins.indexOf(targeted) : -1)
+            : db.plugins.findIndex((p: RisuPlugin) => p.name === pluginData.name);
 
-        if(originalPluginName && originalPluginName !== pluginData.name){
-            showError(`When updating plugin "${originalPluginName}", the plugin name cannot be changed to "${pluginData.name}". Please keep the original name to update.`)
-            return
+        if(hasUpdateTarget && oldPluginIndex === -1){
+            return showError(
+                `The plugin being updated ("${originalPluginName}") is no longer installed, so nothing was `
+                + 'changed. Import it as a new plugin instead.',
+            )
         }
 
+        // The name remains the runtime key for permissions, providers and IPC,
+        // so two installs must not share one. A rename onto an occupied name is
+        // refused rather than silently creating that collision.
+        const collidingIndex = db.plugins.findIndex((p: RisuPlugin, index: number) =>
+            index !== oldPluginIndex && p.name === pluginData.name)
+        if(hasUpdateTarget && collidingIndex !== -1){
+            return showError(
+                `Updating "${originalPluginName}" would rename it to "${pluginData.name}", which another `
+                + 'installed plugin already uses. Nothing was changed.',
+            )
+        }
 
         if(!isUpdate && oldPluginIndex !== -1){
             const c = await alertConfirm(language.duplicatePluginFoundUpdateIt)
             if(!c){
-                return
+                return { ok: false, reason: 'the existing plugin was not replaced' }
             }
         }
 
         if(oldPluginIndex !== -1){
+            // The identity belongs to the install, not to the file, so it is
+            // carried across the replacement. Without this every update would
+            // mint a new id and the next one would have nothing to resolve by.
+            pluginData.id = db.plugins[oldPluginIndex].id ?? v4()
             db.plugins[oldPluginIndex] = pluginData;
         }
         else if(!isUpdate || argu.isHotReload){
+            pluginData.id = v4()
             db.plugins.push(pluginData)
+        }
+        else {
+            return showError(
+                `"${pluginData.name}" was treated as an update but matches no installed plugin, so nothing `
+                + 'was installed.',
+            )
         }
 
         if(argu.isHotReload && !hotReloading.includes(pluginData.name)){
@@ -479,11 +606,13 @@ export async function importPlugin(code:string|null = null, argu:{
         }
 
         await loadPlugins()
-        
+
+        return { ok: true }
     } catch (error) {
         console.error(error)
         if (argu.isUpdate) throw error
         alertError(language.errors.noData)
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) }
     }
 }
 
@@ -520,6 +649,18 @@ export async function loadPlugins() {
                 error,
             )
         }
+    }
+
+    // Backfill install identities for a database written before they existed.
+    // This runs on every load and is a no-op once every record has one; it is
+    // deliberately here rather than in a bootstrap step so that a plugin list
+    // arriving late (or being replaced by a restore) is covered too. It writes
+    // nothing when the plugin list is deferred -- see `ensurePluginIdentities`.
+    const identitiesAssigned = ensurePluginIdentities(db.plugins)
+    if (identitiesAssigned > 0) {
+        console.info(`[Plugin] assigned stable ids to ${identitiesAssigned} plugin(s); saving.`)
+        setDatabaseLite(db)
+        void requestImmediateSave()
     }
 
     // Built-ins are code assets, not mutable rows in the user database. This

@@ -3,10 +3,12 @@ import type { SqlBootstrapStorage } from "./ISqlStorage";
 import { getActiveSqlStorage } from "./sqlBootstrap";
 import { tick } from "svelte";
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply } from "../hydrationState";
-import { rebaselineHydratedRootKey } from "./sqlPersistenceRuntime";
+import { flushSqlDirtyChanges, isSqlMessageDirty, rebaselineHydratedRootKey } from "./sqlPersistenceRuntime";
 import { validateOlderMessagePage } from "../../chatWindow";
+import { isMessageMounted } from "../../chatMountRegistry";
 import { clearDeferredRootKey, isRootKeyDeferred } from "./deferredRootKeys";
 import {
+  getSqlPosition,
   getSqlWindow,
   setSqlPosition,
   setSqlWindow,
@@ -33,6 +35,23 @@ export function normalizeHydratedCharacter(value: character): character {
 }
 
 const DEFAULT_MESSAGE_LIMIT = 40;
+
+/**
+ * Upper bound on how many messages of one chat stay in memory.
+ *
+ * Paging back used to be a one-way ratchet: `loadOlderChatMessages` prepended a
+ * page and nothing ever released one, so walking a long history kept every
+ * message it touched resident for the rest of the session. The bound is what
+ * stops that; the release target is what stops the trimmer from firing on every
+ * single page load once the bound is reached.
+ *
+ * Both are well clear of what a screen can mount at once (`Chats.svelte` mounts
+ * at most 60 rows) so that the trimmer is never asked to choose between the
+ * bound and a visible row -- and when it is asked anyway, it keeps the row.
+ */
+export const MAX_RESIDENT_MESSAGES = 320;
+export const RESIDENT_RELEASE_TARGET = 240;
+
 const characterHydrations = new Map<string, Promise<character | null>>();
 const chatHydrations = new Map<string, Promise<Chat | null>>();
 const rootKeyHydrations = new Map<string, Promise<unknown>>();
@@ -169,6 +188,75 @@ function insertMessages(resident: Chat["message"], incoming: Chat["message"], at
 }
 
 /**
+ * Release messages from the newest end of a resident slice until it fits the
+ * bound, and return the window that describes what is left.
+ *
+ * Direction is not arbitrary. Residency only grows through
+ * `loadOlderChatMessages`, and that is triggered when the user is at the oldest
+ * resident message and walking further back, so the newest end is the far end
+ * from where they are looking. Trimming the oldest end would cut exactly the
+ * page they just asked for.
+ *
+ * Releasing is not deleting. Nothing is marked deleted, no manifest is
+ * rewritten, and the returned window records `hasNewer` so that every
+ * completeness reader -- export, merge, backup, the dirty-commit manifest, the
+ * idle audit -- keeps seeing a partial history. The caller pairs that with
+ * `messagesFullyLoaded = false`; the audit reads that flag before it is allowed
+ * to turn an id it cannot see into a DELETE, and a trimmed slice must never
+ * clear that gate.
+ *
+ * A message is released only when all five of these hold, and the walk stops at
+ * the first one that does not, newest first:
+ *
+ *   - it has a `chatId`, so it has a durable identity to be found by again;
+ *   - it is not mounted -- `Chats.svelte` draws the screen from what it has
+ *     mounted, so releasing a mounted row is a hole nothing repaints;
+ *   - it is not dirty -- `buildSqlDirtyCommit` resolves a dirty id by looking it
+ *     up in `chat.message` and skips ids it cannot find, so a message spliced
+ *     out while it still carries an unflushed edit loses that edit silently;
+ *   - it carries a canonical persisted position, which is the evidence that it
+ *     exists in storage at a known place. Without one, "release" would be
+ *     indistinguishable from discarding a message that was never saved;
+ *   - the slice is still above the release target.
+ *
+ * `message` is spliced in place. Handing `Chats.svelte` a different array
+ * unmounts the whole conversation and leaves the screen blank.
+ */
+function releaseNewestResidentMessages(
+  chat: Chat,
+  chatId: string,
+  window: SqlHydrationWindow,
+): SqlHydrationWindow {
+  const messages = chat.message;
+  if (!Array.isArray(messages) || messages.length <= MAX_RESIDENT_MESSAGES) return window;
+  // A streaming chat is writing into its own tail. The streaming row is mounted
+  // and its text is not yet persisted, so both guards below would already stop
+  // the walk; refusing outright says so once instead of relying on that.
+  if (chat.isStreaming) return window;
+
+  let keep = messages.length;
+  while (keep > RESIDENT_RELEASE_TARGET) {
+    const candidate = messages[keep - 1];
+    const id = candidate?.chatId;
+    if (!id || isMessageMounted(id) || isSqlMessageDirty(chatId, id)) break;
+    if (!Number.isSafeInteger(getSqlPosition(candidate))) break;
+    keep -= 1;
+  }
+  const releaseCount = messages.length - keep;
+  if (releaseCount === 0) return window;
+
+  // The boundary is the fact that makes the release reversible: it names where
+  // the resident slice now ends, so `loadNewestChatMessages` knows there is
+  // something beyond it and where. Without a position to record we would be
+  // claiming `hasNewer` with no way to say from where, so nothing is released.
+  const boundary = getSqlPosition(messages[keep - 1]);
+  if (!Number.isSafeInteger(boundary)) return window;
+
+  messages.splice(keep, releaseCount);
+  return { ...window, hasNewer: true, nextAfter: boundary! };
+}
+
+/**
  * Reverse pages are a different contract from forward hydration: every page
  * must terminate exactly at the persisted boundary we asked for. Validate the
  * response before attaching positions or replacing either observable window.
@@ -205,7 +293,16 @@ function validateOlderReversePage(
   if (page.hasMore ? page.nextBefore !== page.positions[0] : page.nextBefore !== null) {
     throw new Error("Reverse page boundary is noncontiguous")
   }
-  if (!page.hasMore && knownIds.size + seen.size !== page.total) {
+  // Coverage counts resident ids against the persisted total, so it only means
+  // anything while the window still holds the newest end -- `knownIds` is then
+  // everything from this page to the end of the history. Once residency
+  // trimming has released messages from the newest end the resident count is
+  // deliberately smaller than the history, and this rule would reject the last
+  // page of every trimmed chat, stranding the start of its history behind a
+  // throw. Nothing is lost by skipping it: the rule exists to stop a short
+  // terminal page from marking a chat complete, and a trimmed window is never
+  // marked complete -- `hasNewer` holds `messagesFullyLoaded` at false.
+  if (!page.hasMore && !window.hasNewer && knownIds.size + seen.size !== page.total) {
     throw new Error("Reverse page terminal coverage is incomplete")
   }
 }
@@ -272,6 +369,11 @@ export async function ensureChatMessageWindow(character: character, chatIndex: n
         nextBefore: page.nextBefore,
         total: page.total,
         hasOlder: page.hasMore,
+        // The newest page is where reverse paging starts, so this window holds
+        // the newest end by construction. Only residency trimming can change
+        // that, and it replaces the window when it does.
+        hasNewer: false,
+        nextAfter: null,
         nextPosition: page.nextPosition,
       };
 
@@ -353,13 +455,24 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
         nextBefore: page.nextBefore,
         total: page.total,
         hasOlder: page.hasMore,
+        // Prepending does not touch the newest end, so whatever this window
+        // already knew about it carries forward; the trim below is the only
+        // thing that can change it.
+        hasNewer: window.hasNewer,
+        nextAfter: window.nextAfter,
         nextPosition: Math.max(window.nextPosition, page.nextPosition),
       };
 
       insertMessages(current.message, older, "start");
+      const boundedWindow = releaseNewestResidentMessages(current, chatId, nextWindow);
       (current as HydratableChat).messagesLoaded = true;
-      (current as HydratableChat).messagesFullyLoaded = !page.hasMore;
-      setSqlWindow(current, nextWindow);
+      // A trimmed slice is not the full history even when the page that
+      // triggered the trim reached the start of it. `messagesFullyLoaded` is
+      // the flag the idle audit reads before it may turn a missing id into a
+      // DELETE, and every export/backup/merge guard reads it too, so the
+      // released newer end has to clear it.
+      (current as HydratableChat).messagesFullyLoaded = !page.hasMore && !boundedWindow.hasNewer;
+      setSqlWindow(current, boundedWindow);
       beginHydrationApply(key);
       await tick();
       endHydrationApply(key);
@@ -370,5 +483,144 @@ export async function loadOlderChatMessages(character: character, chatIndex: num
     }
   })();
   chatHydrations.set(key, hydration);
+  return hydration;
+}
+
+/**
+ * Bring the resident slice back to the newest end of the history after
+ * residency trimming released it.
+ *
+ * This is the return path for {@link releaseNewestResidentMessages}. Trimming
+ * is what bounds memory; without a way back the user who paged deep into a long
+ * history would be left looking at a chat whose newest messages had vanished
+ * from the screen, which reads as data loss even though nothing was deleted.
+ *
+ * The backend serves reverse pages only -- `before`, never `after` -- so there
+ * is no way to walk forward one page at a time. The newest page, though, is
+ * exactly what a `before`-less request returns, so this resets the window to it
+ * and releases the older slice: the same operation the "latest" control already
+ * means. The result is indistinguishable from a freshly opened chat.
+ *
+ * Nothing is released until every message about to go is provably safe to
+ * release, and that check runs before the array is touched:
+ *
+ *   - pending local changes are flushed first, and any message still dirty
+ *     afterwards aborts the whole operation. `buildSqlDirtyCommit` finds dirty
+ *     rows by looking them up in `chat.message`, so releasing one would drop the
+ *     edit with no error anywhere;
+ *   - a message with no canonical persisted position is not known to be in
+ *     storage at all, so releasing it would be discarding it.
+ *
+ * Both refusals throw. A silent fallback here is a chat quietly losing edits.
+ */
+export async function loadNewestChatMessages(character: character, chatIndex: number, limit?: number): Promise<Chat | null> {
+  const chat = character.chats[chatIndex];
+  const window = chat && getSqlWindow(chat);
+  // No window, or a window that never released its newest end: the resident
+  // slice already ends where the history does and there is nothing to restore.
+  if (!chat || !window || !window.hasNewer) return chat ?? null;
+  const storage = getNodeBootstrapStorage();
+  if (!storage) return chat;
+  const chatId = chat.id;
+  if (!chatId) return null;
+  const key = `${character.chaId}/${chatId}`;
+  const existing = chatHydrations.get(key);
+  if (existing) return existing;
+
+  const hydration = (async () => {
+    // Flushed before the hydration guard opens, because `beginHydration` is
+    // what suppresses dirty marking -- and inside the registered promise, so a
+    // concurrent caller shares this flush instead of racing a second one.
+    await flushSqlDirtyChanges();
+    beginHydration(key);
+    try {
+      const page = await storage.loadChatMessageReversePage(chatId, undefined, normalizeLimit(limit));
+      const currentIndex = character.chats.findIndex((value) => value?.id === chatId);
+      const current = currentIndex === -1 ? null : character.chats[currentIndex];
+      if (!current) return null;
+
+      // Everything that can throw runs first, against the page's own objects
+      // and against a plan rather than the live array, so a refusal leaves the
+      // chat exactly as the user last saw it.
+      // This is the only path that removes messages because of what a page does
+      // NOT contain, so the page has to be worth believing before any of it is
+      // acted on. A transient empty or short response would otherwise release
+      // the resident slice and leave the chat holding almost nothing -- the
+      // page is a view of storage, not an assertion that everything missing
+      // from it is gone.
+      attachCanonicalPositions(page.messages, page.positions);
+      if (page.messages.length === 0 && page.total > 0) {
+        throw new Error(
+          `Refusing to restore the newest page of chat ${chatId}: the backend returned no ` +
+          `messages while reporting ${page.total} in storage. Nothing was released.`,
+        );
+      }
+      if (page.messages.length < Math.min(normalizeLimit(limit), page.total)) {
+        throw new Error(
+          `Refusing to restore the newest page of chat ${chatId}: it carried ` +
+          `${page.messages.length} messages where at least ` +
+          `${Math.min(normalizeLimit(limit), page.total)} were expected. Nothing was released.`,
+        );
+      }
+      const arriving = new Set(page.messages.map((message) => message.chatId));
+      const resident = current.message ?? [];
+      const releasing = resident.filter((message) => !arriving.has(message.chatId));
+      for (const message of releasing) {
+        const id = message.chatId;
+        if (!id || isSqlMessageDirty(chatId, id)) {
+          throw new Error(
+            `Refusing to release message ${id ?? "(missing id)"} of chat ${chatId} while it still ` +
+            "carries an unflushed change; the newest page was not restored.",
+          );
+        }
+        if (!Number.isSafeInteger(getSqlPosition(message))) {
+          throw new Error(
+            `Refusing to release message ${id} of chat ${chatId}: it has no canonical persisted ` +
+            "position, so it is not known to exist in storage.",
+          );
+        }
+      }
+      const restoredWindow: SqlHydrationWindow = {
+        before: page.before,
+        nextBefore: page.nextBefore,
+        total: page.total,
+        hasOlder: page.hasMore,
+        hasNewer: false,
+        nextAfter: null,
+        // A message appended during the session may already hold a position
+        // past what this page reports; the allocator must never hand that one
+        // out twice.
+        nextPosition: Math.max(window.nextPosition, page.nextPosition),
+      };
+
+      // Splice, never replace: `Chats.svelte` sweeps by identity and a new
+      // array unmounts the whole conversation.
+      for (let index = resident.length - 1; index >= 0; index -= 1) {
+        if (!arriving.has(resident[index].chatId)) resident.splice(index, 1);
+      }
+      if (!Array.isArray(current.message)) current.message = [];
+      insertMessages(current.message, page.messages, "end");
+      (current as HydratableChat).messagesLoaded = true;
+      // Same coverage rule as the initial page: a terminal page is only the
+      // whole history when it actually accounts for every persisted message.
+      (current as HydratableChat).messagesFullyLoaded = !page.hasMore && current.message.length >= page.total;
+      setSqlWindow(current, restoredWindow);
+      beginHydrationApply(key);
+      await tick();
+      endHydrationApply(key);
+      return current;
+    } finally {
+      endHydration(key);
+    }
+  })();
+  chatHydrations.set(key, hydration);
+  // Freed on settle rather than from inside the body, whose `finally` now runs
+  // after an `await` that precedes this `set`: clearing from in there would
+  // race the registration and could strand a settled promise in the map,
+  // turning one failed flush into a chat that can never be restored again.
+  const release = () => {
+    if (chatHydrations.get(key) === hydration) chatHydrations.delete(key);
+  };
+  hydration.then(release, release);
   return hydration;
 }

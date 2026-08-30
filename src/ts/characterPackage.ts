@@ -6,8 +6,8 @@ import { LocalWriter, readImage, VirtualWriter } from './globalApi.svelte'
 import { language } from 'src/lang'
 import { type character, getDatabase, setDatabase, saveImage, normalizeChat } from './storage/database.svelte'
 import type { Chat } from './storage/database.svelte'
-import { fetchChatFromServer } from './storage/chatStorage'
-import { hasOlderSqlMessages } from './storage/sql/sqlRuntimeWindow'
+import { chatNeedsServerFetch, fetchChatFromServer } from './storage/chatStorage'
+import { isSqlWindowPartial } from './storage/sql/sqlRuntimeWindow'
 import { selectSingleFile } from './util'
 import { createBlankChar } from './characters'
 import { CharXWriter } from './process/processzip'
@@ -414,7 +414,12 @@ async function exportCharacterPackageInner(
         // Hydrate placeholder chats from server before any scan/export
         for (let i = 0; i < char.chats.length; i++) {
             const chat = char.chats[i]
-            if ((chat._placeholder || (chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false) && chat.id) {
+            // A trimmed chat still reports messagesLoaded true, so without this
+            // it skipped the fetch and hit the refusal below -- which asked the
+            // user to load earlier messages, the action that trims further.
+            const partial = chatNeedsServerFetch(chat)
+                || (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false
+            if (partial && chat.id) {
                 const full = await fetchChatFromServer(char.chaId, i, chat.id)
                 if (full) {
                     char.chats[i] = full as Chat
@@ -424,7 +429,7 @@ async function exportCharacterPackageInner(
                 }
             }
             const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean }
-            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || hasOlderSqlMessages(hydrated)) {
+            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || isSqlWindowPartial(hydrated)) {
                 alertError(`Load earlier messages before package export: "${hydrated.name}".`)
                 return
             }

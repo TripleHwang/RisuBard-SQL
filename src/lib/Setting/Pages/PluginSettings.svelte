@@ -7,6 +7,7 @@
 
     import { DBState, hotReloading } from "src/ts/stores.svelte";
     import { checkPluginUpdate, createBlankPlugin, importPlugin, loadPlugins, updatePlugin } from "src/ts/plugins/plugins.svelte";
+    import { describePluginUpdateFailure, isPluginUpdateRefusal } from "src/ts/plugins/pluginUpdate";
     import { requestImmediateSave } from "src/ts/globalApi.svelte";
     import { resetPluginPermission } from "src/ts/plugins/apiV3/v3.svelte";
     import TextInput from "src/lib/UI/GUI/TextInput.svelte";
@@ -33,8 +34,13 @@
         if (updatingPlugins.includes(plugin.name)) return
         updatingPlugins = [...updatingPlugins, plugin.name]
         try {
-            if (await updatePlugin(plugin)) notifySuccess(language.pluginUpdateSuccess)
-            else notifyError(language.pluginUpdateFailed)
+            // The update used to answer with a bare boolean, so "the download
+            // 404'd", "the file no longer parses" and "it was already current"
+            // were one indistinguishable failure toast. The result now names
+            // which one happened; say it.
+            const result = await updatePlugin(plugin)
+            if (isPluginUpdateRefusal(result)) notifyError(`${language.pluginUpdateFailed}: ${describePluginUpdateFailure(result.failure)}`)
+            else notifySuccess(language.pluginUpdateSuccess)
         } finally {
             updatingPlugins = updatingPlugins.filter((name) => name !== plugin.name)
         }
@@ -215,6 +221,12 @@
                         let plugins = DBState.db.plugins ?? [];
                         plugins.splice(i, 1);
                         DBState.db.plugins = plugins;
+                        // Permission grants are keyed by plugin name and outlive
+                        // the plugin unless they are cleared here. A later plugin
+                        // installed under the same name would inherit whatever
+                        // this one was granted -- full database access included --
+                        // without ever showing the user a consent dialog.
+                        await resetPluginPermission(plugin.name)
                         loadPlugins()
                         void requestImmediateSave()
                     }

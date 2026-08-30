@@ -23,7 +23,7 @@ vi.mock('../process/generationState', () => ({ isChatGenerating: (id: string) =>
 vi.mock('./hydrationState', () => ({ beginHydration: () => undefined, beginHydrationApply: () => undefined, endHydration: () => undefined, endHydrationApply: () => undefined, isHydrationActive: (key: string) => runtimeState.hydrating.has(key) }))
 vi.mock('../stores.svelte', () => ({ selectedCharID: { subscribe: (run: (value: number) => void) => { runtimeState.listeners.push(run); run(runtimeState.selectedIndex); return () => undefined } } }))
 
-const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage, touchHydratedChat, evictHydratedChats, resetChatHydrationCacheForTesting, isChatHistoryIncomplete } = await import('./chatStorage')
+const { chatToStub, stubToPlaceholder, convertStubsToPlaceholders, classifyChat, ChatHydrationCache, hydrateRecentChatPage, touchHydratedChat, evictHydratedChats, resetChatHydrationCacheForTesting, chatNeedsServerFetch, isChatHistoryIncomplete } = await import('./chatStorage')
 const { getSqlWindow, setSqlWindow } = await import('./sql/sqlRuntimeWindow')
 type Chat = any
 type ChatStub = any
@@ -426,7 +426,7 @@ describe('runtime hydrated-chat eviction', () => {
             messagesFullyLoaded: false, note: `${id}-note`,
             localLore: [{ key: id }], modules: [`${id}-module`], customMetadata: { id }, ...extras,
         })
-        setSqlWindow(chat, { before: null, nextBefore: 0, total: 2, hasOlder: true, nextPosition: 2 })
+        setSqlWindow(chat, { before: null, nextBefore: 0, total: 2, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 2 })
         return chat
     }
     const character = (id: string, chat: any) => ({ chaId: id, chatPage: 0, chats: [chat] })
@@ -580,7 +580,23 @@ describe('isChatHistoryIncomplete', () => {
         const chat = blankChat({
             id: 'chat-1', message: [{ chatId: 'm-400' }], messagesLoaded: true, messagesFullyLoaded: true,
         })
-        setSqlWindow(chat, { before: null, nextBefore: 360, total: 400, hasOlder: true, nextPosition: 400 })
+        setSqlWindow(chat, { before: null, nextBefore: 360, total: 400, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 400 })
+
+        expect(isChatHistoryIncomplete(chat)).toBe(true)
+    })
+
+    test('reports a chat whose newest messages were released as incomplete', () => {
+        // The mirror of the case above, and the one residency trimming creates:
+        // the user paged back to the start of the history, so nothing is older,
+        // and the trimmer released the newest end to bound memory. The flags say
+        // "loaded" here on purpose -- this pins the window predicate itself
+        // rather than passing on `messagesFullyLoaded === false`, which trimming
+        // also clears. A reader still asking `hasOlderSqlMessages` answers
+        // "complete" over a slice that is missing the end of the conversation.
+        const chat = blankChat({
+            id: 'chat-1', message: [{ chatId: 'm-100' }], messagesLoaded: true, messagesFullyLoaded: true,
+        })
+        setSqlWindow(chat, { before: null, nextBefore: null, total: 400, hasOlder: false, hasNewer: true, nextAfter: 279, nextPosition: 400 })
 
         expect(isChatHistoryIncomplete(chat)).toBe(true)
     })
@@ -589,7 +605,7 @@ describe('isChatHistoryIncomplete', () => {
         const chat = blankChat({
             id: 'chat-1', message: [{ chatId: 'm-1' }], messagesLoaded: true, messagesFullyLoaded: true,
         })
-        setSqlWindow(chat, { before: null, nextBefore: null, total: 1, hasOlder: false, nextPosition: 1 })
+        setSqlWindow(chat, { before: null, nextBefore: null, total: 1, hasOlder: false, hasNewer: false, nextAfter: null, nextPosition: 1 })
 
         expect(isChatHistoryIncomplete(chat)).toBe(false)
     })
@@ -601,5 +617,31 @@ describe('isChatHistoryIncomplete', () => {
         expect(isChatHistoryIncomplete(blankChat({ _placeholder: true }))).toBe(true)
         expect(isChatHistoryIncomplete(blankChat({ messagesLoaded: false }))).toBe(true)
         expect(isChatHistoryIncomplete(blankChat({ messagesFullyLoaded: false }))).toBe(true)
+    })
+})
+
+describe('deciding whether a chat must be fetched before export or backup', () => {
+    // Both paths work on a structuredClone of the database, where the
+    // symbol-keyed hydration window does not survive -- so these flags are the
+    // only signal left. A trimmed chat keeps messagesLoaded true, which is why
+    // the earlier condition skipped the fetch and then refused the backup with
+    // "load earlier messages", the one action that trims further.
+    test('fetches a chat residency trimming has shortened', () => {
+        expect(chatNeedsServerFetch({
+            id: 'chat-1', message: [], messagesLoaded: true, messagesFullyLoaded: false,
+        } as any)).toBe(true)
+    })
+
+    test('fetches a placeholder and an unloaded chat', () => {
+        expect(chatNeedsServerFetch({ id: 'chat-1', _placeholder: true } as any)).toBe(true)
+        expect(chatNeedsServerFetch({ id: 'chat-1', messagesLoaded: false } as any)).toBe(true)
+    })
+
+    test('leaves a whole chat alone', () => {
+        expect(chatNeedsServerFetch({
+            id: 'chat-1', message: [], messagesLoaded: true, messagesFullyLoaded: true,
+        } as any)).toBe(false)
+        // A chat that never went through SQL hydration carries neither flag.
+        expect(chatNeedsServerFetch({ id: 'chat-1', message: [] } as any)).toBe(false)
     })
 })

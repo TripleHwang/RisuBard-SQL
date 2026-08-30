@@ -53,6 +53,22 @@ export function markSqlMessageDirty(chatId: string, messageId: string, immediate
     scheduleDirtyFlush(immediate)
 }
 
+/**
+ * True while a message carries an unflushed local change.
+ *
+ * Residency trimming consults this before releasing a message from memory.
+ * `buildSqlDirtyCommit` resolves each dirty id by looking it up in the live
+ * `chat.message` array and skips ids it cannot find, so releasing a dirty row
+ * turns a pending edit into one that is never written -- silent loss, not a
+ * deferral. Unknown is the safe answer here, and an id with no mark is known
+ * clean rather than unknown: marks survive until the commit carrying them is
+ * acknowledged.
+ */
+export function isSqlMessageDirty(chatId: string, messageId: string): boolean {
+    if (!chatId || !messageId) return false
+    return registry.hasMessage(chatId, messageId)
+}
+
 export function markSqlMessageDeleted(chatId: string, messageId: string): void {
     if (!chatId || !messageId || isChatHydrationActive(chatId)) return
     registry.markMessageDeleted(chatId, messageId)

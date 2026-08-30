@@ -59,6 +59,20 @@ export class DirtyRegistry {
         this.markNested(this.messages, chatId, messageId)
     }
 
+    /**
+     * True while this message still has an unacknowledged local change.
+     *
+     * Marks are only cleared by `acknowledge`, and only for the exact
+     * generation that was committed, so this stays true across an in-flight
+     * flush and across a failed one. Residency trimming asks before releasing a
+     * message: the commit builder finds rows by looking them up in
+     * `chat.message`, so a message spliced out while still dirty is not
+     * "deferred", it is a user edit that silently never reaches storage.
+     */
+    hasMessage(chatId: string, messageId: string): boolean {
+        return this.messages.get(chatId)?.has(messageId) === true
+    }
+
     markMessageManifest(chatId: string): void {
         this.messageManifestChatIds.set(chatId, this.nextGeneration())
     }

@@ -19,7 +19,7 @@ import { setSqlWindow, type SqlHydrationWindow } from "../storage/sql/sqlRuntime
  */
 
 const partialWindow: SqlHydrationWindow = {
-  before: null, nextBefore: 360, total: 400, hasOlder: true, nextPosition: 400,
+  before: null, nextBefore: 360, total: 400, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 400,
 };
 
 describe("chats offered to plugins", () => {
@@ -36,6 +36,25 @@ describe("chats offered to plugins", () => {
 
     setSqlWindow(resident, { ...partialWindow, hasOlder: false });
     expect(isPluginChatComplete(resident)).toBe(true);
+  });
+
+  test("a chat whose newest messages were released is refused too", () => {
+    // Residency trimming releases the newest end once the user has paged far
+    // enough back, and by then nothing is older. The flags are left saying
+    // "loaded" on purpose: this pins the window predicate rather than passing
+    // on `messagesFullyLoaded === false`, which trimming also clears. A plugin
+    // handed this slice and writing it back replaces the persisted history with
+    // a window missing the end of the conversation.
+    const trimmed = $state({
+      id: "chat-1", message: [{ chatId: "m-100" }],
+      messagesLoaded: true, messagesFullyLoaded: true,
+    });
+    setSqlWindow(trimmed, {
+      before: null, nextBefore: null, total: 400, hasOlder: false, hasNewer: true,
+      nextAfter: 279, nextPosition: 400,
+    });
+
+    expect(isPluginChatComplete(trimmed)).toBe(false);
   });
 
   test("the checks for a chat that was never hydrated still stand on their own", () => {

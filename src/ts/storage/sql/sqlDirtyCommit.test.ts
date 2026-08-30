@@ -93,7 +93,7 @@ describe("row-scoped SQL dirty commits", () => {
     const chat = db.characters[0].chats[0];
     chat.message = chat.message.slice(3);
     chat.messagesFullyLoaded = false;
-    setSqlWindow(chat, { before: null, nextBefore: 4, total: 5, hasOlder: true, nextPosition: 9 });
+    setSqlWindow(chat, { before: null, nextBefore: 4, total: 5, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 9 });
     setSqlPosition(chat.message[0], 4);
     setSqlPosition(chat.message[1], 8);
     chat.message.push({ chatId: "m-new", role: "char", data: "new" });
@@ -214,6 +214,27 @@ describe("row-scoped SQL dirty commits", () => {
     expect(buildSqlDirtyCommit(db, dirty, 7).presets).toEqual({
       upserts: [], deletes: ["preset-b"], activeId: "preset-a",
     });
+  });
+
+  it("never emits a deletion manifest after residency trimming released the newest end", () => {
+    // What trimming actually leaves behind: nothing older to load, the newest
+    // end released. `messagesFullyLoaded` is left true on purpose so this pins
+    // the window predicate rather than passing on the flag trimming also
+    // clears. A gate still asking `hasOlderSqlMessages` rewrites the manifest
+    // from the resident slice, and every released message becomes a DELETE
+    // against a row still on disk.
+    const db = fixtureDatabaseWithMessages(5);
+    const chat = db.characters[0].chats[0];
+    chat.message = chat.message.slice(0, 2);
+    chat.messagesLoaded = true;
+    chat.messagesFullyLoaded = true;
+    setSqlWindow(chat, {
+      before: null, nextBefore: null, total: 5, hasOlder: false, hasNewer: true, nextAfter: 1, nextPosition: 5,
+    });
+    const dirty = cleanDirty();
+    dirty.messageManifestChatIds = ["chat-a"];
+
+    expect(buildSqlDirtyCommit(db, dirty, 7).messageManifests).toEqual([]);
   });
 
   it("never emits a deletion manifest for an incomplete message window", () => {

@@ -58,6 +58,8 @@
   import DevTool from "./DevTool.svelte";
     import QuickSettingsGui from "../Others/QuickSettingsGUI.svelte";
   import PluginDefinedIcon from "../Others/PluginDefinedIcon.svelte";
+  import LazyState from "../UI/GUI/LazyState.svelte";
+  import { createCharacterOpener } from "src/ts/characterOpen.svelte";
   import CharacterVaultDialog from "./CharacterVaultDialog.svelte";
   import ShButton from "../UI/GUI/ShButton.svelte";
   import ShDialog from "../UI/GUI/ShDialog.svelte";
@@ -108,8 +110,26 @@
     CharEmotion.set({});
   }
 
+  /**
+   * Opening a character is a load, and it happens here rather than behind the
+   * app-wide overlay `changeChar` used to raise.
+   *
+   * That overlay is `fixed inset-0 z-[60]`: for the length of one character's
+   * fetch, nothing else in the app could be clicked -- not the other
+   * characters, not settings, not the chat already on screen. The requirement
+   * is the opposite of that. So the record and its newest message page are
+   * loaded first, with the progress shown on the row the user pressed and the
+   * rest of the sidebar left alone, and `changeChar` is called afterwards with
+   * everything already resident, which is the path where it raises nothing.
+   *
+   * A failure stops here. Opening a character whose record could not be read
+   * would show its missing description and its empty chat as though that were
+   * the character -- and every editor on that screen writes back.
+   */
+  const opener = createCharacterOpener((index) => { void changeChar(index, { reseter }) })
+
   function selectCharacter(index: number) {
-    void changeChar(index, { reseter });
+    opener.open(index)
   }
 
   type sortTypeNormal = { type:'normal',id:string,img: string, index: number, name:string, isNew:boolean }
@@ -734,6 +754,46 @@
     </button>
     <span data-character-vault-label class="text-[10px] font-medium leading-none text-textcolor2">저장소</span>
   </div>
+<!-- Per-row progress: absolute inside the row's own `relative` box, never
+     `fixed`, and pointer-events-none so the rest of the sidebar -- including
+     this row -- stays clickable while one character loads. -->
+{#snippet openingBadge(chaId: string | undefined)}
+  {#if opener.isOpening(chaId)}
+    <span
+      data-character-open-busy={chaId}
+      role="status"
+      aria-live="polite"
+      aria-label={language.lazyLoad.loading}
+      class="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-md bg-overlay/40 text-media-text"
+    >
+      <svg class="animate-spin" style="will-change: transform;" width="20" height="20" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+    </span>
+  {/if}
+{/snippet}
+
+  <!-- A character that could not be loaded says so, here, next to the list it
+       was clicked in. Nothing above or below this is blocked while it shows,
+       and the retry re-runs the same open. Silence would read as an ignored
+       click, which is how the user concludes the character is broken. -->
+  <LazyState resource={opener.resource} inline>
+    {#snippet loading()}{/snippet}
+    {#snippet failed()}
+      <div role="alert" class="mx-2 my-1 flex w-[calc(100%-1rem)] flex-col gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-[11px] leading-tight text-danger">
+        <span class="font-medium">{language.lazyLoad.characterFailed}{opener.openingName ? `: ${opener.openingName}` : ''}</span>
+        {#if opener.resource.errorMessage}
+          <span class="break-all opacity-70">{opener.resource.errorMessage}</span>
+        {/if}
+        <button
+          type="button"
+          class="self-start rounded border border-danger-border px-1.5 py-0.5 transition-colors hover:bg-danger/15"
+          onclick={() => opener.retryCurrent()}
+        >{language.lazyLoad.retry}</button>
+      </div>
+    {/snippet}
+  </LazyState>
   <div data-quick-inventory class="character-list flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto pr-0" class:max-xs:hidden={$leftBarCollapsed} use:touchDragContainer>
     <div class="h-4 min-h-4 w-14" role="listitem" data-spacer-index="0" ondragover={(e) => {
       if(!getCurrentSidebarDrag(e)){ return }
@@ -800,6 +860,7 @@
               name={char.name}
               chaId={DBState.db.characters[char.index]?.chaId}
             />
+            {@render openingBadge(char.id)}
             {#if char.isNew}
               <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-media-text" role="img" aria-label="새 캐릭터" title="새 캐릭터">
                 <SolarBoldIcon name="star-shine" size={20} />
@@ -978,6 +1039,7 @@
                   name={char2.name}
                   chaId={DBState.db.characters[char2.index]?.chaId}
                 />
+                {@render openingBadge(char2.id)}
                 {#if char2.isNew}
                   <span data-new-character-badge class="pointer-events-none absolute bottom-0 right-0 z-20 text-media-text" role="img" aria-label="새 캐릭터" title="새 캐릭터">
                     <SolarBoldIcon name="star-shine" size={20} />

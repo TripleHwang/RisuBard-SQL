@@ -23,7 +23,7 @@ function reactiveChat() {
 }
 
 const window: SqlHydrationWindow = {
-  before: null, nextBefore: 2, total: 3, hasOlder: true, nextPosition: 4,
+  before: null, nextBefore: 2, total: 3, hasOlder: true, hasNewer: false, nextAfter: null, nextPosition: 4,
 };
 
 describe("SQL runtime hydration marks on a $state object", () => {

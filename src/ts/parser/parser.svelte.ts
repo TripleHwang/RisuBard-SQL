@@ -3,6 +3,9 @@ import markdownit from 'markdown-it'
 import { appVer, getCurrentCharacter, getDatabase, type Database, type character, type customscript, type triggerscript } from '../storage/database.svelte';
 import { DBState, selIdState } from '../stores.svelte';
 import { aiWatermarkingLawApplies, getFileSrc } from '../globalApi.svelte';
+// Imported from the cache module rather than from globalApi so this stays
+// resolvable in the suites that replace globalApi with a two-export stub.
+import { subscribeAssetUrlEviction } from '../assetUrlCache';
 import { isNodeServer } from "src/ts/platform"
 import { getChatVar, setChatVar, getGlobalChatVar } from './chatVar.svelte';
 import { processScriptFull } from '../process/scripts';
@@ -440,6 +443,15 @@ function getEmoSrc(emoArr: string[][], emoPaths: AssetPaths) {
 }
 
 const fileSrcCache = new Map<string, string>()
+
+// getFileSrc now hands out blob: URLs from a byte-bounded cache, and a blob URL
+// stops working once that cache revokes it. This second-level map outlives any
+// single render and would otherwise keep re-emitting a dead URL into freshly
+// built message HTML, so it has to drop its copy the moment the entry is
+// evicted; the next render then re-resolves and gets a live URL.
+subscribeAssetUrlEviction((loc) => {
+    fileSrcCache.delete(loc)
+})
 
 async function getFileSrcCached(path:string){
     let cached = fileSrcCache.get(path)

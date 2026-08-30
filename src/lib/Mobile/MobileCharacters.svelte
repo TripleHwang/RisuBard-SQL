@@ -8,6 +8,9 @@
     import { isNodeServer } from "src/ts/platform";
     import { getAssetUrl } from "src/ts/media/assetUrl";
     import VirtualCharacterList from "../UI/VirtualCharacterList.svelte";
+    import LazyState from "../UI/GUI/LazyState.svelte";
+    import { createCharacterOpener } from "src/ts/characterOpen.svelte";
+    import { language } from "src/lang";
 
     interface Props {
         search: string;
@@ -47,15 +50,42 @@
     function fullSource(image: string) {
         return getAssetUrl(image, { variant: 'full', node: isNodeServer });
     }
+
+    /**
+     * The list closes onto the character only once that character is really
+     * loaded, and the progress and any failure stay in this list. The old path
+     * called `changeChar` straight from the row, which raised the app-wide
+     * `fixed inset-0` overlay and then closed the list whether or not the
+     * character had been read.
+     */
+    const opener = createCharacterOpener((index) => {
+        void changeChar(index)
+        endGrid()
+    })
 </script>
 <div class="flex flex-col items-center w-full h-full">
+    <LazyState resource={opener.resource}>
+        {#snippet loading()}
+            <div role="status" aria-live="polite" class="w-full px-2 py-1 text-sm text-textcolor2">
+                {language.lazyLoad.loading}{opener.openingName ? ` · ${opener.openingName}` : ''}
+            </div>
+        {/snippet}
+        {#snippet failed()}
+            <div role="alert" class="m-2 flex w-full flex-col gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-sm text-danger">
+                <span class="font-medium">{language.lazyLoad.characterFailed}{opener.openingName ? `: ${opener.openingName}` : ''}</span>
+                {#if opener.resource.errorMessage}
+                    <span class="break-all text-xs opacity-70">{opener.resource.errorMessage}</span>
+                {/if}
+                <button type="button" class="self-start rounded border border-danger-border px-2 py-0.5 text-xs transition-colors hover:bg-danger/15" onclick={() => opener.retryCurrent()}>
+                    {language.lazyLoad.retry}
+                </button>
+            </div>
+        {/snippet}
+    </LazyState>
     <VirtualCharacterList count={characters.length} itemsSignature={characters.map((char) => char.chaId).join('|')} rowHeight={68} overscan={8} getKey={(index) => characters[index].chaId}>
         {#snippet children(index, focusedIndex, chaId)}
             {@const char = characters[index]}
-            <button id={`virtual-character-${chaId}`} role="option" aria-selected={focusedIndex === index} data-virtual-index={index} tabindex={focusedIndex === index ? 0 : -1} class="flex p-2 border-t-darkborderc gap-2 w-full h-[68px]" class:border-t={index !== 0} onclick={() => {
-                void changeChar(char.i)
-                endGrid()
-            }}>
+            <button id={`virtual-character-${chaId}`} role="option" aria-selected={focusedIndex === index} data-virtual-index={index} tabindex={focusedIndex === index ? 0 : -1} class="flex p-2 border-t-darkborderc gap-2 w-full h-[68px]" class:border-t={index !== 0} onclick={() => opener.open(char.i)}>
                 {#if thumbSource(char.image)}
                     <img class="w-12 h-12 rounded object-cover" src={thumbSource(char.image)} alt="" loading="lazy" decoding="async" onerror={(event) => {
                         const image = event.currentTarget as HTMLImageElement

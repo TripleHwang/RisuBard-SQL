@@ -1616,6 +1616,20 @@ export const languageEnglish = {
     translationCacheNextPage: "Next page",
     translationCachePage: "Page {0} / {1}",
     loading: "Loading",
+    // Per-surface lazy loading. A failed load is a state a component shows in
+    // its own subtree -- never a global overlay, and never an empty list, which
+    // would claim "there are none of these" about data nobody managed to read.
+    lazyLoad: {
+        loading: "Loading…",
+        failedTitle: "Could not load this",
+        failedHint: "This is not an empty result. Nothing could be read, so what is here may be incomplete.",
+        retry: "Try again",
+        characterFailed: "Could not open this character",
+        chatFailed: "Could not open this chat",
+        personasFailed: "Could not load this character's personas",
+        olderMessagesFailed: "Could not load earlier messages",
+        newestMessagesFailed: "Could not return to the latest messages",
+    },
     autoTranslateCachedOnly: "Auto-translate Cached Messages Only",
     notification: "Notification",
     permissionDenied: "Permission Denied by Your Browser or OS",

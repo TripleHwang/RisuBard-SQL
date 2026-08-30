@@ -13,11 +13,12 @@ import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
 import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
 import { isHydrating, isChatHistoryIncomplete, saveChatToServer, ensureChatHydrated, touchHydratedChat, chatToStub, classifyChat } from "./storage/chatStorage";
-import { hasOlderSqlMessages } from "./storage/sql/sqlRuntimeWindow";
+import { isSqlWindowPartial } from "./storage/sql/sqlRuntimeWindow";
 import { getActiveSqlStorage } from "./storage/sql/sqlBootstrap";
 import { AutoStorage } from "./storage/autoStorage";
 import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
-import { supportsPatchSync } from "./platform";
+import { isMobile, supportsPatchSync } from "./platform";
+import { createAssetUrlCache } from "./assetUrlCache";
 import { updateAnimationSpeed } from "./gui/animation";
 import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { language } from "src/lang";
@@ -65,11 +66,48 @@ export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer |
     }, 10000)
 }
 
-let fileCache: {
-    origin: string[], res: (Uint8Array | 'loading' | 'done')[]
-} = {
-    origin: [],
-    res: []
+/**
+ * Asset URL budget. Bounds the blob bytes the browser holds on our behalf for
+ * assets resolved through getFileSrc.
+ *
+ * Only the pure web build ever reaches this cache: under __NODE__ getFileSrc
+ * returns an /api/asset/ URL and the server's immutable cache headers make the
+ * browser's own HTTP cache the storage. Phones are the reason for the numbers --
+ * blob backing store lives outside the JS heap in Safari, so what is bounded
+ * here is the memory that gets a tab killed on iOS.
+ */
+const ASSET_CACHE_MAX_BYTES = isMobile ? 64 * 1024 * 1024 : 256 * 1024 * 1024
+/**
+ * How long an object URL stays alive after the last time it was handed out. An
+ * <img> that was just given a URL still has to load from it; an <img> that has
+ * already loaded is unaffected by a revoke. A minute covers the first without
+ * meaningfully delaying the second.
+ */
+const ASSET_CACHE_GRACE_MS = 60_000
+
+const assetUrlCache = createAssetUrlCache({
+    maxBytes: ASSET_CACHE_MAX_BYTES,
+    graceMs: ASSET_CACHE_GRACE_MS,
+    load: async (loc) => (await forageStorage.getItem(loc)) as unknown as Uint8Array,
+    onError: (loc, error) => {
+        console.error(`[assetUrlCache] failed to resolve ${loc}`, error)
+    },
+    useServiceWorker: () => usingSw,
+})
+
+/** Drops one asset, e.g. after its bytes were overwritten in place. */
+export function invalidateAssetUrl(loc: string) {
+    assetUrlCache.invalidate(loc)
+}
+
+/** Drops every cached asset URL, e.g. after the database is replaced. */
+export function clearAssetUrlCache() {
+    assetUrlCache.clear()
+}
+
+/** Byte accounting for the asset URL cache. Exposed for diagnostics. */
+export function getAssetUrlCacheStats() {
+    return assetUrlCache.stats()
 }
 
 let pathCache: { [key: string]: string } = {}
@@ -110,72 +148,12 @@ export async function getFileSrc(loc: string) {
     // NodeOnly: return a direct server URL instead of fetching + base64-encoding.
     // The browser will cache the response using HTTP Cache-Control headers,
     // so repeated renders (sidebar, chat) cost zero network after first load.
+    // This path never touches the asset URL cache below -- it is the pure web
+    // build that does.
     if ((globalThis as any).__NODE__) {
         return `/api/asset/${Buffer.from(loc, 'utf-8').toString('hex')}`
     }
-    try {
-        if (usingSw) {
-            const encoded = Buffer.from(loc, 'utf-8').toString('hex')
-            let ind = fileCache.origin.indexOf(loc)
-            if (ind === -1) {
-                ind = fileCache.origin.length
-                fileCache.origin.push(loc)
-                fileCache.res.push('loading')
-                try {
-                    const hasCache: boolean = (await (await fetch("/sw/check/" + encoded)).json()).able
-                    if (hasCache) {
-                        fileCache.res[ind] = 'done'
-                        return "/sw/img/" + encoded
-                    }
-                    else {
-                        const f: Uint8Array = await forageStorage.getItem(loc) as unknown as Uint8Array
-                        await fetch("/sw/register/" + encoded, {
-                            method: "POST",
-                            body: f as any
-                        })
-                        fileCache.res[ind] = 'done'
-                        await sleep(10)
-                    }
-                    return "/sw/img/" + encoded
-                } catch (error) {
-
-                }
-            }
-            else {
-                const f = fileCache.res[ind]
-                if (f === 'loading') {
-                    while (fileCache.res[ind] === 'loading') {
-                        await sleep(10)
-                    }
-                }
-                return "/sw/img/" + encoded
-            }
-        }
-        else {
-            let ind = fileCache.origin.indexOf(loc)
-            if (ind === -1) {
-                ind = fileCache.origin.length
-                fileCache.origin.push(loc)
-                fileCache.res.push('loading')
-                const f: Uint8Array = await forageStorage.getItem(loc) as unknown as Uint8Array
-                fileCache.res[ind] = f
-                return `data:image/png;base64,${Buffer.from(f).toString('base64')}`
-            }
-            else {
-                const f = fileCache.res[ind]
-                if (f === 'loading') {
-                    while (fileCache.res[ind] === 'loading') {
-                        await sleep(10)
-                    }
-                    return `data:image/png;base64,${Buffer.from(fileCache.res[ind]).toString('base64')}`
-                }
-                return `data:image/png;base64,${Buffer.from(f).toString('base64')}`
-            }
-        }
-    } catch (error) {
-        console.error(error)
-        return ''
-    }
+    return await assetUrlCache.getFileSrc(loc)
 }
 
 /**
@@ -214,6 +192,10 @@ export async function saveAsset(data: Uint8Array, customId: string = '', fileNam
     }
     let form = `assets/${id}.${fileExtension}`
     const replacer = await forageStorage.setItem(form, data)
+    // With a caller-supplied id the path is not content-derived, so this write
+    // can put different bytes behind a path the cache already resolved. Drop it
+    // so the next read rebuilds rather than serving the previous image.
+    assetUrlCache.invalidate(form)
     if (replacer) {
         return replacer
     }
@@ -879,7 +861,7 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             const partialSqlWindow = getActiveSqlStorage()?.backendKind === 'server-sql' &&
                 ((chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false ||
                 (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false ||
-                hasOlderSqlMessages(chat))
+                isSqlWindowPartial(chat))
             if (partialSqlWindow) continue
             try {
                 await saveChatToServer(chaId, chatIndex, chatId, chat)
@@ -2708,7 +2690,22 @@ export function foldChatToMessage(targetMessageIdOrIndex: string | number) {
     }
 }
 
-export function changeChatTo(IdOrIndex: string | number) {
+export function changeChatTo(IdOrIndex: string | number, arg: {
+    /**
+     * The caller has already awaited this chat's hydration and rendered its own
+     * progress in its own subtree -- `createChatOpener` is what does that.
+     *
+     * Without it this function loads the chat itself behind
+     * `loadingOverlayStore`, which `LoadingOverlay.svelte` renders as
+     * `fixed inset-0 z-[60]` across the whole app: for the length of one chat's
+     * fetch nothing else is clickable. The user's requirement is that loading
+     * one thing does not make the rest unusable, so a surface that can show its
+     * own progress opts out of the blocker here.
+     *
+     * The claim is checked, not trusted. See below.
+     */
+    alreadyLoaded?: boolean,
+} = {}) {
     let index = -1
     if (typeof IdOrIndex === 'number') {
         index = IdOrIndex
@@ -2730,7 +2727,21 @@ export function changeChatTo(IdOrIndex: string | number) {
     char.chatPage = index
     const newChat = char.chats[index]
     if(newChat){
-        if(isChatHistoryIncomplete(newChat)){
+        // `alreadyLoaded` is a claim about this chat, so check it against this
+        // chat rather than believing it. A caller that says "loaded" about a
+        // slot whose messages are still not resident is wrong, and the harm of
+        // being wrong is one-sided: switching anyway renders a conversation
+        // with no messages, which looks exactly like a chat that only ever had
+        // a greeting. So say so and load it here after all.
+        const stillUnread = newChat._placeholder === true ||
+            (newChat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false
+        if(arg.alreadyLoaded && stillUnread){
+            console.error(
+                `[changeChatTo] chat ${newChat.id} was switched to as pre-loaded, but its messages are `
+                + 'not resident. Loading it here instead of showing an empty conversation.',
+            )
+        }
+        if((!arg.alreadyLoaded || stillUnread) && isChatHistoryIncomplete(newChat)){
             const capturedIndex = index
             let cancelled = false
             loadingOverlayStore.set({ active: true, text: language.loading ?? '', onCancel: () => {
@@ -2738,11 +2749,22 @@ export function changeChatTo(IdOrIndex: string | number) {
                 chatDeselected.set(true)
                 loadingOverlayStore.set({ active: false, text: '', onCancel: null })
             }})
+            // Both branches below have to speak. The overlay closes either way,
+            // so a chat whose history never arrived looks exactly like a chat
+            // that only ever had a greeting -- that is the "chat failed to load
+            // and nothing said why" report. A console line alone does not reach
+            // the person looking at the empty screen.
             void ensureChatHydrated(char.chats, capturedIndex, char.chaId).then((hydrated) => {
                 if(cancelled) return
-                if(hydrated && char.chatPage === capturedIndex) loadTogglesFromChat(hydrated)
+                if(hydrated){
+                    if(char.chatPage === capturedIndex) loadTogglesFromChat(hydrated)
+                    return
+                }
+                console.error(`[changeChatTo] chat ${newChat.id} did not hydrate; its history is on disk but not in memory.`)
+                alertError("This chat's history could not be loaded. What you see is not the whole conversation, so do not delete or regenerate from here.")
             }).catch((e) => {
                 console.error('[changeChatTo] hydration failed:', e)
+                if(!cancelled) alertError(e)
             }).finally(() => {
                 if(!cancelled) loadingOverlayStore.set({ active: false, text: '', onCancel: null })
             })

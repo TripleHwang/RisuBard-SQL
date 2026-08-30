@@ -4,7 +4,7 @@ import type { DirtySnapshot } from "./dirtyRegistry";
 import {
   getSqlPosition,
   getSqlWindow,
-  hasOlderSqlMessages,
+  isSqlWindowPartial,
   setSqlPosition,
   setSqlWindow,
 } from "./sqlRuntimeWindow";
@@ -46,7 +46,7 @@ function findChat(database: Database, chatId: string): [character, Chat, number,
 function messageWindowIsIncomplete(chat: RuntimeChat): boolean {
   return chat.messagesLoaded === false ||
     chat.messagesFullyLoaded === false ||
-    hasOlderSqlMessages(chat);
+    isSqlWindowPartial(chat);
 }
 
 function canonicalMessagePosition(

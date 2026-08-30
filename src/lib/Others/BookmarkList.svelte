@@ -7,6 +7,7 @@
     import { createSimpleCharacter, bookmarkListOpen, DBState, selectedCharID, ScrollToMessageStore } from "src/ts/stores.svelte";
     import { language } from "src/lang";
     import { alertInput } from "src/ts/alert";
+    import { SvelteSet } from "svelte/reactivity";
 
     const close = () => $bookmarkListOpen = false;
     let chara = $derived(DBState.db.characters[$selectedCharID]);
@@ -50,7 +51,14 @@
         return messages;
     });
 
-    let expandedBookmarks = $state(new Set<string>());
+    // SvelteSet, not `$state(new Set())`: Svelte's proxy skips built-in
+    // collections, so a plain Set assigned to `$state` signals only when the
+    // *variable* is reassigned. `toggleExpandAll` mutates in place
+    // (`.clear()`), which signalled nothing -- it happened to look right only
+    // because `expandAll` was reassigned in the same handler. SvelteSet makes
+    // every mutation reactive, so the copy-on-write dance below is no longer
+    // needed either.
+    let expandedBookmarks = $state<Set<string>>(new SvelteSet());
     let expandAll = $state(false);
 
     onMount(() => {
@@ -67,19 +75,17 @@
 
     function toggleExpand(chatId: string) {
         if (expandAll) {
+            // Leaving "expand all" keeps every bookmark open except the one
+            // just clicked, so the click reads as a collapse of that row.
             expandAll = false;
-            const allIds = bookmarkedMessages.map(m => m.chatId);
-            const newSet = new Set(allIds);
-            newSet.delete(chatId);
-            expandedBookmarks = newSet;
-        } else {
-            const newSet = new Set(expandedBookmarks);
-            if (newSet.has(chatId)) {
-                newSet.delete(chatId);
-            } else {
-                newSet.add(chatId);
+            expandedBookmarks.clear();
+            for (const message of bookmarkedMessages) {
+                if (message.chatId !== chatId) expandedBookmarks.add(message.chatId);
             }
-            expandedBookmarks = newSet;
+        } else if (expandedBookmarks.has(chatId)) {
+            expandedBookmarks.delete(chatId);
+        } else {
+            expandedBookmarks.add(chatId);
         }
     }
 

@@ -2,8 +2,8 @@ import { alertError, alertStore, alertWait, alertMd, alertConfirm, alertConfirmM
 import { downloadFile, LocalWriter, forageStorage } from "../globalApi.svelte";
 import { encodeRisuSaveLegacy } from "../storage/risuSave";
 import { getDatabase, type Chat } from "../storage/database.svelte";
-import { fetchChatFromServer } from "../storage/chatStorage";
-import { hasOlderSqlMessages } from "../storage/sql/sqlRuntimeWindow";
+import { chatNeedsServerFetch, fetchChatFromServer } from "../storage/chatStorage";
+import { isSqlWindowPartial } from "../storage/sql/sqlRuntimeWindow";
 import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
 import { ensureRootKeyHydrated } from "../storage/sql/sqlRuntimeHydration";
 import { language } from "src/lang";
@@ -285,7 +285,18 @@ export async function SavePartialLocalBackup(){
     for (const char of dbCopy.characters) {
         for (let i = 0; i < char.chats.length; i++) {
             const chat = char.chats[i]
-            if ((chat._placeholder || (chat as Chat & { messagesLoaded?: boolean }).messagesLoaded === false) && chat.id) {
+            // Residency trimming leaves a long chat holding a slice with
+            // `messagesLoaded` still true, so the old condition skipped the
+            // fetch and fell into the refusal below -- which told the user to
+            // load earlier messages, the one action that makes the slice
+            // smaller. Any chat that is not its whole history is fetched.
+            //
+            // Read through the flag rather than the symbol-keyed window:
+            // `dbCopy` came from `structuredClone`, which does not carry symbol
+            // properties, so the window is not on these objects at all.
+            const partial = chatNeedsServerFetch(chat)
+                || (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false
+            if (partial && chat.id) {
                 const full = await fetchChatFromServer(char.chaId, i, chat.id)
                 if (full) {
                     char.chats[i] = full as Chat
@@ -294,7 +305,7 @@ export async function SavePartialLocalBackup(){
                 }
             }
             const hydrated = char.chats[i] as Chat & { messagesFullyLoaded?: boolean }
-            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || hasOlderSqlMessages(hydrated)) {
+            if (hydrated._placeholder || hydrated.messagesFullyLoaded === false || isSqlWindowPartial(hydrated)) {
                 throw new Error(`Load earlier messages before backup: "${hydrated.name}".`)
             }
         }

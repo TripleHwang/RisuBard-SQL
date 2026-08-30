@@ -3,7 +3,7 @@ import { getDatabase, type Chat, type ChatStub, type ChatOrStub, type character,
 import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 import { ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
-import { getSqlWindow, hasOlderSqlMessages, type SqlHydrationWindow } from "./sql/sqlRuntimeWindow"
+import { getSqlWindow, isSqlWindowPartial, type SqlHydrationWindow } from "./sql/sqlRuntimeWindow"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
 import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRuntime"
 import { isChatGenerating } from "../process/generationState"
@@ -394,7 +394,28 @@ export async function fetchChatFromServer(chaId: string, chatIndex: number, chat
     return storage.fetchChatContent(chaId, chatIndex, chatId)
 }
 
+/**
+ * Write a chat to the server's own copy, which is the authoritative history.
+ *
+ * Guarded at the choke point rather than at each caller. `chat.message` is a
+ * window: hydration makes the newest page resident and residency trimming can
+ * release either end, so an in-memory chat is routinely a slice of itself.
+ * Writing a slice here replaces the server's full history with it -- silently,
+ * because saveChatContent has no way to tell a shortened chat from an edited
+ * one. Callers that persist a chat as a side effect of something else (a
+ * find/replace across a conversation, a wiki reboot recording progress) have no
+ * reason to think about windowing, and two of them did not.
+ *
+ * Refusing is the safe direction: the caller's edit is still in memory and the
+ * server still holds the history it had.
+ */
 export async function saveChatToServer(chaId: string, chatIndex: number, chatId: string, chat: Chat): Promise<void> {
+    if (isChatHistoryIncomplete(chat)) {
+        throw new Error(
+            `Refusing to save chat ${chatId}: only part of its history is loaded, so writing it ` +
+            "would replace the server's full copy with a slice. Load the whole chat first.",
+        )
+    }
     const storage = forageStorage.realStorage
     await storage.saveChatContent(chaId, chatIndex, chatId, chat)
 }
@@ -416,7 +437,7 @@ export function isChatHistoryIncomplete(chat: Chat | null | undefined): boolean 
         messagesLoaded?: boolean
         messagesFullyLoaded?: boolean
     }
-    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || hasOlderSqlMessages(chat)
+    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || isSqlWindowPartial(chat)
 }
 
 /**
@@ -511,4 +532,26 @@ export async function ensureCurrentChatReady(
     chaId: string,
 ): Promise<Chat | null> {
     return ensureChatHydrated(chats, chatPage, chaId)
+}
+
+/**
+ * True when this chat object is not its own whole history, judged without the
+ * runtime window.
+ *
+ * Export and backup work on a `structuredClone` of the database, and
+ * structuredClone does not carry symbol-keyed properties -- so the hydration
+ * window is simply not on those objects and `isSqlWindowPartial` answers false
+ * for every one of them. Only the plain flags survive the clone, which makes
+ * them the only honest signal at that point.
+ *
+ * Used to decide whether to fetch the full chat from the server first. Getting
+ * it wrong in the false direction exports a slice as if it were the history;
+ * getting it wrong in the true direction costs one fetch.
+ */
+export function chatNeedsServerFetch(chat: Chat | null | undefined): boolean {
+    if (!chat) return false
+    const runtime = chat as Chat & { messagesLoaded?: boolean; messagesFullyLoaded?: boolean }
+    return chat._placeholder === true
+        || runtime.messagesLoaded === false
+        || runtime.messagesFullyLoaded === false
 }

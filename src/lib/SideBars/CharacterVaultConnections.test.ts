@@ -150,8 +150,18 @@ describe('Character Vault sidebar integration', () => {
         expect(characters).toContain('void changeChar(db.characters.length-1, { clearNewBadge: false })')
         expect(changeCharacter).toContain('if(arg.clearNewBadge !== false)')
         expect(changeCharacter).toContain('clearCharacterVaultNew(db, selectedCharacter.chaId)')
-        expect(source('src/lib/SideBars/Sidebar.svelte')).toContain('void changeChar(index, { reseter })')
-        expect(source('src/lib/Mobile/MobileCharacters.svelte')).toContain('void changeChar(char.i)')
+        // The two call-site assertions that used to live here -- that
+        // Sidebar.svelte literally contained `void changeChar(index, { reseter })`
+        // and MobileCharacters.svelte `void changeChar(char.i)` -- are gone on
+        // purpose. Both call sites moved into the per-surface character opener
+        // (`createCharacterOpener`), which loads the character before it
+        // navigates so that no app-wide overlay is raised. Nothing about the
+        // badge behaviour changed, but a string match on the old spelling broke
+        // anyway, which is all a string match can ever tell you. The behaviour
+        // is asserted against the mounted components instead, by clicking the
+        // real rows and reading the real database:
+        //   src/lib/SideBars/SidebarCharacterOpen.svelte.test.ts
+        //   src/lib/Mobile/MobileCharacterOpen.svelte.test.ts
     })
 
     test('exposes one shared modal state from the app stores', () => {

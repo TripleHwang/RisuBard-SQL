@@ -38,6 +38,8 @@
     import ShDropdownMenuItem from '../UI/GUI/ShDropdownMenuItem.svelte';
     import SidebarResizeHandle from './SidebarResizeHandle.svelte';
     import { normalizeChatListHeight } from 'src/ts/gui/sidebarLayout';
+    import { createChatOpener } from 'src/ts/chatOpen.svelte';
+    import LazyState from '../UI/GUI/LazyState.svelte';
 
     interface Props {
         chara: character;
@@ -45,6 +47,24 @@
 
     let { chara = $bindable() }: Props = $props();
     let editMode = $state(false)
+
+    /**
+     * Opening a chat is a load, and it happens in this list rather than behind
+     * the app-wide overlay `changeChatTo` used to raise.
+     *
+     * That overlay is `fixed inset-0 z-[60]`: while one chat's newest page was
+     * fetched, nothing else in the app could be clicked -- not the other chats
+     * in this very list, not the character list, not settings. The requirement
+     * is the opposite of that, so the page is loaded first with the progress
+     * shown on the row the user pressed, and `changeChatTo` is called afterwards
+     * with `alreadyLoaded`, which is the path where it raises nothing.
+     *
+     * A failure stops here. Switching to a chat whose history could not be read
+     * would render an empty conversation, which is exactly what a chat that only
+     * ever had a greeting looks like -- and the user's next move on that screen
+     * is to regenerate from it or delete it.
+     */
+    const chatOpener = createChatOpener((chatIndex) => changeChatTo(chatIndex, { alreadyLoaded: true }))
 
     // Safety net: chats whose folderId references a deleted folder would
     // otherwise be invisible (excluded from both the no-folder section and
@@ -351,6 +371,26 @@
         })
     })
 </script>
+<!-- Per-row progress. In normal flow inside the row, never `fixed`, and
+     pointer-events-none so the rest of the list -- including this row -- stays
+     clickable while one chat loads. -->
+{#snippet chatOpeningBadge(chatIdx: number)}
+    {#if chatOpener.isOpening(chatIdx)}
+        <span
+            data-chat-open-busy={chatIdx}
+            role="status"
+            aria-live="polite"
+            aria-label={language.lazyLoad.loading}
+            class="pointer-events-none ml-1 inline-flex shrink-0 items-center text-textcolor2"
+        >
+            <svg class="animate-spin" style="will-change: transform;" width="14" height="14" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+        </span>
+    {/if}
+{/snippet}
+
 {#if mergeOpen}
     <ChatMergeDialog open={mergeOpen} chats={chara.chats} loadChat={loadMergeChat}
         onMerge={mergeChats} onOpenChange={(open) => { mergeOpen = open }} />
@@ -501,10 +541,11 @@
                     {@const chatIdx = chara.chats.indexOf(chat)}
                     <button data-chat-list-row data-risu-chat-idx={chatIdx} onclick={() => {
                         if(!editMode){
-                            changeChatTo(chatIdx)
+                            chatOpener.open(chatIdx)
                         }
                     }} class="risu-chats flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"class:bg-selected={chatIdx === chara.chatPage && !$chatDeselected}>
                         <span class="truncate">{chat.name}</span>
+                        {@render chatOpeningBadge(chatIdx)}
                     </button>
                     {/each}
                     {/if}
@@ -518,16 +559,37 @@
             {#if chat.folderId == null || isOrphanFolder(chat.folderId)}
             <button data-chat-list-row data-risu-chat-idx={i} onclick={() => {
                 if(!editMode){
-                    changeChatTo(i)
+                    chatOpener.open(i)
                 }
             }}
             class="flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"
             class:bg-selected={i === chara.chatPage && !$chatDeselected}>
                 <span class="truncate">{chat.name}</span>
+                {@render chatOpeningBadge(i)}
             </button>
             {/if}
             {/each}
         </div>
+        <!-- A chat that could not be opened says so, here, next to the list it
+             was clicked in. Nothing above or below is blocked while it shows,
+             and the retry re-runs the same open. Silence reads as an ignored
+             click, which is how a user concludes the chat is gone. -->
+        <LazyState resource={chatOpener.resource} inline>
+            {#snippet loading()}{/snippet}
+            {#snippet failed()}
+                <div role="alert" data-chat-open-failed class="m-1 flex flex-col gap-1 rounded-lg border border-danger-border bg-danger-bg p-2 text-[11px] leading-tight text-danger">
+                    <span class="font-medium">{language.lazyLoad.chatFailed}{chatOpener.openingName ? `: ${chatOpener.openingName}` : ''}</span>
+                    {#if chatOpener.resource.errorMessage}
+                        <span class="break-all opacity-70">{chatOpener.resource.errorMessage}</span>
+                    {/if}
+                    <button
+                        type="button"
+                        class="self-start rounded border border-danger-border px-1.5 py-0.5 transition-colors hover:bg-danger/15"
+                        onclick={() => chatOpener.retryCurrent()}
+                    >{language.lazyLoad.retry}</button>
+                </div>
+            {/snippet}
+        </LazyState>
     </div>
     {/key}
     <SidebarResizeHandle axis="height" target={listEle} />
