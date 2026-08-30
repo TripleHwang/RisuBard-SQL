@@ -2796,8 +2796,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 if (realChatId) clearPendingSend(realChatId)
                 return false
             }
-            currentChat = normalizeChat(triggerResult.chat)
-            character.chats[chatIndex] = currentChat
+            character.chats[chatIndex] = normalizeChat(triggerResult.chat)
+            // Read the slot back. `runTrigger` returns a `safeStructuredClone`
+            // of the chat, so what is assigned here is a RAW object; `chats` is
+            // a `$state` array, so the slot now holds a PROXY of it and the two
+            // can never agree again. `currentChat` is handed to the
+            // `chatOutput` plugin hook below -- a plugin writing to a detached
+            // clone is a write that reaches neither the screen nor storage.
+            currentChat = character.chats[chatIndex]
         }
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true
@@ -2902,8 +2908,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
         const triggerResult = await runTrigger(currentChar, 'output', {chat:currentChat})
         if(triggerResult && triggerResult.chat){
-            currentChat = normalizeChat(triggerResult.chat)
-            DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
+            DBState.db.characters[selectedChar].chats[selectedChat] = normalizeChat(triggerResult.chat)
+            // Same as the streaming branch: the trigger's chat is a structured
+            // clone, so re-read the slot rather than keeping the raw object the
+            // `$state` array wrapped. Two lines above already does this for the
+            // non-trigger case; this branch did not.
+            currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
         }
         if(triggerResult && triggerResult.sendAIprompt){
             resendChat = true

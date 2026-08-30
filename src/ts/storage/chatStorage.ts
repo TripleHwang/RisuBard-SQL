@@ -514,7 +514,21 @@ export async function ensureChatHydrated(
 
             await touchHydratedChat(chaId, chats, currentIndex)
 
-            return full
+            // Read the slot back rather than returning `full`.
+            //
+            // `chats` is a `$state` array, so the assignment above stored a
+            // PROXY of `full`, and a Svelte 5 proxy never writes through to its
+            // target. Handing `full` back gives callers an object that is no
+            // longer the one in the database: writes to it are invisible to the
+            // UI, are never marked dirty, and are gone on reload.
+            //
+            // That is not hypothetical. `loadTogglesFromChat` mutates the chat
+            // it is given, and two call sites (characters.ts and
+            // globalApi.svelte.ts `changeChatTo`) pass this return value
+            // straight into it; `jobRecovery.ts` carries a comment naming the
+            // same failure from the field. Returning the live slot fixes every
+            // caller at once instead of asking each to remember.
+            return chats[currentIndex] ?? full
         } finally {
             endHydration(key)
             hydrationPromises.delete(key)

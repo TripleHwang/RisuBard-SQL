@@ -268,13 +268,20 @@ function validateOlderReversePage(
   /** Resident messages that carry a canonical position, i.e. that storage holds. */
   persistedResidentCount: number,
 ): void {
-  // `before` and `nextPosition` are the boundary contract: the page must start
-  // exactly where this window said it would. `total` is not part of it. It is a
-  // COUNT(*) snapshot taken when the window was built, and any message the user
-  // deletes afterwards legitimately moves it -- treating that as corruption made
-  // every older page throw for the rest of the session, permanently stranding
-  // history behind a single deletion. The fresh count is adopted below instead.
-  if (page.before !== window.nextBefore || page.nextPosition !== window.nextPosition) {
+  // `before` is the boundary contract: the page must start exactly where this
+  // window said it would.
+  //
+  // `nextPosition` and `total` are not part of it, for the same reason. Both are
+  // snapshots of the tail taken when the window was built, and the user moves
+  // the tail legitimately: a deletion changes `total`, and sending a message
+  // while this page is still in the air advances `nextPosition`, because the
+  // commit that allocates the appended row's position writes it back into the
+  // window. Reading either as corruption made the page throw -- so a reply sent
+  // during a scroll stranded the rest of the history behind it and put
+  // "could not load older messages" on screen for doing nothing wrong. The
+  // fresh values are adopted below: `total` from the page, `nextPosition` as
+  // the max of the two, since a local append is ahead of what the server saw.
+  if (page.before !== window.nextBefore) {
     throw new Error("Reverse page metadata changed")
   }
   if (!Array.isArray(page.positions) || page.positions.length !== page.messages.length) {
@@ -344,7 +351,12 @@ export async function ensureCharacterHydrated(db: Database, characterIndex: numb
       if (currentIndex === -1 || (db.characters[currentIndex] as HydratableCharacter | undefined)?.detailsLoaded !== false) return null;
       const normalized = normalizeHydratedCharacter(full);
       db.characters[currentIndex] = normalized;
-      return normalized;
+      // Read the slot back rather than returning `normalized`. `db.characters`
+      // is a `$state` array, so what was stored is a PROXY of `normalized`, and
+      // a Svelte 5 proxy never writes through to its target. A caller handed
+      // `normalized` would be editing an object that is no longer in the
+      // database: no UI update, no dirty mark, nothing persisted.
+      return db.characters[currentIndex] ?? normalized;
     } finally {
       characterHydrations.delete(characterId);
     }
