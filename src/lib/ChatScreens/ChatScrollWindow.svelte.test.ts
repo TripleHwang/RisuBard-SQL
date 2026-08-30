@@ -265,7 +265,10 @@ describe('the chat screen follows the scroll instead of a page number', () => {
         flushSync()
 
         expect(mountedIndices(container).at(-1)).toBe(399)
-    })
+        // Up to a hundred sentinel reports, each a synchronous re-render of a
+        // 400-message reactive array. Fast alone, past the default 5s when the
+        // whole suite is competing for the machine.
+    }, 30_000)
 
     it('keeps the anchored message on screen when older history is prepended', () => {
         const messages = reactiveMessages(400)

@@ -12,7 +12,7 @@ import {
   ensureRootKeyHydrated,
   loadOlderChatMessages,
 } from "./sqlRuntimeHydration";
-import { getSqlPosition, getSqlWindow } from "./sqlRuntimeWindow";
+import { getSqlPosition, getSqlWindow, setSqlWindow } from "./sqlRuntimeWindow";
 import {
   isRootKeyDeferred,
   markRootKeyDeferred,
@@ -130,6 +130,29 @@ describe("Node SQL runtime hydration", () => {
 
     expect(character.chats[0].message).toBe(previousMessages);
     expect(getSqlWindow(character.chats[0])).toBe(previousWindow);
+  });
+
+  it("accepts an older page whose tail is behind the window, because a local append moved it", async () => {
+    const reverse = vi.fn()
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m2" }, { chatId: "m3" }], positions: [8, 12], nextPosition: 13, before: 13, nextBefore: 8, total: 4, hasMore: true })
+      .mockResolvedValueOnce({ chatId: "chat-1", messages: [{ chatId: "m0" }, { chatId: "m1" }], positions: [0, 4], nextPosition: 13, before: 8, nextBefore: null, total: 4, hasMore: false });
+    activeStorage.current = { backendKind: "server-sql", loadCharacterHydration: vi.fn(), loadChatMessageReversePage: reverse };
+    const character = { chaId: "character-1", chats: [{ id: "chat-1", message: [] }] } as any;
+
+    await ensureChatMessageWindow(character, 0, 2);
+    // What sending a message while this page is in the air does: the commit
+    // allocates the appended row a position and writes the advanced tail back
+    // into the window. The page still reports the tail the server saw. Reading
+    // that as corruption threw, so a reply sent during a scroll stranded the
+    // rest of the history and put a load failure on screen.
+    const window = getSqlWindow(character.chats[0])!;
+    setSqlWindow(character.chats[0], { ...window, nextPosition: window.nextPosition + 2 });
+
+    await loadOlderChatMessages(character, 0, 2);
+
+    expect(character.chats[0].message.map((message: any) => message.chatId)).toEqual(["m0", "m1", "m2", "m3"]);
+    // The local tail is ahead of the server's, and stays ahead.
+    expect(getSqlWindow(character.chats[0])!.nextPosition).toBe(15);
   });
 
   it("rejects a terminal reverse page that leaves known message coverage below total", async () => {
