@@ -49,6 +49,7 @@ const {
     normalizeSqlAncillaryPageQuery,
 } = require('./sql-read-route-params.cjs');
 const { createSqlBootstrapHandler, createSqlRootKeyHandler } = require('./sql-root-key-route.cjs');
+const { buildLegacyDatabaseFromSql } = require('./sql-legacy-database.cjs');
 const { createSqlCommitHandler } = require('./sql-commit-route.cjs');
 const { createExpressErrorResponder } = require('./express-error-response.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
@@ -4323,6 +4324,30 @@ function stripToSettingsOnly(dbObj) {
 }
 
 /**
+ * The database object an export must ship, and where it came from.
+ *
+ * Once an install has migrated, the client boots metadata-first and never calls
+ * `saveDb()` again, so `database/database.bin` is frozen at the instant of the
+ * migration while every later message lives only in SQLite. Reading the file in
+ * that state produced backups that silently rolled the user back to the moment
+ * they migrated. So: SQL first whenever SQL is canonical, and the file only on
+ * installs where it is still the live copy.
+ *
+ * Returns `null` only when neither source exists. Never returns a partially
+ * read SQL database — `buildLegacyDatabaseFromSql` throws instead, and that
+ * error is allowed to reach the client as a 500.
+ */
+async function resolveExportDatabase({ withCharacters = true } = {}) {
+    const fromSql = buildLegacyDatabaseFromSql(relationalSql, { withCharacters });
+    if (fromSql) return { database: fromSql, source: 'sql' };
+    const raw = kvGet('database/database.bin');
+    if (!raw) return null;
+    // Plain decodeRisuSave, not decodeDatabaseWithPersistentChatIds: that
+    // variant runs chat-id and cold-storage migrations and can persist.
+    return { database: await decodeRisuSave(raw), source: 'legacy' };
+}
+
+/**
  * Works out what a settings-only export would ship.
  *
  * Shared by the export endpoint and the estimate endpoint so the number shown
@@ -4336,13 +4361,12 @@ function stripToSettingsOnly(dbObj) {
  * never dropped when module assets are excluded.
  */
 async function buildSettingsOnlyPlan({ includeModuleAssets = true } = {}) {
-    const raw = kvGet('database/database.bin');
-    if (!raw) return null;
+    // stripToSettingsOnly drops the character library anyway, so it is never
+    // read out of SQL in the first place.
+    const source = await resolveExportDatabase({ withCharacters: false });
+    if (!source) return null;
 
-    // Plain decodeRisuSave, not decodeDatabaseWithPersistentChatIds: that
-    // variant runs chat-id and cold-storage migrations and can persist. Both
-    // concern data we are about to drop anyway.
-    const trimmed = stripToSettingsOnly(await decodeRisuSave(raw));
+    const trimmed = stripToSettingsOnly(source.database);
     const dbValue = Buffer.from(encodeRisuSaveLegacy(trimmed, 'compression'));
 
     const withModules = buildUncleanableSet(trimmed);
@@ -4427,6 +4451,23 @@ app.get('/api/backup/export', async (req, res, next) => {
             settingsAssetNames = plan.keepNames;
         }
 
+        // A full export from a migrated install has to come out of SQL:
+        // `database/database.bin` stopped being written the moment the client
+        // went metadata-first, so streaming it would hand the user a backup
+        // frozen at their migration. Encoded up front because content-length
+        // must describe the bytes actually written, not `kvSize()` of a file
+        // this response is not going to send.
+        //
+        // `buildLegacyDatabaseFromSql` throws rather than returning a short
+        // database; that error travels to `next(error)` below and the client
+        // gets a 500 naming the character or chat that could not be read. No
+        // truncated zip is produced and no success is reported for one.
+        let sqlDbValue = null;
+        if (!settingsOnly) {
+            const sqlDatabase = buildLegacyDatabaseFromSql(relationalSql);
+            if (sqlDatabase) sqlDbValue = Buffer.from(encodeRisuSaveLegacy(sqlDatabase));
+        }
+
         // Inlay images only ever attach to chat messages, so a settings-only
         // export skips those namespaces for the same reason upstream does.
         const skipInlay = settingsOnly || target === 'upstream';
@@ -4488,7 +4529,21 @@ app.get('/api/backup/export', async (req, res, next) => {
             ...sidecarEntries.filter(Boolean),
             ...canonicalEntries,
         ].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-        const dbSize = settingsOnly ? settingsDbValue.length : kvSize('database/database.bin');
+        const dbSize = settingsOnly
+            ? settingsDbValue.length
+            : sqlDbValue
+                ? sqlDbValue.length
+                : kvSize('database/database.bin');
+        // kvSize reports 0 for a key that is not there, and the write below is
+        // guarded on dbSize -- so without this an install with neither a
+        // canonical SQL database nor a database.bin answers 200 with a
+        // well-formed backup containing assets and no database at all. The user
+        // finds out when a restore rejects it. buildSettingsOnlyPlan already
+        // refuses this state; the full export has to reach the same verdict.
+        if (!dbSize) {
+            res.status(500).json({ error: 'No database to export: SQL holds no canonical database and database.bin is missing.' });
+            return;
+        }
         const totalBytes = namespacedEntries.reduce((sum, entry) => {
             return sum + 8 + Buffer.byteLength(entry.backupName, 'utf-8') + entry.size;
         }, 0) + (dbSize ? 8 + Buffer.byteLength('database.risudat', 'utf-8') + dbSize : 0);
@@ -4537,7 +4592,9 @@ app.get('/api/backup/export', async (req, res, next) => {
         }
 
         if (!closed && dbSize) {
-            const dbValue = settingsOnly ? settingsDbValue : kvGet('database/database.bin');
+            const dbValue = settingsOnly
+                ? settingsDbValue
+                : sqlDbValue ?? kvGet('database/database.bin');
             if (dbValue) {
                 const ok = res.write(encodeBackupEntry('database.risudat', dbValue));
                 if (!ok) {
@@ -4774,6 +4831,25 @@ app.post('/api/backup/server/save', async (req, res, next) => {
         const totalEntries = namespacedEntries.length + 1; // +1 for database
         const totalBytes = namespacedEntries.reduce((sum, e) => sum + e.size, 0);
 
+        // The database blob is built here, before a single header goes out, and
+        // for the same reason /api/backup/export builds it: in SQL mode
+        // database/database.bin stopped being written the moment SQL became
+        // canonical, so shipping it would save a backup frozen at migration
+        // time. That matters more here than it does for a download, because
+        // /api/backup/server/restore calls relationalSql.reset() and
+        // re-migrates from whatever database.risudat it finds -- restoring one
+        // of these would not merely hand back a stale file, it would overwrite
+        // the user's live history with it.
+        //
+        // Building first is also what keeps an incomplete SQL read honest: it
+        // throws before res.flushHeaders(), so it reaches the error handler as
+        // a 500 the client can read, rather than aborting a stream that has
+        // already reported progress.
+        const sqlDatabase = buildLegacyDatabaseFromSql(relationalSql);
+        const dbValue = sqlDatabase
+            ? Buffer.from(encodeRisuSaveLegacy(sqlDatabase))
+            : kvGet('database/database.bin');
+
         // Stream progress as NDJSON
         res.setHeader('content-type', 'application/x-ndjson');
         res.flushHeaders();
@@ -4813,7 +4889,6 @@ app.post('/api/backup/server/save', async (req, res, next) => {
                         }
                     }
                     if (closed) throw new Error('Client disconnected during backup save');
-                    const dbValue = kvGet('database/database.bin');
                     if (dbValue) {
                         const ok = writeStream.write(encodeBackupEntry('database.risudat', dbValue));
                         if (!ok) await new Promise(r => writeStream.once('drain', r));
@@ -5649,13 +5724,29 @@ async function sumInlayFsBytes() {
     return total;
 }
 
+// Size on disk of the relational SQLite database, or 0 if it is not there.
+async function sqlDatabaseFileBytes() {
+    try {
+        const stat = await fs.stat(relationalSql.databasePath);
+        return stat.size;
+    } catch {
+        return 0;
+    }
+}
+
 // Estimated server-backup size — mirrors the enumeration in
 // /api/backup/server/save without writing anything. Inlay files live on the
 // filesystem (post-migration), so we have to fs.stat them rather than read
 // kvSize. Cost: ~5-50 ms typical, ~200 ms for users with thousands of inlays.
 async function estimateServerBackupSize() {
     let total = 0;
-    total += kvSize(DB_BLOB_KEY) || 0;
+    // Whichever source the save is going to encode from, whichever is larger.
+    // The saved database entry comes from SQL when SQL is canonical, and
+    // database.bin is then frozen at migration time -- billing this check for
+    // the frozen size would clear a disk that cannot hold the real one. The
+    // SQLite file is an over-estimate of what encodes out of it, and for a
+    // pre-flight disk check over is the safe direction to be wrong in.
+    total += Math.max(kvSize(DB_BLOB_KEY) || 0, await sqlDatabaseFileBytes());
     for (const it of kvListWithSizes('assets/')) total += it.size;
     for (const it of kvListWithSizes('inlay_meta/')) total += it.size;
     for (const e of listColdStorageBackupEntries()) total += e.size;

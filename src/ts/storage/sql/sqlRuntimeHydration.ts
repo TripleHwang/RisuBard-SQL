@@ -624,3 +624,29 @@ export async function loadNewestChatMessages(character: character, chatIndex: nu
   hydration.then(release, release);
   return hydration;
 }
+
+/**
+ * Load every character that is still a bootstrap summary.
+ *
+ * Export and backup read the live database, where an unopened character carries
+ * only its name, image, chat list and timestamps. Archiving that writes a stub
+ * in place of the record, and the loss is invisible until a restore. Callers
+ * that are about to serialise the whole database run this first.
+ *
+ * Throws on the first character that cannot be loaded, naming it. A refused
+ * backup is recoverable; a silently incomplete one is not.
+ */
+export async function hydrateSummaryCharacters(db: Database): Promise<void> {
+  for (let index = 0; index < (db.characters?.length ?? 0); index += 1) {
+    const character = db.characters[index] as HydratableCharacter | undefined;
+    if (!character || character.detailsLoaded !== false) continue;
+    const hydrated = await ensureCharacterHydrated(db, index);
+    const settled = db.characters[index] as HydratableCharacter | undefined;
+    if (!hydrated && settled?.detailsLoaded === false) {
+      throw new Error(
+        `Character "${settled.name ?? character.chaId}" could not be loaded from storage, so it ` +
+        "would be written out as a stub with no description, lorebook or scripts. Nothing was saved.",
+      );
+    }
+  }
+}

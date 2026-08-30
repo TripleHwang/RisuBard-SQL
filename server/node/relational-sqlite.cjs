@@ -986,6 +986,7 @@ function createRelationalSqlite(options) {
         searchMessages, searchCharactersByName, searchCharactersByTag,
         commit, migrationState, checkpoint, reset, close,
         maxStatementsPerCommit: MAX_STATEMENTS_PER_COMMIT,
+        databasePath,
     };
 }
 

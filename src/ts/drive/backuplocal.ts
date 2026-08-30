@@ -2,6 +2,7 @@ import { alertError, alertStore, alertWait, alertMd, alertConfirm, alertConfirmM
 import { downloadFile, LocalWriter, forageStorage } from "../globalApi.svelte";
 import { encodeRisuSaveLegacy } from "../storage/risuSave";
 import { getDatabase, type Chat } from "../storage/database.svelte";
+import { hydrateSummaryCharacters } from '../storage/sql/sqlRuntimeHydration'
 import { chatNeedsServerFetch, fetchChatFromServer } from "../storage/chatStorage";
 import { isSqlWindowPartial } from "../storage/sql/sqlRuntimeWindow";
 import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
@@ -281,6 +282,18 @@ export async function SavePartialLocalBackup(){
 
     // Reassemble full chats from server for placeholders (runtime lazy load)
     alertWait(`Saving partial local backup... (Assembling chat data)`)
+    // Characters load as bootstrap summaries -- name, image, chat list,
+    // timestamps -- and the description, first message, lorebook, scripts and
+    // emotion images arrive only when one is opened. Cloning the live database
+    // without hydrating them first writes those stubs into the archive, and a
+    // backup missing most of every character the user never opened looks
+    // completely normal until the day they restore it.
+    //
+    // Chats already had this treatment; characters never got it. Failing is the
+    // right direction: a refused backup is recoverable, a silently short one is
+    // not.
+    await hydrateSummaryCharacters(db)
+
     const dbCopy = structuredClone({ ...db, account: undefined })
     for (const char of dbCopy.characters) {
         for (let i = 0; i < char.chats.length; i++) {
