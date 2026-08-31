@@ -62,3 +62,9 @@ jobs:
 
       - name: Verify standalone release contract
         run: pnpm check:standalone-release
+
+      # The portable and the Docker image install from the committed manifest
+      # at scripts/portable/server-deps/ instead of the app's 69-dependency
+      # package.json. Catch a drifted manifest here rather than at tag time.
+      - name: Verify server dependency manifest is current
+        run: pnpm check:server-deps

@@ -16,6 +16,14 @@ and browser OPFS backend are adapted from the user-supplied
 PocketRisu-compatible `Database` contract and remain covered by this
 repository's GPLv3 terms.
 
+## Portable server dependency manifest
+
+`scripts/portable/gen-server-deps.cjs` is adapted from the file of the same
+name in PocketRisu (https://github.com/PocketRisu/PocketRisu), itself a fork of
+RisuAI. PocketRisu is licensed GPL-3.0-only, as is this repository, so the port
+is carried under this repository's GPLv3 terms. The file's own header records
+the origin and the changes made for this tree.
+
 ## Bundled PageFold provider
 
 `src/ts/builtin/pagefold-0.1.1-fix.js` is the user-supplied PageFold 0.1.1

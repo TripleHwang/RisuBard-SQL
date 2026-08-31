@@ -21,6 +21,10 @@ const legacyTokens = [
             // credits the project RisuBard itself forked from, which is the same
             // attribution the files above are excepted for.
             'patchnote/0.9.3-arca.txt',
+            // Ported GPLv3 source. Its header must name the project it came
+            // from and that project's licence; NOTICE.md carries the same
+            // attribution.
+            'scripts/portable/gen-server-deps.cjs',
         ]),
     },
 ]
