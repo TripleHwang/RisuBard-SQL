@@ -1197,6 +1197,21 @@ export async function startMetadataPersistence() {
     // Without this the corner of the screen is silent whether saving works or
     // not, and the user has no way to tell the difference.
     onSqlCommitActivity((active) => { saving.state = active })
+    // `requestImmediateSave` is assigned inside `saveDb` too, so in this mode it
+    // stayed at its `() => {}` default: sixty-three call sites across the app
+    // asking to be saved right now, every one of them a no-op. Most were covered
+    // by the five-second audit eventually, but the ones that await it and then
+    // act -- delete a chat, close a screen, hand off to a reload -- were acting
+    // on a save that never happened.
+    //
+    // The audit runs first because it is what turns a mutation into a dirty
+    // mark. Flushing without it would commit whatever happened to be marked
+    // already and report success for the change the caller is asking about.
+    requestImmediateSaveImpl = async () => {
+        await tick()
+        auditSqlCompatibilityDatabase(getDatabase())
+        await flushSqlDirtyChanges()
+    }
     startSqlMetadataPersistence(window, () => {
         try { void fetch('/api/db/flush', { method: 'POST', keepalive: true, credentials: 'same-origin' }) } catch { /* best effort */ }
     })

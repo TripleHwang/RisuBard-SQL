@@ -497,3 +497,24 @@ describe('the saving indicator in SQL mode', () => {
         expect(states).toEqual([true, false])
     })
 })
+
+describe('the audit-then-flush pair requestImmediateSave is wired to in SQL mode', () => {
+    it('commits a mutation that has not been marked dirty by anything else yet', async () => {
+        const storage = fakeStorageAtRevision(3)
+        const database = fixtureDatabaseWithMessages(2)
+        activateSqlPersistenceRuntime(storage, database)
+        initializeSqlCompatibilityBaseline(database)
+
+        // What every `requestImmediateSave` call site does: mutate, then ask to
+        // be saved now. `saveDb` assigns that function and never runs in this
+        // mode, so it stayed a no-op and none of the sixty-three call sites
+        // saved anything; the ones that await it and then act were acting on a
+        // save that had not happened.
+        database.username = 'renamed right now'
+        auditSqlCompatibilityDatabase(database)
+        await flushSqlDirtyChanges()
+
+        expect((storage.commit as any).mock.calls[0][0].root.upserts)
+            .toContainEqual(expect.objectContaining({ key: 'username', value: 'renamed right now' }))
+    })
+})
