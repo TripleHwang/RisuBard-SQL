@@ -39,6 +39,14 @@ const MAX_MIGRATION_CHUNKS = 100_000;
 const DEFAULT_MESSAGE_PAGE_LIMIT = 40;
 const MAX_MESSAGE_PAGE_LIMIT = 100;
 const MAX_RELATIONAL_NODE_DEPTH = 128;
+// The client's `RELATIONAL_JSON_NODE_KEY`. A value too large to explode into one
+// row per scalar is stored as a single row whose text is the whole value as
+// canonical JSON, marked by an `object_key` on the ROOT node -- a slot a
+// flattened root never occupies, so this needs no new column, no new
+// `value_type` (every CHECK constraint pins the list at seven) and no schema
+// version bump. The two readers MUST agree: this file serves the bootstrap that
+// every launch reads, and `relationalNodeCodec.ts` writes it.
+const RELATIONAL_JSON_NODE_KEY = '__risuRelationalJson';
 const MAX_SQL_READ_KEY_LENGTH = 256;
 const MAX_SQL_READ_LIMIT = 100;
 const MAX_DEFERRED_ROOT_KEYS = 512;
@@ -189,6 +197,11 @@ function createRelationalSqlite(options) {
         const rows = [...input].sort((left, right) => Number(left.node_id) - Number(right.node_id));
         if (Number(rows[0].node_id) !== 0 || rows[0].parent_node_id !== null) {
             throw new Error('Relational value has an invalid root node');
+        }
+        if (rows.length === 1
+            && rows[0].object_key === RELATIONAL_JSON_NODE_KEY
+            && rows[0].value_type === 'string') {
+            return JSON.parse(decodedText(rows[0].text_value, rows[0].encoded_text_value));
         }
         const children = new Map();
         for (const row of rows.slice(1)) {

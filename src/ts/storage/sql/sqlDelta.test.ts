@@ -114,3 +114,48 @@ describe("SQL delta commits", () => {
     expect(commit.messageManifests).toEqual([]);
   });
 });
+
+/**
+ * The delta builder compares values by encoding them, so it has to encode them
+ * the same way the write path does. It used to call `flattenRelationalValue`
+ * directly, which throws above the row cap -- so on a value large enough to be
+ * stored as a single JSON row, asking "did this setting change?" threw instead
+ * of answering, and took the whole sync with it.
+ *
+ * (`buildSqlDeltaCommit` has no production caller today: `sqlDelta.ts` is
+ * imported only by this file. The invariant is still worth pinning, because the
+ * two encoders silently disagreeing is exactly the shape of the bug this
+ * replaced.)
+ */
+describe("comparing a value too large to explode into one row per scalar", () => {
+  function bigModules(entries: number) {
+    return [{
+      id: "module-one",
+      name: "One",
+      lorebook: Array.from({ length: entries }, (_unused, index) => ({
+        key: `key-${index}`,
+        content: `content ${index}`,
+        insertorder: index,
+      })),
+    }];
+  }
+
+  it("answers instead of throwing, and still sees the change", () => {
+    // Past MAX_RELATIONAL_NODE_ROWS: roughly four nodes per entry.
+    const before = { ...database(), modules: bigModules(70_000) };
+    const after = { ...database(), modules: bigModules(70_001) };
+
+    const commit = buildSqlDeltaCommit(before as any, after as any, 3)!;
+
+    expect(commit.root.upserts.map((upsert) => upsert.key)).toContain("modules");
+  });
+
+  it("reports no change when such a value is untouched", () => {
+    const before = { ...database(), modules: bigModules(70_000) };
+    const after = { ...database(), modules: bigModules(70_000) };
+
+    // Nothing at all changed, so there is no commit to make -- and reaching
+    // that answer means the comparison completed rather than throwing.
+    expect(buildSqlDeltaCommit(before as any, after as any, 3)).toBeNull();
+  });
+});

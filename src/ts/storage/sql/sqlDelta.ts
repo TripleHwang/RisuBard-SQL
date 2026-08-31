@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 
 import type { Database, Message } from "../database.svelte";
-import { flattenRelationalValue } from "./relationalNodeCodec";
+import { encodeRelationalNodeRows } from "./relationalNodeCodec";
 import { isSqlWindowPartial } from "./sqlRuntimeWindow";
 import {
   createEmptySqlCommit,
@@ -19,8 +19,11 @@ const ROOT_EXCLUSIONS = new Set([
   "botPresetsId",
 ]);
 
+// The encoder the write path uses, so a value large enough to be stored as one
+// JSON row is comparable here too. `flattenRelationalValue` threw on exactly
+// those, which turned "has this setting changed?" into a thrown migration.
 function fingerprint(value: unknown): string {
-  return JSON.stringify(flattenRelationalValue(value));
+  return JSON.stringify(encodeRelationalNodeRows(value));
 }
 
 function sameValue(left: unknown, right: unknown): boolean {

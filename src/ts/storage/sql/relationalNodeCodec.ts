@@ -3,6 +3,59 @@ export const SQLITE_SCHEMA_VERSION = 3;
 export const MAX_RELATIONAL_NODE_DEPTH = 128;
 export const MAX_RELATIONAL_NODE_ROWS = 250_000;
 
+/**
+ * Above this many nodes, a value is stored as one canonical-JSON row instead of
+ * being exploded into one row per scalar.
+ *
+ * The cap it replaces was unusable. `MAX_RELATIONAL_NODE_ROWS` mirrors the
+ * server's `MAX_STATEMENTS_PER_COMMIT`, so a value needing more rows than that
+ * could not be written by any means -- and `modules` is a single root key
+ * holding every module a user has, lorebooks and all, re-encoded whole on every
+ * change. The cap is on that array, not on one module: what crosses it is the
+ * cumulative node count, which a user hit by importing a module they could not
+ * then save. Raising the number only moves the wall, because a dirty
+ * commit is one request whose statement budget is shared by every scope in the
+ * flush, so a value that costs 250,000 INSERTs starves everything else even
+ * when it fits.
+ *
+ * 20,000 is chosen against that budget rather than against the value: touching
+ * one settings key can cost at most 8% of a commit, which leaves the rest of
+ * the flush -- characters, chats, messages -- able to go with it. It is also
+ * the same bound as `SQL_MIGRATION_CHUNK_STATEMENTS`, so no single value can
+ * ever be larger than one migration chunk.
+ *
+ * Nothing queries these tables by node structure (`object_key` is only ever
+ * read back, never matched on), so a value that stops being relational loses no
+ * capability -- exactly the trade `bot_presets.data` already makes.
+ */
+export const MAX_RELATIONAL_NODE_ROWS_PER_VALUE = 20_000;
+
+/**
+ * Marker that says "this row's text is the whole value, as canonical JSON".
+ *
+ * It sits in `object_key` on the ROOT node, which is the one place in the
+ * format that cannot already be occupied: the root is always appended as
+ * `append(value, null, 0, null, 0)`, so `object_key` is NULL on the root of
+ * every value any version of this codec has ever written. Reusing it therefore
+ * needs no new column, no new `value_type` -- both `system_settings` and the
+ * four `*_extension_nodes` tables pin theirs with a CHECK constraint listing
+ * seven types -- and so no schema version bump.
+ *
+ * That last part is the point. A bump means `SqlSchemaResetRequiredError` for
+ * every existing database, which for the database that reported this bug is a
+ * multi-minute re-migration, and this fix has to be deployable to someone whose
+ * app currently cannot save anything at all.
+ */
+export const RELATIONAL_JSON_NODE_KEY = "__risuRelationalJson";
+
+/** Thrown when a value has more nodes than the caller allowed. */
+export class RelationalRowLimitError extends Error {
+  constructor(readonly limit: number) {
+    super(`Relational value exceeds maximum row count ${limit}`);
+    this.name = "RelationalRowLimitError";
+  }
+}
+
 export class SqlSchemaResetRequiredError extends Error {
   constructor(foundVersion: unknown, foundLayout: unknown) {
     super(
@@ -108,19 +161,33 @@ function defineEntry(
   });
 }
 
+/** One node's coordinates, handed to a walk's visitor. */
+type RelationalVisit = (
+  nodeId: number,
+  parentNodeId: number | null,
+  nodeOrder: number,
+  key: string | null,
+  current: unknown,
+) => void;
+
 /**
- * Flattens a JavaScript value into typed adjacency-list rows. No JSON text is
- * involved, and empty containers, null, object insertion order, NUL, and
- * unpaired UTF-16 surrogates survive a round trip.
+ * The single traversal every relational encoder and every relational check goes
+ * through.
+ *
+ * Depth, cycles, unsupported types and the row limit are enforced here and
+ * nowhere else, so "would this encode?" and "encode it" can never disagree --
+ * which matters now that the first question is asked separately from the second
+ * in order to refuse one root key without failing the commit around it.
  */
-export function flattenRelationalValue(
+function walkRelationalValue(
   value: unknown,
-  options: RelationalNodeCodecOptions = {},
-): RelationalNodeRow[] {
+  options: RelationalNodeCodecOptions,
+  visit: RelationalVisit | null,
+): number {
   const maxDepth = options.maxDepth ?? MAX_RELATIONAL_NODE_DEPTH;
   const maxRows = options.maxRows ?? MAX_RELATIONAL_NODE_ROWS;
-  const rows: RelationalNodeRow[] = [];
   const ancestors = new Set<object>();
+  let count = 0;
 
   const append = (
     current: unknown,
@@ -131,77 +198,190 @@ export function flattenRelationalValue(
   ): void => {
     if (depth > maxDepth)
       throw new Error(`Relational value exceeds maximum depth ${maxDepth}`);
-    if (rows.length >= maxRows)
-      throw new Error(`Relational value exceeds maximum row count ${maxRows}`);
+    if (count >= maxRows) throw new RelationalRowLimitError(maxRows);
 
-    const nodeId = rows.length;
-    const encodedKey =
-      key === null ? { text: null, encoded: null } : encodedText(key);
-    const row: RelationalNodeRow = {
-      node_id: nodeId,
-      parent_node_id: parentNodeId,
-      node_order: nodeOrder,
-      object_key: encodedKey.text,
-      object_key_encoded: encodedKey.encoded,
-      value_type: "null",
-      text_value: null,
-      encoded_text_value: null,
-      number_value: null,
-      boolean_value: null,
-    };
-    rows.push(row);
+    const nodeId = count;
+    count += 1;
+    visit?.(nodeId, parentNodeId, nodeOrder, key, current);
 
-    if (current === null) return;
-    if (current === undefined) {
-      row.value_type = "undefined";
-      return;
-    }
-    if (typeof current === "boolean") {
-      row.value_type = "boolean";
-      row.boolean_value = current ? 1 : 0;
-      return;
-    }
-    if (typeof current === "number") {
-      row.value_type = "number";
-      if (Number.isFinite(current)) row.number_value = current;
-      else
-        row.text_value = Number.isNaN(current)
-          ? "NaN"
-          : current > 0
-            ? "Infinity"
-            : "-Infinity";
-      return;
-    }
-    if (typeof current === "string") {
-      row.value_type = "string";
-      const encoded = encodedText(current);
-      row.text_value = encoded.text;
-      row.encoded_text_value = encoded.encoded;
-      return;
-    }
-    if (typeof current !== "object") {
-      throw new TypeError(
-        `Unsupported relational value type: ${typeof current}`,
-      );
-    }
-    if (ancestors.has(current))
+    if (current === null || current === undefined) return;
+    const kind = typeof current;
+    if (kind === "boolean" || kind === "number" || kind === "string") return;
+    if (kind !== "object")
+      throw new TypeError(`Unsupported relational value type: ${kind}`);
+    if (ancestors.has(current as object))
       throw new TypeError("Relational values cannot contain cycles");
-    ancestors.add(current);
-    row.value_type = Array.isArray(current) ? "array" : "object";
+    ancestors.add(current as object);
     if (Array.isArray(current)) {
       current.forEach((item, index) =>
         append(item, nodeId, index, null, depth + 1),
       );
     } else {
-      Object.entries(current).forEach(([childKey, item], index) =>
+      Object.entries(current as object).forEach(([childKey, item], index) =>
         append(item, nodeId, index, childKey, depth + 1),
       );
     }
-    ancestors.delete(current);
+    ancestors.delete(current as object);
   };
 
   append(value, null, 0, null, 0);
+  return count;
+}
+
+/** The typed row for one node, given its coordinates. */
+function relationalRow(
+  nodeId: number,
+  parentNodeId: number | null,
+  nodeOrder: number,
+  key: string | null,
+  current: unknown,
+): RelationalNodeRow {
+  const encodedKey =
+    key === null ? { text: null, encoded: null } : encodedText(key);
+  const row: RelationalNodeRow = {
+    node_id: nodeId,
+    parent_node_id: parentNodeId,
+    node_order: nodeOrder,
+    object_key: encodedKey.text,
+    object_key_encoded: encodedKey.encoded,
+    value_type: "null",
+    text_value: null,
+    encoded_text_value: null,
+    number_value: null,
+    boolean_value: null,
+  };
+  if (current === null) return row;
+  if (current === undefined) {
+    row.value_type = "undefined";
+    return row;
+  }
+  if (typeof current === "boolean") {
+    row.value_type = "boolean";
+    row.boolean_value = current ? 1 : 0;
+    return row;
+  }
+  if (typeof current === "number") {
+    row.value_type = "number";
+    if (Number.isFinite(current)) row.number_value = current;
+    else
+      row.text_value = Number.isNaN(current)
+        ? "NaN"
+        : current > 0
+          ? "Infinity"
+          : "-Infinity";
+    return row;
+  }
+  if (typeof current === "string") {
+    row.value_type = "string";
+    const encoded = encodedText(current);
+    row.text_value = encoded.text;
+    row.encoded_text_value = encoded.encoded;
+    return row;
+  }
+  if (typeof current === "object")
+    row.value_type = Array.isArray(current) ? "array" : "object";
+  return row;
+}
+
+/**
+ * Flattens a JavaScript value into typed adjacency-list rows. No JSON text is
+ * involved, and empty containers, null, object insertion order, NUL, and
+ * unpaired UTF-16 surrogates survive a round trip.
+ */
+export function flattenRelationalValue(
+  value: unknown,
+  options: RelationalNodeCodecOptions = {},
+): RelationalNodeRow[] {
+  const rows: RelationalNodeRow[] = [];
+  walkRelationalValue(value, options, (...node) =>
+    void rows.push(relationalRow(...node)),
+  );
   return rows;
+}
+
+/**
+ * How many rows a value would flatten into, allocating none of them.
+ *
+ * Validates exactly what flattening validates, which is what makes it usable as
+ * the "can this key be written at all?" question a commit asks before deciding
+ * whether to include the key or refuse it.
+ */
+export function measureRelationalValue(
+  value: unknown,
+  options: RelationalNodeCodecOptions = {},
+): number {
+  return walkRelationalValue(
+    value,
+    { maxRows: Number.POSITIVE_INFINITY, ...options },
+    null,
+  );
+}
+
+/**
+ * The `system_settings` / root descriptor for a value: its own type, without
+ * walking a single child.
+ *
+ * `system_settings` has no `object_key` column, so a JSON-spilled value cannot
+ * carry its marker there -- and must not be registered as the string it spilled
+ * into. This gives that table the value's real type, and it replaces a
+ * `flattenRelationalValue(value)[0]` that walked an entire module tree to read
+ * row zero.
+ */
+export function relationalRootDescriptor(value: unknown): RelationalNodeRow {
+  return relationalRow(0, null, 0, null, value);
+}
+
+/** The single row a spilled value is stored as. */
+function relationalJsonRow(value: unknown): RelationalNodeRow {
+  const json = JSON.stringify(value);
+  if (json === undefined)
+    throw new TypeError("Relational value has no JSON representation");
+  const encoded = encodedText(json);
+  return {
+    node_id: 0,
+    parent_node_id: null,
+    node_order: 0,
+    object_key: RELATIONAL_JSON_NODE_KEY,
+    object_key_encoded: null,
+    value_type: "string",
+    text_value: encoded.text,
+    encoded_text_value: encoded.encoded,
+    number_value: null,
+    boolean_value: null,
+  };
+}
+
+export interface RelationalEncodeOptions extends RelationalNodeCodecOptions {
+  /** Node count above which the value is stored as one JSON row. */
+  spillAbove?: number;
+}
+
+/**
+ * The rows to store for one value: exploded when that is a reasonable number of
+ * rows, one canonical-JSON row when it is not.
+ *
+ * The value is measured first, so the choice is made on the whole tree and the
+ * same validation runs either way -- a cycle or a BigInt is refused before the
+ * size question is even asked, rather than being quietly dropped by
+ * `JSON.stringify` on the spill path.
+ *
+ * The spill is not lossless in the way the node format is: `undefined`, `NaN`
+ * and the infinities become `null` or disappear. For root settings on the Node
+ * backend that changes nothing, because bootstrap already ships every setting
+ * value as JSON over HTTP and has always lost exactly those. It also makes a
+ * spilled value fingerprint-identical to itself under
+ * `snapshotCompatibility`'s `JSON.stringify`, so a round trip through storage
+ * cannot show up as a spurious edit on the next audit.
+ */
+export function encodeRelationalNodeRows(
+  value: unknown,
+  options: RelationalEncodeOptions = {},
+): RelationalNodeRow[] {
+  const spillAbove = options.spillAbove ?? MAX_RELATIONAL_NODE_ROWS_PER_VALUE;
+  const { spillAbove: _ignored, ...codecOptions } = options;
+  const rows = measureRelationalValue(value, codecOptions);
+  if (rows <= spillAbove) return flattenRelationalValue(value, codecOptions);
+  return [relationalJsonRow(value)];
 }
 
 export function rebuildRelationalValue(
@@ -213,6 +393,19 @@ export function rebuildRelationalValue(
   );
   if (Number(rows[0].node_id) !== 0 || rows[0].parent_node_id !== null) {
     throw new Error("Relational value has an invalid root node");
+  }
+  // A value stored as canonical JSON, written by `encodeRelationalNodeRows`
+  // when exploding it would have cost more rows than a commit can afford. It is
+  // always exactly one row, and its root carries an `object_key` that a
+  // flattened root never can, so this can neither miss one nor claim one.
+  if (
+    rows.length === 1 &&
+    rows[0].object_key === RELATIONAL_JSON_NODE_KEY &&
+    rows[0].value_type === "string"
+  ) {
+    return JSON.parse(
+      decodedText(rows[0].text_value, rows[0].encoded_text_value),
+    );
   }
   const children = new Map<number, Record<string, unknown>[]>();
   for (const row of rows.slice(1)) {

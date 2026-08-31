@@ -1,6 +1,7 @@
 import type { SqlCommit } from "./sqlCommit";
 import {
-  flattenRelationalValue,
+  encodeRelationalNodeRows,
+  relationalRootDescriptor,
   RELATIONAL_NODE_COLUMNS,
   type RelationalNodeRow,
 } from "./relationalNodeCodec";
@@ -144,7 +145,11 @@ async function replaceNodes(
   );
   const columns = [...ownerColumns, ...RELATIONAL_NODE_COLUMNS];
   const placeholders = columns.map(() => "?").join(", ");
-  for (const row of flattenRelationalValue(value)) {
+  // `encodeRelationalNodeRows`, not `flattenRelationalValue`: a value big
+  // enough to need more rows than a commit can carry is stored as one JSON row
+  // instead of being refused. Every node table goes through here, so a huge
+  // character lorebook is bounded the same way `modules` is.
+  for (const row of encodeRelationalNodeRows(value)) {
     await execute(
       `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`,
       nodeBind(ownerValues, row),
@@ -192,7 +197,10 @@ export async function applySqliteCommit(
     if (upsert.key === "botPresets" || upsert.key === "botPresetsId")
       throw new Error(`${upsert.key} must be written through presets`);
     if (upsert.key === "pluginCustomStorage") continue;
-    const root = flattenRelationalValue(upsert.value)[0];
+    // The value's OWN root type, never the spilled row's: `system_settings` has
+    // no `object_key` column to carry the spill marker, so registering a
+    // spilled object as the string it spilled into would be a lie about the key.
+    const root = relationalRootDescriptor(upsert.value);
     await execute(
       `INSERT INTO system_settings
             (key, domain, value_type, text_value, encoded_text_value, number_value, boolean_value, updated_at)
@@ -289,7 +297,7 @@ export async function applySqliteCommit(
       await execute("DELETE FROM setting_extension_nodes WHERE setting_key = ?", ["activeBotPresetId"]);
     } else if (commit.presets.activeId !== undefined) {
       const value = commit.presets.activeId;
-      const root = flattenRelationalValue(value)[0];
+      const root = relationalRootDescriptor(value);
       await execute(
         `INSERT INTO system_settings
                 (key, domain, value_type, text_value, encoded_text_value, number_value, boolean_value, updated_at)
@@ -413,9 +421,9 @@ export async function applySqliteCommit(
 
   for (const entry of commit.messages) {
     const data = entry.data as Record<string, any>;
-    const content = flattenRelationalValue(
+    const content = relationalRootDescriptor(
       typeof data.data === "string" ? data.data : String(data.data ?? ""),
-    )[0];
+    );
     await execute(
       `INSERT INTO messages
             (chat_id, id, position, role, content_text, content_encoded, sender_name, sent_time, generation_model, input_tokens, output_tokens)
