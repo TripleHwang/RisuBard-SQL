@@ -8,8 +8,20 @@
     import { scrollWithinContainer } from './scrollWithin';
     import { estimateSpacerHeight, getChatWindow, stepChatWindowCenter, type ChatWindow } from 'src/ts/chatWindow';
     import { publishMountedMessageIds, releaseMountedMessageIds } from 'src/ts/chatMountRegistry';
-    import { updateRuntimeResources } from 'src/ts/performance/performanceReport';
-    
+    import { recordRuntimeDuration, updateRuntimeResources } from 'src/ts/performance/performanceReport';
+
+    /**
+     * Wall clock for the forced-layout measurement below. Falls back to
+     * `Date.now` rather than throwing, because a missing `performance` must
+     * never be able to stop the chat from rendering.
+     */
+    const layoutClock = () => {
+        try {
+            const value = globalThis.performance?.now?.();
+            return Number.isFinite(value) ? value : Date.now();
+        } catch { return Date.now(); }
+    };
+
     const getCurrentChatRoomId = () => {
         const charId = get(selectedCharID);
         if (charId < 0) return null;
@@ -97,7 +109,12 @@
      * outlive every render and be retracted exactly once, on destroy.
      */
     const mountRegistryToken = {};
-    let measuredRowHeights: number[] = [];
+    /**
+     * The spacer counts currently written into the DOM. `-1` means "nothing has
+     * been written yet", so the first render always sizes them.
+     */
+    let appliedBeforeCount = -1;
+    let appliedAfterCount = -1;
 
     function stableMessageId(message: Message): string {
         // Legacy imported rows receive their durable identity before becoming a
@@ -216,14 +233,18 @@
         }
         const loadStart = domWindow.end - 1
         const loadEnd = domWindow.start
-        measuredRowHeights = Array.from(messageHost.querySelectorAll('[data-chat-row]'))
-            .map((element) => (element as HTMLElement).getBoundingClientRect().height)
-            .filter(height => height > 0);
-        const spacerHeight = (count: number) => estimateSpacerHeight(measuredRowHeights, count);
-        const afterSpacer = chatBody.querySelector('[data-chat-spacer="after"]') as HTMLElement | null;
-        const beforeSpacer = chatBody.querySelector('[data-chat-spacer="before"]') as HTMLElement | null;
-        if (afterSpacer) afterSpacer.style.height = `${spacerHeight(domWindow.afterCount)}px`;
-        if (beforeSpacer) beforeSpacer.style.height = `${spacerHeight(domWindow.beforeCount)}px`;
+        /**
+         * True once this pass has added or removed a row.
+         *
+         * A row re-rendered in place under the same id does not count. The
+         * heights exist to size a placeholder for rows that are NOT mounted, so
+         * what matters is whether the mounted set is still a representative
+         * sample of the chat -- which changes when rows join or leave it, not
+         * when one of them is rewritten. A rewrite that does change heights is
+         * still picked up: the next thing that can consume the estimate is a
+         * change in a spacer count, and that re-measures.
+         */
+        let mountedRowSetChanged = false;
         // Find the last real (non-comment, non-disabled) char message index
         // Only show reroll if it's the actual last non-disabled message
         let lastRealCharIdx = -1;
@@ -299,6 +320,7 @@
                     },
 
                 })
+                if (!mounted) mountedRowSetChanged = true;
                 mountInstances.set(messageId, { instance: inst, element: b, signature });
                 if(nextRow){
                     messageHost.insertBefore(b, nextRow.nextSibling);
@@ -322,7 +344,55 @@
                 unmount(mounted.instance);
                 mounted.element.remove();
                 mountInstances.delete(id);
+                mountedRowSetChanged = true;
             }
+        }
+        /**
+         * The one place in the render path that forces a synchronous layout,
+         * now paid only when its answer can differ.
+         *
+         * `estimateSpacerHeight` turns the measured heights into a placeholder
+         * for the rows outside the window. Its inputs are those heights and the
+         * two counts; while all three are what they were, re-reading them costs
+         * a whole-tree layout to write back the pixel values already in the
+         * DOM. That was every effect run -- every keystroke, every streamed
+         * token -- and it is what the console reported as "Forced reflow while
+         * executing JavaScript".
+         *
+         * Staleness cannot outlive its consequence. A stale height only matters
+         * once it is used to size a spacer, and a spacer is only ever resized
+         * from here; both triggers below -- a changed count, a changed mounted
+         * set -- fire before the estimate is applied, so every spacer height
+         * written is computed from rows measured in the same pass. The
+         * measurement is taken after the mount sweep for the same reason: it
+         * now describes the rows that are on screen rather than the ones that
+         * were there before this pass ran.
+         */
+        const spacersNeedResizing = mountedRowSetChanged ||
+            domWindow.beforeCount !== appliedBeforeCount ||
+            domWindow.afterCount !== appliedAfterCount;
+        if (spacersNeedResizing) {
+            const rowMeasureStartedAt = layoutClock();
+            /**
+             * Heights of the rows mounted right now.
+             *
+             * Deliberately local. Nothing outside this block reads them, and
+             * nothing carries them to a later render: a height is measured and
+             * consumed in the same pass, so a spacer can never be sized from
+             * rows that have since been replaced. `spacersNeedResizing` is what
+             * decides when that pass happens.
+             */
+            const measuredRowHeights = Array.from(messageHost.querySelectorAll('[data-chat-row]'))
+                .map((element) => (element as HTMLElement).getBoundingClientRect().height)
+                .filter(height => height > 0);
+            recordRuntimeDuration('chat-row-measure', layoutClock() - rowMeasureStartedAt);
+            const spacerHeight = (count: number) => estimateSpacerHeight(measuredRowHeights, count);
+            const afterSpacer = chatBody.querySelector('[data-chat-spacer="after"]') as HTMLElement | null;
+            const beforeSpacer = chatBody.querySelector('[data-chat-spacer="before"]') as HTMLElement | null;
+            if (afterSpacer) afterSpacer.style.height = `${spacerHeight(domWindow.afterCount)}px`;
+            if (beforeSpacer) beforeSpacer.style.height = `${spacerHeight(domWindow.beforeCount)}px`;
+            appliedBeforeCount = domWindow.beforeCount;
+            appliedAfterCount = domWindow.afterCount;
         }
         // Published after the sweep, so what the registry holds is what is
         // actually mounted right now -- never a row this pass just unmounted.
@@ -456,8 +526,6 @@
 
     $effect(() => {
         void $ReloadChatPointer; // Make $effect track ReloadChatPointer changes
-        const wasAtBottom = checkIfAtBottom();
-        updateChatBody()
 
         const currentChatRoomId = getCurrentChatRoomId();
         const isSameChat = currentChatRoomId === previousChatRoomId;
@@ -487,6 +555,33 @@
             && messages.length > previousLength
             && lastMessageId !== previousLastMessageId
             && !seenNewestMessageIds.has(lastMessageId);
+
+        /**
+         * Where the reader was before this render changed anything.
+         *
+         * Read here, ahead of `updateChatBody`, because it has to describe the
+         * scroll as it was -- but read ONLY when something is going to consume
+         * it. `getBoundingClientRect` after the DOM has been written forces the
+         * browser to lay the whole tree out synchronously, and this call was the
+         * first such read in the turn, so it paid for the reflow on every effect
+         * run whether or not anything had arrived. A streamed token rewrites the
+         * last message in place, which is not an arrival, so during a stream
+         * this answer was computed thirty to sixty times a second and thrown
+         * away every time.
+         *
+         * The conditions are exactly the ones guarding its only use below, in
+         * the same order, so short-circuiting also keeps the effect's reactive
+         * dependencies where they were: `autoScrollToNewMessage` and
+         * `alwaysScrollToNewMessage` are still read only on an arrival.
+         */
+        const wasAtBottom = arrivedAtNewestEnd
+            && lastMsg!.role === 'char'
+            && !!DBState.db.autoScrollToNewMessage
+            && !DBState.db.alwaysScrollToNewMessage
+            ? checkIfAtBottom()
+            : false;
+
+        updateChatBody()
 
         if(arrivedAtNewestEnd){
             if(lastMsg.role === 'char' && DBState.db.autoScrollToNewMessage){

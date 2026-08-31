@@ -1744,6 +1744,34 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return (await this.loadDatabase({ shallow: true }))?.database ?? ({} as Database);
   }
 
+  /**
+   * One root key, read from its own route.
+   *
+   * The difference between this and `loadRootKeyHydration` is what it is FOR.
+   * That one installs a deferred key's real value into the live database, so it
+   * records the key as resident and drops the cached bootstrap projection --
+   * both of which change what later bootstraps ask for. This one just reads a
+   * row: nothing is installed anywhere, so neither bookkeeping applies, and
+   * claiming residency for a value we did not keep would make every later
+   * refetch carry a key this client is not holding.
+   *
+   * A 404 is reported as absent rather than thrown. The callers below are the
+   * conflict rebase, which used to reach these values through the bootstrap
+   * projection, where a key that is not stored is simply a missing property --
+   * `undefined`, not an error. A rejection here would abort `rebaseDirtyScopes`
+   * and with it the retry that carries the user's edit, which is a far worse
+   * answer to "that key is not stored" than the one it replaces. Nothing in
+   * this path turns absence into a deletion: the rebase discards what it reads,
+   * and only a dirty mark decides what is written.
+   */
+  private async readRootKey(key: string): Promise<{ present: boolean; value: unknown }> {
+    const response = await this.request(rootKeyRequestPath(key));
+    if (response.status === 404) return { present: false, value: undefined };
+    const { revision, value } = await readRootKeyResponse(key, response);
+    this.acceptReadRevision(revision);
+    return { present: true, value };
+  }
+
   async loadCharacter(characterId: string): Promise<character | null> {
     return await this.loadCharacterHydration(characterId);
   }
@@ -1804,11 +1832,20 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     }));
   }
 
+  /**
+   * One preset, read from the server.
+   *
+   * `listBotPresets` above deliberately stays on the cached bootstrap
+   * projection: it is a startup reader that wants the whole list and runs while
+   * the payload is still warm. This one is the conflict rebase's reader, called
+   * once per dirty preset with the cache already dropped by the 409, so it paid
+   * a whole bootstrap fetch to find one row.
+   */
   async loadBotPreset(id: string): Promise<StoredBotPreset | null> {
-    const preset = ((await this.current()).botPresets ?? []).find(
-      (item) => item.id === id,
-    );
-    return preset ? preset as StoredBotPreset : null;
+    const { present, value } = await this.readRootKey("botPresets");
+    if (!present || !Array.isArray(value)) return null;
+    const preset = (value as StoredBotPreset[]).find((item) => item?.id === id);
+    return preset ?? null;
   }
 
   async loadLorebooks(): Promise<{ name: string; data: loreBook[] }[]> {
@@ -1839,12 +1876,25 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return Object.keys((await this.current()).pluginCustomStorage ?? {});
   }
 
+  /**
+   * One plugin storage key, read from the server.
+   *
+   * This was not merely slow through `this.current()`, it was blind:
+   * `pluginCustomStorage` is in the default defer set, so the bootstrap
+   * projection this used to index into deliberately does not carry the map at
+   * all, and every read of it answered `undefined` regardless of what is
+   * stored. The `pluginCustomStorage` root route reads the
+   * `plugin_custom_storage` table and nothing else.
+   */
   async loadPluginCustomStorageKey(key: string): Promise<unknown> {
-    return (await this.current()).pluginCustomStorage?.[key];
+    const { present, value } = await this.readRootKey("pluginCustomStorage");
+    if (!present || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    return (value as Record<string, unknown>)[key];
   }
 
   async loadSettingKey(key: string): Promise<unknown> {
-    return (await this.current() as any)[key];
+    const { present, value } = await this.readRootKey(key);
+    return present ? value : undefined;
   }
 
   async getChatDraft(key: string): Promise<{ m: string; t: string } | null> {

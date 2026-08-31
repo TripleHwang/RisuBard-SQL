@@ -25,6 +25,10 @@ const legacyTokens = [
             // from and that project's licence; NOTICE.md carries the same
             // attribution.
             'scripts/portable/gen-server-deps.cjs',
+            // The 0.3.16 note credits the upstream project the portable
+            // dependency manifest came from. Attribution belongs where the user
+            // reads it, not only in a file header they never open.
+            'src/etc/patchNote.ts',
         ]),
     },
 ]

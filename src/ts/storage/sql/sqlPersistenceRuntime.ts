@@ -12,6 +12,8 @@ import { buildSqlDirtyCommit } from './sqlDirtyCommit'
 import { hasSqlCommitChanges, SqlRevisionConflictError } from './sqlCommit'
 import { v4 as uuidv4 } from 'uuid'
 import { runtimeMetrics } from '../../performance/runtimeMetrics'
+import { recordRuntimeDuration, updateRuntimeMemory } from '../../performance/performanceReport'
+import { readJsHeap } from '../../performance/heapUsage'
 
 let activeStorage: ISqlStorage | null = null
 /**
@@ -42,6 +44,30 @@ type CompatibilityBaseline = {
     characters: Map<string, string>; chats: Map<string, { characterId: string; signature: string }>
     messages: Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>
     characterOrder: string[]; presetOrder: string[]; activePreset: number; chatOrders: Map<string, string[]>
+    /**
+     * Content-free size of this snapshot, counted while it was built rather
+     * than by walking it afterwards, so measuring costs nothing.
+     *
+     * `bytes` is UTF-16 bytes of the fingerprint strings only -- the string
+     * payload the process holds for the rest of the session -- not the Map
+     * overhead around them. `entries` is how many such strings there are.
+     *
+     * These describe the snapshot as taken. `rebaselineHydratedRootKey`
+     * deliberately does not adjust them: it swaps one key's fingerprint, and
+     * the next audit (at most five seconds later) recomputes both exactly.
+     */
+    bytes: number
+    entries: number
+    /**
+     * How many of those `entries` are the string instance the previous baseline
+     * already held, because this pass produced a byte-identical one.
+     *
+     * `entries - reused` is what this pass actually added to the heap for the
+     * next five seconds. It is the only observable evidence that the carry-over
+     * in `snapshotCompatibility` is working: JavaScript cannot compare string
+     * identity, so a test has no other way to tell one copy from two.
+     */
+    reused: number
 }
 let compatibilityBaseline: CompatibilityBaseline | null = null
 
@@ -649,35 +675,121 @@ function fingerprint(value: unknown): string {
 /** Roots carried by their own baseline scope, never by the generic root map. */
 const STRUCTURAL_COMPATIBILITY_ROOTS = ['characters', 'pluginCustomStorage', 'botPresets', 'botPresetsId']
 
-function snapshotCompatibility(database: Database): CompatibilityBaseline {
+/**
+ * Re-fingerprint everything resident, keeping the strings the standing baseline
+ * already holds wherever this pass produced the same bytes.
+ *
+ * The carry-over is not a narrowing. Every value is serialised on every pass,
+ * exactly as before, and every comparison the diff makes is over the same
+ * bytes; `previous` decides only which of two identical strings the process
+ * goes on holding. What it removes is the churn. A fingerprint produced here is
+ * referenced for the whole five seconds until the next pass replaces it, which
+ * on any generational collector is long enough to be promoted out of the
+ * nursery and then abandoned -- so the audit was handing the collector 2.55 MiB
+ * of promoted-then-dead string every five seconds at the reporting shape, and
+ * holding two full copies of it for the length of each pass. Carried over, the
+ * new string dies inside the pass that made it and the old one is never
+ * touched.
+ *
+ * `previous` is `null` for the first pass, and every value is new by
+ * definition.
+ */
+function snapshotCompatibility(database: Database, previous: CompatibilityBaseline | null): CompatibilityBaseline {
+    // Counted here, on the strings this pass already produced, so knowing the
+    // size of the baseline costs one addition per fingerprint and never a
+    // second walk over the graph.
+    let bytes = 0
+    let entries = 0
+    let reused = 0
+    /**
+     * `held` is what the standing baseline has for this same slot, or
+     * `undefined` when it has nothing. Equal content means the two strings are
+     * interchangeable, so the older instance is kept and the new one is left to
+     * die as nursery garbage.
+     */
+    const take = (held: string | undefined, value: unknown): string => {
+        const text = fingerprint(value)
+        bytes += text.length * 2
+        entries += 1
+        if (held !== undefined && held === text) { reused += 1; return held }
+        return text
+    }
     const roots = new Map<string, string>()
     // A deferred key is not fingerprinted at all: its in-memory value is a
     // placeholder for "unknown", and baselining that would let a later diff
     // read the placeholder as real content.
-    for (const key of Object.keys(database)) if (!STRUCTURAL_COMPATIBILITY_ROOTS.includes(key) && !isRootKeyDeferred(key)) roots.set(key, fingerprint((database as any)[key]))
+    for (const key of Object.keys(database)) if (!STRUCTURAL_COMPATIBILITY_ROOTS.includes(key) && !isRootKeyDeferred(key)) roots.set(key, take(previous?.roots.get(key), (database as any)[key]))
     // A deferred plugin storage map is fingerprinted as nothing at all and
     // flagged as unknown, so `auditSqlCompatibilityDatabase` skips the diff
     // instead of reading the absence as hundreds of deleted rows.
     const pluginsKnown = !isRootKeyDeferred('pluginCustomStorage')
+    // Only carried from a baseline that actually knew the map. A previous
+    // snapshot flagged unknown holds an empty map, which would offer nothing to
+    // carry anyway, but reading it as a source of truth is the mistake this
+    // whole `pluginsKnown` flag exists to prevent.
+    const heldPlugins = previous?.pluginsKnown ? previous.plugins : undefined
     const plugins = pluginsKnown
-        ? new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, fingerprint(value)]))
+        ? new Map(Object.entries(database.pluginCustomStorage ?? {}).map(([key, value]) => [key, take(heldPlugins?.get(key), value)]))
         : new Map<string, string>()
     for (const preset of database.botPresets ?? []) preset.id ||= uuidv4()
-    const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, fingerprint(preset)]))
+    const presets = new Map((database.botPresets ?? []).filter(preset => preset.id).map(preset => [preset.id!, take(previous?.presets.get(preset.id!), preset)]))
     const characters = new Map<string, string>(); const chats = new Map<string, { characterId: string; signature: string }>(); const chatOrders = new Map<string, string[]>(); const messages = new Map<string, { order: string[]; values: Map<string, string>; complete: boolean }>()
     for (const character of database.characters ?? []) {
         if (!character) continue
         character.chaId ||= uuidv4()
-        characters.set(character.chaId, fingerprint({ ...character, chats: undefined }))
+        characters.set(character.chaId, take(previous?.characters.get(character.chaId), { ...character, chats: undefined }))
         for (const chat of character.chats ?? []) if (chat) chat.id ||= uuidv4()
         const ids = (character.chats ?? []).map(chat => chat?.id).filter((id): id is string => Boolean(id)); chatOrders.set(character.chaId, ids)
         for (const chat of character.chats ?? []) { if (!chat) continue; {
-            chats.set(chat.id, { characterId: character.chaId, signature: fingerprint({ ...chat, message: undefined }) })
+            chats.set(chat.id, { characterId: character.chaId, signature: take(previous?.chats.get(chat.id)?.signature, { ...chat, message: undefined }) })
             const rows = chat.message ?? []; for (const message of rows) message.chatId ||= uuidv4()
-            messages.set(chat.id, { order: rows.map(message => message.chatId!), values: new Map(rows.map(message => [message.chatId!, fingerprint(message)])), complete: (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false })
+            const heldMessages = previous?.messages.get(chat.id)?.values
+            messages.set(chat.id, { order: rows.map(message => message.chatId!), values: new Map(rows.map(message => [message.chatId!, take(heldMessages?.get(message.chatId!), message)])), complete: (chat as Chat & { messagesFullyLoaded?: boolean }).messagesFullyLoaded !== false })
         } }
     }
-    return { roots, pluginsKnown, plugins, presets, characters, chats, messages, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders }
+    return { roots, pluginsKnown, plugins, presets, characters, chats, messages, characterOrder: (database.characters ?? []).map(c => c?.chaId).filter(Boolean), presetOrder: (database.botPresets ?? []).map(p => p.id).filter(Boolean), activePreset: Number(database.botPresetsId) || 0, chatOrders, bytes, entries, reused }
+}
+
+function auditNow(): number {
+    try {
+        const value = globalThis.performance?.now?.()
+        return Number.isFinite(value) ? value : Date.now()
+    }
+    catch { return Date.now() }
+}
+
+/**
+ * What one audit pass cost and what it left behind.
+ *
+ * Reported after the baseline is installed, so `compatibilityBaseline*`
+ * describes the snapshot the process is now holding for the rest of the
+ * session -- which is the number that decides whether this loop is a memory
+ * floor. Best-effort in the same sense as every other metric here:
+ * instrumentation must never be able to fail a save.
+ */
+function reportCompatibilityAudit(startedAt: number, baseline: CompatibilityBaseline): void {
+    try {
+        recordRuntimeDuration('compatibility-audit', Math.max(0, auditNow() - startedAt))
+        const heap = readJsHeap()
+        updateRuntimeMemory({
+            jsHeapUsedBytes: heap.usedBytes,
+            jsHeapTotalBytes: heap.totalBytes,
+            compatibilityBaselineBytes: baseline.bytes,
+            compatibilityBaselineEntries: baseline.entries,
+            compatibilityBaselineReusedEntries: baseline.reused,
+        })
+    }
+    catch { /* reporting is optional */ }
+}
+
+/** The size of the baseline this session is holding, or null when it holds none. */
+export function sqlCompatibilityBaselineFootprint(): { bytes: number; entries: number; reused: number } | null {
+    if (!compatibilityBaseline) return null
+    return {
+        bytes: compatibilityBaseline.bytes,
+        entries: compatibilityBaseline.entries,
+        reused: compatibilityBaseline.reused,
+    }
 }
 
 function changedKeys(before: Map<string, string>, after: Map<string, string>): Set<string> {
@@ -790,10 +902,17 @@ function hasUnreconcilablePartialOrder(
 
 /** Idle compatibility audit: baseline first, then only explicitly changed scopes. */
 export function auditSqlCompatibilityDatabase(database: Database): void {
-    const next = snapshotCompatibility(database)
+    const startedAt = auditNow()
     const previous = compatibilityBaseline
+    const next = snapshotCompatibility(database, previous)
     compatibilityBaseline = next
-    if (!previous) return
+    if (!previous) { reportCompatibilityAudit(startedAt, next); return }
+    try { auditChangedScopes(previous, next) }
+    finally { reportCompatibilityAudit(startedAt, next) }
+}
+
+/** The diff half of one audit pass, split out only so the pass can be timed whole. */
+function auditChangedScopes(previous: CompatibilityBaseline, next: CompatibilityBaseline): void {
     for (const key of changedRootKeys(previous.roots, next.roots)) markSqlRootDirty(key)
     // Only diff plugin storage when BOTH snapshots actually knew its contents.
     // A load (unknown -> known) is not an edit, and a deferral (known ->
@@ -845,7 +964,9 @@ export function auditSqlCompatibilityDatabase(database: Database): void {
 }
 
 export function initializeSqlCompatibilityBaseline(database: Database): void {
-    compatibilityBaseline = snapshotCompatibility(database)
+    const startedAt = auditNow()
+    compatibilityBaseline = snapshotCompatibility(database, null)
+    reportCompatibilityAudit(startedAt, compatibilityBaseline)
 }
 
 /** Metadata-first startup deliberately avoids saveDb and its reactive encoder path. */
