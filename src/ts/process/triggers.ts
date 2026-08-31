@@ -1552,6 +1552,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                         char: char,
                         chat: chat,
                         moduleId: trigger.moduleId,
+                        triggerName: trigger.comment,
                     })
 
                     if(triggerCodeResult.stopSending){

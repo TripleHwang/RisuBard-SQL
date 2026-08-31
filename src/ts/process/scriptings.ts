@@ -63,6 +63,25 @@ let luaFactoryPromise: Promise<void> | null = null;
 let pendingEngineCreations = new Map<string, Promise<ScriptingEngineState>>();
 const MAX_SCRIPTING_ENGINES = 8
 
+/**
+ * Where a script came from, for an error message.
+ *
+ * A module id alone is a UUID, which tells the user nothing, so it is resolved
+ * to the module's name and only falls back to the id when the module is no
+ * longer installed. No id at all means the trigger belongs to the character.
+ */
+function describeScriptSource(arg: { moduleId?: string, triggerName?: string, char?: character | simpleCharacterArgument }): string {
+    const trigger = arg.triggerName ? `trigger "${arg.triggerName}"` : 'script'
+    if (arg.moduleId) {
+        const module = getDatabase().modules?.find((item) => item?.id === arg.moduleId)
+        return `${trigger} from module "${module?.name ?? arg.moduleId}"`
+    }
+    // `simpleCharacterArgument` is a trimmed character and carries a name too,
+    // but the two shapes have no declared overlap, so it is read defensively.
+    const name = (arg.char as { name?: unknown } | undefined)?.name
+    return `${trigger} on character "${typeof name === 'string' && name ? name : 'unknown'}"`
+}
+
 export async function runScripted(code:string, arg:{
     char?:character|simpleCharacterArgument,
     chat?:Chat
@@ -74,6 +93,14 @@ export async function runScripted(code:string, arg:{
     mode?: string,
     type?: 'lua'|'py',
     moduleId?: string
+    /**
+     * The trigger's own name, so a script error can say which script it came
+     * from. A Lua error reads `[string "..."]:698: attempt to index a nil
+     * value`, which names neither the trigger nor the module that shipped it --
+     * a user with several script modules installed has no way to tell which one
+     * failed.
+     */
+    triggerName?: string
 }){
     const type: 'lua'|'py' = arg.type ?? 'lua'
     const char = arg.char ?? getCurrentCharacter()
@@ -1179,7 +1206,7 @@ export async function runScripted(code:string, arg:{
                     ScriptingEngineState.stopSending = true
                 }
             } catch (error) {
-                console.error(error)
+                console.error(`[script] ${describeScriptSource(arg)} failed during "${mode}"`, error)
             }
         }
         if(ScriptingEngineState.type === 'py'){
