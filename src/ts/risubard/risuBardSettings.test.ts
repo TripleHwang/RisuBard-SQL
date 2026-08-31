@@ -32,6 +32,7 @@ describe('RisuBard analysis settings', () => {
             const event = buildRisuBardEventWritingPolicy(style, 'Use short sentences.', 'en')
             const canon = buildRisuBardCanonicalWritingPolicy(style, 'Use short sentences.', 'en')
             expect(event).toContain('English')
+            expect(canon).toContain('### Current State')
             expect(canon).toContain('### Story History')
             expect(canon).toContain('16')
             expect(canon).toContain('entire body')
@@ -41,6 +42,7 @@ describe('RisuBard analysis settings', () => {
     )
 
     test('uses conservative defaults for missing and invalid values', () => {
+        expect(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT).toBe(8_192)
         expect(normalizeRisuBardAnalysisTokenLimit(undefined))
             .toBe(RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT)
         expect(normalizeRisuBardAdditionalSearchLimit('2'))
@@ -107,11 +109,12 @@ describe('RisuBard analysis settings', () => {
     test('keeps character canon compact while preserving detailed event evidence', () => {
         const policy = buildRisuBardCanonicalWritingPolicy('concise', '')
 
-        expect(policy).toContain('캐릭터 정본은 현재 상태')
+        expect(policy).toContain('모든 캐릭터 정본은 문서 상단')
         expect(policy).toContain('인과에 필요한 전환점')
         expect(policy).toContain('턴별 행동 기록을 누적하지 않는다')
         expect(policy).toContain('상세 과거 행적은 사건 문서')
         expect(policy).toContain('이전 상태를 현재 사실처럼 병기하지 않는다')
+        expect(policy).toContain('### 현재 상태')
         expect(policy).toContain('### 작중 행적')
         expect(policy).toContain('최대 16개')
         expect(policy).toContain('[[사건 문서 제목]]')
@@ -141,5 +144,32 @@ describe('RisuBard analysis settings', () => {
         expect(resolved.risuBardResponseMessageCount).toBe(20)
         expect(resolved.risuBardResponseExcludeUserMessages).toBe(true)
         expect(resolved.showRequestStatus).toBe(false)
+    })
+
+    test('resolves per-chat BARDCHAT context selections with token-saving defaults', () => {
+        const defaults = resolveRisuBardChatSettings({})
+        expect(defaults).toMatchObject({
+            bardChatIncludeWiki: true,
+            bardChatIncludeChat: false,
+            bardChatIncludeSystemPrompt: false,
+            bardChatIncludeCharacterDescription: false,
+            bardChatIncludePersona: false,
+            bardChatIncludeCharacterLorebook: false,
+            bardChatIncludeModuleLorebook: false,
+        })
+
+        const resolved = resolveRisuBardChatSettings({
+            bardChatIncludeSystemPrompt: true,
+            bardChatIncludeCharacterLorebook: true,
+        }, {
+            bardChatIncludeSystemPrompt: false,
+            bardChatIncludeChat: true,
+        })
+        expect(resolved).toMatchObject({
+            bardChatIncludeWiki: true,
+            bardChatIncludeChat: true,
+            bardChatIncludeSystemPrompt: false,
+            bardChatIncludeCharacterLorebook: true,
+        })
     })
 })

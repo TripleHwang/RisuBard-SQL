@@ -92,6 +92,27 @@ describe('chat request evidence', () => {
         expect(JSON.stringify(evidence)).not.toContain('provider.example')
     })
 
+    it('exports a safe failure category and HTTP status without the raw provider error', () => {
+        const failed: RequestLogEntry = {
+            ...entry,
+            success: false,
+            status: 504,
+            errorMessage: 'Upstream request timed out after 300000ms api_key=must-not-export',
+        }
+        const evidence = buildChatRequestEvidence('chat-7', [failed])
+        const markdown = formatChatRequestEvidenceMarkdown(evidence)
+
+        expect(evidence.requests[0]).toMatchObject({
+            outcome: 'failed',
+            status: 504,
+            failureCategory: 'timeout',
+        })
+        expect(markdown).toContain('| HTTP 상태 | 504 |')
+        expect(markdown).toContain('| 오류 유형 | 타임아웃 |')
+        expect(markdown).not.toContain('api_key')
+        expect(markdown).not.toContain('must-not-export')
+    })
+
     it('formats the card fields and every injection row as readable Markdown', () => {
         const evidence = buildChatRequestEvidence(
             'chat-7',

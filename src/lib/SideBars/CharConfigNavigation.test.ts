@@ -53,6 +53,22 @@ describe('character configuration navigation', () => {
         }
     })
 
+    test('keeps alternate greetings in a collapsed list below the first message', () => {
+        const config = source('src/lib/SideBars/CharConfig.svelte')
+        const infoStart = config.indexOf('{#if activeSubMenu === 0}')
+        const displayStart = config.indexOf('{:else if activeSubMenu === 1}')
+        const advancedStart = config.indexOf('{:else if activeSubMenu === 2}')
+        const info = config.slice(infoStart, displayStart)
+        const advanced = config.slice(advancedStart)
+
+        expect(info.indexOf('bind:value={DBState.db.characters[$selectedCharID].firstMessage}'))
+            .toBeLessThan(info.indexOf('data-alternate-greetings'))
+        expect(info).toContain('<ShAccordion')
+        expect(info).toContain('DBState.db.characters[$selectedCharID].alternateGreetings.length')
+        expect(info).toContain("alternateGreetings.push('')")
+        expect(advanced).not.toContain('data-alternate-greetings')
+    })
+
     test('opens the former share screen from the management button', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         const charConfig = source('src/lib/SideBars/CharConfig.svelte')

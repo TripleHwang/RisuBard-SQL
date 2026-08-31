@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -217,6 +218,27 @@ describe('file-native KV compatibility projection', () => {
 
         expect(store.kvList('assets/')).toEqual(['assets/later'])
         expect(createFileKv({ dataRoot }).kvList('assets/')).toEqual(['assets/later'])
+    })
+
+    it('promotes a verified staged file into the object store without recopying it', async () => {
+        const dataRoot = root()
+        const stagingRoot = root()
+        const sourcePath = path.join(stagingRoot, 'large.bin')
+        const value = Buffer.alloc(2 * 1024 * 1024, 0x6b)
+        const stagedMtime = new Date('2001-02-03T04:05:06.000Z')
+        fs.writeFileSync(sourcePath, value)
+        fs.utimesSync(sourcePath, stagedMtime, stagedMtime)
+
+        const store = createFileKv({ dataRoot })
+        await store.kvReplacePrefixesFromFilesAsync([
+            { key: 'assets/large', sourcePath },
+        ], ['assets/'])
+
+        const hash = crypto.createHash('sha256').update(value).digest('hex')
+        const objectPath = path.join(dataRoot, 'kv', 'objects', hash)
+        expect(fs.existsSync(sourcePath)).toBe(false)
+        expect(fs.statSync(objectPath).mtimeMs).toBe(stagedMtime.getTime())
+        expect(store.kvGet('assets/large')).toEqual(value)
     })
 
     it('publishes replacement values from staged files without loading them into entry buffers', async () => {

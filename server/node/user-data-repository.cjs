@@ -88,21 +88,67 @@ function createUserDataRepository(options = {}) {
     fs.mkdirSync(dataRoot, { recursive: true });
     recoverTransactions(dataRoot);
 
-    function loadSidebarIndex() {
+    function loadSidebarIndex(options = {}) {
         const indexPath = path.join(dataRoot, 'index', 'sidebar.json');
         if (!fs.existsSync(indexPath)) {
             return { schemaVersion: 1, updatedAt: 0, characters: [], collections: {} };
         }
-        return readVerifiedJson(dataRoot, 'index/sidebar.json');
+        return readVerifiedJson(dataRoot, 'index/sidebar.json', {
+            ...options,
+            validate: isPlainObject,
+        });
     }
 
-    function readJson(relativePath) {
-        return readVerifiedJson(dataRoot, relativePath);
+    function getProjectionRevision() {
+        const indexPath = path.join(dataRoot, 'index', 'sidebar.json');
+        if (!fs.existsSync(indexPath)) return null;
+
+        const index = loadSidebarIndex({ acceptExternalChanges: true });
+        const relativePaths = new Set([
+            'index/sidebar.json',
+            'settings/app.json',
+            'secrets/credentials.json',
+        ]);
+        for (const [legacyName, directory] of COLLECTIONS) {
+            for (const id of index.collections?.[legacyName] || []) {
+                relativePaths.add(path.join(directory, `${stableId(id, directory.slice(0, -1))}.json`));
+            }
+        }
+        for (const character of index.characters || []) {
+            const characterId = stableId(character?.id, 'character');
+            relativePaths.add(path.join('characters', characterId, 'metadata.json'));
+            for (const chat of character?.chats || []) {
+                const chatId = stableId(chat?.id, 'chat');
+                relativePaths.add(chatMetadataPath(characterId, chatId));
+                relativePaths.add(messagesPath(characterId, chatId));
+            }
+        }
+
+        const revision = crypto.createHash('sha256');
+        for (const relativePath of [...relativePaths].sort()) {
+            const normalizedPath = relativePath.split(path.sep).join('/');
+            const target = resolveInside(dataRoot, relativePath);
+            try {
+                const stat = fs.statSync(target, { bigint: true });
+                revision.update(`${normalizedPath}\0${stat.size}\0${stat.mtimeNs}\n`);
+            } catch (error) {
+                if (error?.code !== 'ENOENT') throw error;
+                revision.update(`${normalizedPath}\0missing\n`);
+            }
+        }
+        return revision.digest('hex');
     }
 
-    function loadCharacter(characterId) {
+    function readJson(relativePath, options = {}) {
+        return readVerifiedJson(dataRoot, relativePath, {
+            ...options,
+            validate: isPlainObject,
+        });
+    }
+
+    function loadCharacter(characterId, options = {}) {
         const id = stableId(characterId, 'character');
-        return readJson(path.join('characters', id, 'metadata.json'));
+        return readJson(path.join('characters', id, 'metadata.json'), options);
     }
 
     function messagesPath(characterId, chatId) {
@@ -124,8 +170,8 @@ function createUserDataRepository(options = {}) {
         });
     }
 
-    function loadChat(characterId, chatId) {
-        const metadata = readJson(chatMetadataPath(characterId, chatId));
+    function loadChat(characterId, chatId, options = {}) {
+        const metadata = readJson(chatMetadataPath(characterId, chatId), options);
         return { ...metadata, message: loadMessages(characterId, chatId) };
     }
 
@@ -267,23 +313,24 @@ function createUserDataRepository(options = {}) {
         return { mode, characters: characters.length, files: operations.length };
     }
 
-    function loadCollection(directory, ids) {
-        return (ids || []).map(id => readJson(path.join(directory, `${stableId(id, directory.slice(0, -1))}.json`)));
+    function loadCollection(directory, ids, options = {}) {
+        return (ids || []).map(id => readJson(path.join(directory, `${stableId(id, directory.slice(0, -1))}.json`), options));
     }
 
-    function exportLegacyDatabase() {
-        const settings = fs.existsSync(path.join(dataRoot, 'settings', 'app.json')) ? readJson('settings/app.json') : {};
-        const secrets = fs.existsSync(path.join(dataRoot, 'secrets', 'credentials.json')) ? readJson('secrets/credentials.json') : {};
+    function exportLegacyDatabase(exportOptions = {}) {
+        const readOptions = { acceptExternalChanges: exportOptions.acceptExternalChanges === true };
+        const settings = fs.existsSync(path.join(dataRoot, 'settings', 'app.json')) ? readJson('settings/app.json', readOptions) : {};
+        const secrets = fs.existsSync(path.join(dataRoot, 'secrets', 'credentials.json')) ? readJson('secrets/credentials.json', readOptions) : {};
         const { schemaVersion: _settingsSchema, ...plainSettings } = settings;
         const { schemaVersion: _secretsSchema, ...plainSecrets } = secrets;
-        const index = loadSidebarIndex();
+        const index = loadSidebarIndex(readOptions);
         const database = deepMerge(plainSettings, plainSecrets);
         for (const [legacyName, directory] of COLLECTIONS) {
-            database[legacyName] = loadCollection(directory, index.collections?.[legacyName]);
+            database[legacyName] = loadCollection(directory, index.collections?.[legacyName], readOptions);
         }
         database.characters = index.characters.map(summary => {
-            const character = loadCharacter(summary.id);
-            return { ...character, chats: summary.chats.map(chat => loadChat(summary.id, chat.id)) };
+            const character = loadCharacter(summary.id, readOptions);
+            return { ...character, chats: summary.chats.map(chat => loadChat(summary.id, chat.id, readOptions)) };
         });
         return database;
     }
@@ -294,6 +341,7 @@ function createUserDataRepository(options = {}) {
         commitUserMessage,
         exportLegacyDatabase,
         finalizeAssistantDraft,
+        getProjectionRevision,
         importLegacyDatabase,
         loadAssistantDraft,
         loadCharacter,

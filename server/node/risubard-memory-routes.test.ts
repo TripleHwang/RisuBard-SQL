@@ -526,6 +526,17 @@ describe('RisuBard memory routes', () => {
                     chatId: 'chat',
                     currentInput: 'bridge',
                     tokenBudget: { target: 1_500, maximum: 4_500 },
+                    semanticMatches: [{
+                        documentId: 'event-bridge',
+                        score: 0.91,
+                    }],
+                    sourceMatches: [{
+                        messageId: 'message-5',
+                        role: 'assistant',
+                        content: '플러피풋의 사과 에일',
+                        score: 4.2,
+                        occurredAt: 5,
+                    }],
                 },
             },
             harness.response,
@@ -537,8 +548,58 @@ describe('RisuBard memory routes', () => {
             chatId: 'chat',
             currentInput: 'bridge',
             tokenBudget: { target: 1_500, maximum: 4_500 },
+            semanticMatches: [{
+                documentId: 'event-bridge',
+                score: 0.91,
+            }],
+            sourceMatches: [{
+                messageId: 'message-5',
+                role: 'assistant',
+                content: '플러피풋의 사과 에일',
+                score: 4.2,
+                occurredAt: 5,
+            }],
         })
         expect(harness.response.statusCode).toBe(200)
+
+        await harness.routes.get('/api/risubard/memory/inquiry')!(
+            {
+                body: {
+                    characterId: 'character',
+                    chatId: 'chat',
+                    currentInput: 'bridge',
+                    semanticMatches: Array.from({ length: 33 }, (_, index) => ({
+                        documentId: `event-${index}`,
+                        score: 0.9,
+                    })),
+                },
+            },
+            harness.response,
+            vi.fn()
+        )
+        expect(harness.response.statusCode).toBe(400)
+        expect(service.inquireNarrative).toHaveBeenCalledTimes(1)
+
+        await harness.routes.get('/api/risubard/memory/inquiry')!(
+            {
+                body: {
+                    characterId: 'character',
+                    chatId: 'chat',
+                    currentInput: 'bridge',
+                    sourceMatches: Array.from({ length: 9 }, (_, index) => ({
+                        messageId: `message-${index}`,
+                        role: 'assistant',
+                        content: 'bounded source',
+                        score: 1,
+                        occurredAt: index,
+                    })),
+                },
+            },
+            harness.response,
+            vi.fn()
+        )
+        expect(harness.response.statusCode).toBe(400)
+        expect(service.inquireNarrative).toHaveBeenCalledTimes(1)
 
         await harness.routes.get('/api/risubard/memory/inquiry')!(
             {
@@ -930,6 +991,7 @@ describe('RisuBard memory routes', () => {
             chatId: 'chat',
             type: 'faction',
             title: '은촛대 수도회',
+            aliases: ['은촛대', '실버 캔들'],
             markdown: '# 은촛대 수도회\n\n사용자 작성.',
         }
 

@@ -9,15 +9,21 @@ export interface ModelResponse {
 export class ModelOutputError extends Error {
     retryable: boolean
     validationHint?: string
-    constructor(public readonly reason: 'empty' | 'truncated' | 'invalid-structure' | 'blocked') {
-        super({
+    constructor(
+        public readonly reason: 'empty' | 'truncated' | 'invalid-structure' | 'blocked',
+        validationHint?: string
+    ) {
+        const baseMessage = {
             empty: 'AI가 최종 답변 없이 빈 응답을 반환했습니다.',
             truncated: 'AI 응답이 출력 한도에서 잘렸습니다. 출력 토큰 한도를 늘리거나 한 번에 처리할 양을 줄여 주세요.',
             'invalid-structure': 'AI 응답 형식이 올바르지 않습니다. 검증되지 않은 내용은 저장하지 않았습니다.',
             blocked: '모델 제공자가 응답 생성을 중단했습니다.',
-        }[reason])
+        }[reason]
+        const boundedHint = validationHint?.slice(0, 512)
+        super(baseMessage)
         this.name = 'ModelOutputError'
         this.retryable = reason !== 'blocked'
+        this.validationHint = boundedHint
     }
 }
 
@@ -70,13 +76,16 @@ export async function runValidatedModelRequest<T>(options: {
                 return options.parse(text)
             } catch (error) {
                 if (error instanceof ModelOutputError) throw error
-                const failure = new ModelOutputError('invalid-structure')
                 // JSON parser errors may quote private model text. Only use
                 // bounded contract-validator feedback, never replay raw output.
-                if (error instanceof Error && !(error instanceof SyntaxError)) {
-                    failure.validationHint = error.message.slice(0, 512)
-                }
-                throw failure
+                const validationHint = error instanceof Error
+                    && !(error instanceof SyntaxError)
+                    ? error.message
+                    : undefined
+                throw new ModelOutputError(
+                    'invalid-structure',
+                    validationHint
+                )
             }
         } catch (error) {
             if (!(error instanceof ModelOutputError)) throw error

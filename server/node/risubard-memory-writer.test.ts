@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest'
 import {
     canonicalBatchSchema,
+    buildCanonicalBatchSchema,
+    buildRebootBatchDraftSchema,
     memoryWriterDraftSchema,
-    rebootBatchDraftSchema,
     memoryWriterSystemPrompt,
     hasMemoryWriterContent,
     parseMemoryWriterDraft,
@@ -17,6 +18,8 @@ describe('BardWiki memory writer skill', () => {
         const prompt = buildMemoryWriterSystemPrompt('en')
         expect(prompt).toContain('canonicalUpdateCandidates')
         expect(prompt).toContain('characterKnowledge')
+        expect(prompt).toContain('Reserved story arc plot')
+        expect(prompt).toContain('configured confirmed-event checkpoint')
         expect(prompt).not.toMatch(/[가-힣]/)
         const draft = parseMemoryWriterDraft(JSON.stringify({
             schemaVersion: 1, title: 'Arrival', establishedEvents: ['Alice arrived.'],
@@ -34,6 +37,19 @@ describe('BardWiki memory writer skill', () => {
         expect(memoryWriterSystemPrompt).toContain('ID, 파일 경로, revision, hash')
         expect(memoryWriterSystemPrompt).toContain('인물별 지식')
         expect(memoryWriterSystemPrompt).toContain('독립적인 이야기 요약')
+        expect(memoryWriterSystemPrompt).toContain('아크 플롯 후보는 만들지 마라')
+        expect(memoryWriterSystemPrompt).toContain('설정한 확정 사건 체크포인트마다')
+    })
+
+    test('describes every required canonical candidate field without contradicting the schema', () => {
+        const candidateContract = memoryWriterSystemPrompt
+            .split('- `canonicalUpdateCandidates`:')[1]
+            ?.split('\n\n')[0] ?? ''
+        for (const field of [
+            'type', 'title', 'reason', 'action', 'targetDocumentId', 'confidence',
+        ]) {
+            expect(candidateContract).toContain(`\`${field}\``)
+        }
     })
 
     test('teaches general narrative value and omission-cost judgment', () => {
@@ -56,7 +72,7 @@ describe('BardWiki memory writer skill', () => {
         expect(creation).toContain('주요 인물')
         expect(creation).toContain('사건 문서나 다른 인물의 정본에 이름이 등장하는 것')
         expect(creation).toContain('일회성 인물')
-        expect(updates).toContain('구체적인 지속 변화')
+        expect(updates).toContain('대표되지 않은 지속 변화')
         expect(updates).toContain('사건 문서만으로 충분한 행동')
         expect(updates).toContain('정본 후보를 만들지 마라')
         expect(memoryWriterSystemPrompt).not.toContain(
@@ -102,6 +118,8 @@ describe('BardWiki memory writer skill', () => {
             .toMatchObject({ type: 'string' })
         expect(schema.properties.canonicalUpdateCandidates.items.properties.action)
             .toMatchObject({ type: 'string' })
+        expect(schema.properties.canonicalUpdateCandidates.items.properties.aliases)
+            .toMatchObject({ type: 'array', maxItems: 32 })
     })
 
     test('supports canonical target budgets above eight while validating index membership', () => {
@@ -116,7 +134,11 @@ describe('BardWiki memory writer skill', () => {
         }))
         expect(draft.canonicalUpdateCandidates).toHaveLength(10)
         const documents = candidates.map((candidate, candidateIndex) => ({
-            candidateIndex, markdown: `## ${candidate.title}\n\n변경된 상태`,
+            candidateIndex,
+            sections: [{
+                heading: '', operation: 'upsert',
+                content: `${candidate.title}의 변경된 상태`,
+            }],
         }))
         expect(parseCanonicalBatch(JSON.stringify({ schemaVersion: 1, documents }), 10).documents).toHaveLength(10)
         expect(() => parseCanonicalBatch(JSON.stringify({ schemaVersion: 1, documents }), 9)).toThrow()
@@ -125,6 +147,51 @@ describe('BardWiki memory writer skill', () => {
         const schema = JSON.parse(canonicalBatchSchema).properties.documents
         expect(schema.maxItems).toBeUndefined()
         expect(schema.items.properties.candidateIndex.maximum).toBeUndefined()
+        const boundedSchema = JSON.parse(buildCanonicalBatchSchema(10))
+            .properties.documents
+        expect(boundedSchema).toMatchObject({ minItems: 10, maxItems: 10 })
+        expect(boundedSchema.items.properties.candidateIndex.maximum).toBe(9)
+    })
+
+    test('parses bounded canonical section patches and rejects full document rewrites', () => {
+        const output = JSON.stringify({
+            schemaVersion: 1,
+            documents: [{
+                candidateIndex: 0,
+                sections: [{
+                    heading: '현재 상태',
+                    operation: 'upsert',
+                    content: '- 석사 학위 취득 완료',
+                }],
+            }],
+        })
+
+        expect(parseCanonicalBatch(output, 1).documents[0]).toEqual({
+            candidateIndex: 0,
+            sections: [{
+                heading: '현재 상태',
+                operation: 'upsert',
+                content: '- 석사 학위 취득 완료',
+            }],
+        })
+        expect(() => parseCanonicalBatch(JSON.stringify({
+            schemaVersion: 1,
+            documents: [{ candidateIndex: 0, markdown: '## 루치아' }],
+        }), 1)).toThrow()
+        expect(() => parseCanonicalBatch(JSON.stringify({
+            schemaVersion: 1,
+            documents: [{
+                candidateIndex: 0,
+                sections: [
+                    { heading: '현재 상태', operation: 'upsert', content: '- A' },
+                    { heading: '현재 상태', operation: 'upsert', content: '- B' },
+                ],
+            }],
+        }), 1)).toThrow(/heading/)
+        expect(parseCanonicalBatch(JSON.stringify({
+            schemaVersion: 1,
+            documents: [{ candidateIndex: 0, sections: [] }],
+        }), 1).documents[0]?.sections).toEqual([])
     })
 
     test('validates a semantic draft and serializes deterministic Markdown', () => {
@@ -147,12 +214,16 @@ describe('BardWiki memory writer skill', () => {
             canonicalUpdateCandidates: [{
                 type: 'location',
                 title: '케사리아',
+                aliases: ['제국 수도', ' 케사리아 '],
                 reason: '성문 봉쇄 상태가 새로 확정되었다.',
                 action: 'update',
                 targetDocumentId: 'location.caesarea',
                 confidence: 0.94,
             }],
         }))
+
+        expect(draft.canonicalUpdateCandidates[0].aliases)
+            .toEqual(['제국 수도', '케사리아'])
 
         expect(serializeMemoryWriterDraft(draft)).toBe([
             '## 성문 도착',
@@ -163,9 +234,27 @@ describe('BardWiki memory writer skill', () => {
         ].join('\n'))
     })
 
+    test('defaults omitted canonical aliases to an empty array', () => {
+        const draft = parseMemoryWriterDraft(JSON.stringify({
+            schemaVersion: 1, title: '별칭 없는 후보',
+            establishedEvents: ['라비안이 도착했다.'],
+            stateChanges: [], characterKnowledge: [], persistentFacts: [],
+            openContinuity: [], canonicalUpdateCandidates: [{
+                type: 'character', title: '라비안', reason: '지속 인물이다.',
+                action: 'create', targetDocumentId: null, confidence: 0.9,
+            }],
+        }))
+
+        expect(draft.canonicalUpdateCandidates[0].aliases).toEqual([])
+    })
+
     test('keeps two reboot events separate while sharing canonical candidates', () => {
-        const schema = JSON.parse(rebootBatchDraftSchema)
-        expect(schema.properties.turns).toMatchObject({ minItems: 1, maxItems: 2 })
+        const schema = JSON.parse(buildRebootBatchDraftSchema(2))
+        expect(schema.properties.turns).toMatchObject({ minItems: 2, maxItems: 2 })
+        expect(schema.properties.turns.items.required)
+            .toEqual(['title', 'establishedEvents'])
+        expect(schema.properties.turns.items.properties)
+            .not.toHaveProperty('assistantMessageId')
         const draft = parseRebootBatchDraft(JSON.stringify({
             schemaVersion: 1,
             turns: [{
@@ -191,6 +280,25 @@ describe('BardWiki memory writer skill', () => {
             ...draft,
             turns: [...draft.turns].reverse(),
         }), ['a1', 'a2'])).toThrow(/order|assistant/i)
+    })
+
+    test('binds trusted reboot assistant IDs instead of model-generated IDs', () => {
+        const draft = parseRebootBatchDraft(JSON.stringify({
+            schemaVersion: 1,
+            turns: [{
+                assistantMessageId: 'reboot_1',
+                title: '창고 탈출',
+                establishedEvents: ['린이 시호를 부축해 창고를 나섰다.'],
+            }],
+            stateChanges: [],
+            characterKnowledge: [],
+            persistentFacts: [],
+            openContinuity: [],
+            canonicalUpdateCandidates: [],
+        }), ['actual-assistant-message-id'])
+
+        expect(draft.turns[0].assistantMessageId)
+            .toBe('actual-assistant-message-id')
     })
 
     test('normalizes Gemini operation as the canonical action field', () => {

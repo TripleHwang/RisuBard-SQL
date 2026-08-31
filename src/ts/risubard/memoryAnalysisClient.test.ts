@@ -674,6 +674,84 @@ describe('stored response memory analysis', () => {
         }
     })
 
+    test('passes an exact one-turn reboot schema to the model provider', async () => {
+        const modelCalls: MemoryAnalysisModelCall[] = []
+        const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => {
+            modelCalls.push(request)
+            return {
+                type: 'success' as const,
+                result: JSON.stringify({
+                    schemaVersion: 1,
+                    turns: [{ title: '탈출', establishedEvents: [] }],
+                    stateChanges: [],
+                    characterKnowledge: [],
+                    persistentFacts: [],
+                    openContinuity: [],
+                    canonicalUpdateCandidates: [],
+                }),
+            }
+        })
+        const fetchImpl = vi.fn(async (input, init) => {
+            const url = String(input)
+            if (url.endsWith('/view')) {
+                return new Response(JSON.stringify({
+                    mode: 'markdown', wikiPath: 'wiki', documents: [],
+                    health: { danglingLinks: [], unlinkedDocumentIds: [] },
+                }))
+            }
+            if (url.endsWith('/inquiry')) {
+                return new Response(JSON.stringify({
+                    mode: 'v2-current', graphRevision: 0, indexRevision: 0,
+                    cacheStatus: 'current', sources: [], metrics: {
+                        candidateCount: 0, inspectedNodeCount: 0,
+                        inspectedEdgeCount: 0, selectedNodeCount: 0,
+                        selectedTokens: 0, hopCount: 0,
+                        auxiliaryModelCalls: 0,
+                    },
+                }))
+            }
+            if (url.endsWith('/wiki/reboot/begin')) {
+                return new Response(JSON.stringify({ canonicalCount: 0 }))
+            }
+            if (url.endsWith('/wiki/reboot/record')) {
+                return new Response(JSON.stringify(
+                    JSON.parse(String(init?.body)).receipt
+                ))
+            }
+            throw new Error(`Unexpected request: ${url}`)
+        }) as unknown as typeof fetch
+        const analysis = createStoredResponseMemoryAnalysis({
+            requestModel,
+            fetchImpl,
+            createAuth: async () => 'test-jwt',
+            onError: vi.fn(),
+            nativeV2Analysis: true,
+        })
+
+        await analysis.confirm({
+            characterId: 'character',
+            chatId: 'reboot-job',
+            messages: [{
+                messageId: 'assistant-1',
+                role: 'assistant',
+                content: '창고를 나섰다.',
+            }],
+            rebootTurns: [{
+                assistantMessageId: 'assistant-1',
+                sourceMessageIds: ['assistant-1'],
+            }],
+        })
+
+        expect(modelCalls).toHaveLength(1)
+        const schema = JSON.parse(modelCalls[0].schema ?? '{}')
+        expect(schema.properties.turns).toMatchObject({
+            minItems: 1,
+            maxItems: 1,
+        })
+        expect(schema.properties.turns.items.properties)
+            .not.toHaveProperty('assistantMessageId')
+    })
+
     test('falls back to the main model only when the memory binding is unset', async () => {
         const modes: string[] = []
         const requestModel = vi.fn(async (
@@ -1078,22 +1156,23 @@ describe('stored response memory analysis', () => {
     test('awaits an explicit confirmation and announces its completed write', async () => {
         const updates = vi.fn()
         window.addEventListener('risubard-memory-updated', updates)
+        const requestModel = vi.fn(async (request: MemoryAnalysisModelCall) => ({
+            type: 'success',
+            result: request.schema?.includes('establishedEvents')
+                ? JSON.stringify({
+                    schemaVersion: 1,
+                    title: '확정된 턴',
+                    establishedEvents: ['턴이 확정되었다.'],
+                    stateChanges: [],
+                    characterKnowledge: [],
+                    persistentFacts: [],
+                    openContinuity: [],
+                    canonicalUpdateCandidates: [],
+                })
+                : 'NONE',
+        }))
         const analysis = createStoredResponseMemoryAnalysis({
-            requestModel: vi.fn(async (request) => ({
-                type: 'success',
-                result: request.schema?.includes('establishedEvents')
-                    ? JSON.stringify({
-                        schemaVersion: 1,
-                        title: '확정된 턴',
-                        establishedEvents: ['턴이 확정되었다.'],
-                        stateChanges: [],
-                        characterKnowledge: [],
-                        persistentFacts: [],
-                        openContinuity: [],
-                        canonicalUpdateCandidates: [],
-                    })
-                    : 'NONE',
-            })),
+            requestModel,
             fetchImpl: vi.fn(async (input) => {
                 if (String(input).endsWith('/inquiry')) {
                     return new Response(JSON.stringify({
@@ -1130,11 +1209,12 @@ describe('stored response memory analysis', () => {
                         role: 'assistant'
                         content: string
                     }>
-                }) => Promise<void>
+                }, signal?: AbortSignal) => Promise<void>
             }
         ).confirm
 
         expect(confirm).toBeTypeOf('function')
+        const controller = new AbortController()
         await confirm?.({
             characterId: 'character',
             chatId: 'chat',
@@ -1143,7 +1223,9 @@ describe('stored response memory analysis', () => {
                 role: 'assistant',
                 content: 'The accepted turn.',
             }],
-        })
+        }, controller.signal)
+        expect((requestModel.mock.calls[0] as unknown[])[2])
+            .toBe(controller.signal)
         expect(updates).toHaveBeenCalledOnce()
         window.removeEventListener('risubard-memory-updated', updates)
     })
@@ -1250,7 +1332,10 @@ describe('stored response memory analysis', () => {
                     documents: JSON.parse(request.formated[1].content).targets.map(
                         ({ candidateIndex, target }) => ({
                             candidateIndex,
-                            markdown: `# ${target.title}\n\n지속 정보.`,
+                            sections: [{
+                                heading: '현재 상태', operation: 'upsert',
+                                content: `- ${target.title}의 지속 정보.`,
+                            }],
                         })
                     ),
                 }),
@@ -1310,8 +1395,24 @@ describe('stored response memory analysis', () => {
         // Long evidence can split the rewrite into one request per target.
         expect(modelCalls).toHaveLength(longEvidence ? 3 : 2)
         expect(modelCalls[1].schema).toContain('candidateIndex')
+        expect(modelCalls[1].schema).toContain('sections')
+        expect(modelCalls[1].schema).not.toContain('markdown')
+        for (const call of modelCalls.filter((item) =>
+            item.logPurpose === 'bardwiki-canonical-update'
+        )) {
+            const targetCount = JSON.parse(call.formated[1].content)
+                .targets.length
+            const schema = JSON.parse(call.schema ?? '{}')
+            expect(schema.properties.documents).toMatchObject({
+                minItems: targetCount,
+                maxItems: targetCount,
+            })
+            expect(schema.properties.documents.items.properties
+                .candidateIndex.maximum).toBe(targetCount - 1)
+        }
         expect(modelCalls[0].logPurpose).toBe('bardwiki-analysis')
         expect(modelCalls[1].logPurpose).toBe('bardwiki-canonical-update')
+        expect(modelCalls[0].maxTokens).toBe(analysisTokenLimit)
         expect(modelCalls[1].maxTokens).toBe(analysisTokenLimit)
         const tokenizer = get_encoding('cl100k_base')
         try {

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ModelPresetAdapterError } from '../../preset/adapter/error'
 import { ModelOutputError } from '../../../../packages/risubard-core/src/modelResponse'
-import { filterResponseCharacters, normalizeRequestRetryLimit, presetFailureRetryPolicy } from './responseRetryPolicy'
+import { filterResponseCharacters, isRetryableTransportError, normalizeRequestRetryLimit, presetFailureRetryPolicy } from './responseRetryPolicy'
 
 describe('bounded request retries', () => {
     it.each([NaN, Infinity, -1])('normalizes invalid retry count %s', (value) => {
@@ -30,6 +30,19 @@ describe('bounded request retries', () => {
         expect(presetFailureRetryPolicy(new ModelPresetAdapterError('server', 'server'))).toEqual({ noRetry: false, fallbackEligible: true })
         expect(presetFailureRetryPolicy(new Error('aborted'), true)).toEqual({ noRetry: true, fallbackEligible: false })
     })
+    it('classifies thrown network and internal timeout failures as retryable', () => {
+        expect(isRetryableTransportError(new TypeError('Failed to fetch'))).toBe(true)
+        expect(isRetryableTransportError(new DOMException('Timed out', 'AbortError'))).toBe(true)
+        expect(isRetryableTransportError(Object.assign(new Error('socket closed'), {
+            code: 'ECONNRESET',
+        }))).toBe(true)
+    })
+    it('does not classify user cancellation or unrelated exceptions as transport retries', () => {
+        expect(isRetryableTransportError(
+            new DOMException('Cancelled', 'AbortError'), true
+        )).toBe(false)
+        expect(isRetryableTransportError(new Error('Invalid request body'))).toBe(false)
+    })
     it('preserves refusal-only decoupled stream no-retry classification', () => {
         expect(presetFailureRetryPolicy(new ModelOutputError('blocked'))).toEqual({ noRetry: true, fallbackEligible: false })
     })
@@ -38,6 +51,13 @@ describe('bounded request retries', () => {
         expect(source.includes('da = filterResponseCharacters(')).toBe(true)
         expect(source.includes('trys > retryLimit')).toBe(true)
         expect(source.replace(/\r/g, '').includes('if(failed){\n                    continue')).toBe(false)
+    })
+    it('routes safe thrown transport failures through the shared bounded retry loop', () => {
+        const source = readFileSync('src/ts/process/request/request.ts', 'utf8')
+        expect(source).toContain('isRetryableTransportError')
+        expect(source).toMatch(
+            /try\s*\{\s*da = await requestChatDataMain\([\s\S]*?catch\(error\)[\s\S]*?tools\.length === 0[\s\S]*?failByServerError:\s*true/
+        )
     })
     it('protects completed and interrupted decoupled streams from regeneration', () => {
         const source = readFileSync('src/ts/process/request/request.ts', 'utf8')

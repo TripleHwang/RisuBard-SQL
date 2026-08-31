@@ -8,12 +8,14 @@ import {
 
 /**
  * The page-boundary helpers this file also covered -- `getChatPageBounds`,
- * `getChatPageCount`, `getChatPageForMessage`, `getLatestChatPage` -- are gone
- * along with the numbered pages they sliced the chat view into. The chat screen
- * follows the scroll now; see `src/lib/ChatScreens/ChatScrollWindow.svelte.test.ts`.
+ * `getChatPageForMessage`, `getLatestChatPage` -- are gone along with the
+ * numbered pages they sliced the chat view into. The chat screen follows the
+ * scroll now; see `src/lib/ChatScreens/ChatScrollWindow.svelte.test.ts`.
  *
  * The page size itself survives, because loading older history is still done a
- * page at a time.
+ * page at a time. So does `getChatPageCount`, but no longer as a view concern:
+ * the Arca chat-log dialog uses it for the range of messages the user picks to
+ * export, and it is covered by `ArcaChatLogDialog.test.ts`.
  */
 describe('normalizeChatPageSize', () => {
     it('normalizes finite values into the supported range', () => {

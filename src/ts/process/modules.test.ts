@@ -122,13 +122,12 @@ describe('readModule asset persistence', () => {
         mocks.setItems.mockResolvedValue(undefined)
     })
 
-    it('persists decoded assets in server-sized batches', async () => {
+    it('bounds decoded asset batches to mobile-safe worker-sized groups', async () => {
         const module = await readModule(risumWithAssets(51))
 
-        expect(mocks.setItems).toHaveBeenCalledTimes(2)
-        expect(mocks.setItems.mock.calls[0][0]).toHaveLength(50)
-        expect(mocks.setItems.mock.calls[1][0]).toHaveLength(1)
-        expect(mocks.decodeRPackBatch).toHaveBeenCalledTimes(2)
+        expect(mocks.setItems).toHaveBeenCalledTimes(7)
+        expect(mocks.decodeRPackBatch).toHaveBeenCalledTimes(7)
+        expect(mocks.decodeRPackBatch.mock.calls.every(([items]) => items.length <= 8)).toBe(true)
         expect(mocks.saveAsset).not.toHaveBeenCalled()
         expect(module.assets?.[0][1]).toBe('assets/hash-0.png')
         expect(module.assets?.[50][1]).toBe('assets/hash-50.png')

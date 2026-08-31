@@ -2,7 +2,11 @@
     import { language } from 'src/lang'
     import { resizeHandle } from 'src/ts/gui/resizeHandle'
 
-    let { target, centered = false }: { target: HTMLElement | null; centered?: boolean } = $props()
+    let { target, centered = false, onResizeEnd }: {
+        target: HTMLElement | null
+        centered?: boolean
+        onResizeEnd?: (target: HTMLElement) => void
+    } = $props()
     const edges = $derived(centered ? ['n', 'e', 's', 'w', 'ne', 'se', 'sw', 'nw'] : ['e', 's', 'se'])
 
     function startResize(edge: string) {
@@ -28,13 +32,17 @@
         target?.style.removeProperty('--manager-width')
         target?.style.removeProperty('--manager-height')
     }
+
+    function finishResize() {
+        if (target) onResizeEnd?.(target)
+    }
 </script>
 
 {#each edges as edge}
     <button type="button" class="manager-window-resize" data-manager-window-resize={edge}
         aria-label={`${language.collectionOrganizer.resizeWindow} · ${edge.toUpperCase()}`}
         title={language.collectionOrganizer.resizeHint}
-        use:resizeHandle={{ start: () => startResize(edge), reset: resetSize }}></button>
+        use:resizeHandle={{ start: () => startResize(edge), reset: resetSize, end: finishResize }}></button>
 {/each}
 
 <style>

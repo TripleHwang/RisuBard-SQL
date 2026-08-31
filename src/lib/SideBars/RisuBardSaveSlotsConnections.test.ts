@@ -31,6 +31,9 @@ const databaseSource = readFileSync(resolve(
     process.cwd(), 'src/ts/storage/database.svelte.ts'
 ), 'utf8')
 const koreanSource = readFileSync(resolve(process.cwd(), 'src/lang/ko.ts'), 'utf8')
+const charactersSource = readFileSync(resolve(
+    process.cwd(), 'src/ts/characters.ts'
+), 'utf8')
 
 describe('chat file save slot connections', () => {
     test('opens save mode in every chat theme and only writes after choosing a slot', () => {
@@ -141,6 +144,29 @@ describe('chat file save slot connections', () => {
         expect(defaultChatSource).toContain('onQuickLoad')
     })
 
+    test('autosaves an idle completed turn without waiting for the next turn confirmation', () => {
+        const effectStart = chatScreenSource.indexOf('$effect(() => {',
+            chatScreenSource.indexOf('async function autosaveCurrentChat'))
+        const effectEnd = chatScreenSource.indexOf('const wallPaper', effectStart)
+        const autosaveEffect = chatScreenSource.slice(effectStart, effectEnd)
+
+        expect(autosaveEffect).toContain('$isWikiGenerating')
+        expect(autosaveEffect).toContain('$generationStates.has(chatGenKey(chat.id))')
+        expect(autosaveEffect).toContain('shouldCreateAutosave(')
+        expect(autosaveEffect).not.toContain('risubardMemoryConfirmed')
+        expect(autosaveEffect).not.toContain('wikiReady')
+    })
+
+    test('keeps BardWiki when a RisuBard chat is exported and reimported locally', () => {
+        expect(charactersSource).toContain('sourceCharacterId: char.chaId')
+        expect(charactersSource).toContain('await forkMemoryWiki({')
+        expect(charactersSource).toContain("mode: 'copy'")
+        expect(charactersSource).toMatch(
+            /await requestImmediateSave[\s\S]*await Promise\.all[\s\S]*completeMemoryWikiFork/
+        )
+        expect(charactersSource).toContain('resetImportedBardWikiState')
+    })
+
     test('shows the current chat as a plain title above a separate chat-list disclosure', () => {
         const currentStart = source.indexOf('data-current-chat-section')
         const disclosureStart = source.indexOf('data-chat-list-disclosure')
@@ -201,6 +227,7 @@ describe('chat file save slot connections', () => {
         expect(dialogSource).toContain('height: 91vh')
         expect(dialogSource).toContain('width: 100dvw')
         expect(dialogSource).toContain('height: 100dvh')
+        expect(dialogSource).toContain('translate: none')
         expect(dialogSource).toContain('<SolarAssetIcon src={loadIcon} name="undo-left-square-bold"')
         expect(dialogSource).toContain('@media (max-width: 767px)')
         expect(dialogSource).not.toContain('height: 70vh')
@@ -222,14 +249,13 @@ describe('chat file save slot connections', () => {
     })
 
     test('replaces the current chat and finalizes its wiki only after persistence', () => {
-        expect(chatScreenSource).toContain('const destinationChatId = currentChat.id')
+        expect(chatScreenSource).toContain('const destinationChatId = asNewChat ? v4() : currentChat.id')
         expect(chatScreenSource).toMatch(/prepareMemorySaveLoad\(\{[^}]*currentChat,/)
         expect(chatScreenSource).toContain('destinationChatId,')
         expect(chatScreenSource).toContain('loadedChat.id = destinationChatId')
         expect(chatScreenSource).toContain('character.chats[chatIdx] = loadedChat')
         expect(chatScreenSource).toContain('character.chats[chatIdx] = currentChat')
-        expect(chatScreenSource).toContain('changeChatTo(chatIdx)')
-        expect(chatScreenSource).not.toContain('character.chats.unshift(loadedChat)')
+        expect(chatScreenSource).toContain('changeChatTo(asNewChat ? 0 : chatIdx)')
         expect(chatScreenSource).toMatch(
             /prepareMemorySaveLoad[\s\S]*requestImmediateSave[\s\S]*action: 'finalize'/
         )
@@ -238,6 +264,18 @@ describe('chat file save slot connections', () => {
         )
         expect(chatScreenSource).not.toContain('void requestImmediateSave({ forceFullWrite: true })')
         expect(chatScreenSource).toContain("notifySuccess('스토리 불러오기 완료', { duration: 3000 })")
+    })
+
+    test('can load a save as a new chat without replacing the current chat', () => {
+        expect(dialogSource).toContain('새 챗으로 불러오기')
+        expect(dialogSource).toContain('onLoad(saveId, loadAsNewChat)')
+        expect(chatScreenSource).toContain('async function loadSavedChat(saveId: string, asNewChat = false)')
+        expect(chatScreenSource).toContain('const destinationChatId = asNewChat ? v4() : currentChat.id')
+        expect(chatScreenSource).toContain('character.chats.unshift(loadedChat)')
+        expect(chatScreenSource).toContain("loadedChat.name = createChatCopyName(loadedChat.name, 'Copy')")
+        expect(chatScreenSource).toContain('if(asNewChat)')
+        expect(chatScreenSource).toContain('character.chats.splice(0, 1)')
+        expect(chatScreenSource).toContain('changeChatTo(asNewChat ? 0 : chatIdx)')
     })
 
     test('uses the defined theme tokens for opaque save slot surfaces', () => {

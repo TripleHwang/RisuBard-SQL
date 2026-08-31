@@ -8,16 +8,19 @@ const componentPath = resolve(process.cwd(), 'src/lib/Setting/SettingsNavigation
 const workspacePath = resolve(process.cwd(), 'src/lib/Setting/Settings.svelte')
 
 describe('SettingsNavigation', () => {
-    test('places RisuBard common, wiki prompt, and chat pages directly below AI', () => {
+    test('places the unified RisuBard common page and wiki prompt directly below AI', () => {
         expect(settingsSections.map((section) => section.id).slice(0, 3)).toEqual([
             'ai',
             'risubard',
             'experience',
         ])
         expect(settingsSections[1].items).toEqual([
-            expect.objectContaining({ id: 'risubard-common', route: SettingsRoute.RisuBardCommon }),
+            expect.objectContaining({
+                id: 'risubard-common',
+                route: SettingsRoute.RisuBardCommon,
+                aliases: [SettingsRoute.RisuBardChat],
+            }),
             expect.objectContaining({ id: 'risubard-wiki-prompt', route: SettingsRoute.RisuBardWikiPrompt }),
-            expect.objectContaining({ id: 'risubard-chat', route: SettingsRoute.RisuBardChat }),
         ])
     })
 
@@ -27,6 +30,17 @@ describe('SettingsNavigation', () => {
         expect(source).toContain('data-settings-navigation')
         expect(source).toContain('data-settings-section')
         expect(source).toContain("aria-current={isSettingsNavigationItemActive(item, activeRoute) ? 'page' : undefined}")
+    })
+
+    test('places a persona manager action first in the first settings section', () => {
+        const source = readFileSync(componentPath, 'utf8')
+        const personaButton = source.indexOf('data-settings-persona')
+        const routedItems = source.indexOf('{#each section.items as item')
+
+        expect(source).toContain("section.id === 'ai'")
+        expect(source).toContain('onNavigate(SettingsRoute.Persona)')
+        expect(personaButton).toBeGreaterThan(-1)
+        expect(personaButton).toBeLessThan(routedItems)
     })
 
     test('provides search, close, and mobile back actions', () => {

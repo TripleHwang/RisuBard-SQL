@@ -18,6 +18,41 @@ export interface CanonicalTurnReceipt {
     recordedAt: string
 }
 
+const CANONICAL_UPDATE_RETRY_PREFIX = '정본 문서 갱신 실패'
+
+function canonicalFailureCategory(error: unknown): string {
+    const message = (error instanceof Error ? error.message : String(error))
+        .toLocaleLowerCase()
+    if (/timed?\s*out|timeout|시간.*초과/u.test(message)) return '타임아웃'
+    if (/\b429\b|rate.?limit|resource exhausted|quota/u.test(message)) {
+        return '호출 제한'
+    }
+    if (/\b(?:401|403)\b|unauthor|forbidden|authentication|api.?key/u.test(message)) {
+        return '인증 오류'
+    }
+    if (/\b5\d\d\b|bad gateway|service unavailable|internal server/u.test(message)) {
+        return '공급자 서버 오류'
+    }
+    if (/network|fetch|econn|enotfound|socket|connection|proxy/u.test(message)) {
+        return '네트워크 오류'
+    }
+    return '공급자 응답 오류'
+}
+
+export function formatCanonicalUpdateFailureWarning(error: unknown): string {
+    return `${CANONICAL_UPDATE_RETRY_PREFIX} (${canonicalFailureCategory(error)}). `
+        + '사건 기록은 보존했지만 정보 문서는 저장하지 않았습니다. '
+        + '다음 턴에 자동으로 다시 시도합니다.'
+}
+
+export function canonicalTurnNeedsRetry(
+    receipt: CanonicalTurnReceipt
+): boolean {
+    return receipt.warnings.some((warning) =>
+        warning.startsWith(CANONICAL_UPDATE_RETRY_PREFIX)
+    )
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

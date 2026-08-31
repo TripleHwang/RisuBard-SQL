@@ -154,7 +154,7 @@ export const searchManifestEntries: ManualSearchEntry[] = [
         id: 'manual.page.risuBardCommon',
         label: () => language.risuBardSettings.common.title,
         help: () => language.risuBardSettings.common.description,
-        keywords: ['risubard', 'common', 'canonical style', '공통 설정', '정본 문체'],
+        keywords: ['risubard', 'common', 'canonical style', 'chat mode', 'recent messages', 'chat history', '공통 설정', '정본 문체', '채팅 모드', '최근 대화', '대화 내역'],
         route: SettingsRoute.RisuBardCommon,
     },
     {
@@ -164,14 +164,6 @@ export const searchManifestEntries: ManualSearchEntry[] = [
         keywords: ['bardwiki', 'wiki prompt', 'wiki guide', '위키 프롬프트', '위키 가이드'],
         route: SettingsRoute.RisuBardWikiPrompt,
     },
-    {
-        id: 'manual.page.risuBardChat',
-        label: () => language.risuBardSettings.chat.title,
-        help: () => language.risuBardSettings.chat.description,
-        keywords: ['risubard', 'chat mode', 'recent messages', 'chat history', '채팅 모드', '최근 대화', '대화 내역'],
-        route: SettingsRoute.RisuBardChat,
-    },
-
     // ── Standalone hardcoded pages
     {
         id: 'manual.page.migration',

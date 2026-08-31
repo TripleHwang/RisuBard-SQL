@@ -12,13 +12,13 @@
         KeyboardIcon,
         MonitorIcon,
         MonitorSmartphoneIcon,
-        MessageCircleIcon,
         PackageIcon,
         SearchIcon,
         SettingsIcon,
         SparklesIcon,
         ScrollTextIcon,
         TruckIcon,
+        UserRoundIcon,
         Volume2Icon,
     } from '@lucide/svelte'
     import { language } from 'src/lang'
@@ -30,7 +30,7 @@
         SettingsSectionId,
     } from 'src/ts/setting/settingsNavigation'
     import { isSettingsNavigationItemActive } from 'src/ts/setting/settingsNavigation'
-    import type { SettingsRouteValue } from 'src/ts/routing'
+    import { SettingsRoute, type SettingsRouteValue } from 'src/ts/routing'
 
     interface Props {
         sections: SettingsNavigationSection[]
@@ -58,7 +58,6 @@
         'ai-settings': SparklesIcon,
         'risubard-common': SettingsIcon,
         'risubard-wiki-prompt': ScrollTextIcon,
-        'risubard-chat': MessageCircleIcon,
         prompt: SparklesIcon,
         'global-lorebook': ScrollTextIcon,
         'global-regex': BracesIcon,
@@ -84,7 +83,6 @@
             'ai-settings': language.settingsWorkspace.sections.ai,
             'risubard-common': language.risuBardSettings.common.title,
             'risubard-wiki-prompt': language.risuBardWikiPrompt.title,
-            'risubard-chat': language.risuBardSettings.chat.title,
             prompt: language.promptTemplate,
             'global-lorebook': language.loreBook,
             'global-regex': language.regexScript,
@@ -153,6 +151,16 @@
                 <section data-settings-section={section.id} class="navigation-section">
                     <h2>{sectionLabel(section.id)}</h2>
                     <div class="navigation-items">
+                        {#if section.id === 'ai'}
+                            <button
+                                data-settings-persona
+                                aria-haspopup="dialog"
+                                onclick={() => onNavigate(SettingsRoute.Persona)}
+                            >
+                                <UserRoundIcon size={17} strokeWidth={1.8} />
+                                <span>{language.persona}</span>
+                            </button>
+                        {/if}
                         {#each section.items as item (item.id)}
                             {@const Icon = icons[item.id as keyof typeof icons]}
                             <button

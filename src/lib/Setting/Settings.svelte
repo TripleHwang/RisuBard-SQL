@@ -6,7 +6,6 @@
     import GlobalRegex from './Pages/GlobalRegex.svelte'
     import HotkeySettings from './Pages/HotkeySettings.svelte'
     import RisuBardCommonSettings from './Pages/RisuBardCommonSettings.svelte'
-    import RisuBardChatSettings from './Pages/RisuBardChatSettings.svelte'
     import RisuBardWikiPromptSettings from './Pages/RisuBardWikiPromptSettings.svelte'
     import InlayImageGallery from './Pages/InlayImageGallery.svelte'
     import MigrationSettings from './Pages/MigrationSettings.svelte'
@@ -24,7 +23,7 @@
     import DevPanel from 'src/lib/_dev/DevPanel.svelte'
     import { isLite } from 'src/ts/lite'
     import { MobileGUI, SettingsMenuIndex, settingsOpen } from 'src/ts/stores.svelte'
-    import { SettingsRoute, type SettingsRouteValue } from 'src/ts/routing'
+    import { openSettings, SettingsRoute, type SettingsRouteValue } from 'src/ts/routing'
     import { getVisibleSettingsSections, isExperienceSettingsRoute } from 'src/ts/setting/settingsNavigation'
     import { isAISettingsRoute } from 'src/ts/setting/aiSettingsSections'
 
@@ -51,7 +50,7 @@
     })
 
     function navigate(route: SettingsRouteValue) {
-        $SettingsMenuIndex = route
+        openSettings(route)
     }
 
     function closeSettings() {
@@ -87,7 +86,10 @@
         {/if}
 
         {#if isDesktop || $SettingsMenuIndex !== SettingsRoute.None}
-            <main class="settings-content rs-setting-cont-4">
+            <main
+                class="settings-content rs-setting-cont-4"
+                class:settings-content--mobile-collection={$SettingsMenuIndex === SettingsRoute.Module || $SettingsMenuIndex === SettingsRoute.Plugin}
+            >
                 {#if !isDesktop}
                     <SettingsNavigation
                         {sections}
@@ -110,12 +112,10 @@
                                 activeRoute={$SettingsMenuIndex as SettingsRouteValue}
                                 onNavigate={navigate}
                             />
-                        {:else if $SettingsMenuIndex === SettingsRoute.RisuBardCommon}
+                        {:else if $SettingsMenuIndex === SettingsRoute.RisuBardCommon || $SettingsMenuIndex === SettingsRoute.RisuBardChat}
                             <RisuBardCommonSettings />
                         {:else if $SettingsMenuIndex === SettingsRoute.RisuBardWikiPrompt}
                             <RisuBardWikiPromptSettings />
-                        {:else if $SettingsMenuIndex === SettingsRoute.RisuBardChat}
-                            <RisuBardChatSettings />
                         {:else if isExperienceSettingsRoute($SettingsMenuIndex as SettingsRouteValue)}
                             <ExperienceSettingsWorkspace
                                 activeRoute={$SettingsMenuIndex as SettingsRouteValue}
@@ -331,6 +331,46 @@
 
         .settings-page {
             padding: 1.15rem 1rem max(5rem, env(safe-area-inset-bottom));
+        }
+
+        .settings-content--mobile-collection:has(:global(.settings-standard-page--resizable)) {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .settings-content--mobile-collection:has(:global(.settings-standard-page--resizable)) .settings-page {
+            flex: 1;
+            min-height: 0;
+            padding: 0;
+        }
+
+        .settings-content--mobile-collection :global(.mobile-header) {
+            flex: 0 0 auto;
+        }
+
+        .settings-content--mobile-collection :global(.settings-standard-page--resizable) {
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+            max-height: none;
+            padding-bottom: 0;
+        }
+
+        .settings-content--mobile-collection :global(.settings-standard-page--resizable > .settings-standard-page__header),
+        .settings-content--mobile-collection :global([data-manager-window-resize]) {
+            display: none;
+        }
+
+        .settings-content--mobile-collection :global(.settings-standard-page--resizable > .settings-standard-page__body) {
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .settings-content--mobile-collection :global([data-collection-organizer-list]) {
+            height: 100%;
+            border: 0;
+            border-radius: 0;
         }
 
         :global(.settings-standard-page__header) {

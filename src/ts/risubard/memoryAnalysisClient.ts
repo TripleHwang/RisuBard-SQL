@@ -32,6 +32,7 @@ import {
 import { get_encoding, type Tiktoken } from '@dqbd/tiktoken'
 import { saveCanonicalWikiDocument } from './markdownWikiWriter'
 import type { WikiWritingLanguage } from './wikiWritingLanguage'
+import { RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT } from './risuBardSettings'
 import {
     announceRisuBardMemoryUpdated,
 } from './memoryEvents'
@@ -75,7 +76,8 @@ export interface MemoryAnalysisModelCall {
 interface MemoryAnalysisClientOptions {
     requestModel(
         request: MemoryAnalysisModelCall,
-        model: 'memory' | 'model'
+        model: 'memory' | 'model',
+        signal?: AbortSignal
     ): Promise<MemoryAnalysisModelResponse>
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
@@ -573,20 +575,23 @@ export function createStoredResponseMemoryAnalysis(
     options: MemoryAnalysisClientOptions
 ) {
     async function requestMemoryModel(
-        request: MemoryAnalysisModelCall
+        request: MemoryAnalysisModelCall,
+        signal?: AbortSignal
     ): Promise<MemoryAnalysisModelResponse> {
+        signal?.throwIfAborted()
+        const requestWithModel = (model: 'memory' | 'model') => signal
+            ? options.requestModel(structuredClone(request), model, signal)
+            : options.requestModel(structuredClone(request), model)
         if (options.getModelMode?.(request.realChatId) === 'model') {
-            return options.requestModel(structuredClone(request), 'model')
+            return requestWithModel('model')
         }
-        const response = await options.requestModel(
-            structuredClone(request),
-            'memory'
-        )
+        const response = await requestWithModel('memory')
         if (response.type !== 'fail'
             || response.bindingFailure !== 'sub-unset') {
             return response
         }
-        return options.requestModel(structuredClone(request), 'model')
+        signal?.throwIfAborted()
+        return requestWithModel('model')
     }
 
     function modelFailureMessage(
@@ -720,6 +725,7 @@ export function createStoredResponseMemoryAnalysis(
             type: 'character' | 'location' | 'scene' | 'faction' | 'item'
                 | 'concept' | 'other'
             title: string
+            aliases?: string[]
             sourceMessageIds: string[]
             markdown: string
             expectedContentHash?: string
@@ -740,7 +746,7 @@ export function createStoredResponseMemoryAnalysis(
             append?: boolean
             writingLanguage?: WikiWritingLanguage
         }) {
-            return await readJson(await postJson(
+            const document = await readJson(await postJson(
                 options.fetchImpl,
                 options.createAuth,
                 '/api/risubard/memory/wiki/save',
@@ -748,6 +754,10 @@ export function createStoredResponseMemoryAnalysis(
             )) as import('./memoryWiki').NarrativeMemoryWikiMarkdown[
                 'documents'
             ][number]
+            return {
+                ...document,
+                aliases: document.aliases ?? [],
+            }
         },
         async recordRebootBatchReceipt(input: {
             characterId: string
@@ -769,7 +779,7 @@ export function createStoredResponseMemoryAnalysis(
         markdownWikiService,
         nativeV2Analysis: options.nativeV2Analysis,
         onError: options.onError,
-        async analyze(request) {
+        async analyze(request, signal) {
             const boundedInput = fitAnalysisInput(
                 request.system,
                 request.input,
@@ -783,9 +793,8 @@ export function createStoredResponseMemoryAnalysis(
                 useStreaming: false,
                 noMultiGen: true,
                 tools: [],
-                maxTokens: request.format === 'canonical-batch'
-                    ? request.inputTokenLimit ?? 12_000
-                    : 4_096,
+                maxTokens: request.inputTokenLimit
+                    ?? RISUBARD_ANALYSIS_TOKEN_LIMIT_DEFAULT,
                 temperature: 0,
                 bias: {},
                 extractJson: '',
@@ -803,9 +812,11 @@ export function createStoredResponseMemoryAnalysis(
                         schema: request.format === 'memory-draft'
                             ? memoryWriterDraftSchema
                             : request.format === 'reboot-batch'
-                                ? rebootBatchDraftSchema
+                                ? request.responseSchema
+                                    ?? rebootBatchDraftSchema
                             : request.format === 'canonical-batch'
-                                ? canonicalBatchSchema
+                                ? request.responseSchema
+                                    ?? canonicalBatchSchema
                                 : request.schemaVersion === 2
                                     ? narrativeGraphDeltaSchema
                                     : memoryDeltaSchema,
@@ -818,7 +829,7 @@ export function createStoredResponseMemoryAnalysis(
                         formated: [{ role: 'system', content: request.system
                             + (feedback ? `\n\n${modelOutputRepairInstruction(feedback)}` : '') },
                         modelCall.formated[1]],
-                    })
+                    }, signal)
                     if (response.type !== 'success') {
                         throw new Error(modelFailureMessage('Memory analysis model request failed', response))
                     }
@@ -847,9 +858,9 @@ export function createStoredResponseMemoryAnalysis(
 
     return {
         run: runner.run,
-        async confirm(input: MemoryAnalysisInput) {
+        async confirm(input: MemoryAnalysisInput, signal?: AbortSignal) {
             if (input.messages.length === 0) return undefined
-            const result = await runner.run(input)
+            const result = await runner.run(input, signal)
             announceRisuBardMemoryUpdated({
                 characterId: input.characterId,
                 chatId: input.chatId,

@@ -88,6 +88,20 @@ describe('manager window resize controls', () => {
         expect(target.style.getPropertyValue('--manager-height')).toBe('284px')
     })
 
+    test('reports the resized target after a committed resize', async () => {
+        const target = document.body.appendChild(document.createElement('div'))
+        target.getBoundingClientRect = () => ({ width: 800, height: 500 } as DOMRect)
+        const onResizeEnd = vi.fn()
+        mounted = mount(ManagerResizeHandles, { target, props: { target, centered: true, onResizeEnd } })
+        await tick()
+
+        target.querySelector<HTMLElement>('[data-manager-window-resize="e"]')!
+            .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+
+        expect(onResizeEnd).toHaveBeenCalledOnce()
+        expect(onResizeEnd).toHaveBeenCalledWith(target)
+    })
+
     test('uses 1.3x base widths only for the requested managers', () => {
         const settingPage = readFileSync('src/lib/UI/GUI/SettingPage.svelte', 'utf8')
         const settings = readFileSync('src/lib/Setting/Settings.svelte', 'utf8')

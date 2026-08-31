@@ -5,6 +5,7 @@ import skillInstructions from '../../src/ts/risubard/skills/bardwiki-memory-writ
 import eventSchemaReference from '../../src/ts/risubard/skills/bardwiki-memory-writer/references/event-schema.md?raw'
 import englishContract from '../../src/ts/risubard/skills/bardwiki-memory-writer/references/english-contract.md?raw'
 import { normalizeWikiWritingLanguage, wikiWritingHeadings, type WikiWritingLanguage } from '../../src/ts/risubard/wikiWritingLanguage'
+import { normalizeCanonicalSectionHeading } from './risubard-markdown-section-patch'
 
 const itemString = { type: 'string', minLength: 1, maxLength: 500 }
 const canonicalTypes = [
@@ -90,6 +91,11 @@ export const memoryWriterDraftSchema = JSON.stringify({
                 properties: {
                     type: { type: 'string', enum: canonicalTypes },
                     title: itemString,
+                    aliases: {
+                        type: 'array',
+                        maxItems: 32,
+                        items: { type: 'string', minLength: 1, maxLength: 160 },
+                    },
                     reason: itemString,
                     action: {
                         type: 'string', enum: ['create', 'update'],
@@ -108,69 +114,105 @@ export const memoryWriterDraftSchema = JSON.stringify({
 
 const memoryWriterProperties = JSON.parse(memoryWriterDraftSchema).properties
 
-export const rebootBatchDraftSchema = JSON.stringify({
-    type: 'object',
-    additionalProperties: false,
-    required: [
-        'schemaVersion', 'turns', 'stateChanges', 'characterKnowledge',
-        'persistentFacts', 'openContinuity', 'canonicalUpdateCandidates',
-    ],
-    properties: {
-        schemaVersion: { const: 1 },
-        turns: {
-            type: 'array', minItems: 1, maxItems: 2,
-            items: {
-                type: 'object', additionalProperties: false,
-                required: ['assistantMessageId', 'title', 'establishedEvents'],
-                properties: {
-                    assistantMessageId: {
-                        type: 'string', minLength: 1, maxLength: 1_024,
+export function buildRebootBatchDraftSchema(turnCount?: 1 | 2): string {
+    return JSON.stringify({
+        type: 'object',
+        additionalProperties: false,
+        required: [
+            'schemaVersion', 'turns', 'stateChanges', 'characterKnowledge',
+            'persistentFacts', 'openContinuity', 'canonicalUpdateCandidates',
+        ],
+        properties: {
+            schemaVersion: { const: 1 },
+            turns: {
+                type: 'array',
+                minItems: turnCount ?? 1,
+                maxItems: turnCount ?? 2,
+                items: {
+                    type: 'object', additionalProperties: false,
+                    required: ['title', 'establishedEvents'],
+                    properties: {
+                        title: { type: 'string', minLength: 1, maxLength: 160 },
+                        establishedEvents:
+                            memoryWriterProperties.establishedEvents,
                     },
-                    title: { type: 'string', minLength: 1, maxLength: 160 },
-                    establishedEvents: memoryWriterProperties.establishedEvents,
                 },
             },
+            stateChanges: memoryWriterProperties.stateChanges,
+            characterKnowledge: memoryWriterProperties.characterKnowledge,
+            persistentFacts: memoryWriterProperties.persistentFacts,
+            openContinuity: memoryWriterProperties.openContinuity,
+            canonicalUpdateCandidates:
+                memoryWriterProperties.canonicalUpdateCandidates,
         },
-        stateChanges: memoryWriterProperties.stateChanges,
-        characterKnowledge: memoryWriterProperties.characterKnowledge,
-        persistentFacts: memoryWriterProperties.persistentFacts,
-        openContinuity: memoryWriterProperties.openContinuity,
-        canonicalUpdateCandidates:
-            memoryWriterProperties.canonicalUpdateCandidates,
-    },
-})
+    })
+}
 
-export const canonicalBatchSchema = JSON.stringify({
-    type: 'object',
-    additionalProperties: false,
-    required: ['schemaVersion', 'documents'],
-    properties: {
-        schemaVersion: { const: 1 },
-        documents: {
-            type: 'array',
-            items: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['candidateIndex', 'markdown'],
-                properties: {
-                    candidateIndex: {
-                        type: 'integer', minimum: 0,
-                    },
-                    markdown: {
-                        type: 'string', minLength: 1, maxLength: 12_000,
+export const rebootBatchDraftSchema = buildRebootBatchDraftSchema()
+
+export function buildCanonicalBatchSchema(candidateCount?: number): string {
+    if (candidateCount !== undefined
+        && (!Number.isSafeInteger(candidateCount) || candidateCount < 1)) {
+        throw new Error('Canonical batch schema candidate count is invalid')
+    }
+    return JSON.stringify({
+        type: 'object',
+        additionalProperties: false,
+        required: ['schemaVersion', 'documents'],
+        properties: {
+            schemaVersion: { const: 1 },
+            documents: {
+                type: 'array',
+                ...(candidateCount === undefined ? {} : {
+                    minItems: candidateCount,
+                    maxItems: candidateCount,
+                }),
+                items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['candidateIndex', 'sections'],
+                    properties: {
+                        candidateIndex: {
+                            type: 'integer',
+                            minimum: 0,
+                            ...(candidateCount === undefined ? {} : {
+                                maximum: candidateCount - 1,
+                            }),
+                        },
+                        sections: {
+                            type: 'array', minItems: 0, maxItems: 24,
+                            items: {
+                                type: 'object',
+                                additionalProperties: false,
+                                required: ['heading', 'operation', 'content'],
+                                properties: {
+                                    heading: {
+                                        type: 'string', maxLength: 160,
+                                    },
+                                    operation: {
+                                        type: 'string', enum: ['upsert', 'delete'],
+                                    },
+                                    content: {
+                                        type: 'string', maxLength: 4_000,
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
             },
         },
-    },
-})
+    })
+}
+
+export const canonicalBatchSchema = buildCanonicalBatchSchema()
 
 export const memoryWriterSystemPrompt = [
     skillInstructions.trim(),
     '## 런타임 필드 계약',
     eventSchemaReference.trim(),
-    '정본 후보마다 create/update를 명시하라. update는 existingNotes에 실제로 제공된 문서 ID를 targetDocumentId로 사용하고, create는 targetDocumentId를 null로 두라.',
-    '제목이 다르더라도 의미상 같은 문서라면 update를 선택할 수 있다. confidence는 0 이상 1 이하의 수다.',
+    'update의 targetDocumentId는 existingNotes의 실제 ID, create는 null이다.',
+    '같은 실체는 제목이 달라도 update다. confidence는 0~1이다.',
     '반드시 제공된 JSON Schema에 맞는 JSON 객체 하나만 반환하라. Markdown, YAML, 코드 펜스, 해설을 반환하지 마라.',
 ].join('\n\n')
 
@@ -197,6 +239,7 @@ export interface MemoryWriterDraft {
     canonicalUpdateCandidates: Array<{
         type: typeof canonicalTypes[number]
         title: string
+        aliases: string[]
         reason: string
         action: 'create' | 'update'
         targetDocumentId: string | null
@@ -204,11 +247,17 @@ export interface MemoryWriterDraft {
     }>
 }
 
+export interface CanonicalSectionPatch {
+    heading: string
+    operation: 'upsert' | 'delete'
+    content: string
+}
+
 export interface CanonicalBatch {
     schemaVersion: 1
     documents: Array<{
         candidateIndex: number
-        markdown: string
+        sections: CanonicalSectionPatch[]
     }>
 }
 
@@ -325,13 +374,16 @@ export function parseMemoryWriterDraft(output: string): MemoryWriterDraft {
         'canonicalUpdateCandidates'
     ).map((item, index) => {
         if (!isRecord(item)) throw new Error(`canonicalUpdateCandidates[${index}] must be an object`)
-        const candidate = !Object.prototype.hasOwnProperty.call(item, 'action')
+        const candidateWithAction = !Object.prototype.hasOwnProperty.call(item, 'action')
             && Object.prototype.hasOwnProperty.call(item, 'operation')
             ? { ...item, action: item.operation }
             : item
-        if (candidate !== item) delete candidate.operation
+        if (candidateWithAction !== item) delete candidateWithAction.operation
+        const candidate = Object.prototype.hasOwnProperty.call(
+            candidateWithAction, 'aliases'
+        ) ? candidateWithAction : { ...candidateWithAction, aliases: [] }
         exactKeys(candidate, [
-            'type', 'title', 'reason', 'action',
+            'type', 'title', 'aliases', 'reason', 'action',
             'targetDocumentId', 'confidence',
         ], `canonicalUpdateCandidates[${index}]`)
         if (!canonicalTypes.includes(candidate.type as typeof canonicalTypes[number])) {
@@ -359,9 +411,28 @@ export function parseMemoryWriterDraft(output: string): MemoryWriterDraft {
             || candidate.confidence > 1) {
             throw new Error(`canonicalUpdateCandidates[${index}].confidence is invalid`)
         }
+        const aliases: string[] = []
+        const aliasKeys = new Set<string>()
+        for (const [aliasIndex, alias] of boundedArray(
+            candidate.aliases,
+            `canonicalUpdateCandidates[${index}].aliases`,
+            32
+        ).entries()) {
+            const normalized = text(
+                alias,
+                `canonicalUpdateCandidates[${index}].aliases[${aliasIndex}]`,
+                160
+            )
+            const key = normalized.normalize('NFKC').toLocaleLowerCase()
+            if (!aliasKeys.has(key)) {
+                aliasKeys.add(key)
+                aliases.push(normalized)
+            }
+        }
         return {
             type: candidate.type as typeof canonicalTypes[number],
             title: text(candidate.title, `canonicalUpdateCandidates[${index}].title`),
+            aliases,
             reason: text(candidate.reason, `canonicalUpdateCandidates[${index}].reason`),
             action,
             targetDocumentId,
@@ -401,25 +472,30 @@ export function parseRebootBatchDraft(
     if (rawTurns.length !== expectedAssistantMessageIds.length) {
         throw new Error('Reboot batch turn count does not match assistant IDs')
     }
+    const legacyAssistantMessageIds: Array<string | undefined> = []
     const turns = rawTurns.map((item, index) => {
         if (!isRecord(item)) {
             throw new Error(`reboot batch turns[${index}] must be an object`)
         }
-        exactKeys(
+        const hasLegacyAssistantMessageId = Object.prototype.hasOwnProperty.call(
             item,
-            ['assistantMessageId', 'title', 'establishedEvents'],
-            `reboot batch turns[${index}]`
+            'assistantMessageId'
         )
-        const assistantMessageId = text(
-            item.assistantMessageId,
-            `reboot batch turns[${index}].assistantMessageId`,
-            1_024
-        )
-        if (assistantMessageId !== expectedAssistantMessageIds[index]) {
-            throw new Error('Reboot batch assistant order does not match input')
+        exactKeys(item, [
+            ...(hasLegacyAssistantMessageId ? ['assistantMessageId'] : []),
+            'title',
+            'establishedEvents',
+        ], `reboot batch turns[${index}]`)
+        legacyAssistantMessageIds[index] = undefined
+        if (hasLegacyAssistantMessageId) {
+            legacyAssistantMessageIds[index] = text(
+                item.assistantMessageId,
+                `reboot batch turns[${index}].assistantMessageId`,
+                1_024
+            )
         }
         return {
-            assistantMessageId,
+            assistantMessageId: expectedAssistantMessageIds[index],
             title: text(item.title, `reboot batch turns[${index}].title`, 160),
             establishedEvents: boundedArray(
                 item.establishedEvents,
@@ -431,6 +507,17 @@ export function parseRebootBatchDraft(
             )),
         }
     })
+    const expectedIdSet = new Set(expectedAssistantMessageIds)
+    const legacyIdsAreTrusted = legacyAssistantMessageIds.length
+        === expectedAssistantMessageIds.length
+        && legacyAssistantMessageIds.every((id) =>
+            id !== undefined && expectedIdSet.has(id)
+        )
+    if (legacyIdsAreTrusted && legacyAssistantMessageIds.some(
+        (id, index) => id !== expectedAssistantMessageIds[index]
+    )) {
+        throw new Error('Reboot batch assistant order does not match input')
+    }
     const aggregate = parseMemoryWriterDraft(JSON.stringify({
         schemaVersion: 1,
         title: turns.map((turn) => turn.title).join(' · ').slice(0, 160),
@@ -484,7 +571,7 @@ export function parseCanonicalBatch(
         }
         exactKeys(
             item,
-            ['candidateIndex', 'markdown'],
+            ['candidateIndex', 'sections'],
             `canonical batch documents[${index}]`
         )
         if (!Number.isSafeInteger(item.candidateIndex)
@@ -495,17 +582,74 @@ export function parseCanonicalBatch(
                 `canonical batch documents[${index}].candidateIndex is invalid`
             )
         }
-        if (typeof item.markdown !== 'string'
-            || item.markdown.trim().length === 0
-            || item.markdown.length > 12_000) {
-            throw new Error(
-                `canonical batch documents[${index}].markdown is invalid`
+        const headings = new Set<string>()
+        let totalLength = 0
+        const sections = boundedArray(
+            item.sections,
+            `canonical batch documents[${index}].sections`,
+            24
+        ).map<CanonicalSectionPatch>((section, sectionIndex) => {
+            if (!isRecord(section)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}] must be an object`
+                )
+            }
+            exactKeys(
+                section,
+                ['heading', 'operation', 'content'],
+                `canonical batch documents[${index}].sections[${sectionIndex}]`
             )
-        }
+            if (typeof section.heading !== 'string'
+                || section.heading.length > 160
+                || /[\r\n]/u.test(section.heading)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].heading is invalid`
+                )
+            }
+            const heading = section.heading.trim()
+            const headingKey = normalizeCanonicalSectionHeading(heading)
+            if (headings.has(headingKey)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].heading is duplicated`
+                )
+            }
+            headings.add(headingKey)
+            const operation = section.operation
+            if (operation !== 'upsert'
+                && operation !== 'delete') {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].operation is invalid`
+                )
+            }
+            if (typeof section.content !== 'string'
+                || section.content.length > 4_000) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].content is invalid`
+                )
+            }
+            const content = section.content.trim()
+            if ((operation === 'upsert' && content.length === 0)
+                || (operation === 'delete' && content.length > 0)) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections[${sectionIndex}].content does not match operation`
+                )
+            }
+            totalLength += heading.length + content.length
+            if (totalLength > 12_000) {
+                throw new Error(
+                    `canonical batch documents[${index}].sections are too large`
+                )
+            }
+            return {
+                heading,
+                operation,
+                content,
+            }
+        })
         used.add(item.candidateIndex as number)
         return {
             candidateIndex: item.candidateIndex as number,
-            markdown: item.markdown.trim(),
+            sections,
         }
     })
     return { schemaVersion: 1, documents }

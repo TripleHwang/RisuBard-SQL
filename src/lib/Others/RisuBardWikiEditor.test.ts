@@ -40,6 +40,7 @@ const documents = [{
     type: 'character' as const,
     status: 'active' as const,
     title: '라비안',
+    aliases: ['기사님'],
     relativePath: 'characters/라비안.md',
     sourceMessageIds: [],
     updated: '2026-08-08T00:00:00.000Z',
@@ -52,6 +53,7 @@ const documents = [{
     type: 'event' as const,
     status: 'active' as const,
     title: '전투',
+    aliases: [],
     relativePath: 'events/turn-1.md',
     sourceMessageIds: ['assistant-1'],
     updated: '2026-08-08T00:01:00.000Z',
@@ -98,7 +100,7 @@ describe('RisuBardWikiEditor', () => {
             .toBe('현재 장면')
     })
 
-    it('collapses action labels instead of wrapping the toolbar at narrow widths', async () => {
+    it('keeps save, revert, and delete icon-only in the editor toolbar', async () => {
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
             target,
@@ -113,11 +115,11 @@ describe('RisuBardWikiEditor', () => {
         expect(toolbar).not.toBeNull()
         expect([...toolbar!.querySelectorAll('button')].map((button) =>
             button.textContent?.trim()
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
-        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(5)
+        )).toEqual(['', '', '로어북에 복사', ''])
+        expect(toolbar!.querySelectorAll('[data-wiki-action-label]')).toHaveLength(1)
         expect([...toolbar!.querySelectorAll('button')].map((button) =>
             button.getAttribute('aria-label')
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
+        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제'])
 
         const source = readFileSync(
             'src/lib/Others/RisuBardWikiEditor.svelte',
@@ -142,26 +144,38 @@ describe('RisuBardWikiEditor', () => {
         expect(source).toMatch(
             /\.markdown-editor::\-webkit-scrollbar-thumb\s*\{[^}]*background-color:\s*color-mix\(/s
         )
+        expect(source).toMatch(
+            /\.markdown-preview\s*\{[^}]*overflow-y:\s*scroll[^}]*scrollbar-gutter:\s*stable[^}]*scrollbar-width:\s*thin/s
+        )
     })
 
-    it('opens find and replace from the editor toolbar with the bold magnifier', async () => {
-        const onOpenFindReplace = vi.fn()
+    it('marks dangling-link files red without offering automatic repair', async () => {
+        const brokenDocuments = [{
+            ...documents[0],
+            content: '# 라비안\n\n[[사라진 도시#성문|그곳]]으로 향했다.',
+            links: ['사라진 도시#성문|그곳'],
+        }, documents[1]]
         mounted = mount(RisuBardWikiEditor, {
             target: document.body,
             props: {
-                characterId: 'character', chatId: 'chat', documents,
-                onOpenFindReplace,
+                characterId: 'character', chatId: 'chat',
+                documents: brokenDocuments,
+                health: {
+                    danglingLinks: [{
+                        sourceId: 'character.lavian', target: '사라진 도시',
+                    }],
+                    unlinkedDocumentIds: [],
+                },
             },
         })
         await tick()
 
-        const button = document.querySelector<HTMLButtonElement>(
-            '[data-wiki-open-find-replace]'
+        const row = document.querySelector<HTMLElement>(
+            '[data-wiki-dangling-document="character.lavian"]'
         )!
-        expect(button).not.toBeNull()
-        expect(button.querySelector('[data-solar-icon="magnifier"]')).not.toBeNull()
-        button.click()
-        expect(onOpenFindReplace).toHaveBeenCalledOnce()
+        expect(row).not.toBeNull()
+        expect(row.classList.contains('dangling-link')).toBe(true)
+        expect(row.querySelector('[data-wiki-repair-link]')).toBeNull()
     })
 
     it('toggles a live, safe Markdown preview from the editor toolbar', async () => {
@@ -216,7 +230,7 @@ describe('RisuBardWikiEditor', () => {
         )?.value).toBe(previewDocuments[0].content)
     })
 
-    it('exposes collapsible portrait panels, touch resizing, and editor focus', async () => {
+    it('opens the responsive document sidebar on demand and closes it from the scrim', async () => {
         const onFocusModeChange = vi.fn()
         const target = document.body.appendChild(document.createElement('div'))
         mounted = mount(RisuBardWikiEditor, {
@@ -231,29 +245,25 @@ describe('RisuBardWikiEditor', () => {
         await tick()
 
         const editor = document.querySelector<HTMLElement>('[data-wiki-editor]')!
-        expect(editor.dataset.treeExpanded).toBe('true')
+        expect(editor.dataset.treeExpanded).toBe('false')
         expect(editor.dataset.editorExpanded).toBe('true')
         expect(editor.dataset.editorFocus).toBe('false')
-        expect(editor.style.getPropertyValue('--wiki-tree-height')).toBe('176px')
-
-        document.querySelector<HTMLButtonElement>(
-            '[data-wiki-tree-resizer]'
-        )?.dispatchEvent(new KeyboardEvent('keydown', {
-            key: 'ArrowDown',
-            bubbles: true,
-        }))
-        await tick()
-        expect(editor.style.getPropertyValue('--wiki-tree-height')).toBe('200px')
+        expect(document.querySelector('[data-wiki-tree-scrim]')).toBeNull()
 
         document.querySelector<HTMLButtonElement>(
             '[data-wiki-toggle-tree]'
         )?.click()
-        document.querySelector<HTMLButtonElement>(
-            '[data-wiki-toggle-editor]'
-        )?.click()
+        await tick()
+        expect(editor.dataset.treeExpanded).toBe('true')
+        const scrim = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-tree-scrim]'
+        )
+        expect(scrim?.getAttribute('aria-label')).toBe('문서 목록 닫기')
+
+        scrim?.click()
         await tick()
         expect(editor.dataset.treeExpanded).toBe('false')
-        expect(editor.dataset.editorExpanded).toBe('false')
+        expect(document.querySelector('[data-wiki-tree-scrim]')).toBeNull()
 
         document.querySelector<HTMLButtonElement>(
             '[data-wiki-editor-focus]'
@@ -262,6 +272,20 @@ describe('RisuBardWikiEditor', () => {
         expect(editor.dataset.editorFocus).toBe('true')
         expect(editor.dataset.editorExpanded).toBe('true')
         expect(onFocusModeChange).toHaveBeenLastCalledWith(true)
+    })
+
+    it('uses an explicit mobile overlay drawer instead of stacking the tree above the editor', () => {
+        const source = readFileSync(
+            'src/lib/Others/RisuBardWikiEditor.svelte',
+            'utf8'
+        )
+
+        expect(source).toContain('class:mobile-layout={mobileLayout}')
+        expect(source).toMatch(/\.wiki-editor\.mobile-layout \.file-tree\s*\{[^}]*position:\s*absolute[^}]*transform:\s*translateX\(-100%\)/s)
+        expect(source).toContain(
+            '.wiki-editor.mobile-layout:not(.tree-collapsed) .file-tree'
+        )
+        expect(source).toContain('.tree-scrim')
     })
 
     it('copies a saved wiki document into the character lorebook without AI', async () => {
@@ -357,8 +381,9 @@ describe('RisuBardWikiEditor', () => {
         markdown.value = '# 전투\n\n패배했다.'
         markdown.dispatchEvent(new Event('input', { bubbles: true }))
         await tick()
-        const save = [...document.querySelectorAll('button')]
-            .find((button) => button.textContent?.trim() === '저장')!
+        const save = document.querySelector<HTMLButtonElement>(
+            '[data-wiki-action-toolbar] [aria-label="저장"]'
+        )!
         save.click()
 
         await vi.waitFor(() => {
@@ -372,6 +397,32 @@ describe('RisuBardWikiEditor', () => {
                 })
             )
         })
+    })
+
+    it('edits aliases as comma-separated document metadata', async () => {
+        mocks.saveManualWikiDocument.mockResolvedValue(documents[0])
+        mounted = mount(RisuBardWikiEditor, {
+            target: document.body,
+            props: { characterId: 'character', chatId: 'chat', documents },
+        })
+        await tick()
+
+        const aliases = document.querySelector<HTMLInputElement>(
+            '[aria-label="별칭"]'
+        )!
+        expect(aliases.value).toBe('기사님')
+        aliases.value = '기사님, 북방의 검'
+        aliases.dispatchEvent(new Event('input', { bubbles: true }))
+        await tick()
+        document.querySelector<HTMLButtonElement>(
+            '[data-wiki-action-toolbar] [aria-label="저장"]'
+        )!.click()
+
+        await vi.waitFor(() => expect(mocks.saveManualWikiDocument)
+            .toHaveBeenCalledWith(expect.objectContaining({
+                documentId: 'character.lavian',
+                aliases: ['기사님', '북방의 검'],
+            })))
     })
 
     it('navigates to the selected document source from the left toolbar action', async () => {
@@ -431,9 +482,10 @@ describe('RisuBardWikiEditor', () => {
         const toolbar = document.querySelector('[data-wiki-action-toolbar]')!
         expect([...toolbar.querySelectorAll('button')].map((button) =>
             button.textContent?.trim()
-        )).toEqual(['저장', '되돌리기', '로어북에 복사', '삭제', '모두 바꾸기'])
-        const deleteButton = [...toolbar.querySelectorAll('button')]
-            .find((button) => button.textContent?.trim() === '삭제')!
+        )).toEqual(['', '', '로어북에 복사', ''])
+        const deleteButton = toolbar.querySelector<HTMLButtonElement>(
+            '[aria-label="삭제"]'
+        )!
         deleteButton.click()
 
         await vi.waitFor(() => {
@@ -470,7 +522,8 @@ describe('RisuBardWikiEditor', () => {
         await tick()
 
         const button = (label: string) => [...document.querySelectorAll('button')]
-            .find((item) => item.textContent?.trim() === label)!
+            .find((item) => item.getAttribute('aria-label') === label
+                || item.textContent?.trim() === label)!
         button('새 문서').click()
         await tick()
         const type = document.querySelector<HTMLSelectElement>('[aria-label="항목 유형"]')!

@@ -45,6 +45,7 @@ export interface NarrativeMemoryWikiMarkdown {
         status: 'active' | 'superseded' | 'retracted'
         supersededBy?: string
         title: string
+        aliases?: string[]
         relativePath: string
         sourceMessageIds: string[]
         updated: string
@@ -374,7 +375,7 @@ export async function loadNarrativeMemoryWiki(input: {
                     || Object.keys(document).some((key) => ![
                         ...documentKeys, 'created', 'authoring',
                         'supersededBy', 'reviewStatus',
-                        'reviewBaseContent',
+                        'reviewBaseContent', 'aliases',
                     ].includes(key))
                     || ![
                         'event', 'character', 'location', 'scene', 'faction',
@@ -395,6 +396,10 @@ export async function loadNarrativeMemoryWiki(input: {
                     || !document.links.every(
                         (link) => typeof link === 'string'
                     )
+                    || (document.aliases !== undefined
+                        && (!Array.isArray(document.aliases)
+                            || !document.aliases.every((alias) =>
+                                typeof alias === 'string')))
                     || (document.created !== undefined
                         && typeof document.created !== 'string')
                     || (document.authoring !== undefined
@@ -420,6 +425,9 @@ export async function loadNarrativeMemoryWiki(input: {
                         NarrativeMemoryWikiMarkdown['documents'][number]['type'],
                     status: document.status as 'active' | 'superseded' | 'retracted',
                     title: requireString(document.title),
+                    aliases: document.aliases === undefined
+                        ? []
+                        : document.aliases as string[],
                     relativePath: requireString(document.relativePath),
                     sourceMessageIds: document.sourceMessageIds,
                     updated: requireString(document.updated),
@@ -541,6 +549,7 @@ export async function saveManualWikiDocument(input: {
     documentId?: string
     type: MarkdownWikiDocumentType
     title: string
+    aliases?: string[]
     markdown: string
     expectedContentHash?: string
     fetchImpl: typeof fetch
@@ -561,6 +570,11 @@ export async function saveManualWikiDocument(input: {
             : {}),
         type: input.type,
         title: requiredMutationString(input.title, 'Wiki title', 160),
+        ...(input.aliases === undefined ? {} : {
+            aliases: input.aliases.map((alias) =>
+                requiredMutationString(alias, 'Wiki alias', 160)
+            ),
+        }),
         markdown: requiredMutationString(input.markdown, 'Markdown', 12_000),
     }
     const response = await invokeBrowserFetch(
@@ -738,7 +752,7 @@ export async function retractWikiEventsBySourceMessages(input: {
         chatId: requiredMutationString(input.chatId, 'Chat ID', 1_024),
         sourceMessageIds: [...new Set(input.sourceMessageIds.map((id) =>
             requiredMutationString(id, 'Source message ID', 1_024)
-        ))].slice(0, 100),
+        ))],
     }
     if (body.sourceMessageIds.length === 0) {
         throw new Error('At least one source message ID is required')

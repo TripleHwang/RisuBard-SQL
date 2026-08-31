@@ -10,6 +10,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "node --watch --watch-preserve-output server/node/server.cjs",
     "build": "vite build --sourcemap",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",

@@ -300,6 +300,7 @@ describe('content-type compatibility', () => {
 
 type NdjsonEvent =
   | { type: 'progress'; bytes: number; totalBytes: number }
+  | { type: 'phase'; phase: 'validating' | 'publishing' | 'finalizing' }
   | { type: 'heartbeat' }
   | { type: 'done'; ok: boolean; assetsRestored?: number; coldStorageFailed?: number }
   | { type: 'error'; message: string }
@@ -310,6 +311,7 @@ interface NdjsonImportResult {
   done?: Extract<NdjsonEvent, { type: 'done' }>
   errors: Array<Extract<NdjsonEvent, { type: 'error' }>>
   progresses: Array<Extract<NdjsonEvent, { type: 'progress' }>>
+  phases: Array<Extract<NdjsonEvent, { type: 'phase' }>>
   heartbeats: Array<Extract<NdjsonEvent, { type: 'heartbeat' }>>
 }
 
@@ -344,6 +346,7 @@ async function importViaNdjson(
     done: events.find((e): e is Extract<NdjsonEvent, { type: 'done' }> => e.type === 'done'),
     errors: events.filter((e): e is Extract<NdjsonEvent, { type: 'error' }> => e.type === 'error'),
     progresses: events.filter((e): e is Extract<NdjsonEvent, { type: 'progress' }> => e.type === 'progress'),
+    phases: events.filter((e): e is Extract<NdjsonEvent, { type: 'phase' }> => e.type === 'phase'),
     heartbeats: events.filter((e): e is Extract<NdjsonEvent, { type: 'heartbeat' }> => e.type === 'heartbeat'),
   }
 }
@@ -496,6 +499,22 @@ describe('ndjson streaming import', () => {
       last = p.bytes
     }
     expect(last).toBeLessThanOrEqual(seed.byteLength)
+  })
+
+  test('T5b: reports post-upload restore phases before completion', async () => {
+    const seed = createSeedBackup({ characterCount: 2, includeAssets: true })
+
+    const srv = await spawnServer()
+    servers.push(srv)
+    const client = await createClient(srv.port, srv.password)
+
+    const ndjson = await importViaNdjson(client, seed)
+    expect(ndjson.done?.ok).toBe(true)
+    expect(ndjson.phases.map(event => event.phase)).toEqual([
+      'validating',
+      'publishing',
+      'finalizing',
+    ])
   })
 
   // T6 — this is *the* reason the patch exists. If a future change drops

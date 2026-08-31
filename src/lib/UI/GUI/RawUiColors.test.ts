@@ -71,6 +71,12 @@ const authoredColors = [
         colors: ['#292d3e', '#202331', '#f7f8fc', '#aeb6cc', '#454b61'],
         reason: 'These fallbacks style exported Arca clipboard HTML, not application chrome.',
     },
+    {
+        file: 'src/lib/ChatScreens/ArcaChatLogDialog.svelte',
+        expression: "color('--risu-theme-",
+        colors: ['#292d3e', '#202331', '#f7f8fc', '#aeb6cc', '#454b61'],
+        reason: 'These fallbacks style exported Arca chat-log HTML, not application chrome.',
+    },
     ...['src/ts/persona.ts', 'src/ts/characterPackage.ts'].map((file) => ({
         file,
         expression: "ctx.fillStyle = 'rgb(100, 116, 139)'",

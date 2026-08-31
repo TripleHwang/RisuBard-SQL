@@ -1,0 +1,187 @@
+<div style="max-width:880px;margin:0 auto;background:linear-gradient(160deg,#f5f8fc,#fbfdff);border:1px solid #bbccdf;color:#29415a;font-family:'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic',sans-serif;">
+	<div style="padding:36px 20px 26px;background:linear-gradient(125deg,#e7f0fb,#f7faff);border-top:5px solid #2d629d;border-bottom:1px solid #bbccdf;">
+		<div style="margin:0 0 14px;color:#436a92;font-size:12px;font-weight:800;letter-spacing:2px;line-height:1.6;">RELEASE NOTES / 통합 업데이트 / RisuBard 독립 포크
+			<br><span style="font-size:36px;font-weight:900;line-height:1.2;letter-spacing:-2px;color:rgb(34, 89, 146);">RisuBard (리스바드)</span><span style="font-size:64px;font-weight:900;line-height:1.2;letter-spacing:-2px;color:#225992;">&nbsp;</span><span style="font-size:18px;">v0.9.4</span></div>
+
+		<p><img src="//ac.arca.live/20260822sac/a4862b5ef30db039658d607493f0e61d644a928fe00023241d036c7a3349a916.png?expires=1788019138&key=bomyGGKlaNRV0vLAq18D_Q" data-originalurl="https://ac-o.arca.live/20260822sac/a4862b5ef30db039658d607493f0e61d644a928fe00023241d036c7a3349a916.png?expires=1788019138&key=bomyGGKlaNRV0vLAq18D_Q&type=orig" class="fr-fic fr-dii"></p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><img src="//ac.arca.live/20260826sac/28b116b74b0c76aeedb80c70a91ae85c6e274c7868e0246e1e6cf781250cfc7f.png?expires=1788019138&key=8y8kYlLvFlbd3xSNSBeZHw" data-originalurl="https://ac-o.arca.live/20260826sac/28b116b74b0c76aeedb80c70a91ae85c6e274c7868e0246e1e6cf781250cfc7f.png?expires=1788019138&key=8y8kYlLvFlbd3xSNSBeZHw&type=orig" class="fr-fic fr-dii"></p>
+
+		<p style="margin:18px 0 8px;color:#173e69;font-size:21px;font-weight:850;line-height:1.6;">확정된 기록 수정 // 중간부터 위키 리부트 // 자동 저장, 빠른 저장 도입 // 쉽고 빠른 로그</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">이번 업데이트는 장기 채팅을 운영하면서 가장 자주 부딪히던 불안을 정리했습니다. 이미 BardWiki에 반영된 원문이라고 해서 손대지 못하는 일도, 위키 전체를 처음부터 다시 처리해야 하는 일도 줄었습니다. 자동저장과 퀵세이브로 과거 상태를 안전하게 보관할 수 있고, 이제는 그림이 많은 AI 응답도 버튼 한 번으로 아카라이브 편집기에 옮길 수 있습니다.</p>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">1. 확정된 챗 원본부터 BardWiki까지 자유롭게 편집</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">이제 &ldquo;이미 확정됐는데 어떡하지?&rdquo;를 걱정하지 않아도 됩니다</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">BardWiki의 근거로 이미 확정된 AI 응답도 채팅 화면의 수정 버튼으로 다시 편집할 수 있습니다. 확정된 사건 문서 역시 Memory Wiki 편집기에서 제목과 본문을 직접 고칠 수 있습니다.</p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">원본 AI 응답 편집</strong>: 위키의 근거로 사용된 과거 응답도 더 이상 잠기지 않습니다. 오타, 어색한 문장, 잘못 생성된 설정을 원문에서 직접 바로잡을 수 있습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">확정 사건 편집</strong>: 사건 ID와 출처 연결은 유지한 채, 사건의 제목과 Markdown 본문을 수정할 수 있습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">원문과 위키를 오가는 편집 동선</strong>: <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">지금까지의 이야기</span>에서 사건을 바로 편집기로 열 수 있고, 편집기에서는 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">원문으로 이동</span> 버튼으로 근거 채팅을 확인할 수 있습니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;"><strong>원본 응답을 수정해도 이미 만들어진 위키 문서가 자동으로 변경되지는 않습니다.</strong></p>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img style="width: 556px;" src="//ac.arca.live/20260827sac/f4afaab6a820825fd202348e3ad093430218e25cdbbd7b2a92381b864ab9cc8f.png?expires=1788019138&key=tJV2ibUQLuyyUQKAqe61Qw" data-originalurl="https://ac-o.arca.live/20260827sac/f4afaab6a820825fd202348e3ad093430218e25cdbbd7b2a92381b864ab9cc8f.png?expires=1788019138&key=tJV2ibUQLuyyUQKAqe61Qw&type=orig" class="fr-fic fr-dii"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">확정된 원본 응답 수정, 사건 편집기와 원문 이동</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">2. 영어 위키 지원 + 갱신 / 추가된 항목 표시</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">For those who prefer ABC over ㄱㄴㄷ</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">환경설정 &gt; 리스바드 &gt; 공통 설정 에서 &nbsp;위키 작성에 쓸 언어를 선택할 수 있습니다. 중간부터 언어를 바꾸지는 마세요.&nbsp;</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">아직은 한국어와 영어만 지원합니다만, 생각해 보니 일본어도 필요할 것 같네요.</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">그리고 이제 갱신되었거나 새로 위키에 추가된 항목에는 &#39;New&#39; 레이블이 표시됩니다.</p>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260827sac/98d41e79931de2e38f182ac02addbba0db72f895aa6d68cca9a49ba4f28061ff.png?expires=1788019138&key=rBm_Vk6cwJZDNzMwamndrQ" data-originalurl="https://ac-o.arca.live/20260827sac/98d41e79931de2e38f182ac02addbba0db72f895aa6d68cca9a49ba4f28061ff.png?expires=1788019138&key=rBm_Vk6cwJZDNzMwamndrQ&type=orig" class="fr-fic fr-dii"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">영어 위키</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">3. 자동저장과 퀵세이브 &mdash; 진짜 게임처럼 관리</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">저장하는 걸 깜빡해도, 큰 피해 없이 과거 채팅으로</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">채팅마다 독립적인 퀵세이브 슬롯과 순환 자동저장을 제공합니다. 중요한 선택 직전에는 퀵세이브를 만들고, 평소에는 자동저장에 맡기면 됩니다. 세이브를 불러오면 새 채팅을 만드는 대신 <strong style="color:#173e69;font-weight:800;">현재 채팅 자체가 저장 시점으로 돌아갑니다.</strong></p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">퀵세이브 / 퀵로드</strong>: 첫 퀵세이브로 채팅 전용 슬롯을 만들고, 이후에는 같은 슬롯을 빠르게 덮어씁니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">자동저장</strong>: 기본 5턴 간격으로 저장하며, 간격은 1~100턴 사이에서 조절할 수 있습니다. 기본 5개를 순환 보관하고 보관 수는 1~20개로 바꿀 수 있습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">대화와 위키를 함께 복원</strong>: 채팅 기록뿐 아니라 BardWiki, 스토리 진행 변수, 페르소나와 모델 바인딩도 같은 시점으로 되돌립니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">안전한 저장 시점</strong>: AI 답변 생성과 BardWiki 갱신이 끝난 뒤에만 자동저장하므로 처리 중인 상태를 어중간하게 기록하지 않습니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;">분기 하나 잘못 탔다고 긴 채팅을 포기할 필요가 없습니다. 퀵세이브로 중요한 장면을 찍어 두고, 저장을 잊었더라도 자동저장에서 가까운 과거로 돌아가면 됩니다. 이제 세이브 파일이 대화와 위키를 함께 되돌리는 공식 복구 지점입니다.</p>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260827sac/e2c25409b55800fa9743dff76eaf54c961aa8ee5d661f5bacecb3a03b35488f4.png?expires=1788019138&key=8FZUJdXPlLMuDQd3-B7Wvw" data-originalurl="https://ac-o.arca.live/20260827sac/e2c25409b55800fa9743dff76eaf54c961aa8ee5d661f5bacecb3a03b35488f4.png?expires=1788019138&key=8FZUJdXPlLMuDQd3-B7Wvw&type=orig" class="fr-fic fr-dii"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">강화된 세이브 / 로드 창
+						<br>
+						<br><img src="//ac.arca.live/20260827sac/1c66f4834b433fc8f903ef561fc5388e8d5e80f131b08bdffdb976f49d39546c.png?expires=1788019138&key=n_r1bSbMvyRukPHPamP9jw" data-originalurl="https://ac-o.arca.live/20260827sac/1c66f4834b433fc8f903ef561fc5388e8d5e80f131b08bdffdb976f49d39546c.png?expires=1788019138&key=n_r1bSbMvyRukPHPamP9jw&type=orig" class="fr-fic fr-dii">
+						<br>세이브, 로드, 퀵세이브, 퀵로드 툴바</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div style="margin:34px 0 0;padding:21px 20px;background:linear-gradient(100deg,#ddeaf8,#edf4fc);border-top:2px solid #456f9c;border-bottom:1px solid #bbccdf;">
+
+		<h2 style="margin:0;color:#173e69;font-size:23px;font-weight:850;line-height:1.5;">4. 아카라이브 챗 추출기 프로토타입</h2>
+	</div>
+	<div style="padding:27px 20px 18px;border-bottom:1px solid #d2deeb;">
+
+		<h3 style="margin:0 0 15px;padding:0 0 11px;color:#1a426e;font-size:19px;font-weight:800;line-height:1.55;border-bottom:1px solid #c3d4e6;">이거 진짜 큰 건데, 이제 이미지까지 모두 원클릭으로 붙여넣기</h3>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">원하는 AI 응답에서 <strong style="color:#173e69;font-weight:800;">아카라이브 챗 저장기</strong> 버튼을 누르고, 아카라이브 게시판 편집기에 그대로 붙여넣으세요. 본문뿐 아니라 응답 안의 모든 삽화가 원래 순서대로 주입됩니다.</p>
+
+		<ul>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">이미지까지 한 번에</strong>: RisuBard 안에서 CSS 배경으로 표시되던 삽화를 실제 이미지로 변환하고, 본문 순서에 맞춰 클립보드 HTML에 넣습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">아카라이브 호환 구조</strong>: 상호작용 버튼과 지원되지 않는 레이아웃은 제거하거나 단순한 인라인 스타일로 바꿉니다. 아카라이브가 이미지를 다시 업로드해도 지정한 크기가 유지되도록 처리했습니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">읽기 좋은 의미별 서식</strong>: 대사, 생각, <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">&sect;효과음&sect;</span>과 명시적인 선택지를 구분해 아카라이브에서도 읽기 쉽게 옮깁니다.</p>
+			</li>
+			<li>
+
+				<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">모든 챗에 공통 적용되는 옵션</strong>: <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">환경설정 &gt; RisuBard &gt; 공통 설정 &gt; 아카라이브 챗 추출기</span>에서 조절합니다.</p>
+			</li>
+		</ul>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;"><strong style="color:#173e69;font-weight:800;">설정 가능한 항목</strong>: 삽화 너비, 본문 글자 크기, 문단 사이 개행 간격, 타이틀 이미지 표시 여부와 형식을 바꿀 수 있습니다. 타이틀 이미지는 <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">큰 타원형</span>, <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">정사각형</span>, <span style="font-family:Consolas,Monaco,monospace;font-size:0.94em;color:#214d79;background:linear-gradient(110deg,#eaf1f8,#f0f5fb);border-bottom:1px solid #c2d3e6;">썸네일 + 타이틀</span> 중에서 고를 수 있습니다.</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;padding:14px 16px;background:linear-gradient(110deg,#eaf2fb,#f5f9fe);border-left:3px solid #2d629d;">현재는 <strong style="color:#173e69;font-weight:800;">프로토타입</strong>입니다. &ldquo;버튼 클릭 &rarr; 아카라이브 편집기에 붙여넣기&rdquo;만으로 장문의 챗과 대량의 이미지를 함께 옮기는 핵심 흐름은 작동하고, 문제가 없으면 <strong>원하는 범위의 챗을 모두 한번에 아카라이브에 맞는 형태로 추출</strong>하는 기능을 추가하겠습니다.</p>
+
+		<table style="width:100%;margin:22px 0 12px;border-collapse:collapse;border:0;">
+			<tbody>
+				<tr>
+					<td style="height:120px;padding:0;background:linear-gradient(150deg,#f0f5fb,#e8f0f8);border:1px solid #b8cde3;text-align:center;vertical-align:top;"><img src="//ac.arca.live/20260827sac/54857f4a5b64fdc06d7b060bf168306d4cca66d980d8d05cd1ef86d059d5e9f2.png?expires=1788019138&key=3_lf5zPw2hkrk7VFQc43LQ" data-originalurl="https://ac-o.arca.live/20260827sac/54857f4a5b64fdc06d7b060bf168306d4cca66d980d8d05cd1ef86d059d5e9f2.png?expires=1788019138&key=3_lf5zPw2hkrk7VFQc43LQ&type=orig" class="fr-fic fr-dii"><img src="//ac.arca.live/20260827sac/2c710358036fa62bce8adacd9fe6c8822cd0b9bd665bf437e41816ee88985998.png?expires=1788019138&key=sQuFnr9jE_ocPaOokcyjvQ" data-originalurl="https://ac-o.arca.live/20260827sac/2c710358036fa62bce8adacd9fe6c8822cd0b9bd665bf437e41816ee88985998.png?expires=1788019138&key=sQuFnr9jE_ocPaOokcyjvQ&type=orig" class="fr-fic fr-dii"></td>
+				</tr>
+				<tr>
+					<td style="padding:11px 14px;background:linear-gradient(110deg,#e4eef9,#f1f6fc);border:1px solid #b8cde3;text-align:left;color:#425e7b;font-size:13px;line-height:1.7;">추출 버튼 클릭 후 아카라이브 게시판에 붙여넣기하면 이렇게 나옵니다.</td>
+				</tr>
+			</tbody>
+		</table>
+
+		<p>
+			<br>
+		</p>
+
+		<p><strong><a href="https://github.com/rpaddict/RisuBard/releases/latest" target="_blank" rel="noopener noreferrer"><span style="font-size:48px;">RisuBard 다운로드</span></a></strong>
+			<br>설치에 도움이 필요하면 <a href="https://github.com/rpaddict/RisuBard/blob/main/docs/ko/install.md" target="_blank" rel="noopener noreferrer"><strong><span style="font-size:24px;">한국어 설치 가이드</span></strong></a>를 참고하세요.</p>
+
+		<p>
+			<br>
+		</p>
+
+		<p>
+			<br>
+		</p>
+
+		<p style="margin:12px 0;color:#29415a;font-size:15px;line-height:1.85;">부분 리부트는 사용자 요청에 따라 실험적으로 추가했습니다. 다만 선택 지점 직전의 전체 BardWiki 상태를 복원할 수 있는 <strong>턴별 스냅샷</strong>이 없는 현재 구조에서는 최신 정본에 과거 변화가 다시 적용되거나 이전 맥락이 누락될 수 있습니다. 기능을 시험해 볼 수는 있지만 공식적인 복구 수단으로 권장하지 않습니다. <strong><span style="font-size:18px;color:rgb(184, 49, 47);">제가 권장하는 안정적인 복구 수단은 어디까지나 세이브 / 로드 시스템입니다.&nbsp;</span></strong></p>
+
+		<p>
+			<br>
+		</p>
+	</div>
+	<div style="padding:22px 20px;color:#4b6783;font-size:12px;line-height:1.7;text-align:center;background:linear-gradient(100deg,#e8f0f9,#f4f8fd);">RisuBard &middot; v0.9.3 &middot; 주요 패치노트</div></div>

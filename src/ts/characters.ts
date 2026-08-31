@@ -10,7 +10,7 @@ import { checkNullish, findCharacterbyId, findCharacterIndexbyId, getUserName, s
 import { v4 as uuidv4, v4 } from 'uuid';
 import { getImageType } from "./media";
 import { MobileGUIStack, OpenRealmStore, selectedCharID } from "./stores.svelte";
-import { AppendableBuffer, changeChatTo, checkCharOrder, downloadFile, getFileSrc, requiresFullEncoderReload } from "./globalApi.svelte";
+import { AppendableBuffer, changeChatTo, checkCharOrder, downloadFile, forageStorage, getFileSrc, requestImmediateSave, requiresFullEncoderReload } from "./globalApi.svelte";
 import { updateInlayScreen } from "./process/inlayScreen";
 import { parseMarkdownSafe } from "./parser/parser.svelte";
 import { translateHTML } from "./translator/translator";
@@ -19,6 +19,8 @@ import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
 import { clearCharacterVaultNew, pinCharacterVaultQuickAccess } from './characterVault'
+import { resetImportedBardWikiState } from './risubard/chatImportMemory'
+import { completeMemoryWikiFork, forkMemoryWiki } from './risubard/memoryWikiFork'
 import { withSaverScope } from './performance/saverMode'
 import { markSqlCharacterDirty, markSqlChatDirty, markSqlMessageDirty, markSqlMessageManifestDirty } from './storage/sql/sqlPersistenceRuntime';
 import { runtimeMetrics } from './performance/runtimeMetrics'
@@ -230,11 +232,12 @@ export async function exportChat(page:number){
             if(chat.folderId) {
                 folders = db.characters[selectedID].chatFolders?.filter(f => f.id === chat.folderId)
             }
-            const stringl = Buffer.from(JSON.stringify({
-                type: 'risuChat',
-                ver: 2,
-                data: chat,
-                folders: folders
+             const stringl = Buffer.from(JSON.stringify({
+                 type: 'risuChat',
+                 ver: 2,
+                 sourceCharacterId: char.chaId,
+                 data: chat,
+                 folders: folders
             }), 'utf-8')
     
             await downloadFile(`${char.name}_${date}_chat`.replace(/[<>:"/\\|?*\.\,]/g, "") + '.json', stringl)
@@ -439,6 +442,20 @@ async function importChatInner(){
                 const chats = Array.isArray(json.data) ? json.data : [json.data]
                 const selectedID = get(selectedCharID)
                 let db = getDatabase()
+                const targetCharacter = db.characters[selectedID]
+                const previousChats = [...targetCharacter.chats]
+                const previousFolders = [...(targetCharacter.chatFolders ?? [])]
+                const sourceCharacterId = typeof json.sourceCharacterId === 'string'
+                    && json.sourceCharacterId.trim()
+                    ? json.sourceCharacterId
+                    : undefined
+                const staged: Array<{
+                    characterId: string
+                    destinationChatId: string
+                    forkToken: string
+                }> = []
+                let applied = false
+                let missingWiki = false
                 let folderIdMap = {}
                 folders.forEach(folder => {
                     if(db.characters[selectedID].chatFolders?.some(f => f.id === folder.id)){
@@ -449,22 +466,96 @@ async function importChatInner(){
                         folderIdMap[folder.id] = folder.id
                     }
                 })
-                if(db.characters[selectedID].chatFolders === undefined){
-                    db.characters[selectedID].chatFolders = []
-                }
-                db.characters[selectedID].chatFolders.push(...folders)
-                chats.forEach(chat => {
-                    if(chat.folderId && folderIdMap[chat.folderId]){
-                        chat.folderId = folderIdMap[chat.folderId]
+                const importedChats: Chat[] = []
+                try {
+                    for (const rawChat of chats) {
+                        const sourceChatId = typeof rawChat.id === 'string'
+                            && rawChat.id.trim()
+                            ? rawChat.id
+                            : undefined
+                        if(rawChat.folderId && folderIdMap[rawChat.folderId]){
+                            rawChat.folderId = folderIdMap[rawChat.folderId]
+                        }
+                        rawChat.id = v4()
+                        const imported = normalizeChat(rawChat)
+                        if (sourceCharacterId && sourceChatId) {
+                            const receipt = await forkMemoryWiki({
+                                characterId: sourceCharacterId,
+                                destinationCharacterId: targetCharacter.chaId,
+                                sourceChatId,
+                                destinationChatId: imported.id,
+                                mode: 'copy',
+                                fetchImpl: fetch,
+                                createAuth: () => forageStorage.createAuth(),
+                            })
+                            staged.push({
+                                characterId: targetCharacter.chaId,
+                                destinationChatId: imported.id,
+                                forkToken: receipt.forkToken,
+                            })
+                            if (!receipt.sourceExists) {
+                                resetImportedBardWikiState(imported)
+                                missingWiki = true
+                            }
+                        }
+                        else {
+                            resetImportedBardWikiState(imported)
+                            missingWiki = true
+                        }
+                        importedChats.push(imported)
                     }
-                    chat.id = v4()
-                })
-                const imported = chats.map(c => normalizeChat(c))
-                db.characters[selectedID].chats.unshift(...imported)
-                imported.forEach(chat => markImportedChat(db.characters[selectedID].chaId, chat))
-                markChatOrder(db.characters[selectedID].chaId, db.characters[selectedID].chats)
-                notifySuccess(language.successImport)
-                return
+                    targetCharacter.chatFolders ??= []
+                    targetCharacter.chatFolders.push(...folders)
+                    targetCharacter.chats.unshift(...importedChats)
+                    // SQL is canonical here, so an unshift is invisible to the
+                    // persistence layer until the rows carry identities and
+                    // dirty marks -- and it moves every sibling's position.
+                    // requestImmediateSave audits before it flushes, but the
+                    // audit cannot mark messages `immediate`, and the fork
+                    // finalization below is only durable if these rows are.
+                    for (const chat of importedChats) markImportedChat(targetCharacter.chaId, chat)
+                    markChatOrder(targetCharacter.chaId, targetCharacter.chats)
+                    applied = true
+                    await requestImmediateSave({
+                        forceFullWrite: true,
+                        rejectOnFailure: true,
+                    })
+                    await Promise.all(staged.map((fork) =>
+                        completeMemoryWikiFork({
+                            ...fork,
+                            action: 'finalize',
+                            fetchImpl: fetch,
+                            createAuth: () => forageStorage.createAuth(),
+                        })
+                    ))
+                    notifySuccess(language.successImport)
+                    if (missingWiki) {
+                        notifyInfo(language.risuBardChatImportWikiUnavailable)
+                    }
+                    return
+                }
+                catch (error) {
+                    if (applied) {
+                        targetCharacter.chats = previousChats
+                        targetCharacter.chatFolders = previousFolders
+                        // The rollback is itself a mutation SQL has to see; the
+                        // audit inside requestImmediateSave below reconciles the
+                        // removed rows, this restores the surviving order.
+                        markChatOrder(targetCharacter.chaId, targetCharacter.chats)
+                    }
+                    await Promise.allSettled(staged.map((fork) =>
+                        completeMemoryWikiFork({
+                            ...fork,
+                            action: 'discard',
+                            fetchImpl: fetch,
+                            createAuth: () => forageStorage.createAuth(),
+                        })
+                    ))
+                    if (applied) {
+                        void requestImmediateSave({ forceFullWrite: true })
+                    }
+                    throw error
+                }
             }
             if(json.type === 'risuAllChats' && json.ver === 1){
                 const chats = json.data
@@ -557,11 +648,12 @@ export async function exportAllChats() {
 
         const allChats = char.chats
         const allFolders = char.chatFolders
-        const stringl = Buffer.from(JSON.stringify({
-            type: 'risuAllChats',
-            ver: 2,
-            data: allChats,
-            folders: allFolders
+         const stringl = Buffer.from(JSON.stringify({
+             type: 'risuAllChats',
+             ver: 2,
+             sourceCharacterId: char.chaId,
+             data: allChats,
+             folders: allFolders
         }), 'utf-8')
         await downloadFile(`${char.name}_all_chats_${date}`.replace(/[<>:"/\\|?*.,]/g, "") + '.json', stringl)
         notifySuccess(language.successExport)

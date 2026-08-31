@@ -1,7 +1,7 @@
 <script lang="ts">
 
     import Suggestion from './Suggestion.svelte';
-    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon } from "@lucide/svelte";
+    import { CameraIcon, ChevronUpIcon, ChevronDownIcon, ChevronsUpIcon, ChevronsDownIcon, DatabaseIcon, FileTextIcon, GlobeIcon, ImagePlusIcon, LanguagesIcon, Laugh, MenuIcon, MicOffIcon, PackageIcon, Plus, RefreshCcwIcon, ReplyIcon, Send, StepForwardIcon, XIcon, BrainIcon, ArrowDown, ZapIcon, Maximize2, Minimize2, BookOpenIcon } from "@lucide/svelte";
     import ShDropdownMenu from 'src/lib/UI/GUI/ShDropdownMenu.svelte';
     import ShDropdownMenuTrigger from 'src/lib/UI/GUI/ShDropdownMenuTrigger.svelte';
     import ShDropdownMenuContent from 'src/lib/UI/GUI/ShDropdownMenuContent.svelte';
@@ -30,7 +30,7 @@
     } from "../../ts/process/index.svelte";
     import { abortGeneration, chatGenKey, endGeneration, generationStates, registerAbort } from "../../ts/process/generationState";
     import { claimPendingSend, clearPendingSend, markResumable, resumableSends, takeResumable } from "../../ts/process/request/pendingSends";
-    import { ensureCurrentChatReady } from "../../ts/storage/chatStorage";
+    import { chatNeedsServerFetch, ensureCurrentChatReady, fetchChatFromServer } from "../../ts/storage/chatStorage";
     import { loadNewestChatMessages, loadOlderChatMessages } from '../../ts/storage/sql/sqlRuntimeHydration';
     import { carrySqlRuntimeFields, hasNewerSqlMessages, hasOlderSqlMessages } from '../../ts/storage/sql/sqlRuntimeWindow';
     import { sleep } from "../../ts/util";
@@ -45,6 +45,11 @@ import { isMobile } from 'src/ts/platform'
     import MainMenu from '../UI/MainMenu.svelte';
     import AssetInput from './AssetInput.svelte';
     import { scrollWithinContainer } from './scrollWithin';
+    import {
+        captureChatScrollAnchor,
+        restoreChatScrollAnchor,
+        type ChatScrollAnchor,
+    } from './chatScrollAnchor';
     import { aiLawApplies, chatFoldedState, chatFoldedStateMessageIndex, downloadFile } from 'src/ts/globalApi.svelte';
     import { runTrigger } from 'src/ts/process/triggers';
     import { v4 } from 'uuid';
@@ -55,7 +60,10 @@ import { isMobile } from 'src/ts/platform'
     import { quickMenu } from 'src/ts/hotkey';
     import { loadChatDraft, scheduleSaveChatDraft, flushChatDraft, removeChatDraft } from 'src/ts/storage/chatDraft';
     import { blocksChatGeneration } from 'src/ts/risubard/wikiReboot';
-    import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
+    import {
+        cancelWikiGeneration,
+        isWikiGenerating,
+    } from 'src/ts/risubard/wikiGenerationState';
     import { saverModeStore } from 'src/ts/performance/saverMode';
 
     import Chats from './Chats.svelte';
@@ -64,6 +72,7 @@ import { isMobile } from 'src/ts/platform'
     import PluginFloatingActionButtons from '../Others/PluginFloatingActionButtons.svelte';
     import SolarAssetIcon from '../UI/Icons/SolarAssetIcon.svelte';
     import RisuBardMemoryWiki from '../Others/RisuBardMemoryWiki.svelte';
+    import ArcaChatLogDialog from './ArcaChatLogDialog.svelte'
     import RisuBardSaveLoadShortcuts from './RisuBardSaveLoadShortcuts.svelte';
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar';
     import feedIcon from 'src/assets/solar-bold/feed-bold.svg';
@@ -112,6 +121,7 @@ import { isMobile } from 'src/ts/platform'
     let messageInputTranslate:string = $state('')
     let openMenu = $state(false)
     let memoryWikiOpen = $state(false)
+    let arcaChatLogOpen = $state(false)
     let paginationKey = $state('')
     // Cancels a late response when a different chat becomes active mid-fetch.
     let chatWindowVersion = $state(0)
@@ -128,6 +138,13 @@ import { isMobile } from 'src/ts/platform'
     let chatsInstance: any = $state()
     let chatScrollContainer: HTMLElement | undefined = $state()
     let isScrollingToMessage = $state(false)
+    let currentScrollAnchor: ChatScrollAnchor | null = null
+    let scrollAnchorCaptureTimer: ReturnType<typeof setTimeout> | null = null
+    let scrollAnchorRestoreTimers: ReturnType<typeof setTimeout>[] = []
+    let scrollAnchorMutationToken = 0
+    let scrollAnchorFreezeUntil = 0
+    let restoringScrollAnchor = false
+    const SCROLL_ANCHOR_RESTORE_DELAYS = [0, 80, 180, 350, 700, 1300, 2100]
     let {
         openModuleList = $bindable(false),
         openChatList = $bindable(false),
@@ -147,10 +164,162 @@ import { isMobile } from 'src/ts/platform'
         wikiRebootBlocksGeneration || $isWikiGenerating
     )
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
+
+    /**
+     * The Arca chat log renders and exports `chat.message` in full, so it is an
+     * export path, and `currentChatReady` is not the predicate an export path
+     * wants: it only says the chat hydrated, not that the whole history is
+     * resident. A windowed chat passes it while holding one page, which would
+     * put a slice of the conversation into the log under the whole chat's name
+     * -- with the page numbers computed from the slice, so nothing on screen
+     * would say it was short. Fetch the rest first, the way the CharX and
+     * backup exports do, and refuse rather than log a partial history.
+     */
+    async function openArcaChatLog(): Promise<void> {
+        const char = currentCharacter
+        const chat = currentChatSlot
+        if (!char?.chaId || !chat?.id) return
+        const partial = chatNeedsServerFetch(chat)
+            || (chat as ChatData & { messagesFullyLoaded?: boolean }).messagesFullyLoaded === false
+            || hasOlderSqlMessages(chat)
+        if (partial) {
+            try {
+                const full = await fetchChatFromServer(char.chaId, char.chatPage, chat.id)
+                if (!full) {
+                    alertError("This chat's full history could not be loaded, so the log was not opened. Logging now would present one page of the conversation as the whole chat.")
+                    return
+                }
+                // Assigned whole, not merged: `carrySqlRuntimeFields` would copy
+                // the partial window off the slice and re-mark the full history
+                // as windowed, which is the state this fetch just left behind.
+                char.chats[char.chatPage] = full as ChatData
+            } catch (error) {
+                console.error(`[DefaultChatScreen] loading the full history of chat ${chat.id} for the Arca chat log failed.`, error)
+                alertError(error)
+                return
+            }
+        }
+        arcaChatLogOpen = true
+    }
     let currentChat = $derived(currentChatReady ? currentChatSlot.message : [])
     let currentChatFmIndex = $derived(currentChatReady ? (currentChatSlot.fmIndex ?? -1) : -1)
     /** How many messages one older page carries. */
     let chatPageSize = $derived(normalizeChatPageSize(DBState.db.chatPageSize))
+
+    function clearScrollAnchorTimers() {
+        if (scrollAnchorCaptureTimer) clearTimeout(scrollAnchorCaptureTimer)
+        scrollAnchorCaptureTimer = null
+        for (const timer of scrollAnchorRestoreTimers) clearTimeout(timer)
+        scrollAnchorRestoreTimers = []
+    }
+
+    function captureCurrentScrollAnchor() {
+        if (
+            !DBState.db.preserveChatScrollPosition
+            || !chatScrollContainer
+            || restoringScrollAnchor
+            || Date.now() < scrollAnchorFreezeUntil
+        ) return
+        currentScrollAnchor = captureChatScrollAnchor(
+            chatScrollContainer,
+            paginationKey,
+            currentChat.length,
+        )
+    }
+
+    function scheduleScrollAnchorCapture(delay = 55) {
+        if (!DBState.db.preserveChatScrollPosition) return
+        if (scrollAnchorCaptureTimer) clearTimeout(scrollAnchorCaptureTimer)
+        scrollAnchorCaptureTimer = setTimeout(() => {
+            scrollAnchorCaptureTimer = null
+            captureCurrentScrollAnchor()
+        }, delay)
+    }
+
+    function queueScrollAnchorRestore() {
+        if (!DBState.db.preserveChatScrollPosition || !currentScrollAnchor) {
+            scheduleScrollAnchorCapture(80)
+            return
+        }
+
+        const snapshot = { ...currentScrollAnchor }
+        const token = ++scrollAnchorMutationToken
+        for (const timer of scrollAnchorRestoreTimers) clearTimeout(timer)
+        scrollAnchorFreezeUntil = Date.now() + SCROLL_ANCHOR_RESTORE_DELAYS.at(-1)! + 50
+        scrollAnchorRestoreTimers = SCROLL_ANCHOR_RESTORE_DELAYS.map((delay, index) =>
+            setTimeout(() => {
+                if (
+                    token !== scrollAnchorMutationToken
+                    || !DBState.db.preserveChatScrollPosition
+                    || !chatScrollContainer
+                ) return
+
+                restoringScrollAnchor = true
+                const result = restoreChatScrollAnchor(
+                    chatScrollContainer,
+                    snapshot,
+                    paginationKey,
+                    currentChat.length,
+                )
+                restoringScrollAnchor = false
+
+                if (result === 'context-changed') {
+                    scrollAnchorMutationToken += 1
+                    return
+                }
+                if (index === SCROLL_ANCHOR_RESTORE_DELAYS.length - 1) {
+                    scrollAnchorFreezeUntil = 0
+                    scheduleScrollAnchorCapture(55)
+                }
+            }, delay),
+        )
+    }
+
+    function handleDirectScrollInteraction() {
+        scrollAnchorMutationToken += 1
+        for (const timer of scrollAnchorRestoreTimers) clearTimeout(timer)
+        scrollAnchorRestoreTimers = []
+        scrollAnchorFreezeUntil = 0
+        captureCurrentScrollAnchor()
+    }
+
+    $effect(() => {
+        const container = chatScrollContainer
+        const enabled = DBState.db.preserveChatScrollPosition
+        const contextKey = paginationKey
+        if (!container || !enabled || !contextKey) {
+            currentScrollAnchor = null
+            clearScrollAnchorTimers()
+            return
+        }
+
+        const observer = new MutationObserver(() => queueScrollAnchorRestore())
+        const handleMediaLoad = (event: Event) => {
+            if (event.target instanceof HTMLImageElement || event.target instanceof HTMLVideoElement) {
+                queueScrollAnchorRestore()
+            }
+        }
+        observer.observe(container, { childList: true, subtree: true })
+        container.addEventListener('load', handleMediaLoad, true)
+        container.addEventListener('pointerdown', handleDirectScrollInteraction)
+        container.addEventListener('wheel', handleDirectScrollInteraction)
+        container.addEventListener('touchstart', handleDirectScrollInteraction)
+        container.addEventListener('keydown', handleDirectScrollInteraction)
+        scheduleScrollAnchorCapture(0)
+
+        return () => {
+            observer.disconnect()
+            container.removeEventListener('load', handleMediaLoad, true)
+            container.removeEventListener('pointerdown', handleDirectScrollInteraction)
+            container.removeEventListener('wheel', handleDirectScrollInteraction)
+            container.removeEventListener('touchstart', handleDirectScrollInteraction)
+            container.removeEventListener('keydown', handleDirectScrollInteraction)
+            scrollAnchorMutationToken += 1
+            currentScrollAnchor = null
+            clearScrollAnchorTimers()
+            scrollAnchorFreezeUntil = 0
+        }
+    })
 
     async function restoreChatViewScroll(key: string, savedView: ChatViewSession) {
         await tick()
@@ -1320,6 +1489,10 @@ import { isMobile } from 'src/ts/platform'
                                     <DatabaseIcon /><span>{language.chatList}</span>
                                 </ShDropdownMenuItem>
                             {/if}
+                            <ShDropdownMenuItem data-open-arca-chat-log disabled={!currentChatReady}
+                                onSelect={() => { void openArcaChatLog() }}>
+                                <FileTextIcon /><span>{language.arcaChatLog.menu}</span>
+                            </ShDropdownMenuItem>
                             {#each additionalChatMenu as menu}
                                 <ShDropdownMenuItem onSelect={() => { menu.callback() }}>
                                     <PluginDefinedIcon ico={menu} /><span>{menu.name}</span>
@@ -1501,17 +1674,62 @@ import { isMobile } from 'src/ts/platform'
                 {/if}
 
                 {#if currentCharacter?.chaId !== '§playground' && currentCharacter?.chaId && currentChatSlot?.id}
-                    <div class="order-3 shrink-0 flex items-center h-9" data-risubard-wiki-controls>
+                    <div class="relative order-3 shrink-0 flex items-center h-9" data-risubard-wiki-controls>
+                        {#if $isWikiGenerating}
+                            <button
+                                    type="button"
+                                    data-risubard-wiki-cancel
+                                    onclick={cancelWikiGeneration}
+                                    aria-label={language.risuBardWikiCancel}
+                                    title={language.risuBardWikiCancel}
+                                    class="absolute bottom-[calc(100%+6px)] right-0 z-30 whitespace-nowrap rounded-md border border-danger/70 bg-danger px-2.5 py-1.5 text-xs font-bold text-on-danger shadow-lg transition-colors hover:bg-danger/85 active:bg-danger/75"
+                            >
+                                {language.risuBardWikiCancel}
+                            </button>
+                        {/if}
                         <button
                                 type="button"
                                 data-risubard-wiki-button
                                 onclick={() => memoryWikiOpen = !memoryWikiOpen}
                                 aria-label={language.risuBardMemoryOpenManual}
                                 title={language.risuBardMemoryOpenManual}
+                                style="left: 5px"
                                 class="relative z-10 shrink-0 flex justify-center items-center w-9 h-9 rounded-full bg-warning text-on-warning shadow-sm hover:bg-warning/85 active:bg-warning/75 transition-colors"
                                 class:wiki-generating={$isWikiGenerating}
                         >
                             <BookOpenIcon size={18} strokeWidth={2.2} />
+                        </button>
+                        <button
+                                type="button"
+                                role="switch"
+                                data-risubard-auto-wiki
+                                aria-checked={DBState.db.risuBardAutoWikiEnabled !== false}
+                                aria-label={language.risuBardAutoWiki}
+                                title={DBState.db.risuBardAutoWikiEnabled !== false
+                                    ? language.risuBardAutoWikiOn
+                                    : language.risuBardAutoWikiOff}
+                                onclick={() => {
+                                    DBState.db.risuBardAutoWikiEnabled =
+                                        DBState.db.risuBardAutoWikiEnabled === false
+                                }}
+                                class={`-ml-1 flex h-7 items-center gap-1 rounded-r-full border py-0.5 pl-2.5 pr-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                                    DBState.db.risuBardAutoWikiEnabled !== false
+                                        ? 'border-warning bg-warning/20 text-warning'
+                                        : 'border-darkborderc bg-darkbg text-textcolor2'
+                                }`}
+                        >
+                            <span>auto</span>
+                            <span
+                                    aria-hidden="true"
+                                    class="flex h-4 w-4 items-center justify-center rounded-full border transition-colors"
+                                    class:border-warning={DBState.db.risuBardAutoWikiEnabled !== false}
+                                    class:bg-warning={DBState.db.risuBardAutoWikiEnabled !== false}
+                                    class:shadow-sm={DBState.db.risuBardAutoWikiEnabled !== false}
+                                    class:border-darkborderc={DBState.db.risuBardAutoWikiEnabled === false}
+                                    class:bg-bgcolor={DBState.db.risuBardAutoWikiEnabled === false}
+                            >
+                                <span class="h-1.5 w-1.5 rounded-full bg-on-warning/90"></span>
+                            </span>
                         </button>
                     </div>
                 {/if}
@@ -1619,6 +1837,9 @@ import { isMobile } from 'src/ts/platform'
                 bumpScrollNav()
             }
             const chatTarget = e.target as HTMLElement;
+            if (!restoringScrollAnchor && Date.now() >= scrollAnchorFreezeUntil) {
+                scheduleScrollAnchorCapture()
+            }
             if (paginationKey) {
                 saveChatViewSession(paginationKey, {
                     anchorId: chatsInstance?.getAnchorId() ?? null,
@@ -1765,6 +1986,16 @@ import { isMobile } from 'src/ts/platform'
             onExecuteWikiCommand={executeCurrentNarrativeWikiCommand}
             onNavigateStorySource={navigateStorySource}
         />
+        {#if currentChatReady}
+            <ArcaChatLogDialog
+                open={arcaChatLogOpen}
+                onOpenChange={(next) => { arcaChatLogOpen = next }}
+                character={currentCharacter}
+                chat={currentChatSlot}
+                {currentUsername}
+                {userIcon}
+            />
+        {/if}
     {/if}
 </div>
 

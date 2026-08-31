@@ -6,6 +6,7 @@ import type {
 } from '../../../packages/risubard-core/src/contextCompiler'
 import { invokeBrowserFetch } from './browserFetch'
 import { normalizeRisuBardInquiryTokenBudget } from './risuBardSettings'
+import type { HistoricalSourceMatch } from './historicalSourceRecall'
 
 export const NARRATIVE_CONTEXT_OPT_IN_KEY =
     'risubard.experimentalNarrativeContext'
@@ -45,6 +46,7 @@ export interface NarrativeInquiryResponse {
         inspectedEdgeCount: number
         selectedNodeCount: number
         selectedTokens: number
+        semanticCandidateCount?: number
         hopCount: number
         auxiliaryModelCalls: 0
     }
@@ -52,6 +54,7 @@ export interface NarrativeInquiryResponse {
 
 const NARRATIVE_EVIDENCE_RULES = [
     'Narrative evidence rules:',
+    '- Original historical chat excerpts are primary evidence for exact old details and outrank compressed summaries when they conflict.',
     '- For past details, event documents are the detailed evidence; canonical summaries are compressed navigation and current-state context.',
     '- Do not invent an omitted action target or location. Do not turn temporal order into causation or cross a character knowledge boundary.',
     '- Current-state sections in canonical character documents outrank older historical descriptions and unsupported continuation assumptions.',
@@ -91,6 +94,11 @@ export async function loadNarrativeInquiry(input: {
         target: number
         maximum: number
     }
+    semanticMatches?: readonly {
+        documentId: string
+        score: number
+    }[]
+    sourceMatches?: readonly HistoricalSourceMatch[]
     fetchImpl: typeof fetch
     createAuth(): Promise<string>
     timeoutMs?: number
@@ -130,6 +138,14 @@ export async function loadNarrativeInquiry(input: {
                                         input.tokenBudget.target,
                                         input.tokenBudget.maximum
                                     ) }),
+                            ...(input.semanticMatches === undefined
+                                ? {}
+                                : { semanticMatches:
+                                    input.semanticMatches.slice(0, 32) }),
+                            ...(input.sourceMatches === undefined
+                                ? {}
+                                : { sourceMatches:
+                                    input.sourceMatches.slice(0, 8) }),
                         }),
                     }
                 )
@@ -180,15 +196,24 @@ export async function loadNarrativeInquiry(input: {
         || !Array.isArray(value.sources)
         || value.sources.length > 16
         || !isRecord(value.metrics)
-        || !hasExactKeys(value.metrics, [
-            'candidateCount',
-            'inspectedNodeCount',
-            'inspectedEdgeCount',
-            'selectedNodeCount',
-            'selectedTokens',
-            'hopCount',
-            'auxiliaryModelCalls',
-        ])
+        || !(hasExactKeys(value.metrics, [
+                'candidateCount',
+                'inspectedNodeCount',
+                'inspectedEdgeCount',
+                'selectedNodeCount',
+                'selectedTokens',
+                'hopCount',
+                'auxiliaryModelCalls',
+            ]) || hasExactKeys(value.metrics, [
+                'candidateCount',
+                'inspectedNodeCount',
+                'inspectedEdgeCount',
+                'selectedNodeCount',
+                'selectedTokens',
+                'semanticCandidateCount',
+                'hopCount',
+                'auxiliaryModelCalls',
+            ]))
         || (value.mode === 'v2-current'
             && value.cacheStatus !== 'current')
         || (value.mode === 'bounded-v1-fallback'
@@ -279,6 +304,12 @@ export async function loadNarrativeInquiry(input: {
             selectedTokens: boundedMetric(
                 value.metrics.selectedTokens
             ),
+            ...(value.metrics.semanticCandidateCount === undefined
+                ? {}
+                : { semanticCandidateCount: boundedMetric(
+                    value.metrics.semanticCandidateCount,
+                    32
+                ) }),
             hopCount: boundedMetric(value.metrics.hopCount, 2),
             auxiliaryModelCalls: 0,
         },

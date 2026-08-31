@@ -294,7 +294,23 @@ describe('RisuBardSaveSlotsDialog', () => {
         await vi.waitFor(() => expect(mocks.alertConfirm).toHaveBeenCalledWith(
             '저장하지 않은 채팅은 사라집니다. 불러올까요?'
         ))
-        await vi.waitFor(() => expect(onLoad).toHaveBeenCalledWith('save-1'))
+        await vi.waitFor(() => expect(onLoad).toHaveBeenCalledWith('save-1', false))
+    })
+
+    test('loads a save into a new chat without warning about overwriting the current chat', async () => {
+        const onLoad = render()
+        await vi.waitFor(() => expect(document.body.textContent).toContain('SAVE 01'))
+        const newChatOption = document.body.querySelector<HTMLInputElement>(
+            'input[alt="새 챗으로 불러오기"]'
+        )
+        expect(newChatOption).not.toBeNull()
+        newChatOption!.click()
+        document.body.querySelector<HTMLButtonElement>(
+            '[aria-label="SAVE 01 불러오기"]'
+        )!.click()
+
+        await vi.waitFor(() => expect(onLoad).toHaveBeenCalledWith('save-1', true))
+        expect(mocks.alertConfirm).not.toHaveBeenCalled()
     })
 
     test('skips confirmation when the newest save matches the current story', async () => {
@@ -320,7 +336,7 @@ describe('RisuBardSaveSlotsDialog', () => {
             '[aria-label="SAVE 01 불러오기"]'
         )!.click()
 
-        await vi.waitFor(() => expect(onLoad).toHaveBeenCalledWith('save-1'))
+        await vi.waitFor(() => expect(onLoad).toHaveBeenCalledWith('save-1', false))
         expect(mocks.alertConfirm).not.toHaveBeenCalled()
     })
 })

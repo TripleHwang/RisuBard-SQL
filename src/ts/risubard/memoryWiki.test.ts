@@ -17,6 +17,7 @@ describe('loadNarrativeMemoryWiki', () => {
             type: 'concept',
             status: 'active',
             title: '성약',
+            aliases: ['맹약'],
             relativePath: 'concepts/성약-oath.md',
             sourceMessageIds: [],
             created: '2026-08-08T00:00:00.000Z',
@@ -33,6 +34,7 @@ describe('loadNarrativeMemoryWiki', () => {
             chatId: 'chat',
             type: 'concept',
             title: '성약',
+            aliases: ['맹약'],
             markdown: '# 성약\n\n직접 기록.',
             fetchImpl,
             createAuth: async () => 'token',
@@ -49,6 +51,7 @@ describe('loadNarrativeMemoryWiki', () => {
                     chatId: 'chat',
                     type: 'concept',
                     title: '성약',
+                    aliases: ['맹약'],
                     markdown: '# 성약\n\n직접 기록.',
                 }),
             })
@@ -143,19 +146,30 @@ describe('loadNarrativeMemoryWiki', () => {
     })
 
     it('retracts events linked to confirmed messages before chat deletion', async () => {
-        const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+        const fetchMock = vi.fn(async (
+            _input: RequestInfo | URL,
+            _init?: RequestInit,
+        ) => new Response(JSON.stringify({
             retractedIds: ['event.turn-1'],
-        }))) as unknown as typeof fetch
+        })))
+        const fetchImpl = fetchMock as unknown as typeof fetch
+        const sourceMessageIds = Array.from(
+            { length: 101 },
+            (_, index) => `message-${index}`
+        )
 
         await expect(retractWikiEventsBySourceMessages({
             characterId: 'character', chatId: 'chat',
-            sourceMessageIds: ['assistant-1'], fetchImpl,
+            sourceMessageIds, fetchImpl,
             createAuth: async () => 'token',
         })).resolves.toEqual({ retractedIds: ['event.turn-1'] })
-        expect(fetchImpl).toHaveBeenCalledWith(
+        expect(fetchMock).toHaveBeenCalledWith(
             '/api/risubard/memory/wiki/event/retract-sources',
             expect.objectContaining({ method: 'POST' })
         )
+        const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+        expect(JSON.parse(String(request.body)).sourceMessageIds)
+            .toEqual(sourceMessageIds)
     })
 
     it('accepts or reverts a canonical review through an authenticated request', async () => {

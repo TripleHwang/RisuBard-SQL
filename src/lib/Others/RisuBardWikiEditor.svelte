@@ -16,7 +16,6 @@
         LocateFixedIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
-    import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
     import { v4 } from 'uuid'
     import { forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte'
     import { DBState } from 'src/ts/stores.svelte'
@@ -44,11 +43,11 @@
         documents: WikiDocument[]
         health?: NarrativeMemoryWikiMarkdown['health']
         locked?: boolean
+        mobileLayout?: boolean
         selectedId?: string
         onChanged?: () => void | Promise<void>
         onSelected?: (documentId: string) => void
         onFocusModeChange?: (focused: boolean) => void
-        onOpenFindReplace?: () => void
         onNavigateSource?: (source: StorySourceRef) => void
     }
 
@@ -58,16 +57,17 @@
         documents,
         health = { danglingLinks: [], unlinkedDocumentIds: [] },
         locked = false,
+        mobileLayout = false,
         selectedId = $bindable(''),
         onChanged,
         onSelected,
         onFocusModeChange,
-        onOpenFindReplace,
         onNavigateSource,
     }: Props = $props()
     let creating = $state(false)
     let type = $state<MarkdownWikiDocumentType>('character')
     let title = $state('')
+    let aliasesText = $state('')
     let markdown = $state('')
     let saving = $state(false)
     let error = $state('')
@@ -76,17 +76,18 @@
     let loadedContentHash = $state('')
     let loadedType = $state<MarkdownWikiDocumentType>('character')
     let loadedTitle = $state('')
+    let loadedAliasesText = $state('')
     let loadedMarkdown = $state('')
     let contextDocumentId = $state('')
     let contextX = $state(0)
     let contextY = $state(0)
     let wikiEditorElement = $state<HTMLElement | null>(null)
-    let treeExpanded = $state(true)
+    let treeExpanded = $state(false)
     let editorExpanded = $state(true)
     let editorFocus = $state(false)
     let markdownPreview = $state(false)
     let treeHeight = $state(normalizeMemoryWikiTreeHeight(undefined))
-    let restoredTreeExpanded = true
+    let restoredTreeExpanded = false
     let restoredEditorExpanded = true
 
     const markdownRenderer = markdownit({
@@ -98,6 +99,9 @@
 
     let tree = $derived(buildWikiFileTree(documents))
     let recentlyUpdatedIds = $derived(getRecentlyUpdatedWikiDocumentIds(documents))
+    let danglingSourceIds = $derived(new Set(
+        health.danglingLinks.map((link) => link.sourceId)
+    ))
     let selected = $derived(
         documents.find((document) => document.id === selectedId) ?? null
     )
@@ -108,6 +112,7 @@
     let dirty = $derived(creating
         ? title.trim().length > 0 || markdown.trim().length > 0
         : !!selected && (title !== loadedTitle
+            || aliasesText !== loadedAliasesText
             || type !== loadedType
             || markdown !== loadedMarkdown))
 
@@ -116,11 +121,13 @@
         creating = false
         type = document.type
         title = document.title
+        aliasesText = (document.aliases ?? []).join(', ')
         markdown = document.content
         loadedDocumentId = document.id
         loadedContentHash = document.contentHash
         loadedType = document.type
         loadedTitle = document.title
+        loadedAliasesText = aliasesText
         loadedMarkdown = document.content
         error = ''
         notice = ''
@@ -139,6 +146,7 @@
         creating = true
         type = 'character'
         title = ''
+        aliasesText = ''
         markdown = ''
         error = ''
         notice = ''
@@ -289,6 +297,13 @@
                 } : {}),
                 type,
                 title,
+                aliases: Array.from(new Map(aliasesText
+                    .split(/[,\n]/)
+                    .map((alias) => alias.trim())
+                    .filter(Boolean)
+                    .map((alias) => [
+                        alias.normalize('NFKC').toLocaleLowerCase(), alias,
+                    ])).values()).slice(0, 32),
                 markdown,
                 fetchImpl: fetch,
                 createAuth: () => forageStorage.createAuth(),
@@ -454,6 +469,7 @@
         if (creating || !current) return
         const incomingType = current.type
         const matchesIncoming = title === current.title
+            && aliasesText === (current.aliases ?? []).join(', ')
             && type === incomingType
             && markdown === current.content
         if (current.id !== selectedId
@@ -470,6 +486,7 @@
     class:tree-collapsed={!treeExpanded}
     class:editor-collapsed={!editorExpanded}
     class:editor-focus={editorFocus}
+    class:mobile-layout={mobileLayout}
     data-wiki-editor
     data-tree-expanded={treeExpanded}
     data-editor-expanded={editorExpanded}
@@ -490,6 +507,15 @@
             <ChevronDownIcon size={18} class={treeExpanded ? '' : 'collapsed'} />
         </button>
     </div>
+    {#if treeExpanded}
+        <button
+            type="button"
+            class="tree-scrim"
+            data-wiki-tree-scrim
+            aria-label="문서 목록 닫기"
+            onclick={() => treeExpanded = false}
+        ></button>
+    {/if}
     <nav id="risubard-wiki-file-tree" class="file-tree" aria-label="위키 파일 트리">
         <div class="tree-toolbar">
             <strong>WIKI</strong>
@@ -513,40 +539,53 @@
                     <div class="folder-children">
                         {#each node.children as child (child.path)}
                             {#if child.kind === 'file'}
-                                <button
-                                    type="button"
-                                    class:active={selectedId === child.documentId}
-                                    onclick={() => {
-                                        const document = documents.find((item) => item.id === child.documentId)
-                                        if (document) selectDocument(document)
-                                    }}
-                                    oncontextmenu={(event) => openContextMenu(event, child.documentId)}
-                                    aria-label={`${child.title} ${child.readOnly ? '읽기 전용' : ''}`}
+                                <div
+                                    class="file-row"
+                                    class:dangling-link={danglingSourceIds.has(child.documentId)}
+                                    data-wiki-dangling-document={danglingSourceIds.has(child.documentId) ? child.documentId : undefined}
                                 >
-                                    {#if child.readOnly}<FileLock2Icon size={13} />
-                                    {:else}<FileIcon size={13} />{/if}
-                                    <span class="document-title">{child.title}</span>
-                                    {@render recentUpdateBadge(child.documentId)}
-                                </button>
+                                    <button
+                                        type="button"
+                                        class="file-select"
+                                        class:active={selectedId === child.documentId}
+                                        onclick={() => {
+                                            const document = documents.find((item) => item.id === child.documentId)
+                                            if (document) selectDocument(document)
+                                        }}
+                                        oncontextmenu={(event) => openContextMenu(event, child.documentId)}
+                                        aria-label={`${child.title} ${child.readOnly ? '읽기 전용' : ''}`}
+                                    >
+                                        {#if child.readOnly}<FileLock2Icon size={13} />
+                                        {:else}<FileIcon size={13} />{/if}
+                                        <span class="document-title">{child.title}</span>
+                                        {@render recentUpdateBadge(child.documentId)}
+                                    </button>
+                                </div>
                             {/if}
                         {/each}
                     </div>
                 </details>
             {:else}
-                <button
-                    type="button"
-                    class="root-file"
-                    class:active={selectedId === node.documentId}
-                    onclick={() => {
-                        const document = documents.find((item) => item.id === node.documentId)
-                        if (document) selectDocument(document)
-                    }}
-                    oncontextmenu={(event) => openContextMenu(event, node.documentId)}
-                    aria-label={node.title}
+                <div
+                    class="file-row"
+                    class:dangling-link={danglingSourceIds.has(node.documentId)}
+                    data-wiki-dangling-document={danglingSourceIds.has(node.documentId) ? node.documentId : undefined}
                 >
-                    <FileIcon size={13} /><span class="document-title">{node.title}</span>
-                    {@render recentUpdateBadge(node.documentId)}
-                </button>
+                    <button
+                        type="button"
+                        class="root-file file-select"
+                        class:active={selectedId === node.documentId}
+                        onclick={() => {
+                            const document = documents.find((item) => item.id === node.documentId)
+                            if (document) selectDocument(document)
+                        }}
+                        oncontextmenu={(event) => openContextMenu(event, node.documentId)}
+                        aria-label={node.title}
+                    >
+                        <FileIcon size={13} /><span class="document-title">{node.title}</span>
+                        {@render recentUpdateBadge(node.documentId)}
+                    </button>
+                </div>
             {/if}
         {/each}
     </nav>
@@ -614,6 +653,10 @@
                     <span>이름</span>
                     <input aria-label="항목 이름" bind:value={title} maxlength="160" readonly={readOnly} />
                 </label>
+                <label class="aliases-field">
+                    <span>별칭</span>
+                    <input aria-label="별칭" bind:value={aliasesText} maxlength="3000" readonly={readOnly} placeholder="쉼표로 구분" />
+                </label>
             </div>
             <div class="editor-actions" data-wiki-action-toolbar>
                 {#if selected && selected.sourceMessageIds.length > 0 && onNavigateSource}
@@ -635,10 +678,10 @@
                     </span>
                 {/if}
                 <ShButton size="sm" variant="success" aria-label="저장" title="저장" onclick={save} disabled={readOnly || saving || !dirty || !title.trim() || !markdown.trim()}>
-                    <SaveIcon size={14} /> <span data-wiki-action-label>저장</span>
+                    <SaveIcon size={14} />
                 </ShButton>
                 <ShButton size="sm" variant="ghost" aria-label="되돌리기" title="되돌리기" onclick={revert} disabled={!dirty || saving}>
-                    <RotateCcwIcon size={14} /> <span data-wiki-action-label>되돌리기</span>
+                    <RotateCcwIcon size={14} />
                 </ShButton>
                 <ShButton
                     size="sm"
@@ -652,25 +695,13 @@
                 </ShButton>
                 {#if selected?.type === 'event' && selected.status === 'active'}
                     <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={retractEvent} disabled={saving}>
-                        <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
+                        <Trash2Icon size={14} />
                     </ShButton>
                 {:else}
                     <ShButton size="sm" variant="ghost" aria-label="삭제" title="삭제" onclick={trash} disabled={!selected || creating || readOnly || saving}>
-                        <Trash2Icon size={14} /> <span data-wiki-action-label>삭제</span>
+                        <Trash2Icon size={14} />
                     </ShButton>
                 {/if}
-                <ShButton
-                    size="sm"
-                    variant="ghost"
-                    aria-label="모두 바꾸기"
-                    title="모두 바꾸기"
-                    data-wiki-open-find-replace
-                    onclick={() => onOpenFindReplace?.()}
-                    disabled={locked}
-                >
-                    <SolarBoldIcon name="magnifier" size={14} />
-                    <span data-wiki-action-label>모두 바꾸기</span>
-                </ShButton>
                 <label class="markdown-preview-toggle" title="마크다운 미리보기">
                     <input
                         type="checkbox"
@@ -742,19 +773,23 @@
 
 <style>
     .wiki-editor { display: grid; grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr); min-height: 27rem; border-bottom: 1px solid var(--risu-theme-darkborderc); }
-    .portrait-panel-header, .editor-section-resizer { display: none; }
+    .portrait-panel-header, .editor-section-resizer, .tree-scrim { display: none; }
     .file-tree { min-width: 0; overflow: auto; padding: .55rem; border-right: 1px solid var(--risu-theme-darkborderc); background: color-mix(in srgb, var(--risu-theme-darkbg) 96%, var(--color-bgcolor)); }
     .tree-toolbar, .editor-title-row { display: flex; align-items: center; gap: .5rem; }
     .tree-toolbar { justify-content: space-between; padding: .2rem .25rem .6rem; }
     .wiki-health { display: flex; flex-wrap: wrap; gap: .3rem; padding: 0 .25rem .55rem; color: var(--risu-theme-textcolor2); font-size: .65rem; }
     .wiki-health span { border: 1px solid var(--risu-theme-darkborderc); border-radius: 999px; padding: .16rem .38rem; }
     .tree-toolbar strong { color: var(--risu-theme-textcolor2); font: 700 .65rem/1 ui-monospace, monospace; letter-spacing: .16em; }
-    .folder-row, .root-file, .folder-children button { width: 100%; display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .38rem .45rem; border-radius: .32rem; color: var(--risu-theme-textcolor); text-align: left; font-size: .74rem; }
+    .folder-row, .root-file, .folder-children .file-select { width: 100%; display: flex; align-items: center; gap: .4rem; min-width: 0; padding: .38rem .45rem; border-radius: .32rem; color: var(--risu-theme-textcolor); text-align: left; font-size: .74rem; }
     .folder-row { color: var(--risu-theme-textcolor2); font-weight: 700; }
     .folder-row { cursor: pointer; list-style: none; }
     .folder-row.locked { opacity: .72; }
     .folder-children { margin-left: .7rem; padding-left: .35rem; border-left: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, var(--risu-theme-darkborderc)); }
-    .root-file:hover, .folder-children button:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
+    .file-row { display: flex; min-width: 0; align-items: center; gap: .25rem; border-radius: .32rem; }
+    .file-row .file-select { flex: 1 1 auto; }
+    .root-file:hover, .folder-children .file-select:hover, button.active { background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent); }
+    .file-row.dangling-link { background: color-mix(in srgb, var(--risu-theme-draculared) 10%, transparent); }
+    .file-row.dangling-link .file-select { color: var(--risu-theme-draculared); }
     .document-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .recent-update-badge { flex: 0 0 auto; margin-left: auto; padding: .12rem .32rem; border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 45%, transparent); border-radius: .25rem; color: var(--risu-theme-textcolor); background: color-mix(in srgb, var(--risu-theme-primary) 18%, transparent); font-size: .6rem; font-weight: 700; line-height: 1.2; white-space: nowrap; }
     .editor-pane { container-name: wiki-editor-pane; container-type: inline-size; min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--risu-theme-darkbg) 98%, var(--color-bgcolor)); }
@@ -764,6 +799,7 @@
     .editor-title-row label:first-child { flex: 0 0 5.5rem; }
     .editor-title-row select, .editor-title-row input { box-sizing: border-box; width: 100%; min-height: 2rem; padding: .3rem .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .32rem; color: var(--risu-theme-textcolor); background: var(--risu-theme-darkbg); }
     .title-field { flex: 1 1 12rem; }
+    .aliases-field { flex: 1 1 12rem; }
     .editor-actions { display: flex; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-end; gap: .25rem; overflow-x: auto; padding: .45rem .75rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); }
     .editor-source-action { display: inline-flex; flex: 0 0 auto; margin-right: auto; }
     .markdown-preview-toggle { display: inline-flex; flex: 0 0 auto; min-height: 2rem; align-items: center; gap: .32rem; padding: 0 .45rem; border: 1px solid var(--risu-theme-darkborderc); border-radius: .34rem; color: var(--risu-theme-textcolor2); font: 700 .67rem/1 ui-monospace, monospace; cursor: pointer; user-select: none; }
@@ -778,7 +814,7 @@
     .markdown-editor::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--risu-theme-textcolor2) 42%, transparent); }
     .markdown-editor:focus { box-shadow: inset 3px 0 color-mix(in srgb, var(--risu-theme-primary) 60%, transparent); }
     .markdown-editor[readonly] { opacity: .86; }
-    .markdown-preview { flex: 1; min-height: 20rem; margin: 0; overflow: auto; padding: 1rem 1.15rem 2rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); color: var(--risu-theme-textcolor); font-size: .82rem; line-height: 1.7; }
+    .markdown-preview { flex: 1; min-height: 20rem; margin: 0; overflow-x: auto; overflow-y: scroll; padding: 1rem 1.15rem 2rem; border-top: 1px solid color-mix(in srgb, var(--risu-theme-darkborderc) 60%, transparent); color: var(--risu-theme-textcolor); font-size: .82rem; line-height: 1.7; scrollbar-gutter: stable; scrollbar-width: thin; }
     .markdown-preview :global(h1), .markdown-preview :global(h2), .markdown-preview :global(h3), .markdown-preview :global(h4) { margin: 1.2em 0 .5em; color: var(--risu-theme-textcolor); line-height: 1.3; }
     .markdown-preview :global(h1:first-child), .markdown-preview :global(h2:first-child), .markdown-preview :global(h3:first-child) { margin-top: 0; }
     .markdown-preview :global(h1) { font-size: 1.35rem; }
@@ -831,28 +867,26 @@
         .editor-actions .editor-source-action :global(button) { width: auto; padding-inline: .55rem; }
         .editor-actions [data-wiki-action-label] { display: none; }
     }
-    @media (orientation: portrait) {
-        .wiki-editor {
+    .wiki-editor.mobile-layout {
+            position: relative;
             grid-template-columns: minmax(0, 1fr);
-            grid-template-rows:
-                2.75rem
-                minmax(0, var(--wiki-tree-height))
-                .8rem
-                2.75rem
-                minmax(0, 1fr);
+            grid-template-rows: 2.75rem minmax(0, 1fr);
             height: 100%;
             min-height: 0;
             overflow: hidden;
+            isolation: isolate;
         }
-        .portrait-panel-header {
+        .wiki-editor.mobile-layout .tree-panel-header {
+            z-index: 32;
             display: flex;
+            grid-row: 1;
             min-width: 0;
             border-bottom: 1px solid var(--risu-theme-darkborderc);
             background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
         }
-        .portrait-panel-header > button {
+        .wiki-editor.mobile-layout .tree-panel-header > button {
             display: flex;
-            width: auto;
+            width: 100%;
             min-height: 2.75rem;
             align-items: center;
             gap: .6rem;
@@ -863,134 +897,118 @@
             text-align: left;
             touch-action: manipulation;
         }
-        .portrait-panel-header > .panel-toggle { flex: 1 1 auto; min-width: 0; }
-        .portrait-panel-header > .panel-focus { flex: 0 0 2.75rem; justify-content: center; padding-inline: 0; }
-        .portrait-panel-header > button:active {
+        .wiki-editor.mobile-layout .tree-panel-header > button:active {
             background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent);
         }
-        .portrait-panel-header > button:focus-visible {
+        .wiki-editor.mobile-layout .tree-panel-header > button:focus-visible {
             outline: 2px solid var(--risu-theme-primary);
             outline-offset: -2px;
         }
-        .portrait-panel-header button > span {
+        .wiki-editor.mobile-layout .tree-panel-header button > span {
             display: flex;
             flex: 1;
             min-width: 0;
             align-items: baseline;
             gap: .5rem;
         }
-        .portrait-panel-header strong { font-size: .78rem; }
-        .portrait-panel-header small {
+        .wiki-editor.mobile-layout .tree-panel-header strong { font-size: .78rem; }
+        .wiki-editor.mobile-layout .tree-panel-header small {
             overflow: hidden;
             color: var(--risu-theme-textcolor2);
             font-size: .68rem;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
-        .portrait-panel-header :global(svg:last-child) {
+        .wiki-editor.mobile-layout .tree-panel-header :global(svg:last-child) {
             flex: 0 0 auto;
             transition: transform .18s ease-out;
         }
-        .portrait-panel-header :global(svg:last-child.collapsed) {
+        .wiki-editor.mobile-layout .tree-panel-header :global(svg:last-child.collapsed) {
             transform: rotate(-90deg);
         }
-        .file-tree {
+        .wiki-editor.mobile-layout .file-tree {
+            position: absolute;
+            z-index: 31;
+            inset: 2.75rem auto 0 0;
+            width: min(20rem, calc(100% - 2.75rem));
             min-height: 0;
-            border-right: 0;
-            border-bottom: 1px solid var(--risu-theme-darkborderc);
+            box-sizing: border-box;
+            border-right: 1px solid color-mix(in srgb, var(--risu-theme-primary) 26%, var(--risu-theme-darkborderc));
             overscroll-behavior: contain;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateX(-100%);
+            transition: transform .18s ease-out, opacity .14s ease-out;
         }
-        .folder-row, .root-file, .folder-children button { min-height: 2.75rem; }
-        .editor-section-resizer {
-            position: relative;
+        .wiki-editor.mobile-layout:not(.tree-collapsed) .file-tree {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(0);
+            box-shadow: .8rem 0 2rem color-mix(in srgb, var(--color-shadow) 32%, transparent);
+        }
+        .wiki-editor.mobile-layout .tree-scrim {
+            position: absolute;
+            z-index: 30;
             display: block;
+            inset: 2.75rem 0 0;
             width: 100%;
-            min-height: .8rem;
             padding: 0;
             border: 0;
-            border-block: 1px solid var(--risu-theme-darkborderc);
-            background: color-mix(in srgb, var(--risu-theme-darkbg) 90%, transparent);
-            cursor: row-resize;
-            touch-action: none;
+            background: color-mix(in srgb, var(--color-shadow) 48%, transparent);
+            cursor: default;
         }
-        .editor-section-resizer::before {
-            position: absolute;
-            z-index: 2;
-            inset: -1.9rem 0 0;
-            content: '';
+        .wiki-editor.mobile-layout .folder-row,
+        .wiki-editor.mobile-layout .root-file,
+        .wiki-editor.mobile-layout .folder-children button { min-height: 2.75rem; }
+        .wiki-editor.mobile-layout .editor-section-resizer,
+        .wiki-editor.mobile-layout .editor-panel-header { display: none; }
+        .wiki-editor.mobile-layout .editor-pane { display: flex; grid-row: 2; min-height: 0; overflow: hidden; }
+        .wiki-editor.mobile-layout .editor-title-row {
+            display: grid;
+            grid-template-columns: minmax(6.5rem, .72fr) minmax(0, 1.28fr);
+            gap: .45rem;
+            padding: .5rem .6rem;
         }
-        .editor-section-resizer span {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 3rem;
-            height: .2rem;
-            border-radius: 999px;
-            background: color-mix(in srgb, var(--risu-theme-textcolor2) 58%, transparent);
-            transform: translate(-50%, -50%);
-        }
-        .editor-section-resizer:focus-visible {
-            outline: 2px solid var(--risu-theme-primary);
-            outline-offset: -2px;
-        }
-        .editor-pane { min-height: 0; overflow: hidden; }
-        .editor-title-row {
-            flex-wrap: wrap;
-            gap: .6rem;
-            padding: .65rem .75rem;
-        }
-        .editor-title-row label:first-child { flex: 0 0 7.5rem; }
-        .editor-title-row select, .editor-title-row input {
+        .wiki-editor.mobile-layout .editor-title-row .aliases-field { grid-column: 1 / -1; }
+        .wiki-editor.mobile-layout .editor-title-row select,
+        .wiki-editor.mobile-layout .editor-title-row input {
             min-height: 2.75rem;
             font-size: 1rem;
         }
-        .title-field { min-width: min(12rem, 100%); }
-        .editor-actions {
+        .wiki-editor.mobile-layout .editor-actions {
             width: 100%;
             align-items: center;
             justify-content: flex-end;
-            gap: .5rem;
+            gap: .35rem;
             margin-left: 0;
-            padding: .5rem .75rem;
+            padding: .4rem .6rem;
+            scrollbar-width: thin;
         }
-        .editor-actions :global(button) { min-height: 2.75rem; }
-        .document-meta { flex-wrap: wrap; gap: .35rem .6rem; }
-        .markdown-editor {
+        .wiki-editor.mobile-layout .editor-actions :global(button) { min-height: 2.75rem; }
+        .wiki-editor.mobile-layout .document-meta { flex-wrap: wrap; gap: .35rem .6rem; }
+        .wiki-editor.mobile-layout .markdown-editor,
+        .wiki-editor.mobile-layout .markdown-preview {
             min-height: 0;
             padding: 1rem;
             font-size: 1rem;
             line-height: 1.65;
             overscroll-behavior: contain;
         }
-        .tree-collapsed {
-            grid-template-rows: 2.75rem 0 0 2.75rem minmax(0, 1fr);
-        }
-        .tree-collapsed .file-tree,
-        .tree-collapsed .editor-section-resizer { display: none; }
-        .editor-collapsed {
-            grid-template-rows:
-                2.75rem
-                minmax(0, 1fr)
-                0
-                2.75rem
-                0;
-        }
-        .editor-collapsed .editor-pane,
-        .editor-collapsed .editor-section-resizer { display: none; }
-        .tree-collapsed.editor-collapsed {
-            grid-template-rows: 2.75rem 0 0 2.75rem 0;
-        }
-        .editor-focus {
-            grid-template-rows: 2.75rem minmax(0, 1fr);
-        }
-        .editor-focus .tree-panel-header,
-        .editor-focus .file-tree,
-        .editor-focus .editor-section-resizer { display: none; }
-        .editor-focus .editor-panel-header { display: flex; grid-row: 1; }
-        .editor-focus .editor-pane { display: flex; grid-row: 2; }
+        .wiki-editor.mobile-layout.tree-collapsed .file-tree { display: block; }
+        .wiki-editor.mobile-layout.editor-collapsed .editor-pane { display: flex; }
+        .wiki-editor.mobile-layout.editor-focus { grid-template-rows: minmax(0, 1fr); }
+        .wiki-editor.mobile-layout.editor-focus .tree-panel-header,
+        .wiki-editor.mobile-layout.editor-focus .file-tree,
+        .wiki-editor.mobile-layout.editor-focus .tree-scrim { display: none; }
+        .wiki-editor.mobile-layout.editor-focus .editor-pane { grid-row: 1; }
+
+    @container (max-width: 30rem) {
+        .editor-title-row { grid-template-columns: minmax(0, 1fr); }
+        .editor-title-row .aliases-field { grid-column: auto; }
     }
 
     @media (prefers-reduced-motion: reduce) {
-        .portrait-panel-header :global(svg:last-child) { transition: none; }
+        .tree-panel-header :global(svg:last-child),
+        .file-tree { transition: none; }
     }
 </style>

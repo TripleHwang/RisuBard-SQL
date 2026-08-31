@@ -1,8 +1,215 @@
 import type { SettingItem } from './types'
 import { normalizeRisuBardCanonicalCustomStyle } from '../risubard/risuBardSettings'
 import { normalizeArcaChatTitleImageStyle } from '../arcaChatSaverSettings'
+import {
+    ARC_PLOTTER_CUSTOM_SELECTION_ID,
+    ARC_PLOTTER_LIMITS,
+    isArcPlotterBuiltInPresetId,
+} from '../risubard/arcPlotterSettings'
+
+const markArcPlotterAsCustom: NonNullable<SettingItem['onChange']> = (
+    _value,
+    ctx
+) => {
+    if (isArcPlotterBuiltInPresetId(ctx.db.risuBardArcPlotterPresetId)) {
+        ctx.db.risuBardArcPlotterPresetId = ARC_PLOTTER_CUSTOM_SELECTION_ID
+    }
+}
 
 export const risuBardCommonSettingsItems: SettingItem[] = [
+    {
+        id: 'risubard.common.chatResponse',
+        type: 'header',
+        labelKey: 'risuBardChatResponseSettings',
+        options: { level: 'h2' },
+        keywords: ['chat', 'response', 'request', '채팅', '응답', '요청'],
+    },
+    {
+        id: 'risubard.chat.showRequestStatus',
+        type: 'check',
+        labelKey: 'showRequestStatus',
+        helpKey: 'showRequestStatus',
+        bindKey: 'showRequestStatus',
+        keywords: ['request', 'context', 'injection', 'status', 'toast', 'token', '요청', '컨텍스트', '주입', '토큰'],
+    },
+    {
+        id: 'risubard.chat.responseRecentMessages',
+        type: 'number',
+        labelKey: 'risuBardResponseRecentMessages',
+        helpKey: 'risuBardResponseRecentMessages',
+        bindKey: 'risuBardResponseMessageCount',
+        options: { min: 1, step: 1 },
+        keywords: ['recent messages', 'chat history', '최근 채팅', '대화 내역'],
+    },
+    {
+        id: 'risubard.chat.excludeUserMessages',
+        type: 'check',
+        labelKey: 'risuBardResponseExcludeUsers',
+        helpKey: 'risuBardResponseExcludeUsers',
+        bindKey: 'risuBardResponseExcludeUserMessages',
+        keywords: ['exclude user messages', '사용자 메시지 제외'],
+    },
+    {
+        id: 'risubard.common.wikiAnalysis',
+        type: 'header',
+        labelKey: 'risuBardWikiAnalysisSettings',
+        options: { level: 'h2' },
+        keywords: ['wiki', 'analysis', 'memory', '위키', '분석', '메모리'],
+    },
+    {
+        id: 'risubard.chat.analysisRecentMessages',
+        type: 'number',
+        labelKey: 'risuBardRecentMessages',
+        helpKey: 'risuBardRecentMessages',
+        bindKey: 'risuBardRecentMessageCount',
+        options: { min: 1, step: 1 },
+        keywords: ['analysis', 'wiki', 'recent messages', '분석', '위키', '최근 대화'],
+    },
+    {
+        id: 'risubard.chat.inquiryTargetTokenBudget',
+        type: 'number',
+        labelKey: 'risuBardInquiryTargetTokenBudget',
+        helpKey: 'risuBardInquiryTargetTokenBudget',
+        bindKey: 'risuBardInquiryTargetTokenBudget',
+        options: { min: 256, step: 256 },
+        keywords: ['inquiry', 'target', 'token', '검색', '목표', '토큰'],
+    },
+    {
+        id: 'risubard.chat.inquiryMaximumTokenBudget',
+        type: 'number',
+        labelKey: 'risuBardInquiryMaximumTokenBudget',
+        helpKey: 'risuBardInquiryMaximumTokenBudget',
+        bindKey: 'risuBardInquiryMaximumTokenBudget',
+        options: { min: 256, step: 256 },
+        keywords: ['inquiry', 'maximum', 'token', '검색', '상한', '토큰'],
+    },
+    {
+        id: 'risubard.chat.analysisTokenLimit',
+        type: 'number',
+        labelKey: 'risuBardAnalysisTokenLimit',
+        helpKey: 'risuBardAnalysisTokenLimit',
+        bindKey: 'risuBardAnalysisTokenLimit',
+        options: { min: 3072, step: 1024 },
+        keywords: ['analysis', 'token', 'budget', '분석', '토큰', '상한'],
+    },
+    {
+        id: 'risubard.chat.additionalSearchLimit',
+        type: 'number',
+        labelKey: 'risuBardAdditionalSearchLimit',
+        helpKey: 'risuBardAdditionalSearchLimit',
+        bindKey: 'risuBardAdditionalSearchLimit',
+        options: { min: 0, step: 1 },
+        keywords: ['wiki', 'search', 'fallback', '위키', '추가 검색'],
+    },
+    {
+        id: 'risubard.chat.canonicalTargetLimit',
+        type: 'number',
+        labelKey: 'risuBardCanonicalTargetLimit',
+        helpKey: 'risuBardCanonicalTargetLimit',
+        bindKey: 'risuBardCanonicalTargetLimit',
+        options: { min: 1, step: 1 },
+        keywords: ['canonical', 'target', 'limit', '정본', '대상', '한도'],
+    },
+    {
+        id: 'risubard.common.arcPlotter',
+        type: 'header',
+        labelKey: 'risuBardArcPlotter',
+        helpKey: 'risuBardArcPlotter',
+        options: { level: 'h2' },
+        keywords: ['Archplotter', 'arc', 'plot', 'story', '아크플로터', '아크', '플롯', '서사'],
+    },
+    {
+        id: 'risubard.arcPlotter.presets',
+        type: 'custom',
+        componentId: 'RisuBardArcPlotterPresets',
+        fallbackLabel: 'Archplotter presets',
+        keywords: ['preset', 'short story', 'novella', 'epic', '프리셋', '단편소설', '중편소설', '대하소설'],
+    },
+    {
+        id: 'risubard.arcPlotter.enabled',
+        type: 'check',
+        labelKey: 'risuBardArcPlotterEnabled',
+        helpKey: 'risuBardArcPlotterEnabled',
+        bindKey: 'risuBardArcPlotterEnabled',
+        keywords: ['Archplotter', 'automatic', 'enable', '아크플로터', '자동', '사용'],
+    },
+    {
+        id: 'risubard.arcPlotter.checkpointSize',
+        type: 'number',
+        labelKey: 'risuBardArcPlotterCheckpointSize',
+        helpKey: 'risuBardArcPlotterCheckpointSize',
+        bindKey: 'risuBardArcPlotterCheckpointSize',
+        onChange: markArcPlotterAsCustom,
+        options: {
+            min: ARC_PLOTTER_LIMITS.checkpointSize.min,
+            max: ARC_PLOTTER_LIMITS.checkpointSize.max,
+            step: 1,
+        },
+        keywords: ['checkpoint', 'events', 'interval', '체크포인트', '사건', '갱신 간격'],
+    },
+    {
+        id: 'risubard.arcPlotter.maxArcs',
+        type: 'number',
+        labelKey: 'risuBardArcPlotterMaxArcs',
+        helpKey: 'risuBardArcPlotterMaxArcs',
+        bindKey: 'risuBardArcPlotterMaxArcs',
+        onChange: markArcPlotterAsCustom,
+        options: {
+            min: ARC_PLOTTER_LIMITS.maxArcs.min,
+            max: ARC_PLOTTER_LIMITS.maxArcs.max,
+            step: 1,
+        },
+        keywords: ['arc', 'limit', '아크', '플롯', '한도'],
+    },
+    {
+        id: 'risubard.arcPlotter.maxTurningPoints',
+        type: 'number',
+        labelKey: 'risuBardArcPlotterMaxTurningPoints',
+        helpKey: 'risuBardArcPlotterMaxTurningPoints',
+        bindKey: 'risuBardArcPlotterMaxTurningPoints',
+        onChange: markArcPlotterAsCustom,
+        options: {
+            min: ARC_PLOTTER_LIMITS.maxTurningPoints.min,
+            max: ARC_PLOTTER_LIMITS.maxTurningPoints.max,
+            step: 1,
+        },
+        keywords: ['turning point', 'limit', '전환점', '한도'],
+    },
+    {
+        id: 'risubard.arcPlotter.maxOpenThreads',
+        type: 'number',
+        labelKey: 'risuBardArcPlotterMaxOpenThreads',
+        helpKey: 'risuBardArcPlotterMaxOpenThreads',
+        bindKey: 'risuBardArcPlotterMaxOpenThreads',
+        onChange: markArcPlotterAsCustom,
+        options: {
+            min: ARC_PLOTTER_LIMITS.maxOpenThreads.min,
+            max: ARC_PLOTTER_LIMITS.maxOpenThreads.max,
+            step: 1,
+        },
+        keywords: ['open thread', 'continuity', 'limit', '미해결 줄기', '연속성', '한도'],
+    },
+    {
+        id: 'risubard.arcPlotter.maxCharacters',
+        type: 'number',
+        labelKey: 'risuBardArcPlotterMaxCharacters',
+        helpKey: 'risuBardArcPlotterMaxCharacters',
+        bindKey: 'risuBardArcPlotterMaxCharacters',
+        onChange: markArcPlotterAsCustom,
+        options: {
+            min: ARC_PLOTTER_LIMITS.maxCharacters.min,
+            max: ARC_PLOTTER_LIMITS.maxCharacters.max,
+            step: 500,
+        },
+        keywords: ['plot', 'characters', 'size', '플롯', '글자', '크기', '상한'],
+    },
+    {
+        id: 'risubard.common.wikiWriting',
+        type: 'header',
+        labelKey: 'risuBardWikiWritingSettings',
+        options: { level: 'h2' },
+        keywords: ['wiki', 'canonical', 'writing', '위키', '정본', '집필'],
+    },
     {
         id: 'risubard.common.wikiWritingLanguage',
         type: 'select',
@@ -14,31 +221,6 @@ export const risuBardCommonSettingsItems: SettingItem[] = [
             { value: 'en', label: 'English' },
         ] },
         keywords: ['wiki', 'language', 'English', '위키', '언어', '영어'],
-    },
-    {
-        id: 'risubard.common.showSaveLoadShortcuts',
-        type: 'check',
-        labelKey: 'risuBardShowSaveLoadShortcuts',
-        bindKey: 'showRisuBardSaveLoadShortcuts',
-        keywords: ['save', 'load', 'shortcut', 'floating', '세이브', '로드', '바로가기'],
-    },
-    {
-        id: 'risubard.common.autosaveInterval',
-        type: 'number',
-        labelKey: 'risuBardAutosaveInterval',
-        helpKey: 'risuBardAutosaveInterval',
-        bindKey: 'risuBardAutosaveInterval',
-        options: { min: 1, max: 100, step: 1 },
-        keywords: ['autosave', 'interval', 'turn', '자동 저장', '간격', '턴'],
-    },
-    {
-        id: 'risubard.common.autosaveRetention',
-        type: 'number',
-        labelKey: 'risuBardAutosaveRetention',
-        helpKey: 'risuBardAutosaveRetention',
-        bindKey: 'risuBardAutosaveRetention',
-        options: { min: 1, max: 20, step: 1 },
-        keywords: ['autosave', 'retention', 'slots', '자동 저장', '보관', '개수'],
     },
     {
         id: 'risubard.common.canonicalWritingStyle',
@@ -67,6 +249,38 @@ export const risuBardCommonSettingsItems: SettingItem[] = [
         },
         condition: ({ db }) => db.risuBardCanonicalWritingStyle === 'custom',
         keywords: ['canonical', 'custom instruction', '정본', '사용자 지정', '지시문'],
+    },
+    {
+        id: 'risubard.common.saveAndLoad',
+        type: 'header',
+        labelKey: 'risuBardSaveAndLoadSettings',
+        options: { level: 'h2' },
+        keywords: ['save', 'load', 'autosave', '저장', '불러오기', '자동 저장'],
+    },
+    {
+        id: 'risubard.common.showSaveLoadShortcuts',
+        type: 'check',
+        labelKey: 'risuBardShowSaveLoadShortcuts',
+        bindKey: 'showRisuBardSaveLoadShortcuts',
+        keywords: ['save', 'load', 'shortcut', 'floating', '세이브', '로드', '바로가기'],
+    },
+    {
+        id: 'risubard.common.autosaveInterval',
+        type: 'number',
+        labelKey: 'risuBardAutosaveInterval',
+        helpKey: 'risuBardAutosaveInterval',
+        bindKey: 'risuBardAutosaveInterval',
+        options: { min: 1, max: 100, step: 1 },
+        keywords: ['autosave', 'interval', 'turn', '자동 저장', '간격', '턴'],
+    },
+    {
+        id: 'risubard.common.autosaveRetention',
+        type: 'number',
+        labelKey: 'risuBardAutosaveRetention',
+        helpKey: 'risuBardAutosaveRetention',
+        bindKey: 'risuBardAutosaveRetention',
+        options: { min: 1, max: 20, step: 1 },
+        keywords: ['autosave', 'retention', 'slots', '자동 저장', '보관', '개수'],
     },
     {
         id: 'risubard.common.arcaChatExporter',
@@ -128,3 +342,15 @@ export const risuBardCommonSettingsItems: SettingItem[] = [
         keywords: ['arca', 'paragraph', 'spacing', 'line break', '아카라이브', '문단', '개행', '간격'],
     },
 ]
+
+const arcPlotterStart = risuBardCommonSettingsItems.findIndex((item) =>
+    item.id === 'risubard.common.arcPlotter')
+const arcPlotterEnd = risuBardCommonSettingsItems.findIndex((item) =>
+    item.id === 'risubard.common.wikiWriting')
+
+export const risuBardCommonSettingsBeforeArcPlotterItems =
+    risuBardCommonSettingsItems.slice(0, arcPlotterStart)
+export const risuBardArcPlotterSettingsItems =
+    risuBardCommonSettingsItems.slice(arcPlotterStart, arcPlotterEnd)
+export const risuBardCommonSettingsAfterArcPlotterItems =
+    risuBardCommonSettingsItems.slice(arcPlotterEnd)

@@ -447,6 +447,10 @@ export function installSingleWriterGuards(): void {
             sessionStorage.removeItem('risu-session-handoff-reload')
             setTimeout(() => notifyInfo(language.sessionHandoffReload), 1500)
         }
+        if (sessionStorage.getItem('risu-canonical-files-reload')) {
+            sessionStorage.removeItem('risu-canonical-files-reload')
+            setTimeout(() => notifyInfo(language.canonicalFilesChangedReload), 1500)
+        }
     } catch { /* storage unavailable — skip the notice */ }
 }
 
@@ -852,6 +856,20 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
         changed = true
     }
 
+    function reloadAfterExternalCanonicalChange(currentEtag: string | null) {
+        forageStorage.setDbEtag(currentEtag)
+        // Upstream sets `gotChannel`, the flag its multi-tab guard keeps inside
+        // `saveDb` so a tab already reloading does not also raise the
+        // "another tab took over" modal. That flag does not exist here: the
+        // guard was lifted out of `saveDb` into module scope precisely because
+        // it was dead for every install that no longer calls `saveDb`.
+        // Surrendering the handoff is the same statement in the shape this
+        // fork keeps it -- this tab is going away, do not prompt about it.
+        surrenderToOtherWriter()
+        try { sessionStorage.setItem('risu-canonical-files-reload', '1') } catch {}
+        location.reload()
+    }
+
     async function persistTrackedChanges(
         toSave: toSaveType,
         options?: {
@@ -1082,6 +1100,11 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
                 // Leave saved=false so the full-write path below kicks in.
             } else {
                 const patchResult = await forageStorage.patchItem('database/database.bin', patchData)
+                if (patchResult.canonicalFilesChanged) {
+                    console.warn('[Save] Canonical entity files changed externally; discarding stale in-memory save and reloading')
+                    reloadAfterExternalCanonicalChange(patchResult.etag ?? null)
+                    return 'noop'
+                }
                 saved = patchResult.success
                 if (patchResult.etag) {
                     newEtag = patchResult.etag
@@ -1108,6 +1131,11 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
                 await forageStorage.setItem('database/database.bin', dbData, currentEtag ?? undefined)
             } catch (conflictErr) {
                 if (conflictErr instanceof ConflictError) {
+                    if (conflictErr.canonicalFilesChanged) {
+                        console.warn('[Save] Canonical entity files changed externally; discarding stale in-memory save and reloading')
+                        reloadAfterExternalCanonicalChange(conflictErr.currentEtag)
+                        return 'noop'
+                    }
                     console.warn('[Save] Full-write conflict detected, rebasing tracked local changes on latest server DB...')
                     await rebaseTrackedLocalChangesOnLatestServerDb(conflictErr.currentEtag ?? null, db, toSave)
                     await sleep(Math.min(500 * (savetrys + 1), 3000))

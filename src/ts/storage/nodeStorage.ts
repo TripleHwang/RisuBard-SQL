@@ -16,6 +16,7 @@ import {
     fetchWholeChatContent,
 } from './chatContentClient'
 import { createIncrementalNdjsonParser } from './ndjsonStream'
+import { isCanonicalFilesChangedResponse } from './canonicalConflict'
 
 
 // ── User-gesture recency for the write lock ─────────────────────────────────
@@ -38,10 +39,12 @@ function isUserActive(): boolean {
 // Custom error class for database conflict detection
 export class ConflictError extends Error {
     currentEtag: string | null
-    constructor(message: string, currentEtag: string | null) {
+    canonicalFilesChanged: boolean
+    constructor(message: string, currentEtag: string | null, canonicalFilesChanged = false) {
         super(message)
         this.name = 'ConflictError'
         this.currentEtag = currentEtag
+        this.canonicalFilesChanged = canonicalFilesChanged
     }
 }
 
@@ -60,6 +63,8 @@ export interface PatchItemResult {
     persistWarning?: PersistWarning
     /** Set when the server's chat-internal-field guard rejected the patch. */
     chatGuardRejected?: boolean
+    /** Set when file-native canonical entities changed outside RisuBard. */
+    canonicalFilesChanged?: boolean
 }
 
 export interface ExportBackupOptions {
@@ -103,6 +108,8 @@ export interface ServerRisumImportResult {
 export type ServerRisumImportProgress =
     | { phase: 'uploading', loaded: number, total: number }
     | { phase: 'spooling' | 'validate' | 'assets' | 'publish', completed: number, total: number }
+
+export type BackupImportPhase = 'validating' | 'publishing' | 'finalizing'
 
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 50
@@ -294,7 +301,11 @@ export class NodeStorage{
         })
         if(da.status === 409){
             const data = await da.json()
-            throw new ConflictError(data.error, data.currentEtag ?? null)
+            throw new ConflictError(
+                data.error,
+                data.currentEtag ?? null,
+                isCanonicalFilesChangedResponse(data),
+            )
         }
         if(da.status < 200 || da.status >= 300){
             throw "setItem Error"
@@ -402,7 +413,11 @@ export class NodeStorage{
         })
         if(da.status === 409){
             const data = await da.json()
-            throw new ConflictError(data.error, data.currentEtag ?? null)
+            throw new ConflictError(
+                data.error,
+                data.currentEtag ?? null,
+                isCanonicalFilesChangedResponse(data),
+            )
         }
         if(da.status < 200 || da.status >= 300){
             throw "removeItem Error"
@@ -501,7 +516,12 @@ export class NodeStorage{
             const rejectedByChatGuard = data.chatGuardRejected === true
                 || data.code === 'CHAT_GUARD_REJECTED'
                 || (typeof data.error === 'string' && data.error.includes('chat-internal field ops'))
-            return { success: false, etag: currentEtag, chatGuardRejected: rejectedByChatGuard }
+            return {
+                success: false,
+                etag: currentEtag,
+                chatGuardRejected: rejectedByChatGuard,
+                canonicalFilesChanged: isCanonicalFilesChangedResponse(data),
+            }
         }
         if (da.status < 200 || da.status >= 300) {
             return { success: false }
@@ -625,7 +645,7 @@ export class NodeStorage{
 
     async importBackup(
         file: Blob,
-        onProgress?: (loaded: number, total: number) => void
+        onProgress?: (loaded: number, total: number, phase?: BackupImportPhase) => void
     ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number}> {
         await this.prepareImport(file.size)
         const authHeader = await this.createAuth()
@@ -669,6 +689,8 @@ export class NodeStorage{
                         // After upload finishes, surface server-side processing
                         // progress through the same callback for UI continuity.
                         onProgress?.(msg.bytes, msg.totalBytes)
+                    } else if (msg.type === 'phase') {
+                        onProgress?.(msg.bytes, msg.totalBytes, msg.phase)
                     } else if (msg.type === 'done') {
                         result = msg
                     } else if (msg.type === 'error') {
@@ -908,7 +930,7 @@ export class NodeStorage{
 
     async restoreServerBackup(
         filename: string,
-        onProgress?: (bytes: number, totalBytes: number) => void
+        onProgress?: (bytes: number, totalBytes: number, phase?: BackupImportPhase) => void
     ): Promise<{ok: boolean, assetsRestored: number, coldStorageFailed?: number}> {
         const da = await this.authFetch('/api/backup/server/restore', {
             method: 'POST',
@@ -941,6 +963,8 @@ export class NodeStorage{
                 const msg = JSON.parse(line)
                 if (msg.type === 'progress') {
                     onProgress?.(msg.bytes, msg.totalBytes)
+                } else if (msg.type === 'phase') {
+                    onProgress?.(msg.bytes, msg.totalBytes, msg.phase)
                 } else if (msg.type === 'done') {
                     result = msg
                 } else if (msg.type === 'error') {

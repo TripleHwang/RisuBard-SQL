@@ -15,6 +15,7 @@ export interface ArcaExportOptions {
     imageWidthPercent?: number;
     paragraphSpacingPercent?: number;
     semanticPalette?: ArcaSemanticPalette;
+    renderComplexBlock?: (element: HTMLElement) => Promise<string | readonly string[] | null>;
 }
 
 export interface ArcaClipboardColors {
@@ -109,6 +110,140 @@ const DROPPED_TAGS = new Set([
     'EMBED',
 ]);
 
+export function shouldIncludeArcaSnapshotNode(
+    node: Node,
+    excludedElements: readonly HTMLElement[],
+): boolean {
+    if (excludedElements.includes(node as HTMLElement)) return false;
+    return !(node instanceof Element
+        && node.matches('button, input, textarea, select, [role="button"]'));
+}
+
+export function findDetachedArcaPanels(
+    root: HTMLElement,
+    readStyle: (element: Element) => CSSStyleDeclaration = element => getComputedStyle(element),
+    readRect: (element: HTMLElement) => DOMRect = element => element.getBoundingClientRect(),
+): HTMLElement[] {
+    const rootRect = readRect(root);
+    const rootWidth = Math.max(1, rootRect.width || 760);
+    const elements = Array.from(root.querySelectorAll<HTMLElement>('*'));
+    const isLargeLayer = (element: HTMLElement) => {
+        const rect = readRect(element);
+        return rect.width >= 220 && rect.height >= 120;
+    };
+    const positionOf = (element: HTMLElement) => getStyleValue(readStyle(element), 'position');
+    const fixedPositioned = elements.filter((element) => {
+        const style = readStyle(element);
+        if (getStyleValue(style, 'display') === 'none') return false;
+        const position = getStyleValue(style, 'position');
+        return position === 'fixed' || position === 'sticky';
+    });
+    const fixedLayers = fixedPositioned
+        .filter(isLargeLayer)
+        .filter(element => !hasAncestorIn(element, fixedPositioned));
+
+    const selected: HTMLElement[] = [];
+    for (const layer of fixedLayers) {
+        const rect = readRect(layer);
+        const fillsViewport = rect.width >= rootWidth * .9
+            && (rootRect.height < 2 || rect.height >= rootRect.height * .9);
+        if (!fillsViewport) {
+            selected.push(layer);
+            continue;
+        }
+
+        const nestedSurfaces = Array.from(layer.querySelectorAll<HTMLElement>('*'))
+            .filter(element => isLargeLayer(element) && hasDetachedPanelSurface(readStyle(element)))
+            .filter(element => {
+                const nestedRect = readRect(element);
+                return nestedRect.width * nestedRect.height < rect.width * rect.height * .92;
+            })
+            .sort((left, right) => {
+                const leftOutOfFlow = isOutOfFlowPosition(positionOf(left)) ? 1 : 0;
+                const rightOutOfFlow = isOutOfFlowPosition(positionOf(right)) ? 1 : 0;
+                if (leftOutOfFlow !== rightOutOfFlow) return rightOutOfFlow - leftOutOfFlow;
+                return rectArea(readRect(right)) - rectArea(readRect(left));
+            });
+        selected.push(nestedSurfaces[0] ?? layer);
+    }
+
+    const absoluteLayers = elements.filter((element) => {
+        if (positionOf(element) !== 'absolute' || !isLargeLayer(element)) return false;
+        if (selected.some(layer => layer === element || layer.contains(element) || element.contains(layer))) return false;
+        const style = readStyle(element);
+        return hasDetachedPanelSurface(style) && hasDetachedLayerState(style);
+    });
+    selected.push(...absoluteLayers);
+    return selected.filter((candidate, index) =>
+        selected.indexOf(candidate) === index
+        && !selected.some(other => other !== candidate && candidate.contains(other)),
+    );
+}
+
+function hasAncestorIn(element: HTMLElement, candidates: readonly HTMLElement[]): boolean {
+    return candidates.some(other => other !== element && other.contains(element));
+}
+
+function isOutOfFlowPosition(position: string): boolean {
+    return position === 'absolute' || position === 'fixed' || position === 'sticky';
+}
+
+function rectArea(rect: DOMRect): number {
+    return Math.max(0, rect.width) * Math.max(0, rect.height);
+}
+
+function hasDetachedPanelSurface(style: CSSStyleDeclaration): boolean {
+    const background = [
+        getStyleValue(style, 'background'),
+        getStyleValue(style, 'background-color'),
+        getStyleValue(style, 'background-image'),
+    ].join(' ');
+    const hasBackground = Boolean(background.trim())
+        && !/^(?:\s*|none|transparent|rgba\(0,\s*0,\s*0,\s*0\))+$/i.test(background.trim());
+    const boxShadow = getStyleValue(style, 'box-shadow');
+    const overflow = [
+        getStyleValue(style, 'overflow'),
+        getStyleValue(style, 'overflow-x'),
+        getStyleValue(style, 'overflow-y'),
+    ];
+    return hasBackground
+        || (boxShadow !== '' && boxShadow !== 'none')
+        || overflow.some(value => value === 'auto' || value === 'scroll' || value === 'hidden');
+}
+
+function hasDetachedLayerState(style: CSSStyleDeclaration): boolean {
+    const zIndex = Number.parseInt(getStyleValue(style, 'z-index'), 10);
+    const opacity = Number.parseFloat(getStyleValue(style, 'opacity'));
+    const transform = getStyleValue(style, 'transform');
+    return (Number.isFinite(zIndex) && zIndex >= 10)
+        || (Number.isFinite(opacity) && opacity < 1)
+        || getStyleValue(style, 'pointer-events') === 'none'
+        || (transform !== '' && transform !== 'none');
+}
+
+export interface ArcaComplexSnapshotTarget {
+    kind: 'main' | 'panel';
+    element: HTMLElement;
+    excludeElements: readonly HTMLElement[];
+}
+
+export function planArcaComplexSnapshots(
+    root: HTMLElement,
+    readStyle: (element: Element) => CSSStyleDeclaration = element => getComputedStyle(element),
+    readRect: (element: HTMLElement) => DOMRect = element => element.getBoundingClientRect(),
+): ArcaComplexSnapshotTarget[] {
+    const panels = findDetachedArcaPanels(root, readStyle, readRect);
+    const rootRect = readRect(root);
+    const targets: ArcaComplexSnapshotTarget[] = [];
+    if (rootRect.width >= 2 && rootRect.height >= 2) {
+        targets.push({ kind: 'main', element: root, excludeElements: panels });
+    }
+    for (const panel of panels) {
+        targets.push({ kind: 'panel', element: panel, excludeElements: [] });
+    }
+    return targets;
+}
+
 function getStyleValue(style: CSSStyleDeclaration, property: string): string {
     return style.getPropertyValue(property).trim();
 }
@@ -175,6 +310,7 @@ function inlineSafeStyles(
 
     if (forcedDisplay) {
         appendRawStyle(target, 'display', forcedDisplay);
+        removeGeneratedTableBorder(target);
         return;
     }
 
@@ -182,10 +318,29 @@ function inlineSafeStyles(
     if (display === 'flex' || display === 'grid' || display === 'inline-flex' || display === 'inline-grid') {
         const direction = getStyleValue(style, 'flex-direction');
         target.style.display = direction === 'column' || direction === 'column-reverse' ? 'block' : 'table';
+        if (target.style.display === 'table') {
+            removeGeneratedTableBorder(target);
+        }
     }
     else if (SAFE_DISPLAY_VALUES.has(display) && display !== 'inline' && display !== 'block') {
         target.style.display = display;
     }
+}
+
+function removeGeneratedTableBorder(target: HTMLElement): void {
+    for (const property of [
+        'border',
+        'border-top',
+        'border-right',
+        'border-bottom',
+        'border-left',
+        'border-color',
+        'border-style',
+        'border-width',
+    ]) {
+        target.style.removeProperty(property);
+    }
+    target.style.setProperty('border', '0');
 }
 
 function appendRawStyle(target: HTMLElement, property: string, value: string): void {
@@ -331,6 +486,49 @@ function isImagePlaceholder(element: HTMLElement): boolean {
         }
         return node instanceof HTMLBRElement;
     });
+}
+
+function isComplexVisualBlock(
+    element: HTMLElement,
+    readStyle: (element: Element, pseudoElement?: string | null) => CSSStyleDeclaration,
+): boolean {
+    if (isImagePlaceholder(element)) return false;
+
+    const nodes = [element, ...Array.from(element.querySelectorAll<HTMLElement>('*'))];
+    let hasStructuredLayout = false;
+    let hasVisualBackground = false;
+
+    for (const node of nodes) {
+        const style = readStyle(node);
+        const position = getStyleValue(style, 'position');
+        if (position === 'absolute' || position === 'fixed' || position === 'sticky') {
+            return true;
+        }
+        const display = getStyleValue(style, 'display');
+        if (display === 'grid' || display === 'inline-grid' || display === 'flex' || display === 'inline-flex') {
+            hasStructuredLayout = true;
+        }
+        const backgroundImage = getStyleValue(style, 'background-image');
+        if (backgroundImage && backgroundImage !== 'none') {
+            hasVisualBackground = true;
+        }
+    }
+
+    return hasVisualBackground && (hasStructuredLayout || nodes.length >= 4);
+}
+
+function createComplexSnapshotFrame(dataUrl: string, outputDocument: Document): HTMLParagraphElement {
+    const image = outputDocument.createElement('img');
+    image.src = dataUrl;
+    image.alt = '';
+    image.setAttribute('data-arca-complex-snapshot', '');
+    appendRawStyle(image, 'display', 'block');
+    appendRawStyle(image, 'width', '100%');
+    appendRawStyle(image, 'max-width', '100%');
+    appendRawStyle(image, 'height', 'auto');
+    appendRawStyle(image, 'margin-left', 'auto');
+    appendRawStyle(image, 'margin-right', 'auto');
+    return createCenteredImageFrame(image, outputDocument);
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -522,6 +720,23 @@ export async function exportArcaHtml(root: HTMLElement, options: ArcaExportOptio
     };
 
     for (const child of Array.from(root.childNodes)) {
+        if (child instanceof HTMLElement
+            && resolvedOptions.renderComplexBlock
+            && isComplexVisualBlock(child, readStyle)) {
+            try {
+                const rendered = await resolvedOptions.renderComplexBlock(child);
+                const dataUrls = typeof rendered === 'string' ? [rendered] : rendered;
+                if (dataUrls?.length) {
+                    for (const dataUrl of dataUrls) {
+                        container.appendChild(createComplexSnapshotFrame(dataUrl, outputDocument));
+                    }
+                    continue;
+                }
+            }
+            catch (cause) {
+                throw cause;
+            }
+        }
         const clonedChild = await cloneNodeForArca(child, outputDocument, resolvedOptions);
         if (clonedChild) {
             container.appendChild(clonedChild);

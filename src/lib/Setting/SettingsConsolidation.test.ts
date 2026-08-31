@@ -36,7 +36,7 @@ describe('settings consolidation', () => {
         expect(source).toContain('<ExperienceSettingsWorkspace')
     })
 
-    test('moves persona management from settings to the top of the bot sidebar', () => {
+    test('keeps persona management as an overlay at the top of the bot sidebar', () => {
         const sidebar = readFileSync(sidebarPath, 'utf8')
         const app = readFileSync(appPath, 'utf8')
         const settings = readFileSync(settingsPath, 'utf8')

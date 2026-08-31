@@ -135,6 +135,16 @@
   type sortTypeNormal = { type:'normal',id:string,img: string, index: number, name:string, isNew:boolean }
   type sortType =  sortTypeNormal|{type:'folder',folder:sortTypeNormal[],id:string, name:string, color:string, img?:string}
   let charImages: sortType[] = $state([]);
+  const sidebarImageCache = new Map<string, Promise<string>>()
+
+  function sidebarCharacterImage(image: string): Promise<string> {
+    const key = `${DBState.db.hideAllImages ? 'hidden' : 'shown'}:${image}`
+    const cached = sidebarImageCache.get(key)
+    if (cached) return cached
+    const request = getCharImage(image, 'plain').then((source) => source || '/none.webp')
+    sidebarImageCache.set(key, request)
+    return request
+  }
   // Recently interacted characters for the home sidebar. Character-level
   // `lastInteraction` is already in memory (no chat hydration needed), so this
   // sort is cheap; the $derived is only read while on the home screen.
@@ -404,6 +414,31 @@
   let touchDragTimer = 0
   let touchStartPos = { x: 0, y: 0 }
   let suppressNextClick = false
+
+  // Upstream 0.9.11 moved pinned-character selection to pointerdown so the load
+  // starts on press instead of release -- worth more here than upstream, where
+  // opening a character does not have to hydrate it out of SQL. But it moved
+  // the selection rather than adding to it, and `click` is not only what a
+  // mouse produces: activating a `role="button"` with Space fires `click` with
+  // no `pointerdown` before it, so keyboard users lost the row entirely.
+  // Both routes stay; the token is what keeps a mouse press from selecting
+  // twice, since a real click always follows its own pointerdown.
+  let pointerSelectedCharacterIndex: number | null = $state(null)
+
+  function selectPinnedCharacterOnMouse(event: PointerEvent, item: sortType) {
+    if (isTouchDevice || item.type !== 'normal'
+      || event.button !== 0 || suppressNextClick) return
+    pointerSelectedCharacterIndex = item.index
+    selectCharacter(item.index)
+  }
+
+  function selectPinnedCharacterOnClick(item: sortType) {
+    const handledByPointer = item.type === 'normal'
+      && pointerSelectedCharacterIndex === item.index
+    pointerSelectedCharacterIndex = null
+    if (suppressNextClick || item.type !== 'normal' || handledByPointer) return
+    selectCharacter(item.index)
+  }
 
   function onTouchDragStart(data: DragData, e: TouchEvent & { currentTarget: HTMLElement }) {
     const touch = e.touches[0]
@@ -838,12 +873,8 @@
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="relative"
             role="button" tabindex="0"
-            onclick={() => {
-              if(suppressNextClick) return
-              if(char.type === "normal"){
-                selectCharacter(char.index);
-              }
-            }}
+            onpointerdown={(event) => selectPinnedCharacterOnMouse(event, char)}
+            onclick={() => selectPinnedCharacterOnClick(char)}
             onkeydown={(e) => {
               if (e.key === "Enter") {
                 if(char.type === "normal"){
@@ -853,8 +884,8 @@
             }}
           >
           {#if char.type === 'normal'}
-            <SidebarAvatar 
-              src={char.img ? getCharImage(char.img, "plain") : "/none.webp"} 
+            <SidebarAvatar
+              src={char.img ? sidebarCharacterImage(char.img) : "/none.webp"}
               size="56" 
               rounded={IconRounded} 
               name={char.name}
@@ -869,7 +900,7 @@
           {:else if char.type === "folder"}
             {#key char.color}
             {#key char.name}
-              <SidebarAvatar src="slot" size="56" rounded={IconRounded} bordered name={char.name} color={char.color} backgroundimg={char.img ? getCharImage(char.img, "plain") : ""}
+              <SidebarAvatar src="slot" size="56" rounded={IconRounded} bordered name={char.name} color={char.color} backgroundimg={char.img ? sidebarCharacterImage(char.img) : ""}
               oncontextmenu={async (e) => {
                 e.preventDefault()
                 const folderIndex = getFolderIndex(char.id)
@@ -1018,12 +1049,8 @@
               <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <div class="relative"
                   role="button" tabindex="0"
-                  onclick={() => {
-                    if(suppressNextClick) return
-                    if(char2.type === "normal"){
-                      selectCharacter(char2.index);
-                    }
-                  }}
+                  onpointerdown={(event) => selectPinnedCharacterOnMouse(event, char2)}
+                  onclick={() => selectPinnedCharacterOnClick(char2)}
                   onkeydown={(e) => {
                     if (e.key === "Enter") {
                       if(char2.type === "normal"){
@@ -1032,8 +1059,8 @@
                     }
                   }}
                 >
-                <SidebarAvatar 
-                  src={char2.img ? getCharImage(char2.img, "plain") : "/none.webp"} 
+                <SidebarAvatar
+                  src={char2.img ? sidebarCharacterImage(char2.img) : "/none.webp"}
                   size="56" 
                   rounded={IconRounded} 
                   name={char2.name}
@@ -1260,7 +1287,7 @@
             >
               <div class="shrink-0">
                 <SidebarAvatar
-                  src={rc.image ? getCharImage(rc.image, "plain") : "/none.webp"}
+                  src={rc.image ? sidebarCharacterImage(rc.image) : "/none.webp"}
                   size="36"
                   rounded={IconRounded}
                   name={rc.name}

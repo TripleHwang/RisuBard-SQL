@@ -49,7 +49,7 @@ const {
     normalizeSqlAncillaryPageQuery,
 } = require('./sql-read-route-params.cjs');
 const { createSqlBootstrapHandler, createSqlRootKeyHandler } = require('./sql-root-key-route.cjs');
-const { buildLegacyDatabaseFromSql } = require('./sql-legacy-database.cjs');
+const { buildLegacyDatabaseFromSql, sqlBootstrapIsCanonical } = require('./sql-legacy-database.cjs');
 const { createSqlCommitHandler } = require('./sql-commit-route.cjs');
 const { createExpressErrorResponder } = require('./express-error-response.cjs');
 const { stageBackupEntries } = require('./backup-entry-stream.cjs');
@@ -61,6 +61,7 @@ const { spoolSourceToOwnedFile } = require('./import-stream.cjs');
 const { createAssetUploadHandler } = require('./asset-upload-route.cjs');
 const { importSaveFolderZip, DEFAULT_SAVE_FOLDER_ZIP_LIMITS } = require('./save-folder-zip-import.cjs');
 const { createNdjsonResponseWriter } = require('./ndjson-response-writer.cjs');
+const { createCanonicalProjectionSync } = require('./canonical-projection-sync.cjs');
 const {
     createRisuBardMemoryJsonParser,
     registerRisuBardMemoryRoutes,
@@ -93,6 +94,7 @@ let fullChatStore = null; // Map<chaId, Map<chatId, chatObject>> — lazy-initia
 
 // ETag for database.bin
 let dbEtag = null;
+let externallyAdoptedDbEtag = null;
 
 function computeBufferEtag(buffer) {
     return nodeCrypto.createHash('md5').update(buffer).digest('hex');
@@ -247,6 +249,7 @@ function maybeCollectUnreferencedObjects() {
 }
 
 async function flushPendingDb() {
+    if (adoptExternallyChangedCanonicalProjection()) return;
     if (saveTimers[DB_HEX_KEY]) {
         clearTimeout(saveTimers[DB_HEX_KEY]);
         delete saveTimers[DB_HEX_KEY];
@@ -832,11 +835,122 @@ if(!existsSync(savePath)){
     mkdirSync(savePath)
 }
 const relationalSql = createRelationalSqlite({ dataRoot: savePath })
+const CANONICAL_PROJECTION_REVISION_KEY = 'database/canonical-projection-revision'
+const canonicalProjectionSync = createCanonicalProjectionSync({
+    repository: userDataRepository,
+    readAcceptedRevision: () => {
+        const value = kvGet(CANONICAL_PROJECTION_REVISION_KEY)
+        return value ? Buffer.from(value).toString('utf8').trim() || null : null
+    },
+    writeAcceptedRevision: revision => {
+        kvSet(CANONICAL_PROJECTION_REVISION_KEY, Buffer.from(`${revision}\n`, 'utf8'))
+    },
+})
 let canonicalProjectionReady = existsSync(path.join(savePath, 'index', 'sidebar.json'))
+
+// ── Canonical projection adoption vs. SQL ───────────────────────────────────
+// Upstream 0.9.5 treats the file-native canonical projection as a second live
+// writer: if its files changed behind the app's back, adopt them, rebuild
+// `database/database.bin` from them and repopulate the legacy caches. That
+// premise holds only while the projection IS the live copy.
+//
+// Once this install is metadata-first it is not. `/api/sql/commit` is the only
+// write path the client uses, and it writes `relationalSql` alone -- it never
+// writes the projection and never accepts its revision. So the projection sits
+// frozen at the migration while SQL moves on, and `hasExternalChanges()` would
+// answer "yes" forever, because the accepted-revision key this merge
+// introduces does not exist on any install that predates it.
+//
+// Ungated, the first `flushPendingDb()` after this upgrade would overwrite
+// database.bin and refill `dbCache`/`fullChatStore` from a migration-era
+// snapshot, and then return early from the flush it was called to perform.
+// So every consumer of `hasExternalChanges()` is gated on a SQL canonicality
+// probe, and the probe runs FIRST -- see `adoptExternallyChangedCanonicalProjection`.
+//
+// Deliberately NOT done here: seeding the accepted revision at boot when the
+// key is absent. It looks like a cheap way to stop a pre-feature install from
+// reading as an external edit, but the key is absent on legacy installs too,
+// and there it would swallow the one adoption upstream added the feature for
+// -- files edited while the server was down, noticed on the next boot. The
+// probe below already distinguishes the two cases, so the seed bought nothing
+// and cost upstream's actual fix.
+let sqlCanonicalProbe = null
+let sqlCanonicalProbeRevision = null
+function sqlIsCanonical() {
+    // Canonicality only moves one way inside a process: a migration completes,
+    // it never un-completes. `relationalSql.reset()` is the one exception and
+    // it invalidates below, so a `true` latches and costs nothing again.
+    if (sqlCanonicalProbe === true) return true
+    try {
+        // `bootstrap()` assembles every settings key and every preset blob, so
+        // it must not run per call. The SQL revision is a single indexed row
+        // and moves on every commit -- which is exactly when the answer could
+        // have changed, including the client finishing its migration while
+        // this process is up. Caching the negative against it keeps a legacy
+        // install at one cheap read per call without going stale.
+        const revision = relationalSql.revision()
+        if (sqlCanonicalProbe === false && revision === sqlCanonicalProbeRevision) return false
+        sqlCanonicalProbeRevision = revision
+        sqlCanonicalProbe = sqlBootstrapIsCanonical(relationalSql.bootstrap())
+        return sqlCanonicalProbe
+    } catch (error) {
+        // An unreadable SQL database is not proof the projection is live,
+        // but it is proof this process cannot show that it is not. Refuse
+        // to adopt rather than rewrite database.bin on a guess.
+        logger.warn('[CanonicalProjection] SQL canonicality probe failed:', error?.message || error)
+        return true
+    }
+}
+
+/** `relationalSql.reset()` replaces the database the probe answered about. */
+function invalidateSqlCanonicalProbe() {
+    sqlCanonicalProbe = null
+    sqlCanonicalProbeRevision = null
+}
+
 function persistCanonicalProjection(databaseObject) {
+    // The legacy callers of this function -- backup import, save-folder
+    // import, `/api/write` of database.bin -- are exactly the ones for which
+    // the projection is authoritative, so the guard stays live for them.
+    if (!sqlIsCanonical() && canonicalProjectionSync.hasExternalChanges()) {
+        const error = new Error('Canonical entity files changed outside RisuBard before projection save')
+        error.code = 'CANONICAL_FILES_CHANGED'
+        throw error
+    }
     const result = userDataRepository.importLegacyDatabase(databaseObject, { mode: 'sync' })
+    canonicalProjectionSync.accept()
     canonicalProjectionReady = true
     return result
+}
+
+function adoptExternallyChangedCanonicalProjection() {
+    if (!canonicalProjectionReady) return null
+    // Probe before the stat walk, not after. `hasExternalChanges()` stats every
+    // character, chat and messages file in the projection; on a metadata-first
+    // install that walk can only ever reach a branch that declines to adopt, so
+    // asking SQL first -- a latched boolean, or one indexed row -- skips it
+    // entirely. It also leaves the accepted-revision key untouched here, which
+    // is right: nothing on this install accepts a projection it does not write.
+    if (sqlIsCanonical()) return null
+    if (!canonicalProjectionSync.hasExternalChanges()) return null
+    const changed = canonicalProjectionSync.loadExternalChanges()
+    if (!changed) return null
+
+    if (saveTimers[DB_HEX_KEY]) {
+        clearTimeout(saveTimers[DB_HEX_KEY])
+        delete saveTimers[DB_HEX_KEY]
+    }
+    const fullDb = normalizeJSON(changed.database)
+    const encoded = Buffer.from(encodeRisuSaveLegacy(fullDb))
+    kvSet('database/database.bin', encoded)
+    initChatStore(fullDb)
+    const stripped = normalizeJSON(stripChatsFromDb(fullDb))
+    dbCache[DB_HEX_KEY] = stripped
+    dbEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(stripped)))
+    externallyAdoptedDbEtag = dbEtag
+    canonicalProjectionSync.accept(changed.revision)
+    logger.info('[CanonicalProjection] Adopted externally edited canonical entity files')
+    return { etag: dbEtag, revision: changed.revision }
 }
 
 // Server-side backup directory (outside save/ to avoid bloating updater copies).
@@ -920,6 +1034,8 @@ const inlayMigrationMarker = path.join(inlayDir, '.migrated_to_fs')
 const hexRegex = /^[0-9a-fA-F]+$/;
 const BACKUP_IMPORT_MAX_BYTES = Number(process.env.RISU_BACKUP_IMPORT_MAX_BYTES ?? '0');
 const BACKUP_ENTRY_NAME_MAX_BYTES = 1024;
+const ACCOUNT_BACKUP_KEY_ENDPOINT = process.env.RISUBARD_ACCOUNT_BACKUP_KEY_ENDPOINT
+    || `${hubURL}/cryptokey`;
 // Minimum free disk space headroom multiplier: require 2× the backup size to be free
 const BACKUP_DISK_HEADROOM = 2;
 // Heartbeat interval for NDJSON import progress stream. 5 s by default —
@@ -2325,10 +2441,63 @@ function resolveBackupStorageKey(name) {
     return `assets/${name}`;
 }
 
+async function decryptAccountBackupDatabase(databasePath, metadataPath) {
+    let metadata;
+    try {
+        metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
+    } catch {
+        throw new Error('Invalid account backup encryption metadata');
+    }
+    const time = Number(metadata?.time);
+    if (metadata?.type !== 'account' || !Number.isSafeInteger(time) || time <= 0) {
+        throw new Error('Invalid account backup encryption metadata');
+    }
+
+    const keyUrl = new URL(ACCOUNT_BACKUP_KEY_ENDPOINT);
+    keyUrl.searchParams.set('key', String(time));
+    const keyResponse = await fetch(keyUrl);
+    if (!keyResponse.ok) {
+        throw new Error(`Failed to fetch account backup key (${keyResponse.status})`);
+    }
+    const keyPayload = await keyResponse.json();
+    if (typeof keyPayload?.key !== 'string' || keyPayload.key.length === 0) {
+        throw new Error('Account backup key response is invalid');
+    }
+
+    const encrypted = await fs.readFile(databasePath);
+    if (encrypted.length <= 16) {
+        throw new Error('Encrypted account backup database is invalid');
+    }
+    try {
+        const decipher = nodeCrypto.createDecipheriv(
+            'aes-256-gcm',
+            nodeCrypto.createHash('sha256').update(keyPayload.key).digest(),
+            Buffer.alloc(12),
+        );
+        decipher.setAuthTag(encrypted.subarray(encrypted.length - 16));
+        const decrypted = Buffer.concat([
+            decipher.update(encrypted.subarray(0, encrypted.length - 16)),
+            decipher.final(),
+        ]);
+        await fs.writeFile(databasePath, decrypted);
+    } catch {
+        throw new Error('Failed to decrypt account backup database');
+    }
+}
+
+async function validateStagedBackupDatabase(databasePath) {
+    const database = await decodeRisuSave(await fs.readFile(databasePath));
+    if (!database || typeof database !== 'object' || Array.isArray(database)) {
+        throw new Error('Backup database is invalid');
+    }
+}
+
 // ─── Shared backup import logic ─────────────────────────────────────────────
 // Accepts any async iterable of Buffer chunks (HTTP request body, file stream, etc.)
-async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0, onProgress = null } = {}) {
+async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0, onProgress = null, onPhase = null } = {}) {
     let hasDatabase = false;
+    let databaseEntryPath = null;
+    let encryptionMetadataPath = null;
     let assetsRestored = 0;
     let bytesReceived = 0;
     const stagedKvEntries = [];
@@ -2404,7 +2573,9 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                 const inlayRaw = parseInlayBackupName(name);
                 const inlaySidecar = parseInlaySidecarBackupName(name);
 
-                if (name.startsWith(CANONICAL_BACKUP_PREFIX)) {
+                if (name === 'encryption.risudat') {
+                    encryptionMetadataPath = sourcePath;
+                } else if (name.startsWith(CANONICAL_BACKUP_PREFIX)) {
                     const portable = name.slice(CANONICAL_BACKUP_PREFIX.length);
                     if (!portable || portable.includes('\\') || portable.startsWith('/')
                         || portable.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
@@ -2496,6 +2667,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
                     stagedKvEntries.push({ key: storageKey, sourcePath });
                     if (storageKey === 'database/database.bin') {
                         hasDatabase = true;
+                        databaseEntryPath = sourcePath;
                     } else {
                         assetsRestored += 1;
                     }
@@ -2504,14 +2676,21 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
             },
         });
         bytesReceived = staged.bytesReceived;
+        if (onProgress) onProgress(bytesReceived, totalBytes);
         if (!hasDatabase) {
             throw new Error('Backup does not contain database.risudat');
         }
+        if (onPhase) onPhase('validating');
+        if (encryptionMetadataPath) {
+            await decryptAccountBackupDatabase(databaseEntryPath, encryptionMetadataPath);
+        }
+        await validateStagedBackupDatabase(databaseEntryPath);
         for (const [id, info] of legacyInlayInfoMap.entries()) {
             if (importedInlayIds.has(id) && !importedSidecarIds.has(id)) {
                 writeStagingSidecarSync(id, info);
             }
         }
+        if (onPhase) onPhase('publishing');
         await kvReplacePrefixesFromFilesAsync(stagedKvEntries, [
             'assets/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/',
             'coldstorage/', 'drafts/', 'remotes/', REMOTE_MIGRATION_MARKER_KEY,
@@ -2547,6 +2726,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     await fs.rm(canonicalStagingDir, { recursive: true, force: true }).catch(() => {});
     await fs.rm(entryStagingDir, { recursive: true, force: true }).catch(() => {});
 
+    if (onPhase) onPhase('finalizing');
     await ensureInlayDir();
     try {
         if (existsSync(inlayDir)) {
@@ -2565,6 +2745,10 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     }
 
     invalidateDbCache();
+    if (canonicalEntriesRestored > 0) {
+        canonicalProjectionSync.accept();
+        canonicalProjectionReady = true;
+    }
 
     // Trigger cold storage migration now so import result includes failure count.
     const dbRaw = kvGet('database/database.bin');
@@ -2583,6 +2767,7 @@ async function importBackupFromSource(dataSource, { maxBytes = 0, totalBytes = 0
     // next boot. Preserve the previous SQL file, then expose an empty canonical
     // store so it cannot shadow freshly restored data.
     relationalSql.reset();
+    invalidateSqlCanonicalProbe();
 
     console.log(`[Backup Import] Complete: ${assetsRestored} assets restored, ${(bytesReceived / 1024 / 1024).toFixed(1)}MB processed`);
     if (coldStorageFailed > 0) {
@@ -3498,9 +3683,22 @@ async function readStorageItemPayload(key) {
 }
 
 function sendStorageEtagConflict(res, currentEtag) {
+    if (currentEtag && currentEtag === externallyAdoptedDbEtag) {
+        sendCanonicalProjectionConflict(res, { etag: currentEtag });
+        return;
+    }
     res.status(409).send({
         error: 'ETag mismatch - concurrent modification detected',
         currentEtag
+    });
+}
+
+function sendCanonicalProjectionConflict(res, adopted) {
+    res.status(409).send({
+        error: 'Canonical entity files changed outside RisuBard; reload the latest files before saving',
+        code: 'CANONICAL_FILES_CHANGED',
+        canonicalFilesChanged: true,
+        currentEtag: adopted?.etag ?? dbEtag ?? undefined,
     });
 }
 
@@ -3926,6 +4124,14 @@ app.post('/api/write', async (req, res, next) => {
         await queueStorageOperation(async () => {
             const key = Buffer.from(filePath, 'hex').toString('utf-8');
 
+            if (key === 'database/database.bin') {
+                const adopted = adoptExternallyChangedCanonicalProjection();
+                if (adopted) {
+                    sendCanonicalProjectionConflict(res, adopted);
+                    return;
+                }
+            }
+
             const ifMatch = req.headers['x-if-match'];
             if (ifMatch) {
                 let currentEtag = null;
@@ -4086,6 +4292,14 @@ app.post('/api/patch', async (req, res, next) => {
         await queueStorageOperation(async () => {
             const decodedKey = Buffer.from(filePath, 'hex').toString('utf-8');
 
+            if (decodedKey === 'database/database.bin') {
+                const adopted = adoptExternallyChangedCanonicalProjection();
+                if (adopted) {
+                    sendCanonicalProjectionConflict(res, adopted);
+                    return;
+                }
+            }
+
             // Load database into memory if not already cached
             // For database.bin, cache holds the STRIPPED version (stubs only)
             if (!dbCache[filePath]) {
@@ -4146,6 +4360,10 @@ app.post('/api/patch', async (req, res, next) => {
                 if (decodedKey === 'database/database.bin') {
                     currentEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(dbCache[filePath])));
                     dbEtag = currentEtag;
+                }
+                if (currentEtag && currentEtag === externallyAdoptedDbEtag) {
+                    sendCanonicalProjectionConflict(res, { etag: currentEtag });
+                    return;
                 }
                 res.status(409).send({
                     error: 'Hash mismatch - data out of sync',
@@ -4769,9 +4987,12 @@ app.post('/api/backup/import', legacySaveImportLimiter, async (req, res, next) =
                 totalBytes,
                 onProgress: (received, total) => {
                     const now = Date.now();
-                    if (now - lastProgressWrite < 200) return;
+                    if (received < total && now - lastProgressWrite < 200) return;
                     lastProgressWrite = now;
                     res.write(JSON.stringify({ type: 'progress', bytes: received, totalBytes: total }) + '\n');
+                },
+                onPhase: phase => {
+                    res.write(JSON.stringify({ type: 'phase', phase, bytes: totalBytes, totalBytes }) + '\n');
                 },
             });
             res.write(JSON.stringify({
@@ -5042,9 +5263,12 @@ app.post('/api/backup/server/restore', async (req, res, next) => {
             totalBytes: fileStat.size,
             onProgress: (received, total) => {
                 const now = Date.now();
-                if (now - lastProgressWrite < 200) return;
+                if (received < total && now - lastProgressWrite < 200) return;
                 lastProgressWrite = now;
                 res.write(JSON.stringify({ type: 'progress', bytes: received, totalBytes: total }) + '\n');
+            },
+            onPhase: phase => {
+                res.write(JSON.stringify({ type: 'phase', phase, bytes: fileStat.size, totalBytes: fileStat.size }) + '\n');
             },
         });
         res.write(JSON.stringify({
@@ -5447,6 +5671,7 @@ async function applyLegacySaveReplacement(apply, imported) {
     invalidateDbCache();
     await apply();
     relationalSql.reset();
+    invalidateSqlCanonicalProbe();
     writeFileSync(migrationMarkerPath, new Date().toISOString(), 'utf-8');
     return { imported };
 }

@@ -1,9 +1,170 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
-import { buildArcaClipboardHtml, exportArcaHtml } from './arcaExport';
+import {
+    buildArcaClipboardHtml,
+    exportArcaHtml,
+    findDetachedArcaPanels,
+    planArcaComplexSnapshots,
+    shouldIncludeArcaSnapshotNode,
+} from './arcaExport';
+
+describe('shouldIncludeArcaSnapshotNode', () => {
+    it('accepts text nodes while excluding controls and detached panel subtrees', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<p>prose</p><button>open</button><aside>panel</aside>';
+        const proseText = root.querySelector('p')?.firstChild as Text;
+        const button = root.querySelector('button') as HTMLButtonElement;
+        const panel = root.querySelector('aside') as HTMLElement;
+
+        expect(shouldIncludeArcaSnapshotNode(proseText, [panel])).toBe(true);
+        expect(shouldIncludeArcaSnapshotNode(button, [panel])).toBe(false);
+        expect(shouldIncludeArcaSnapshotNode(panel, [panel])).toBe(false);
+    });
+});
+
+describe('findDetachedArcaPanels', () => {
+    it('separates a large FAB panel without treating its button or internal ornaments as panels', () => {
+        const root = document.createElement('div');
+        root.innerHTML = `
+            <main class="alpha"><span class="beta"></span></main>
+            <button class="gamma">Open</button>
+            <div class="delta"><aside class="epsilon"><span class="zeta"></span></aside></div>
+        `;
+        const [status, fab, overlay] = Array.from(root.children) as HTMLElement[];
+        const panel = overlay.firstElementChild as HTMLElement;
+        const panelOrnament = panel.firstElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [status, cssStyle('position: relative;')],
+            [fab, cssStyle('position: fixed;')],
+            [overlay, cssStyle('position: fixed; background-color: rgba(0, 0, 0, .5);')],
+            [panel, cssStyle('position: absolute; z-index: 900; overflow: hidden; background: linear-gradient(#112244, #050811); box-shadow: 0 20px 50px #000;')],
+            [panelOrnament, cssStyle('position: absolute;')],
+        ]);
+        const rects = new Map<Element, DOMRect>([
+            [root, domRect(760, 600)],
+            [status, domRect(760, 400)],
+            [fab, domRect(48, 48)],
+            [overlay, domRect(760, 600)],
+            [panel, domRect(420, 520)],
+            [panelOrnament, domRect(300, 180)],
+        ]);
+
+        expect(findDetachedArcaPanels(
+            root,
+            element => styles.get(element) ?? cssStyle(''),
+            element => rects.get(element) ?? domRect(0, 0),
+        )).toEqual([panel]);
+    });
+
+    it('skips a zero-size FAB wrapper and schedules its fixed card as a separate snapshot', () => {
+        const root = document.createElement('div');
+        root.className = 'zero-shell';
+        root.innerHTML = '<label class="tiny-launcher">OPEN</label><div class="detached-surface">Panel content</div>';
+        const [fab, panel] = Array.from(root.children) as HTMLElement[];
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [fab, cssStyle('position: fixed; display: flex;')],
+            [panel, cssStyle('position: fixed; display: block; opacity: 0; transform: translateY(8px);')],
+        ]);
+        const rects = new Map<Element, DOMRect>([
+            [root, domRect(0, 0)],
+            [fab, domRect(54, 46)],
+            [panel, domRect(460, 520)],
+        ]);
+
+        const plan = planArcaComplexSnapshots(
+            root,
+            element => styles.get(element) ?? cssStyle(''),
+            element => rects.get(element) ?? domRect(0, 0),
+        );
+
+        expect(plan).toHaveLength(1);
+        expect(plan[0].kind).toBe('panel');
+        expect(plan[0].element).toBe(panel);
+    });
+
+    it('detects an unnamed absolute off-canvas layer from geometry and computed state', () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<section class="ordinary"><i></i></section><aside class="unknown-layer">Details</aside>';
+        const [ordinary, layer] = Array.from(root.children) as HTMLElement[];
+        const ornament = ordinary.firstElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [ordinary, cssStyle('position: relative; display: grid; background-color: rgb(10, 20, 30);')],
+            [ornament, cssStyle('position: absolute; width: 300px; height: 180px;')],
+            [layer, cssStyle('position: absolute; z-index: 700; opacity: 0; pointer-events: none; transform: translateX(100%); overflow: auto; background-color: rgb(20, 30, 60); box-shadow: 0 20px 50px #000;')],
+        ]);
+        const rects = new Map<Element, DOMRect>([
+            [root, domRect(760, 600)],
+            [ordinary, domRect(760, 400)],
+            [ornament, domRect(300, 180)],
+            [layer, domRect(360, 480)],
+        ]);
+
+        expect(findDetachedArcaPanels(
+            root,
+            element => styles.get(element) ?? cssStyle(''),
+            element => rects.get(element) ?? domRect(0, 0),
+        )).toEqual([layer]);
+    });
+});
 
 describe('exportArcaHtml', () => {
+    it('surfaces complex snapshot failures instead of silently flattening hidden panels', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<div class="unknown-wrapper"><div class="unknown-panel">Hidden panel</div></div>';
+        const wrapper = root.firstElementChild as HTMLElement;
+        const panel = wrapper.firstElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [root, cssStyle('font-size: 16px;')],
+            [wrapper, cssStyle('display: block;')],
+            [panel, cssStyle('position: fixed; display: block; opacity: 0;')],
+        ]);
+
+        await expect(exportArcaHtml(root, {
+            readStyle: element => styles.get(element) ?? cssStyle(''),
+            renderComplexBlock: async () => { throw new Error('snapshot failed'); },
+        })).rejects.toThrow('snapshot failed');
+    });
+
+    it('preserves a complex visual block as a full-width snapshot while keeping ordinary prose as HTML', async () => {
+        const root = document.createElement('div');
+        root.innerHTML = '<p>ordinary prose</p><section class="status"><div class="dial">D-18</div></section>';
+        const prose = root.children[0] as HTMLElement;
+        const status = root.children[1] as HTMLElement;
+        const dial = status.firstElementChild as HTMLElement;
+        const styles = new Map<Element, CSSStyleDeclaration>([
+            [root, cssStyle('display: block; font-size: 16px;')],
+            [prose, cssStyle('display: block; font-size: 16px;')],
+            [status, cssStyle('display: grid; width: 100%; min-height: 260px; background-image: linear-gradient(#071122, #02050c);')],
+            [dial, cssStyle('position: absolute; right: 12px; top: 12px;')],
+        ]);
+        const renderComplexBlock = vi.fn(async () => [
+            'data:image/png;base64,status-card',
+            'data:image/png;base64,detached-panel',
+        ]);
+
+        const html = await exportArcaHtml(root, {
+            readStyle: (element) => styles.get(element) ?? cssStyle(''),
+            loadImage: async (url) => url,
+            renderComplexBlock,
+        });
+        const output = document.createElement('div');
+        output.innerHTML = html;
+        const snapshots = Array.from(output.querySelectorAll('img[data-arca-complex-snapshot]')) as HTMLImageElement[];
+
+        expect(output.firstElementChild?.tagName).toBe('P');
+        expect(output.firstElementChild?.textContent).toBe('ordinary prose');
+        expect(snapshots.map(snapshot => snapshot.getAttribute('src'))).toEqual([
+            'data:image/png;base64,status-card',
+            'data:image/png;base64,detached-panel',
+        ]);
+        expect(snapshots[0].style.width).toBe('100%');
+        expect(snapshots[0].style.maxWidth).toBe('100%');
+        expect(renderComplexBlock).toHaveBeenCalledOnce();
+        expect(renderComplexBlock).toHaveBeenCalledWith(status);
+        expect(html).not.toContain('class="status"');
+    });
+
     it('replaces a CSS background asset with a real image without changing message order', async () => {
         const root = document.createElement('div');
         root.innerHTML = `
@@ -97,11 +258,13 @@ describe('exportArcaHtml', () => {
         expect(exportedRow.style.padding).toBe('12px');
         expect(exportedRow.style.backgroundColor).toBe('rgb(247, 244, 232)');
         expect(exportedRow.style.borderRadius).toBe('8px');
+        expect(exportedRow.style.borderWidth).toBe('0px');
         expect(html).toContain('table-cell');
         expect(exportedCells.map((cell) => cell.getAttribute('style'))).toEqual([
             expect.stringContaining('display: table-cell'),
             expect.stringContaining('display: table-cell'),
         ]);
+        expect(exportedCells.every(cell => cell.style.borderWidth === '0px')).toBe(true);
         expect(exportedCells[1].style.textAlign).toBe('right');
         expect(html).not.toMatch(/display:\s*flex/i);
         expect(html).not.toMatch(/position:|overflow:|opacity:|url\(/i);
@@ -412,4 +575,8 @@ function cssStyle(cssText: string): CSSStyleDeclaration {
     const element = document.createElement('div');
     element.style.cssText = cssText;
     return element.style;
+}
+
+function domRect(width: number, height: number): DOMRect {
+    return { width, height, x: 0, y: 0, top: 0, right: width, bottom: height, left: 0, toJSON() {} };
 }

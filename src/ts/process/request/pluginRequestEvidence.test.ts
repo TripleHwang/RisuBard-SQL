@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createPluginRequestEvidenceRecorder } from './pluginRequestEvidence'
+import {
+    createPluginRequestEvidenceRecorder,
+    formatPluginProviderFailure,
+} from './pluginRequestEvidence'
 
 describe('plugin request evidence recorder', () => {
+    it('preserves a bounded Error message instead of serializing it as an empty object', () => {
+        expect(formatPluginProviderFailure(
+            'pagefold-gemini-3.7-flash',
+            new Error('Upstream request timed out after 300000ms')
+        )).toBe(
+            'Plugin Error from pagefold-gemini-3.7-flash: Upstream request timed out after 300000ms'
+        )
+    })
+
     it('records body-free per-chat evidence with locally counted output tokens', async () => {
         const record = vi.fn()
         const recorder = createPluginRequestEvidenceRecorder({

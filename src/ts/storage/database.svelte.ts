@@ -51,9 +51,18 @@ import {
     normalizeWikiPromptPresetState,
     type WikiPromptPreset,
 } from '../risubard/wikiPromptPreset';
+import {
+    ARC_PLOTTER_DEFAULT_PRESET_ID,
+    normalizeArcPlotterCustomPresets,
+    normalizeArcPlotterPresetSelection,
+    normalizeArcPlotterSettings,
+    type ArcPlotterPreset,
+} from '../risubard/arcPlotterSettings';
 import { normalizeSelectedPersonaIndex } from '../personaScopes';
 import {
     normalizeArcaChatFontSizePx,
+    normalizeArcaChatDialogSize,
+    normalizeArcaChatIncludeUserMessages,
     normalizeArcaChatImageWidthPercent,
     normalizeArcaChatParagraphSpacingPercent,
     normalizeArcaChatShowTitleImage,
@@ -827,6 +836,7 @@ export function setDatabase(data:Database){
     }
     data.autoScrollToNewMessage ??= true
     data.alwaysScrollToNewMessage ??= false
+    data.preserveChatScrollPosition ??= true
     data.newMessageButtonStyle ??= 'bottom-center'
     data.echoMessage ??= "Echo Message"
     data.echoDelay ??= 0
@@ -886,6 +896,12 @@ export function setDatabase(data:Database){
     data.risuBardArcaChatTitleImageStyle = normalizeArcaChatTitleImageStyle(
         data.risuBardArcaChatTitleImageStyle
     )
+    data.risuBardArcaChatIncludeUserMessages = normalizeArcaChatIncludeUserMessages(
+        data.risuBardArcaChatIncludeUserMessages
+    )
+    data.risuBardArcaChatDialogSize = normalizeArcaChatDialogSize(
+        data.risuBardArcaChatDialogSize
+    )
     data.risuBardRecentMessageCount = Number.isSafeInteger(data.risuBardRecentMessageCount)
         && data.risuBardRecentMessageCount! >= 1
         ? data.risuBardRecentMessageCount
@@ -921,6 +937,26 @@ export function setDatabase(data:Database){
     )
     data.risuBardCanonicalCustomStyle = normalizeRisuBardCanonicalCustomStyle(
         data.risuBardCanonicalCustomStyle
+    )
+    const arcPlotterSettings = normalizeArcPlotterSettings({
+        checkpointSize: data.risuBardArcPlotterCheckpointSize,
+        maxArcs: data.risuBardArcPlotterMaxArcs,
+        maxTurningPoints: data.risuBardArcPlotterMaxTurningPoints,
+        maxOpenThreads: data.risuBardArcPlotterMaxOpenThreads,
+        maxCharacters: data.risuBardArcPlotterMaxCharacters,
+    })
+    data.risuBardArcPlotterEnabled = data.risuBardArcPlotterEnabled !== false
+    data.risuBardArcPlotterCheckpointSize = arcPlotterSettings.checkpointSize
+    data.risuBardArcPlotterMaxArcs = arcPlotterSettings.maxArcs
+    data.risuBardArcPlotterMaxTurningPoints = arcPlotterSettings.maxTurningPoints
+    data.risuBardArcPlotterMaxOpenThreads = arcPlotterSettings.maxOpenThreads
+    data.risuBardArcPlotterMaxCharacters = arcPlotterSettings.maxCharacters
+    data.risuBardArcPlotterCustomPresets = normalizeArcPlotterCustomPresets(
+        data.risuBardArcPlotterCustomPresets
+    )
+    data.risuBardArcPlotterPresetId = normalizeArcPlotterPresetSelection(
+        data.risuBardArcPlotterPresetId ?? ARC_PLOTTER_DEFAULT_PRESET_ID,
+        data.risuBardArcPlotterCustomPresets
     )
     const wikiPromptState = normalizeWikiPromptPresetState({
         presets: data.risuBardWikiPromptPresets,
@@ -1619,6 +1655,8 @@ export interface Database{
     risuBardArcaChatParagraphSpacingPercent?: number
     risuBardArcaChatShowTitleImage?: boolean
     risuBardArcaChatTitleImageStyle?: import('../arcaChatSaverSettings').ArcaChatTitleImageStyle
+    risuBardArcaChatIncludeUserMessages?: boolean
+    risuBardArcaChatDialogSize?: import('../arcaChatSaverSettings').ArcaChatDialogSize
     risuBardSaveLoadShortcutPlacement?:
         | import('../risubard/saveLoadShortcutLayout').SaveLoadShortcutPlacement
         | { xRatio: number, yRatio: number }
@@ -1640,6 +1678,14 @@ export interface Database{
     risuBardCanonicalWritingStyle?: import('../risubard/risuBardSettings').RisuBardCanonicalWritingStyle
     risuBardCanonicalCustomStyle?: string
     risuBardWikiWritingLanguage?: import('../risubard/wikiWritingLanguage').WikiWritingLanguage
+    risuBardArcPlotterEnabled?: boolean
+    risuBardArcPlotterCheckpointSize?: number
+    risuBardArcPlotterMaxArcs?: number
+    risuBardArcPlotterMaxTurningPoints?: number
+    risuBardArcPlotterMaxOpenThreads?: number
+    risuBardArcPlotterMaxCharacters?: number
+    risuBardArcPlotterPresetId?: string
+    risuBardArcPlotterCustomPresets?: ArcPlotterPreset[]
     risuBardWikiPromptPresets?: WikiPromptPreset[]
     risuBardChatWikiPromptPresetId?: string
     textAreaTextSize:number
@@ -1904,6 +1950,7 @@ export interface Database{
     hideMessagePageCount?: boolean
     autoScrollToNewMessage?: boolean
     alwaysScrollToNewMessage?: boolean
+    preserveChatScrollPosition?: boolean
     newMessageButtonStyle?: string
     pluginDevelopMode?: boolean
     echoMessage?:string

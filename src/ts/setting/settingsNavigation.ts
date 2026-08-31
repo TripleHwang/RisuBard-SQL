@@ -41,9 +41,13 @@ export const settingsSections: SettingsNavigationSection[] = [
     {
         id: 'risubard',
         items: [
-            { id: 'risubard-common', route: SettingsRoute.RisuBardCommon, scope: 'full' },
+            {
+                id: 'risubard-common',
+                route: SettingsRoute.RisuBardCommon,
+                aliases: [SettingsRoute.RisuBardChat],
+                scope: 'full',
+            },
             { id: 'risubard-wiki-prompt', route: SettingsRoute.RisuBardWikiPrompt, scope: 'full' },
-            { id: 'risubard-chat', route: SettingsRoute.RisuBardChat, scope: 'full' },
         ],
     },
     {

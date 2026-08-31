@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from 'svelte'
     import {
         BookOpenIcon,
         CheckCircle2Icon,
@@ -10,6 +11,8 @@
         RefreshCwIcon,
         ChevronDownIcon,
         SquareTerminalIcon,
+        MonitorIcon,
+        SmartphoneIcon,
         XCircleIcon,
     } from '@lucide/svelte'
     import ShButton from 'src/lib/UI/GUI/ShButton.svelte'
@@ -39,6 +42,7 @@
     import RisuBardWikiEditor from './RisuBardWikiEditor.svelte'
     import RisuBardMemoryActivity from './RisuBardMemoryActivity.svelte'
     import RisuBardStorySoFar from './RisuBardStorySoFar.svelte'
+    import RisuBardStoryArcPlot from './RisuBardStoryArcPlot.svelte'
     import RisuBardWikiCommandTerminal from './RisuBardWikiCommandTerminal.svelte'
     import RisuBardFindReplace from './RisuBardFindReplace.svelte'
     import RisuBardMemoryWikiHelp from './RisuBardMemoryWikiHelp.svelte'
@@ -46,7 +50,10 @@
     import SolarBoldIcon from 'src/lib/UI/Icons/SolarBoldIcon.svelte'
     import forceUpdateIdle from 'src/assets/risubard-memory/additional-analysis-idle.png'
     import forceUpdateHover from 'src/assets/risubard-memory/additional-analysis-hover.gif'
-    import type { DirectWikiCommandResult } from 'src/ts/risubard/directWikiCommand'
+    import type {
+        DirectWikiCommandResult,
+        DirectWikiContextSelection,
+    } from 'src/ts/risubard/directWikiCommand'
     import type { StorySourceRef } from 'src/ts/risubard/storySoFar'
     import { alertConfirm, alertError } from 'src/ts/alert'
     import {
@@ -54,7 +61,10 @@
         type WikiRebootBatchSize,
         type WikiRebootJob,
     } from 'src/ts/risubard/wikiReboot'
-    import { resolveRisuBardChatSettings } from 'src/ts/risubard/risuBardSettings'
+    import {
+        resolveRisuBardChatSettings,
+    } from 'src/ts/risubard/risuBardSettings'
+    import { normalizeArcPlotterRuntimeSettings } from 'src/ts/risubard/arcPlotterSettings'
 
     interface Props {
         open?: boolean
@@ -70,10 +80,13 @@
         onResumeWikiReboot?: () => Promise<boolean>
         onCancelWikiReboot?: () => Promise<boolean>
         onExecuteWikiCommand?: (
-            instruction: string
+            instruction: string,
+            contextSelection: DirectWikiContextSelection
         ) => Promise<DirectWikiCommandResult>
         onNavigateStorySource?: (source: StorySourceRef) => void
     }
+
+    type MemoryWikiLayout = 'desktop' | 'mobile'
 
     let {
         open = $bindable(false),
@@ -94,12 +107,18 @@
     let forceUpdating = $state(false)
     let forceUpdateStatus = $state<'success' | 'empty' | 'failed' | ''>('')
     let forceUpdateError = $state('')
+    let forceUpdateMeta = $state<{ turn: number; completedAt: number } | null>(
+        null
+    )
     let requestSequence = 0
     let loadedScope = ''
     let dockElement = $state<HTMLElement | null>(null)
     let workspaceSplitElement = $state<HTMLElement | null>(null)
-    let activeView = $state<'workspace' | 'story' | 'log'>('workspace')
+    let activeView = $state<'workspace' | 'story' | 'arc-plot' | 'log'>('workspace')
     let findReplaceOpen = $state(false)
+    let settingsOpen = $state(false)
+    let layoutMode = $state<MemoryWikiLayout>('desktop')
+    let layoutManuallySelected = false
     let dockRatio = $state(normalizeMemoryWikiDockRatio(
         DBState.db.risuBardMemoryDockRatio
     ))
@@ -136,6 +155,29 @@
             character.chaId === characterId
         )?.chats.find((chat) => chat.id === chatId)
     )
+    let resolvedChatSettings = $derived(resolveRisuBardChatSettings(
+        DBState.db,
+        currentChat?.risuBardSettings
+    ))
+    let arcPlotterSettings = $derived(normalizeArcPlotterRuntimeSettings({
+        enabled: DBState.db.risuBardArcPlotterEnabled,
+        checkpointSize: DBState.db.risuBardArcPlotterCheckpointSize,
+        maxArcs: DBState.db.risuBardArcPlotterMaxArcs,
+        maxTurningPoints: DBState.db.risuBardArcPlotterMaxTurningPoints,
+        maxOpenThreads: DBState.db.risuBardArcPlotterMaxOpenThreads,
+        maxCharacters: DBState.db.risuBardArcPlotterMaxCharacters,
+    }))
+    let bardChatContextSelection = $derived<DirectWikiContextSelection>({
+        wiki: resolvedChatSettings.bardChatIncludeWiki,
+        chat: resolvedChatSettings.bardChatIncludeChat,
+        systemPrompt: resolvedChatSettings.bardChatIncludeSystemPrompt,
+        characterDescription:
+            resolvedChatSettings.bardChatIncludeCharacterDescription,
+        persona: resolvedChatSettings.bardChatIncludePersona,
+        characterLorebook:
+            resolvedChatSettings.bardChatIncludeCharacterLorebook,
+        moduleLorebook: resolvedChatSettings.bardChatIncludeModuleLorebook,
+    })
     let rebootLastChatIndex = $derived((currentChat?.message.length ?? 0) - 1)
     let rebootStartChatIndexValid = $derived(
         Number.isInteger(rebootStartChatIndex)
@@ -168,6 +210,36 @@
         }
         return language.risuBardWikiRebootStop
     })
+    let rebootProgress = $derived.by(() => {
+        if (!rebootJob) return undefined
+        const total = rebootJob.targetAssistantMessageIds.length
+        const completed = Math.min(
+            rebootJob.completedAssistantMessageIds.length,
+            total
+        )
+        const percent = total > 0
+            ? Math.round((completed / total) * 100)
+            : 0
+        return { completed, total, percent }
+    })
+
+    onMount(() => {
+        const media = window.matchMedia?.('(max-width: 840px)')
+        const syncLayout = () => {
+            if (layoutManuallySelected) return
+            layoutMode = (media?.matches ?? window.innerWidth <= 840)
+                ? 'mobile'
+                : 'desktop'
+        }
+        syncLayout()
+        media?.addEventListener('change', syncLayout)
+        return () => media?.removeEventListener('change', syncLayout)
+    })
+
+    function toggleLayout() {
+        layoutManuallySelected = true
+        layoutMode = layoutMode === 'mobile' ? 'desktop' : 'mobile'
+    }
 
     async function handleRebootAction() {
         if (rebootActionBusy) return
@@ -264,13 +336,26 @@
 
     async function forceWikiUpdate() {
         if (forceUpdating || rebootJob) return
+        const targetTurn = currentChat?.message.filter((message) =>
+            message.role === 'char'
+            && !message.isComment
+            && !message.disabled
+            && typeof message.chatId === 'string'
+            && message.chatId.trim().length > 0
+        ).length ?? 0
         forceUpdating = true
         forceUpdateStatus = ''
         forceUpdateError = ''
+        forceUpdateMeta = null
         try {
-            forceUpdateStatus = await onForceWikiUpdate?.()
-                ? 'success'
-                : 'empty'
+            const updated = await onForceWikiUpdate?.()
+            forceUpdateStatus = updated ? 'success' : 'empty'
+            if (updated && targetTurn > 0) {
+                forceUpdateMeta = {
+                    turn: targetTurn,
+                    completedAt: Date.now(),
+                }
+            }
         }
         catch (cause) {
             forceUpdateStatus = 'failed'
@@ -296,14 +381,35 @@
     }
 
     async function executeWikiCommand(
-        instruction: string
+        instruction: string,
+        contextSelection: DirectWikiContextSelection
     ): Promise<DirectWikiCommandResult> {
         if (!onExecuteWikiCommand) {
             throw new Error('현재 채팅에서 위키 관리자 명령을 실행할 수 없습니다.')
         }
-        const result = await onExecuteWikiCommand(instruction)
+        const result = await onExecuteWikiCommand(
+            instruction,
+            contextSelection
+        )
         await loadWiki()
         return result
+    }
+
+    function setBardChatContextSelection(
+        selection: DirectWikiContextSelection
+    ) {
+        if (!currentChat) return
+        currentChat.risuBardSettings ??= {}
+        Object.assign(currentChat.risuBardSettings, {
+            bardChatIncludeWiki: selection.wiki,
+            bardChatIncludeChat: selection.chat,
+            bardChatIncludeSystemPrompt: selection.systemPrompt,
+            bardChatIncludeCharacterDescription:
+                selection.characterDescription,
+            bardChatIncludePersona: selection.persona,
+            bardChatIncludeCharacterLorebook: selection.characterLorebook,
+            bardChatIncludeModuleLorebook: selection.moduleLorebook,
+        })
     }
 
     async function replaceText(input: {
@@ -489,7 +595,10 @@
     class="memory-wiki-dock"
     class:closed={!open}
     class:editor-focus={editorFocus}
+    class:mobile-layout={layoutMode === 'mobile'}
+    class:desktop-layout={layoutMode === 'desktop'}
     data-memory-wiki-dock
+    data-memory-layout={layoutMode}
     data-open={open}
     data-editor-focus={editorFocus}
     bind:this={dockElement}
@@ -519,6 +628,22 @@
                     title="BardWiki 사용 가이드"
                     onclick={() => helpOpen = true}
                 >사용 가이드</button>
+                <button
+                    type="button"
+                    class="dock-layout-toggle"
+                    data-memory-layout-toggle
+                    aria-label={`${layoutMode === 'mobile' ? '데스크톱' : '모바일'} 레이아웃으로 전환`}
+                    title={`${layoutMode === 'mobile' ? '데스크톱' : '모바일'} 레이아웃으로 전환`}
+                    onclick={toggleLayout}
+                >
+                    {#if layoutMode === 'mobile'}
+                        <MonitorIcon size={15} />
+                        <span>데스크톱</span>
+                    {:else}
+                        <SmartphoneIcon size={15} />
+                        <span>모바일</span>
+                    {/if}
+                </button>
             </div>
             </div>
             <button class="dock-close" type="button" aria-label="BardWiki 닫기" onclick={() => open = false}>
@@ -544,6 +669,18 @@
                     <span>{forceUpdating
                         ? language.risuBardMemoryForceUpdating
                         : language.risuBardMemoryForceUpdate}</span>
+                </button>
+                <button
+                    type="button"
+                    class="find-replace-button"
+                    data-wiki-open-find-replace
+                    title="찾기/바꾸기"
+                    aria-label="찾기/바꾸기"
+                    onclick={() => findReplaceOpen = true}
+                    disabled={Boolean(rebootJob)}
+                >
+                    <SolarBoldIcon name="magnifier" size={16} />
+                    <span>찾기/바꾸기</span>
                 </button>
                 <button
                     type="button"
@@ -596,6 +733,13 @@
                         </svg>
                         <span>이야기</span>
                     </button>
+                    <button
+                        type="button"
+                        class:active={activeView === 'arc-plot'}
+                        data-memory-view="arc-plot"
+                        title="아크 플롯"
+                        onclick={() => activeView = 'arc-plot'}
+                    ><NetworkIcon size={20} /><span>아크 플롯</span></button>
                 {/if}
                 <button
                     type="button"
@@ -605,17 +749,62 @@
                     onclick={() => activeView = 'log'}
                 ><LogsIcon size={20} /><span>로그</span></button>
                 {#if wiki?.mode === 'markdown'}
-                    <details class="dock-settings">
-                        <summary data-memory-settings title="설정">
-                            <SolarBoldIcon name="settings" size={22} /><span>설정</span>
-                        </summary>
-                        <div class="settings-popover">
-                            <RisuBardCurrentChatSettings chat={currentChat} global={DBState.db} />
-                        </div>
-                    </details>
+                    <button
+                        type="button"
+                        class="dock-settings"
+                        class:active={settingsOpen}
+                        data-memory-settings
+                        title="설정"
+                        aria-haspopup="true"
+                        aria-expanded={settingsOpen}
+                        onclick={() => settingsOpen = !settingsOpen}
+                    ><SolarBoldIcon name="settings" size={22} /><span>설정</span></button>
                 {/if}
             </div>
+            {#if rebootJob && rebootProgress}
+                <div
+                    class="reboot-progress"
+                    class:running={rebootJob.status === 'running'}
+                    data-risubard-wiki-reboot-progress
+                    role="progressbar"
+                    aria-live="polite"
+                    aria-valuemin="0"
+                    aria-valuemax="100"
+                    aria-valuenow={rebootProgress.percent}
+                    aria-valuetext={language.risuBardWikiRebootProgress(
+                        rebootProgress.completed,
+                        rebootProgress.total,
+                        rebootProgress.percent
+                    )}
+                >
+                    <div class="reboot-progress-copy">
+                        <span>{language.risuBardWikiReboot}</span>
+                        <strong>{language.risuBardWikiRebootProgress(
+                            rebootProgress.completed,
+                            rebootProgress.total,
+                            rebootProgress.percent
+                        )}</strong>
+                    </div>
+                    <div class="reboot-progress-track" aria-hidden="true">
+                        <span
+                            class="reboot-progress-fill"
+                            data-risubard-wiki-reboot-progress-fill
+                            style:width={`${rebootProgress.percent}%`}
+                        ></span>
+                    </div>
+                </div>
+            {/if}
         </nav>
+        {#if wiki?.mode === 'markdown'}
+            <section
+                class="settings-popover"
+                data-memory-settings-popover
+                aria-label="BardWiki 현재 챗 설정"
+                hidden={!settingsOpen}
+            >
+                <RisuBardCurrentChatSettings chat={currentChat} global={DBState.db} />
+            </section>
+        {/if}
     </header>
 
     <div class="memory-ledger min-h-0">
@@ -653,13 +842,27 @@
                 data-force-update-status={forceUpdateStatus}
                 aria-live="polite"
             >
-                {forceUpdateStatus === 'failed' && forceUpdateError
-                    ? forceUpdateError
-                    : forceUpdateStatus === 'success'
-                    ? language.risuBardMemoryForceUpdateDone
-                    : forceUpdateStatus === 'empty'
-                        ? language.risuBardMemoryForceUpdateEmpty
-                        : language.risuBardMemoryForceUpdateFailed}
+                <span>
+                    {forceUpdateStatus === 'failed' && forceUpdateError
+                        ? forceUpdateError
+                        : forceUpdateStatus === 'success'
+                        ? language.risuBardMemoryForceUpdateDone
+                        : forceUpdateStatus === 'empty'
+                            ? language.risuBardMemoryForceUpdateEmpty
+                            : language.risuBardMemoryForceUpdateFailed}
+                </span>
+                {#if forceUpdateStatus === 'success' && forceUpdateMeta}
+                    <span class="force-update-meta" data-force-update-meta>
+                        {language.risuBardMemoryForceUpdateMeta(
+                            forceUpdateMeta.turn,
+                            new Intl.DateTimeFormat(undefined, {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: false,
+                            }).format(forceUpdateMeta.completedAt)
+                        )}
+                    </span>
+                {/if}
             </div>
         {/if}
         {#if wiki?.observability}
@@ -731,8 +934,8 @@
                             bind:selectedId={selectedMarkdownId}
                             onChanged={loadWiki}
                             onFocusModeChange={(focused) => editorFocus = focused}
-                            onOpenFindReplace={() => findReplaceOpen = true}
                             onNavigateSource={onNavigateStorySource}
+                            mobileLayout={layoutMode === 'mobile'}
                         />
                     </div>
                     {#if onExecuteWikiCommand && !rebootJob}
@@ -760,16 +963,16 @@
                                     onclick={() => commandExpanded = !commandExpanded}
                                 >
                                     <SquareTerminalIcon size={17} />
-                                    <span>
-                                        <strong>위키 관리자 명령</strong>
-                                        <small>자연어로 Memory Wiki 편집</small>
-                                    </span>
+                                    <strong>BARDCHAT</strong>
                                     <ChevronDownIcon size={18} class={commandExpanded ? '' : 'collapsed'} />
                                 </button>
                             </header>
                             <div id="risubard-wiki-command-terminal" class="command-terminal-region">
                                 <RisuBardWikiCommandTerminal
                                     onExecute={executeWikiCommand}
+                                    contextSelection={bardChatContextSelection}
+                                    onContextSelectionChange={setBardChatContextSelection}
+                                    mobileLayout={layoutMode === 'mobile'}
                                 />
                             </div>
                         </article>
@@ -779,6 +982,13 @@
                         documents={wiki.documents}
                         onNavigate={onNavigateStorySource}
                         onEdit={editStoryEntry}
+                    />
+                {:else if activeView === 'arc-plot'}
+                    <RisuBardStoryArcPlot
+                        documents={wiki.documents}
+                        checkpointSize={arcPlotterSettings.checkpointSize}
+                        enabled={arcPlotterSettings.enabled}
+                        onOpenDocument={editStoryEntry}
                     />
                 {:else}
                     <div class="activity-log-scroll" data-memory-activity-scroll>
@@ -887,7 +1097,7 @@
                 data-find-replace-dialog
                 role="dialog"
                 aria-modal="true"
-                aria-label="모두 바꾸기"
+                aria-label="찾기/바꾸기"
             >
                 <RisuBardFindReplace
                     documents={wiki.documents}
@@ -1024,10 +1234,12 @@
         background: var(--risu-theme-primary);
     }
     .dock-header {
+        position: relative;
+        z-index: 10;
         display: flex;
         flex-direction: column;
-        gap: .45rem;
-        padding: .5rem .65rem .6rem .8rem;
+        gap: .3rem;
+        padding: .4rem .5rem .45rem .65rem;
         border-bottom: 1px solid var(--risu-theme-darkborderc);
         background: color-mix(in srgb, var(--risu-theme-darkbg) 91%, var(--color-bgcolor));
     }
@@ -1041,11 +1253,14 @@
     }
     .dock-title-row { display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: .35rem .5rem; }
     .dock-identity strong { font-family: var(--risu-font-family); font-size: .84rem; font-weight: 700; line-height: 1.1; letter-spacing: -.02em; white-space: nowrap; }
-    .dock-help {
-        display: inline-grid;
+    .dock-help,
+    .dock-layout-toggle {
+        display: inline-flex;
         flex: 0 0 auto;
         min-height: 1.75rem;
-        place-items: center;
+        align-items: center;
+        justify-content: center;
+        gap: .3rem;
         padding: .2rem .55rem;
         border: 1px solid var(--risu-theme-darkborderc);
         border-radius: .35rem;
@@ -1058,7 +1273,9 @@
         cursor: pointer;
     }
     .dock-help:hover,
-    .dock-help:focus-visible {
+    .dock-help:focus-visible,
+    .dock-layout-toggle:hover,
+    .dock-layout-toggle:focus-visible {
         border-color: color-mix(in srgb, var(--risu-theme-primary) 35%, var(--risu-theme-darkborderc));
         outline: 0;
         color: var(--risu-theme-textcolor);
@@ -1075,9 +1292,64 @@
         color: var(--risu-theme-primary);
         background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent);
     }
-    .dock-views { display: flex; flex-wrap: wrap; width: 100%; min-height: 52px; align-items: center; gap: .45rem; padding: .45rem .48rem; border-radius: .58rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
+    .dock-views { display: flex; flex-wrap: wrap; width: 100%; min-height: 44px; align-items: center; gap: .3rem; padding: .3rem .35rem; border-radius: .48rem; background: color-mix(in srgb, var(--risu-theme-darkbg) 78%, var(--risu-theme-textcolor2) 8%); }
     .dock-view-actions { display: flex; align-items: center; justify-content: flex-end; gap: .25rem; margin-left: auto; }
-    .dock-views button, .dock-views summary, .dock-close {
+    .reboot-progress {
+        flex: 1 0 100%;
+        display: grid;
+        gap: .28rem;
+        padding: .38rem .18rem .08rem;
+        border-top: 1px solid color-mix(in srgb, var(--risu-theme-primary) 18%, var(--risu-theme-darkborderc));
+    }
+    .reboot-progress-copy {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: .75rem;
+        color: var(--risu-theme-textcolor2);
+        font-size: .68rem;
+        line-height: 1;
+    }
+    .reboot-progress-copy strong {
+        color: var(--risu-theme-textcolor);
+        font-size: .7rem;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: .015em;
+    }
+    .reboot-progress-track {
+        height: .34rem;
+        overflow: hidden;
+        border: 1px solid color-mix(in srgb, var(--risu-theme-primary) 20%, transparent);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 82%, var(--risu-theme-textcolor2) 8%);
+    }
+    .reboot-progress-fill {
+        position: relative;
+        display: block;
+        height: 100%;
+        overflow: hidden;
+        border-radius: inherit;
+        background: var(--risu-theme-primary);
+        transition: width 280ms ease-out;
+    }
+    .reboot-progress.running .reboot-progress-fill::after {
+        position: absolute;
+        inset: 0;
+        content: '';
+        background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accenttext) 38%, transparent) 50%, transparent 100%);
+        transform: translateX(-100%);
+        animation: reboot-progress-sheen 1.4s ease-in-out infinite;
+    }
+    @keyframes reboot-progress-sheen {
+        to { transform: translateX(100%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .reboot-progress-fill { transition: none; }
+        .reboot-progress.running .reboot-progress-fill::after {
+            animation: none;
+        }
+    }
+    .dock-views button, .dock-close {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -1093,8 +1365,9 @@
         cursor: pointer;
         list-style: none;
     }
-    .dock-views button, .dock-views summary { width: 2.35rem; min-height: 2.25rem; padding: .35rem; }
+    .dock-views button { width: 2.35rem; min-height: 2.25rem; padding: .35rem; }
     .dock-views .force-update-button,
+    .dock-views .find-replace-button,
     .dock-views .reboot-button,
     .dock-views .reboot-cancel-button {
         flex: 0 0 auto;
@@ -1117,8 +1390,9 @@
     .force-update-button:hover:not(:disabled) .force-update-hover,
     .force-update-button.running .force-update-hover { display: block !important; }
     .dock-view-actions svg { display: block; width: 22px; height: 22px; fill: currentColor; }
-    .dock-views button span, .dock-views summary span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .dock-views button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .dock-views .force-update-button span,
+    .dock-views .find-replace-button span,
     .dock-views .reboot-button span,
     .dock-views .reboot-cancel-button span {
         position: static;
@@ -1128,7 +1402,6 @@
         clip-path: none;
     }
     .dock-views button:hover, .dock-views button.active,
-    .dock-views summary:hover, .dock-settings[open] > summary,
     .dock-close:hover {
         color: var(--risu-theme-textcolor);
         border-color: color-mix(in srgb, var(--risu-theme-primary) 24%, var(--risu-theme-darkborderc));
@@ -1136,20 +1409,22 @@
     }
     .dock-views button.active { color: var(--color-accenttext); border-color: color-mix(in srgb, var(--risu-theme-primary) 72%, transparent); background: var(--risu-theme-primary); }
     .dock-views button:disabled { opacity: .48; cursor: default; }
-    .dock-settings { position: relative; }
     .settings-popover {
         position: absolute;
         z-index: 50;
         top: calc(100% + .22rem);
-        right: 0;
+        right: .5rem;
         display: grid;
-        width: min(30rem, calc(100cqw - 1.8rem));
+        width: min(30rem, calc(100% - 1rem));
+        max-height: calc(100dvh - 7rem);
+        overflow-y: auto;
         padding: .55rem;
         border: 1px solid var(--risu-theme-darkborderc);
         border-radius: .42rem;
         background: var(--risu-theme-bgcolor);
         box-shadow: 0 .6rem 1.5rem color-mix(in srgb, var(--color-shadow) 28%, transparent);
     }
+    .settings-popover[hidden] { display: none; }
     .find-replace-overlay {
         position: absolute;
         z-index: 60;
@@ -1312,11 +1587,21 @@
         border-color: color-mix(in srgb, var(--risu-theme-primary) 45%, var(--risu-theme-darkborderc));
     }
     .force-update-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: .25rem 1rem;
         padding: .42rem 1rem;
         border-bottom: 1px solid color-mix(in srgb, var(--risu-theme-success) 28%, var(--risu-theme-darkborderc));
         color: color-mix(in srgb, var(--risu-theme-success) 78%, var(--risu-theme-textcolor));
         background: color-mix(in srgb, var(--risu-theme-success) 8%, var(--risu-theme-darkbg));
         font-size: .7rem;
+    }
+    .force-update-meta {
+        margin-left: auto;
+        white-space: nowrap;
+        color: color-mix(in srgb, currentColor 78%, transparent);
     }
     .force-update-status.failed {
         border-bottom-color: color-mix(in srgb, var(--risu-theme-draculared) 35%, var(--risu-theme-darkborderc));
@@ -1361,6 +1646,9 @@
             minmax(13rem, 1fr);
         overflow: hidden;
     }
+    .workspace-split > .wiki-editor-region { grid-row: 1; }
+    .workspace-split > .workspace-resizer { grid-row: 2; }
+    .workspace-split > .markdown-command-pane { grid-row: 3; }
     .markdown-wiki.workspace-split.editor-focus {
         grid-template-rows: minmax(0, 1fr);
     }
@@ -1375,7 +1663,8 @@
         min-height: 0;
         border-bottom: 0;
     }
-    .workspace-split .wiki-editor-region :global(.markdown-editor) {
+    .workspace-split .wiki-editor-region :global(.markdown-editor),
+    .workspace-split .wiki-editor-region :global(.markdown-preview) {
         min-height: 0;
     }
     .workspace-resizer {
@@ -1429,6 +1718,8 @@
         background: color-mix(in srgb, var(--risu-theme-primary) 9%, transparent);
     }
     .markdown-command-pane {
+        position: relative;
+        z-index: 6;
         min-height: 0;
         overflow: hidden;
         padding: .65rem .75rem .75rem;
@@ -1436,80 +1727,62 @@
     .portrait-command-header { display: none; }
     .command-terminal-region { height: 100%; min-height: 0; }
 
-    @media (orientation: portrait) {
-        .markdown-wiki.workspace-split {
-            grid-template-rows:
-                minmax(0, min(
-                    var(--wiki-workspace-height),
-                    calc(100% - 13.8rem)
-                ))
-                .8rem
-                minmax(13rem, 1fr);
-        }
-        .markdown-wiki.workspace-split.command-collapsed {
-            grid-template-rows: minmax(0, 1fr) 0 2.75rem;
-        }
-        .workspace-split.command-collapsed > .workspace-resizer { display: none; }
-        .workspace-resizer { min-height: .8rem; }
-        .markdown-command-pane {
-            display: grid;
-            grid-template-rows: 2.75rem minmax(0, 1fr);
-            padding: 0;
-            border-top: 1px solid var(--risu-theme-darkborderc);
-            background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, var(--color-bgcolor));
-        }
-        .portrait-command-header {
-            display: block;
-            min-width: 0;
-            border-bottom: 1px solid var(--risu-theme-darkborderc);
-        }
-        .portrait-command-header > button {
-            display: flex;
-            width: 100%;
-            min-height: 2.75rem;
-            align-items: center;
-            gap: .6rem;
-            padding: .35rem .75rem;
-            border: 0;
-            color: var(--risu-theme-textcolor);
-            background: transparent;
-            text-align: left;
-            touch-action: manipulation;
-        }
-        .portrait-command-header > button:active {
-            background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent);
-        }
-        .portrait-command-header > button:focus-visible {
-            outline: 2px solid var(--risu-theme-primary);
-            outline-offset: -2px;
-        }
-        .portrait-command-header button > span {
-            display: flex;
-            flex: 1;
-            min-width: 0;
-            align-items: baseline;
-            gap: .5rem;
-        }
-        .portrait-command-header strong { font-size: .78rem; }
-        .portrait-command-header small {
-            overflow: hidden;
-            color: var(--risu-theme-textcolor2);
-            font-size: .68rem;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .portrait-command-header :global(svg:last-child) {
-            flex: 0 0 auto;
-            transition: transform .18s ease-out;
-        }
-        .portrait-command-header :global(svg:last-child.collapsed) {
-            transform: rotate(-90deg);
-        }
-        .command-terminal-region { padding: .65rem .75rem .75rem; }
-        .markdown-command-pane.collapsed .command-terminal-region { display: none; }
-        .markdown-wiki.workspace-split.editor-focus {
-            grid-template-rows: minmax(0, 1fr);
-        }
+    .memory-wiki-dock.mobile-layout .markdown-wiki.workspace-split {
+        grid-template-rows: minmax(0, 1fr) 0 minmax(12rem, 42%);
+    }
+    .memory-wiki-dock.mobile-layout .markdown-wiki.workspace-split.command-collapsed {
+        grid-template-rows: minmax(0, 1fr) 0 3rem;
+    }
+    .memory-wiki-dock.mobile-layout .workspace-resizer { display: none; }
+    .memory-wiki-dock.mobile-layout .markdown-command-pane {
+        display: grid;
+        grid-template-rows: 3rem minmax(0, 1fr);
+        padding: 0;
+        border-top: 1px solid var(--risu-theme-darkborderc);
+        background: color-mix(in srgb, var(--risu-theme-darkbg) 94%, var(--color-bgcolor));
+        box-shadow: 0 -.6rem 1.8rem color-mix(in srgb, var(--color-shadow) 16%, transparent);
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header {
+        display: block;
+        min-width: 0;
+        border-bottom: 1px solid var(--risu-theme-darkborderc);
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header > button {
+        display: flex;
+        width: 100%;
+        min-height: 3rem;
+        align-items: center;
+        gap: .6rem;
+        padding: .35rem .75rem;
+        border: 0;
+        color: var(--risu-theme-textcolor);
+        background: transparent;
+        text-align: left;
+        touch-action: manipulation;
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header > button:active {
+        background: color-mix(in srgb, var(--risu-theme-primary) 13%, transparent);
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header > button:focus-visible {
+        outline: 2px solid var(--risu-theme-primary);
+        outline-offset: -2px;
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header strong {
+        flex: 1;
+        min-width: 0;
+        font-size: .78rem;
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header :global(svg:last-child) {
+        flex: 0 0 auto;
+        transition: transform .18s ease-out;
+    }
+    .memory-wiki-dock.mobile-layout .portrait-command-header :global(svg:last-child.collapsed) {
+        transform: rotate(-90deg);
+    }
+    .memory-wiki-dock.mobile-layout .command-terminal-region { padding: .45rem .55rem .55rem; }
+    .memory-wiki-dock.mobile-layout .markdown-command-pane.collapsed .command-terminal-region { display: none; }
+    .memory-wiki-dock.mobile-layout .markdown-wiki.workspace-split.editor-focus {
+        grid-template-rows: minmax(0, 1fr);
     }
 
     @keyframes dock-enter {
@@ -1517,21 +1790,53 @@
         to { opacity: 1; transform: translateX(0); }
     }
 
-    @container (max-width: 36rem) {
-        .dock-views button { width: 2rem; padding-inline: .35rem; }
+    .memory-wiki-dock.mobile-layout .dock-views {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
     }
-
-    @media (max-width: 840px) {
-        .memory-wiki-dock {
-            position: absolute;
-            inset: 0;
-            width: 100% !important;
-            max-width: none;
-            min-width: 0;
-        }
-        .dock-resizer { display: none; }
-        .dock-identity { min-width: 0; }
+    .memory-wiki-dock.mobile-layout .dock-views button {
+        width: 2.75rem;
+        min-height: 2.75rem;
+        padding-inline: .45rem;
     }
+    .memory-wiki-dock.mobile-layout .dock-views .force-update-button,
+    .memory-wiki-dock.mobile-layout .dock-views .find-replace-button {
+        width: 2.75rem;
+        min-width: 2.75rem;
+        height: 2.75rem;
+        justify-content: center;
+        padding-inline: 0;
+    }
+    .memory-wiki-dock.mobile-layout .dock-views .force-update-button span,
+    .memory-wiki-dock.mobile-layout .dock-views .find-replace-button span {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+    .memory-wiki-dock.mobile-layout .dock-views .reboot-button,
+    .memory-wiki-dock.mobile-layout .dock-views .reboot-cancel-button {
+        min-width: auto;
+        height: 2.75rem;
+        padding-inline: .6rem;
+    }
+    .memory-wiki-dock.mobile-layout .dock-view-actions {
+        flex: 0 0 auto;
+        margin-left: auto;
+    }
+    .memory-wiki-dock.mobile-layout {
+        position: absolute;
+        inset: 0;
+        width: 100% !important;
+        max-width: none;
+        min-width: 0;
+    }
+    .memory-wiki-dock.mobile-layout .dock-resizer { display: none; }
+    .memory-wiki-dock.mobile-layout .dock-identity { min-width: 0; }
 
     .memory-observability {
         display: flex;

@@ -174,6 +174,36 @@ describe('Character Vault sidebar integration', () => {
             .toContain("color.startsWith('#') ? color : undefined")
     })
 
+    test('keeps pinned bot images stable across sidebar hover updates', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+
+        expect(sidebar).toContain('const sidebarImageCache = new Map')
+        expect(sidebar).toContain('function sidebarCharacterImage(')
+        expect(sidebar).toContain('src={char.img ? sidebarCharacterImage(char.img) : "/none.webp"}')
+        expect(sidebar).toContain('src={char2.img ? sidebarCharacterImage(char2.img) : "/none.webp"}')
+    })
+
+    test('selects pinned bots on mouse press before native drag can suppress click', () => {
+        const sidebar = source('src/lib/SideBars/Sidebar.svelte')
+        const quickInventory = sidebar.slice(
+            sidebar.indexOf('data-quick-inventory'),
+            sidebar.indexOf('data-sidebar-new-character'),
+        )
+
+        expect(quickInventory).toContain('onpointerdown={(event) => selectPinnedCharacterOnMouse(')
+        // Upstream asserted the inline `isTouchDevice && ...` click branches
+        // literally. Both rows now route their click through one named
+        // function instead, because click is not only what a mouse produces:
+        // Space on a `role="button"` fires click with no pointerdown, and
+        // moving selection wholesale to pointerdown dropped keyboard users.
+        // The claim this test makes is unchanged -- mouse press selects, and
+        // click is still a live route -- so it is checked where it now lives.
+        expect(quickInventory).toContain('onclick={() => selectPinnedCharacterOnClick(char)}')
+        expect(quickInventory).toContain('onclick={() => selectPinnedCharacterOnClick(char2)}')
+        expect(sidebar).toContain("if (isTouchDevice || item.type !== 'normal'")
+        expect(sidebar).toContain('pointerSelectedCharacterIndex = item.index')
+    })
+
     test('resolves quick folder context actions by stable folder id', () => {
         const sidebar = source('src/lib/SideBars/Sidebar.svelte')
         expect(sidebar).toContain('const folderIndex = getFolderIndex(char.id)')

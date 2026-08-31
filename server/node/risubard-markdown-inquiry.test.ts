@@ -10,6 +10,7 @@ function document(
 ): MarkdownWikiDocument {
     return {
         status: 'active',
+        aliases: [],
         sourceMessageIds: [],
         updated: '2026-08-16T00:00:00.000Z',
         links: [],
@@ -20,6 +21,77 @@ function document(
 }
 
 describe('progressive Markdown inquiry', () => {
+    test('retrieves one canonical document by an exact alias', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '무한인은 지금 어디에 있지?',
+            documents: [document({
+                id: 'kim', type: 'character', title: '김철수',
+                aliases: ['김군', '무한인'],
+                relativePath: 'characters/kim.md',
+                content: '## 김철수\n\n현재 북문에 있다.',
+            })],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual([
+            'narrative-memory:wiki:characters/kim.md',
+        ])
+    })
+
+    test('follows a wikilink written with a unique alias', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '북문 경비대 관계를 알려 줘.',
+            documents: [
+                document({
+                    id: 'guard', type: 'faction', title: '북문 경비대',
+                    relativePath: 'factions/guard.md',
+                    content: '## 북문 경비대\n\n지휘관은 [[무한인]]이다.',
+                    links: ['무한인'],
+                }),
+                document({
+                    id: 'kim', type: 'character', title: '김철수',
+                    aliases: ['무한인'],
+                    relativePath: 'characters/kim.md',
+                    content: '## 김철수\n\n말수가 적다.',
+                }),
+            ],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual(
+            expect.arrayContaining([
+                'narrative-memory:wiki:factions/guard.md',
+                'narrative-memory:wiki:characters/kim.md',
+            ])
+        )
+    })
+
+    test('does not resolve a wikilink through a colliding alias', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '북문 경비대 관계를 알려 줘.',
+            documents: [
+                document({
+                    id: 'guard', type: 'faction', title: '북문 경비대',
+                    relativePath: 'factions/guard.md',
+                    content: '## 북문 경비대\n\n[[대장]]이 지휘한다.',
+                    links: ['대장'],
+                }),
+                document({
+                    id: 'kim', type: 'character', title: '김철수',
+                    aliases: ['대장'], relativePath: 'characters/kim.md',
+                    content: '## 김철수\n\n동부대 대장.',
+                }),
+                document({
+                    id: 'lee', type: 'character', title: '이영희',
+                    aliases: ['대장'], relativePath: 'characters/lee.md',
+                    content: '## 이영희\n\n서부대 대장.',
+                }),
+            ],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual([
+            'narrative-memory:wiki:factions/guard.md',
+        ])
+    })
+
     test('follows two derived wiki-link hops from a lexical character seed', () => {
         const result = inquireMarkdownDocuments({
             currentInput: '프로도가 쉘롭에게 공격당한다. 대항할 물건은 무엇인가?',
@@ -124,6 +196,89 @@ describe('progressive Markdown inquiry', () => {
 
         expect(result.sources).toEqual([])
         expect(result.metrics.candidateCount).toBe(0)
+    })
+
+    test('ranks rare discriminative terms above ubiquitous narrative terms', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '청동나비 표식이 있는 봉인문 기록을 찾아줘.',
+            documents: [
+                document({
+                    id: 'rare-clue', type: 'event', title: '오래된 단서',
+                    relativePath: 'events/rare-clue.md',
+                    updated: '2026-08-01T00:00:00.000Z',
+                    content: '# 오래된 단서\n\n청동나비 표식이 찍힌 봉인문 기록이다.',
+                }),
+                ...Array.from({ length: 8 }, (_, index) => document({
+                    id: `common-${index}`, type: 'event',
+                    title: '봉인문 기록',
+                    relativePath: `events/common-${index}.md`,
+                    updated: `2026-08-29T00:00:0${index}.000Z`,
+                    content: '# 봉인문 기록\n\n봉인문 기록을 정리했다.',
+                })),
+            ],
+        })
+
+        expect(result.sources[0]?.id).toBe(
+            'narrative-memory:wiki:events/rare-clue.md'
+        )
+    })
+
+    test('admits semantic candidates without lexical overlap', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '출구를 막은 장치를 풀 방법이 필요하다.',
+            semanticMatches: [{ documentId: 'moon-seal', score: 0.91 }],
+            documents: [document({
+                id: 'moon-seal', type: 'event', title: '월광 의식',
+                relativePath: 'events/moon-seal.md',
+                content: '# 월광 의식\n\n은빛 구체를 제단 홈에 놓자 석문이 열렸다.',
+            })],
+        })
+
+        expect(result.sources.map((source) => source.id)).toEqual([
+            'narrative-memory:wiki:events/moon-seal.md',
+        ])
+        expect(result.metrics.semanticCandidateCount).toBe(1)
+        expect(result.metrics.auxiliaryModelCalls).toBe(0)
+    })
+
+    test('recalls original source evidence through a linked story route', () => {
+        const result = inquireMarkdownDocuments({
+            currentInput: '샤이어를 떠나기 전 마지막으로 마신 에일을 기억해.',
+            documents: [
+                document({
+                    id: 'shire-arc', type: 'other', title: '샤이어 출발 전',
+                    relativePath: 'notes/shire-arc.md',
+                    content: '# 샤이어 출발 전\n\n[[출발 전날의 불꽃놀이]] 뒤 여행을 시작했다.',
+                    links: ['출발 전날의 불꽃놀이'],
+                }),
+                document({
+                    id: 'farewell', type: 'event', title: '출발 전날의 불꽃놀이',
+                    relativePath: 'events/farewell.md',
+                    sourceMessageIds: ['shire-ale'],
+                    content: '# 출발 전날의 불꽃놀이\n\n샘과 프로도는 간달프의 불꽃놀이를 보았다.',
+                    links: ['샤이어 출발 전'],
+                }),
+            ],
+            sourceMatches: [
+                {
+                    messageId: 'later-ale', role: 'assistant', occurredAt: 900,
+                    score: 9,
+                    content: '브리에서 이름 모를 에일을 주문했다.',
+                },
+                {
+                    messageId: 'shire-ale', role: 'assistant', occurredAt: 5,
+                    score: 2,
+                    content: '샘과 프로도는 황금빛이 도는 플러피풋의 사과 에일을 마셨다.',
+                },
+            ],
+        })
+
+        const recalled = result.sources.filter((source) =>
+            source.id.startsWith('narrative-memory:source:'))
+        expect(recalled[0]?.id).toContain('shire-ale')
+        expect(recalled[0]?.content).toContain('플러피풋의 사과 에일')
+        expect(result.metrics.selectedTokens).toBeLessThanOrEqual(2_000)
+        expect(result.metrics.auxiliaryModelCalls).toBe(0)
     })
 
     test('uses a compact default budget instead of filling the hard limit', () => {

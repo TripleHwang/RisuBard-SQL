@@ -3,11 +3,13 @@ import { describe, expect, test } from 'vitest'
 import { shouldAutomaticallyConfirmNarrativeTurn } from './automaticWikiConfirmation'
 
 describe('automatic BardWiki confirmation', () => {
-    test('cannot be disabled by a legacy stored setting', () => {
-        expect(shouldAutomaticallyConfirmNarrativeTurn()).toBe(true)
+    test('remains enabled by default and can be disabled explicitly', () => {
+        expect(shouldAutomaticallyConfirmNarrativeTurn(undefined)).toBe(true)
+        expect(shouldAutomaticallyConfirmNarrativeTurn(true)).toBe(true)
+        expect(shouldAutomaticallyConfirmNarrativeTurn(false)).toBe(false)
     })
 
-    test('places only the manual wiki toggle after the send control', () => {
+    test('places a manual wiki button and auto switch after the send control', () => {
         const composer = readFileSync(
             'src/lib/ChatScreens/DefaultChatScreen.svelte',
             'utf8'
@@ -17,16 +19,19 @@ describe('automatic BardWiki confirmation', () => {
         expect(composer).toContain('data-risubard-wiki-button')
         expect(composer).toContain('onclick={() => memoryWikiOpen = !memoryWikiOpen}')
         expect(korean).toContain('risuBardMemoryOpenManual: "BARDWIKI 열기"')
-        expect(composer).not.toContain('data-risubard-auto-wiki')
-        expect(composer).not.toContain('DBState.db.risuBardAutoWikiEnabled')
+        expect(composer).toContain('data-risubard-auto-wiki')
+        expect(composer).toContain('DBState.db.risuBardAutoWikiEnabled !== false')
+        expect(composer).toContain('data-risubard-wiki-cancel')
+        expect(composer).toContain('onclick={cancelWikiGeneration}')
+        expect(composer).toContain('style="left: 5px"')
+        expect(korean).toContain('risuBardWikiCancel: "바드위키 작업 취소"')
     })
 
-    test('always confirms automatically and keeps manual confirmation available', () => {
+    test('guards automatic confirmation and keeps manual confirmation available', () => {
         const processSource = readFileSync('src/ts/process/index.svelte.ts', 'utf8')
 
-        expect(processSource).toContain('shouldAutomaticallyConfirmNarrativeTurn()')
-        expect(processSource).not.toContain(
-            'shouldAutomaticallyConfirmNarrativeTurn(\n            DBState.db.risuBardAutoWikiEnabled'
+        expect(processSource).toMatch(
+            /shouldAutomaticallyConfirmNarrativeTurn\(\s*DBState\.db\.risuBardAutoWikiEnabled\s*\)/
         )
         expect(processSource).toContain('export async function confirmCurrentNarrativeMessage(')
     })

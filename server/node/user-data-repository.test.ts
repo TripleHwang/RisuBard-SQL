@@ -128,4 +128,36 @@ describe('canonical entity tree', () => {
         expect(reopened.loadChat('char-1', 'chat-1').message.at(-1)?.data).toBe('partial')
         expect(reopened.loadAssistantDraft('char-1', 'chat-1')).toBeNull()
     })
+
+    it('changes the projection revision when canonical entity files are edited externally', () => {
+        const dataRoot = root()
+        const repository = createUserDataRepository({ dataRoot })
+        repository.importLegacyDatabase(legacyDatabase(), { mode: 'merge' })
+
+        const getProjectionRevision = repository.getProjectionRevision?.bind(repository)
+        expect(getProjectionRevision).toBeTypeOf('function')
+        if (!getProjectionRevision) return
+
+        const revisions = [getProjectionRevision()]
+        const editJson = (relativePath: string, mutate: (value: any) => void) => {
+            const target = path.join(dataRoot, relativePath)
+            const value = JSON.parse(fs.readFileSync(target, 'utf8'))
+            mutate(value)
+            fs.writeFileSync(target, `${JSON.stringify(value, null, 2)}\n`)
+            revisions.push(getProjectionRevision())
+        }
+
+        editJson('settings/app.json', value => { value.language = 'external-settings' })
+        editJson('presets/preset-1.json', value => { value.name = 'External preset' })
+        editJson('characters/char-1/metadata.json', value => { value.name = 'External character' })
+        editJson('characters/char-1/chats/chat-1/metadata.json', value => { value.name = 'External chat' })
+        fs.appendFileSync(
+            path.join(dataRoot, 'characters', 'char-1', 'chats', 'chat-1', 'messages.jsonl'),
+            `${JSON.stringify({ id: 'external-message', role: 'user', data: 'external' })}\n`,
+        )
+        revisions.push(getProjectionRevision())
+
+        expect(revisions.every((revision, index) => index === 0 || revision !== revisions[index - 1])).toBe(true)
+        expect(createUserDataRepository({ dataRoot }).getProjectionRevision()).toBe(revisions.at(-1))
+    })
 })

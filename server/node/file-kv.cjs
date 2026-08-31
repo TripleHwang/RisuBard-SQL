@@ -5,7 +5,6 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
-const { pipeline } = require('stream/promises');
 const { atomicWriteJson, readVerifiedJson, recoverTransactions } = require('./file-store.cjs');
 
 const MANIFEST_PATH = 'kv/manifest.json';
@@ -19,10 +18,14 @@ async function digestAsync(data) {
     return Buffer.from(await crypto.webcrypto.subtle.digest('SHA-256', data)).toString('hex');
 }
 
-async function digestFileAsync(filePath) {
+async function inspectFileAsync(filePath) {
     const hash = crypto.createHash('sha256');
-    for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
-    return hash.digest('hex');
+    let size = 0;
+    for await (const chunk of fs.createReadStream(filePath)) {
+        hash.update(chunk);
+        size += chunk.length;
+    }
+    return { hash: hash.digest('hex'), size };
 }
 
 async function mapWithConcurrency(items, concurrency, mapper) {
@@ -121,43 +124,51 @@ async function writeObjectAsync(dataRoot, hash, data) {
 async function writeObjectFromFileAsync(dataRoot, sourcePath, onObjectReady = () => {}) {
     const directory = path.join(dataRoot, 'kv', 'objects');
     await fsp.mkdir(directory, { recursive: true });
-    const temp = path.join(directory, `.${crypto.randomUUID()}.import`);
-    const hash = crypto.createHash('sha256');
-    let size = 0;
-    const input = fs.createReadStream(sourcePath);
-    input.on('data', chunk => {
-        hash.update(chunk);
-        size += chunk.length;
-    });
+    // Upstream 0.9.11 stopped copying the spool file through a temp object and
+    // renames it into the store instead, so a backup import no longer writes
+    // every asset twice. That is a same-filesystem rename here: the entry
+    // staging directory lives under the data root, next to kv/objects. The
+    // separate checksum re-read went with the copy -- the bytes that get
+    // hashed are now literally the bytes that get renamed.
+    const handle = await fsp.open(sourcePath, 'r+');
     try {
-        await pipeline(input, fs.createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
-        const handle = await fsp.open(temp, 'r+');
-        try { await handle.sync(); } finally { await handle.close(); }
-        const digestValue = hash.digest('hex');
-        if (await digestFileAsync(temp) !== digestValue) {
-            throw new Error(`Content object checksum verification failed: ${digestValue}`);
-        }
-        const target = path.join(directory, digestValue);
-        let renamed = false;
-        try {
-            await fsp.rename(temp, target);
-            renamed = true;
-            await syncDirectoryAsync(directory);
-        } catch (error) {
-            try {
-                await fsp.access(target);
-                await fsp.unlink(temp);
-            } catch {
-                throw error;
-            }
-        }
-        onObjectReady(digestValue, renamed);
-        await fsp.unlink(sourcePath).catch(() => {});
-        return { hash: digestValue, size };
-    } catch (error) {
-        await fsp.rm(temp, { force: true }).catch(() => {});
-        throw error;
+        await handle.sync();
+    } finally {
+        await handle.close();
     }
+
+    const inspected = await inspectFileAsync(sourcePath);
+    const target = path.join(directory, inspected.hash);
+    let exists = true;
+    try {
+        await fsp.access(target);
+    } catch {
+        exists = false;
+    }
+    if (exists) {
+        await fsp.unlink(sourcePath).catch(() => {});
+        // The object is on disk and about to be referenced by a manifest that
+        // has not been committed yet; without the retention mark a concurrent
+        // sweep is free to collect it out from under the pending commit.
+        onObjectReady(inspected.hash, false);
+        return inspected;
+    }
+
+    let renamed = false;
+    try {
+        await fsp.rename(sourcePath, target);
+        renamed = true;
+        await syncDirectoryAsync(directory);
+    } catch (error) {
+        try {
+            await fsp.access(target);
+            await fsp.unlink(sourcePath);
+        } catch {
+            throw error;
+        }
+    }
+    onObjectReady(inspected.hash, renamed);
+    return inspected;
 }
 
 function createFileKv(options = {}) {

@@ -45,6 +45,17 @@ describe('settings navigation registry', () => {
         expect(isSettingsNavigationItemActive(aiItem!, SettingsRoute.Display)).toBe(false)
     })
 
+    test('keeps the legacy chat route active inside unified RisuBard common settings', () => {
+        const risuBard = settingsSections.find((section) => section.id === 'risubard')
+        const common = risuBard?.items.find((item) => item.id === 'risubard-common')
+
+        expect(risuBard?.items.map((item) => item.id)).toEqual([
+            'risubard-common',
+            'risubard-wiki-prompt',
+        ])
+        expect(isSettingsNavigationItemActive(common!, SettingsRoute.RisuBardChat)).toBe(true)
+    })
+
     test('removes the redundant creation section from the sidebar', () => {
         const hasCreation = settingsSections.some((section) => String(section.id) === 'creation')
         const routes = settingsSections.flatMap((section) => section.items.map((item) => item.route))

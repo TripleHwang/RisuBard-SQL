@@ -19,7 +19,10 @@ const legacyTokens = [
             'README.md',
             // Upstream release announcements, carried in verbatim. Their header
             // credits the project RisuBard itself forked from, which is the same
-            // attribution the files above are excepted for.
+            // attribution the files above are excepted for. 0.9.3-arca.txt was
+            // superseded upstream by 0.9.4-arca.txt; the entry is kept because
+            // the exception set is matched by path, not by what exists today.
+            'patchnote/0.8.14-arca.txt',
             'patchnote/0.9.3-arca.txt',
             // Ported GPLv3 source. Its header must name the project it came
             // from and that project's licence; NOTICE.md carries the same

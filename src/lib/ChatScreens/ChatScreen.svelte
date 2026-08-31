@@ -16,12 +16,13 @@
     import { ensureChatHydrated, isChatHistoryIncomplete } from 'src/ts/storage/chatStorage';
     import { alertConfirm, notifyInfo, notifySuccess } from 'src/ts/alert';
     import { pluginStateStore } from 'src/ts/plugins/plugins.svelte';
-    import { changeChatTo, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
+    import { changeChatTo, createChatCopyName, forageStorage, requestImmediateSave } from 'src/ts/globalApi.svelte';
     import { completeMemoryWikiFork } from 'src/ts/risubard/memoryWikiFork';
     import { countChatTurns, createMemorySaveSlot, deleteMemorySaveSlot, latestChatMessageId, listMemorySaveSlots, prepareMemorySaveLoad, shouldConfirmMemorySaveLoad, type MemorySaveSlotSummary } from 'src/ts/risubard/memorySaveSlots';
     import { autoSaveId, normalizeAutosaveInterval, normalizeAutosaveRetention, obsoleteAutosaveIds, quickSaveId, shouldCreateAutosave } from 'src/ts/risubard/memorySavePolicy';
     import { isWikiGenerating } from 'src/ts/risubard/wikiGenerationState';
     import { resolveChatTextSurface } from 'src/ts/gui/textTheme';
+    import { chatGenKey, generationStates } from 'src/ts/process/generationState';
     let openChatList = $state(false)
     let openModuleList = $state(false)
     let saveSlotsOpen = $state(false)
@@ -165,7 +166,7 @@
         }
     }
 
-    async function loadSavedChat(saveId: string): Promise<void> {
+    async function loadSavedChat(saveId: string, asNewChat = false): Promise<void> {
         const character = currentCharacter
         if(!character?.chaId) return
         const chatIdx = character.chatPage
@@ -179,7 +180,7 @@
         if(currentChat.isStreaming){
             throw new Error('응답 생성이 끝난 뒤 저장 파일을 불러와 주세요.')
         }
-        const destinationChatId = currentChat.id
+        const destinationChatId = asNewChat ? v4() : currentChat.id
         const prepared = await prepareMemorySaveLoad({
             characterId: character.chaId,
             saveId,
@@ -193,7 +194,13 @@
         loadedChat.isStreaming = false
         delete loadedChat.activeStreamingDisplayOptimizationMode
         delete loadedChat._placeholder
-        character.chats[chatIdx] = loadedChat
+        if(asNewChat){
+            loadedChat.name = createChatCopyName(loadedChat.name, 'Copy')
+            character.chats.unshift(loadedChat)
+        }
+        else {
+            character.chats[chatIdx] = loadedChat
+        }
         character.chats = character.chats
         try {
             await requestImmediateSave({
@@ -202,7 +209,12 @@
             })
         }
         catch(error){
-            character.chats[chatIdx] = currentChat
+            if(asNewChat){
+                character.chats.splice(0, 1)
+            }
+            else {
+                character.chats[chatIdx] = currentChat
+            }
             character.chats = character.chats
             await completeMemoryWikiFork({
                 characterId: character.chaId,
@@ -226,7 +238,7 @@
             fetchImpl: fetch,
             createAuth: () => forageStorage.createAuth(),
         })
-        changeChatTo(chatIdx)
+        changeChatTo(asNewChat ? 0 : chatIdx)
         saveSlotsOpen = false
         notifySuccess('스토리 불러오기 완료', { duration: 3000 })
     }
@@ -241,17 +253,16 @@
     $effect(() => {
         const character = currentCharacter
         const chat = character?.chats[character.chatPage]
+        // isChatHistoryIncomplete supersedes upstream's _placeholder check: in
+        // metadata-first mode a chat can also be hydrated-but-windowed, and
+        // autosaving that writes a truncated history over the full one.
         if(!character?.chaId || !chat?.id || isChatHistoryIncomplete(chat) || chat.isStreaming
-            || savingSlot || $isWikiGenerating) return
+            || savingSlot || $isWikiGenerating
+            || $generationStates.has(chatGenKey(chat.id))) return
         const turnCount = countChatTurns(chat.message)
         const interval = normalizeAutosaveInterval(DBState.db.risuBardAutosaveInterval)
         const retention = normalizeAutosaveRetention(DBState.db.risuBardAutosaveRetention)
-        const latestAssistant = [...chat.message].reverse().find((message) =>
-            message.role === 'char' && !message.isComment && !message.disabled
-        )
-        const wikiReady = DBState.db.risuBardAutoWikiEnabled === false
-            || latestAssistant?.risubardMemoryConfirmed === true
-        if(wikiReady && shouldCreateAutosave(
+        if(shouldCreateAutosave(
             turnCount,
             interval,
             chat.risuBardLastAutosaveTurn,

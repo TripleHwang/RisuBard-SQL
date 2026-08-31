@@ -37,6 +37,7 @@ export interface SavedCanonicalWikiDocument {
     type: CanonicalWikiDocumentType
     status: 'active'
     title: string
+    aliases: string[]
     relativePath: string
     sourceMessageIds: string[]
     updated: string
@@ -202,6 +203,7 @@ export async function saveCanonicalWikiDocument(input: {
     reviewStatus?: 'unreviewed' | 'reviewed'
     type: CanonicalWikiDocumentType
     title: string
+    aliases?: string[]
     sourceMessageIds: string[]
     markdown: string
     writingLanguage?: WikiWritingLanguage
@@ -224,6 +226,11 @@ export async function saveCanonicalWikiDocument(input: {
         ...(input.reviewStatus ? { reviewStatus: input.reviewStatus } : {}),
         type: input.type,
         title: required(input.title, 'Wiki title', 160),
+        ...(input.aliases === undefined ? {} : {
+            aliases: input.aliases.map((alias) =>
+                required(alias, 'Wiki alias', 160)
+            ),
+        }),
         sourceMessageIds: input.sourceMessageIds,
         markdown: normalizeDraft(input.markdown),
         ...(input.writingLanguage ? { writingLanguage: input.writingLanguage } : {}),
@@ -253,6 +260,9 @@ export async function saveCanonicalWikiDocument(input: {
         ].includes(String(value.type))
         || value.status !== 'active'
         || typeof value.title !== 'string'
+        || (value.aliases !== undefined
+            && (!Array.isArray(value.aliases)
+                || !value.aliases.every((alias) => typeof alias === 'string')))
         || typeof value.relativePath !== 'string'
         || !Array.isArray(value.sourceMessageIds)
         || typeof value.updated !== 'string'
@@ -266,5 +276,8 @@ export async function saveCanonicalWikiDocument(input: {
         && value.reviewStatus !== input.reviewStatus) {
         throw new Error('Invalid canonical wiki review receipt')
     }
-    return value as unknown as SavedCanonicalWikiDocument
+    return {
+        ...(value as unknown as Omit<SavedCanonicalWikiDocument, 'aliases'>),
+        aliases: value.aliases === undefined ? [] : value.aliases as string[],
+    }
 }
