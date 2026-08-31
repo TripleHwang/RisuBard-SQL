@@ -22,10 +22,14 @@ describe('immediate save in metadata-first mode', () => {
         expect(metadata).toBeGreaterThan(-1)
 
         const block = source.slice(metadata, legacy > metadata ? legacy : undefined)
-        expect(block).toContain('requestImmediateSaveImpl = async ()')
+        expect(block).toContain('requestImmediateSaveImpl = async (options)')
         // The audit is what turns a mutation into a dirty mark. Flushing without
         // it commits whatever happened to be marked already and reports success
         // for the change the caller is actually asking about.
         expect(block).toMatch(/auditSqlCompatibilityDatabase\(getDatabase\(\)\)[\s\S]*flushSqlDirtyChanges\(\)/)
+        // `options` was ignored here, so a failed commit rejected regardless and
+        // every `void requestImmediateSave()` site turned one transient failure
+        // into an unhandled rejection, which bootstrap shows as a modal.
+        expect(block).toContain('if (options?.rejectOnFailure) throw error')
     })
 })

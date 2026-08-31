@@ -35,8 +35,9 @@ import {
     type RequestLogCategory, type RequestLogSource, type RequestLogRoute,
 } from "./requestLog";
 import { defaultRequestPurpose, type RequestPurpose } from './requestPurpose'
-import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, onSqlCommitActivity, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
+import { auditSqlCompatibilityDatabase, flushSqlDirtyChanges, initializeSqlCompatibilityBaseline, onSqlCommitActivity, onSqlCommitSucceeded, onSqlPersistenceProblem, startSqlCompatibilityAuditLoop, startSqlMetadataPersistence } from './storage/sql/sqlPersistenceRuntime'
 import { collectDatabaseAssetReferences } from './storage/assetRefs'
+import { createWriterHandoff } from './storage/writerHandoff'
 import { isRootKeyDeferred } from './storage/sql/deferredRootKeys'
 
 export const forageStorage = new AutoStorage()
@@ -346,51 +347,70 @@ export function setPatchSyncBaseline(data: Database | null) {
     patchSyncBaseline = data ? safeStructuredClone(data) as Database : null
 }
 
-export async function saveDb(options: { metadataOnly?: boolean } = {}) {
-    const metadataOnly = options.metadataOnly === true
-    let changed = false
-    let gotChannel = false
-    const sessionID = v4()
-    let saveInFlight: Promise<void> | null = null
-    const knownChatIdsByCharacter = new Map<string, Set<string>>(
-        (getDatabase()?.characters ?? [])
-            .filter(character => character?.chaId)
-            .map(character => [
-                character.chaId,
-                new Set((character.chats ?? []).map(chat => chat?.id).filter(Boolean)),
-            ])
-    )
-    let channel: BroadcastChannel
+/**
+ * The single-writer guards, and the one BroadcastChannel this application has.
+ *
+ * Every line of this used to live inside `saveDb`, which the metadata-first
+ * startup never calls -- so in the mode every user is now in, all three layers
+ * of the single-writer story were dead at once:
+ *
+ *   - the same-device channel, leaving two tabs on one machine both writing;
+ *   - the `risu-session-deactivated` listener, the ONLY one in the codebase,
+ *     leaving a 423 from `/api/sql/commit` to become a silent five-second retry
+ *     loop with a spinner that keeps clearing itself;
+ *   - the reload-on-return check, the layer designed so the second one never
+ *     has to fire.
+ *
+ * None of it has anything to do with how the database is encoded, so none of it
+ * belongs to a save function. It installs once per page, from whichever
+ * persistence mode starts.
+ */
+let writerGuardsInstalled = false
+let writerGuardChannel: BroadcastChannel | null = null
+/**
+ * Surrender flag and channel announcement in one object, so they cannot come
+ * apart. `saveDb` kept them together by control flow -- `triggerSave` returned
+ * early when it had surrendered, three lines above the `postMessage` -- and in
+ * this mode the announcement moved to "every commit that reached storage",
+ * which has no such early return. A surrendered tab that keeps announcing
+ * evicts the tab it just surrendered to, so one edit takes out both.
+ */
+const writerHandoff = createWriterHandoff(v4(), () => {
+    alertNormalWait(language.activeTabChange).then(() => {
+        location.reload()
+    })
+})
+
+/** True once another tab or device has taken the writer lock. */
+export function isAnotherWriterActive(): boolean {
+    return writerHandoff.surrendered
+}
+
+/** Tell the other tabs on this device that this one just wrote. */
+export function broadcastLocalWrite(): void {
+    writerHandoff.announce(sessionId => writerGuardChannel?.postMessage(sessionId))
+}
+
+function surrenderToOtherWriter(): void {
+    writerHandoff.surrender()
+}
+
+export function installSingleWriterGuards(): void {
+    if (writerGuardsInstalled) return
+    writerGuardsInstalled = true
+
     if (window.BroadcastChannel) {
-        channel = new BroadcastChannel('risu-db')
+        writerGuardChannel = new BroadcastChannel('risu-db')
+        writerGuardChannel.onmessage = (ev) => { writerHandoff.receive(ev.data) }
     }
-    if (channel) {
-        channel.onmessage = (ev) => {
-            if (ev.data === sessionID) {
-                return
-            }
-            if (!gotChannel) {
-                gotChannel = true
-                alertNormalWait(language.activeTabChange).then(() => {
-                    location.reload()
-                })
-            }
-        }
-    }
+
     // Cross-device single-writer lock: mirrors BroadcastChannel behavior
     // across devices via server-side session check (423 → deactivate).
     // With reload-on-return below, a write actually reaching 423 means TRUE
     // simultaneous use of two devices — rare, and the attempted change cannot
     // be saved — so it stays an explicit blocking modal, never an automatic
     // reload that would eat the user's action without a word.
-    window.addEventListener('risu-session-deactivated', () => {
-        if (!gotChannel) {
-            gotChannel = true
-            alertNormalWait(language.activeTabChange).then(() => {
-                location.reload()
-            })
-        }
-    })
+    window.addEventListener('risu-session-deactivated', surrenderToOtherWriter)
 
     // Reload-on-return: while this tab was hidden, another device may have
     // taken the writer lock and changed data. Check the moment the user comes
@@ -428,6 +448,21 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             setTimeout(() => notifyInfo(language.sessionHandoffReload), 1500)
         }
     } catch { /* storage unavailable — skip the notice */ }
+}
+
+export async function saveDb(options: { metadataOnly?: boolean } = {}) {
+    const metadataOnly = options.metadataOnly === true
+    let changed = false
+    let saveInFlight: Promise<void> | null = null
+    const knownChatIdsByCharacter = new Map<string, Set<string>>(
+        (getDatabase()?.characters ?? [])
+            .filter(character => character?.chaId)
+            .map(character => [
+                character.chaId,
+                new Set((character.chats ?? []).map(chat => chat?.id).filter(Boolean)),
+            ])
+    )
+    installSingleWriterGuards()
 
     const changeTracker: toSaveType = {
         character: [],
@@ -824,14 +859,12 @@ export async function saveDb(options: { metadataOnly?: boolean } = {}) {
             skipBroadcast?: boolean
         }
     ): Promise<'saved' | 'retry' | 'noop'> {
-        if (gotChannel) {
+        if (isAnotherWriterActive()) {
             // Data is saved in another tab.
             await sleep(1000)
             return 'noop'
         }
-        if (channel && !options?.skipBroadcast) {
-            channel.postMessage(sessionID)
-        }
+        if (!options?.skipBroadcast) broadcastLocalWrite()
 
         const db = getDatabase()
         if (!db.characters) {
@@ -1207,11 +1240,47 @@ export async function startMetadataPersistence() {
     // The audit runs first because it is what turns a mutation into a dirty
     // mark. Flushing without it would commit whatever happened to be marked
     // already and report success for the change the caller is asking about.
-    requestImmediateSaveImpl = async () => {
+    requestImmediateSaveImpl = async (options) => {
         await tick()
         auditSqlCompatibilityDatabase(getDatabase())
-        await flushSqlDirtyChanges()
+        try {
+            await flushSqlDirtyChanges()
+        } catch (error) {
+            // `rejectOnFailure` was being ignored here, so every one of the
+            // ~60 `void requestImmediateSave()` sites turned a single failed
+            // commit into an unhandled rejection, which `bootstrap.ts` shows as
+            // a modal. A transient blip became a dialog while a chronic failure
+            // -- the one nobody triggers by hand -- stayed silent. The
+            // consecutive-failure channel below is what reports the chronic
+            // case; this honours what the caller actually asked for.
+            if (options?.rejectOnFailure) throw error
+        }
     }
+
+    // The persistence layer's only way to reach the user. Nothing else can
+    // report a save that is failing: `saving.state` is a spinner with no
+    // failure state, and it clears itself in a `finally`.
+    onSqlPersistenceProblem((problem) => {
+        if (problem.kind === 'session-deactivated') return // the writer guards reload the page
+        notifyError(problem.message, { duration: 15000 })
+    })
+
+    // Storage-mode-independent, and dead in this mode until now: see
+    // `installSingleWriterGuards`.
+    installSingleWriterGuards()
+    // ...and the other half of the same-device guard. `saveDb` posted to the
+    // channel on every write; nothing in SQL mode did, so two metadata-first
+    // tabs installed the listener and then never gave each other anything to
+    // listen to.
+    onSqlCommitSucceeded(() => broadcastLocalWrite())
+
+    // `saveDb` is the only consumer and the only clearer of the baseline, so in
+    // this mode a full deep clone of the boot database was pinned in module
+    // scope for the whole session and never read. Releasing it here keeps the
+    // clone available to anything that runs before persistence starts and drops
+    // it the moment nothing can use it.
+    setPatchSyncBaseline(null)
+
     startSqlMetadataPersistence(window, () => {
         try { void fetch('/api/db/flush', { method: 'POST', keepalive: true, credentials: 'same-origin' }) } catch { /* best effort */ }
     })

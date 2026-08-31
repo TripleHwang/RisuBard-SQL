@@ -64,6 +64,71 @@ export function onSqlCommitActivity(listener: ((active: boolean) => void) | null
     commitActivityListener = listener
 }
 
+/**
+ * Something the user has to be told about persistence, because nothing else
+ * will tell them.
+ *
+ * The legacy path had `savetrys > 4 -> alertError` and a family of persist
+ * failure toasts, all of them written inside `saveDb` and therefore all of them
+ * dead in the mode every user is now in. What replaced them was
+ * `saving.state`, a boolean spinner with no failure state that clears itself in
+ * a `finally`. So a commit failing forever -- offline server, a stale writer
+ * lock, a value storage cannot hold -- was `console.error` and a quiet retry
+ * every five seconds, indistinguishable from working.
+ */
+export type SqlPersistenceProblem = {
+    kind:
+        /** One root key's value could not be encoded; the rest of the commit went. */
+        | 'root-key-refused'
+        /** Commits have been failing in a row for long enough to be real. */
+        | 'commit-failing'
+        /** The server says another session owns the writer lock (HTTP 423). */
+        | 'session-deactivated'
+    /** The root key involved, for 'root-key-refused'. */
+    key?: string
+    /** Consecutive failures so far, for 'commit-failing'. */
+    failures?: number
+    error?: unknown
+    /** English fallback text; the UI layer may localise by `kind`. */
+    message: string
+}
+
+/**
+ * Called once per commit that actually reached storage.
+ *
+ * This is what the same-device writer lock is built on: the legacy path posted
+ * to the `risu-db` BroadcastChannel on every write, and a tab receiving another
+ * tab's post surrendered and reloaded. Installing the listener without a
+ * sender leaves the guard half-dead -- this tab would yield to a legacy tab,
+ * but two metadata-first tabs would never learn about each other.
+ *
+ * Fired from `commitWithMetrics` rather than from the flush, because most
+ * flushes commit nothing: a no-op flush that broadcast would evict the other
+ * tab for no reason at all.
+ */
+let commitSucceededListener: (() => void) | null = null
+
+export function onSqlCommitSucceeded(listener: (() => void) | null): void {
+    commitSucceededListener = listener
+}
+
+let persistenceProblemListener: ((problem: SqlPersistenceProblem) => void) | null = null
+/** Problems already announced, so a 5s retry loop cannot become a 5s modal loop. */
+const announcedProblems = new Set<string>()
+
+export function onSqlPersistenceProblem(
+    listener: ((problem: SqlPersistenceProblem) => void) | null,
+): void {
+    persistenceProblemListener = listener
+}
+
+function reportPersistenceProblem(id: string, problem: SqlPersistenceProblem): void {
+    if (announcedProblems.has(id)) return
+    announcedProblems.add(id)
+    console.error(`[SQL persistence] ${problem.message}`, problem.error ?? '')
+    persistenceProblemListener?.(problem)
+}
+
 function noteCommitActivity(delta: 1 | -1): void {
     const wasActive = commitsInFlight > 0
     commitsInFlight = Math.max(0, commitsInFlight + delta)
@@ -71,10 +136,55 @@ function noteCommitActivity(delta: 1 | -1): void {
     if (isActive !== wasActive) commitActivityListener?.(isActive)
 }
 
+/**
+ * Consecutive failed commits. The legacy path counted these as `savetrys` and
+ * raised an alert at five; nothing counted them here at all.
+ */
+let consecutiveCommitFailures = 0
+/** Matches the legacy `savetrys > 4` threshold: four retries, ~20s of silence. */
+const COMMIT_FAILURE_ALERT_THRESHOLD = 5
+
 const registry = new DirtyRegistry(async () => {
     noteCommitActivity(1)
-    try { await commitDirtyScopes() }
-    catch (error) { scheduleDirtyRetry(); throw error }
+    try {
+        await commitDirtyScopes()
+        if (consecutiveCommitFailures > 0) {
+            consecutiveCommitFailures = 0
+            // Saving recovered, so a later run of failures is news again.
+            announcedProblems.delete('commit-failing')
+        }
+    }
+    catch (error) {
+        consecutiveCommitFailures += 1
+        // A writer-lock refusal is terminal, not transient. Another tab or
+        // another device owns the session, and every retry will get the same
+        // 423 -- so retrying forever means this tab silently stops saving while
+        // its spinner keeps clearing itself, which is exactly what happened
+        // once the `risu-session-deactivated` listener inside `saveDb` went
+        // dead. Say so once and stop; the listener reloads the page.
+        if (isWriterLockRefusal(error)) {
+            reportPersistenceProblem('session-deactivated', {
+                kind: 'session-deactivated',
+                error,
+                message:
+                    'Another tab or device has taken over saving for this account, so this page ' +
+                    'can no longer save. Reload to continue here.',
+            })
+            throw error
+        }
+        if (consecutiveCommitFailures >= COMMIT_FAILURE_ALERT_THRESHOLD) {
+            reportPersistenceProblem('commit-failing', {
+                kind: 'commit-failing',
+                failures: consecutiveCommitFailures,
+                error,
+                message:
+                    `Saving has failed ${consecutiveCommitFailures} times in a row. Recent changes ` +
+                    'are still only in this tab and will be lost if it closes.',
+            })
+        }
+        scheduleDirtyRetry()
+        throw error
+    }
     finally { noteCommitActivity(-1) }
 })
 
@@ -246,6 +356,30 @@ export async function flushSqlDirtyChanges(): Promise<void> {
 }
 
 /**
+ * Audit, then flush. The only correct order for a flush that has to catch up
+ * with edits nobody marked.
+ *
+ * There is no mutation-boundary marking for settings at all:
+ * `markSqlRootDirty`, `markSqlPresetDirty` and `markSqlPluginStorageDirty` have
+ * exactly one caller each in the whole application, and it is
+ * `auditSqlCompatibilityDatabase`. So until the idle audit next runs -- up to
+ * ~10s, a 5s timer chained to `requestIdleCallback({timeout: 5000})` -- a theme
+ * change, a hotkey, a regex rule, an API key, a global lorebook entry or a
+ * plugin's `setItem` is not merely unflushed, it is *unmarked*. A bare
+ * `flushSqlDirtyChanges` at that moment commits whatever happened to already be
+ * marked and reports success, and the user's change is gone.
+ *
+ * `requestImmediateSaveImpl` gets this right and says why. The two paths that
+ * matter most and got it wrong are the ones that run when there is no next
+ * audit coming: `pagehide`/`visibilitychange`, and saver mode's flush.
+ */
+export async function flushSqlDirtyChangesWithAudit(): Promise<void> {
+    const database = resolveActiveDatabase()
+    if (database) auditSqlCompatibilityDatabase(database)
+    await registry.flushNow()
+}
+
+/**
  * Rows this flush could not position, kept out of the commit so the rest of it
  * can go, and re-marked afterwards so they are not acknowledged away.
  *
@@ -256,6 +390,41 @@ export async function flushSqlDirtyChanges(): Promise<void> {
 type RefusedMessage = { chatId: string; messageId: string }
 /** A chat the commit refused because it is still a bootstrap summary. */
 type RefusedChat = { characterId: string; chatId: string }
+/** A root key whose value could not be encoded into rows at all. */
+type RefusedRootKey = { key: string; error: unknown }
+
+/**
+ * Load the stored record of every character a commit refused as a bootstrap
+ * summary, so the next flush can write the whole thing.
+ *
+ * The chat twin of this has existed since chats got `onRefusedChat`; characters
+ * were refused with a bare `console.error` and no retain, so the edit was
+ * acknowledged away. Same shape, same best-effort contract: the marks are
+ * already retained by the time this runs, so a failure here costs a retry.
+ */
+async function hydrateRefusedCharacters(ids: readonly string[]): Promise<void> {
+    const database = resolveActiveDatabase()
+    if (!database) return
+    const { ensureCharacterHydrated } = await import('./sqlRuntimeHydration')
+    for (const id of ids) {
+        const index = (database.characters ?? []).findIndex(item => item?.chaId === id)
+        if (index < 0) continue
+        try {
+            await ensureCharacterHydrated(database, index)
+        } catch (error) {
+            console.error(
+                `[SQL dirty commit] could not load the stored record of refused character ${id}; ` +
+                'it stays dirty and unwritten rather than being written back as a stub.',
+                error,
+            )
+        }
+    }
+}
+
+/** True for the server's "another session holds the writer lock" refusal. */
+function isWriterLockRefusal(error: unknown): boolean {
+    return Number((error as { status?: unknown } | null)?.status) === 423
+}
 
 /**
  * Load the settings of every chat a commit refused, so the next flush can write
@@ -322,6 +491,10 @@ async function commitDirtyScopes(): Promise<void> {
     const refuseChat = (characterId: string, chatId: string) => {
         refusedChats.push({ characterId, chatId })
     }
+    const refusedCharacters: string[] = []
+    const refuseCharacter = (characterId: string) => { refusedCharacters.push(characterId) }
+    const refusedRootKeys: RefusedRootKey[] = []
+    const refuseRootKey = (key: string, error: unknown) => { refusedRootKeys.push({ key, error }) }
     // Re-marking is what keeps a refused row dirty. `acknowledge` only clears a
     // scope whose generation matches the one the snapshot recorded, and
     // `markMessage` takes a fresh, higher generation -- so a re-mark placed
@@ -341,8 +514,33 @@ async function commitDirtyScopes(): Promise<void> {
             registry.markChat(entry.characterId, entry.chatId)
         }
         if (refusedChats.length > 0) void hydrateRefusedChats(refusedChats)
+        // And the same for a character, which until now had the refusal without
+        // the retain: `acknowledge` cleared the mark and a move-to-trash on a
+        // character the user had never opened was simply forgotten.
+        for (const id of refusedCharacters) registry.markCharacter(id)
+        if (refusedCharacters.length > 0) void hydrateRefusedCharacters(refusedCharacters)
+        // A root key that cannot be encoded stays dirty too. It has to: the
+        // audit overwrites its baseline the moment it marks the key
+        // (`compatibilityBaseline = next` happens before the diff is even
+        // read), so a dropped mark is not a deferred write, it is the only
+        // record of the change.
+        for (const entry of refusedRootKeys) {
+            registry.markRoot(entry.key)
+            reportPersistenceProblem(`root-key-refused:${entry.key}`, {
+                kind: 'root-key-refused',
+                key: entry.key,
+                error: entry.error,
+                message:
+                    `"${entry.key}" is too large or too complex for this storage backend to save, ` +
+                    'so it was left out of the last save. Everything else was saved. ' +
+                    'Removing some of its contents will let it save again.',
+            })
+        }
     }
-    let commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse, refuseChat)
+    let commit = buildSqlDirtyCommit(
+        database, snapshot, storage.getRevision(),
+        refuse, refuseChat, refuseRootKey, refuseCharacter,
+    )
     if (!hasSqlCommitChanges(commit)) {
         registry.acknowledge(snapshot)
         retainRefused()
@@ -359,7 +557,12 @@ async function commitDirtyScopes(): Promise<void> {
         await rebaseDirtyScopes(storage, snapshot)
         refused.length = 0
         refusedChats.length = 0
-        commit = buildSqlDirtyCommit(database, snapshot, storage.getRevision(), refuse)
+        refusedCharacters.length = 0
+        refusedRootKeys.length = 0
+        commit = buildSqlDirtyCommit(
+            database, snapshot, storage.getRevision(),
+            refuse, refuseChat, refuseRootKey, refuseCharacter,
+        )
         if (!hasSqlCommitChanges(commit)) {
             registry.acknowledge(snapshot)
             retainRefused()
@@ -376,6 +579,7 @@ async function commitWithMetrics(storage: ISqlStorage, commit: ReturnType<typeof
     const metric = runtimeMetrics.start('dirty-commit')
     try {
         await storage.commit(commit)
+        commitSucceededListener?.()
     } finally {
         runtimeMetrics.end(metric)
     }
@@ -651,7 +855,7 @@ export function startSqlMetadataPersistence(
 ): void {
     if (metadataRuntimeStarted) return
     metadataRuntimeStarted = true
-    const flush = () => { void flushSqlDirtyChanges().catch(() => undefined); keepalive() }
+    const flush = () => { void flushSqlDirtyChangesWithAudit().catch(() => undefined); keepalive() }
     eventTarget.addEventListener('pagehide', flush)
     eventTarget.addEventListener('visibilitychange', () => {
         if (typeof document === 'undefined' || document.visibilityState === 'hidden') flush()
@@ -671,5 +875,9 @@ export function resetSqlPersistenceRuntimeForTesting(): void {
     metadataRuntimeStarted = false
     compatibilityBaseline = null
     unresolvedDatabaseReported = false
+    consecutiveCommitFailures = 0
+    announcedProblems.clear()
+    persistenceProblemListener = null
+    commitSucceededListener = null
     deactivateSqlPersistenceRuntime()
 }

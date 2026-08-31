@@ -45,7 +45,7 @@ import { markPerformance } from './performance/startupMetrics'
 import { runtimeMetrics } from './performance/runtimeMetrics'
 import { beginStartupPhases, markStartupPhase, reportStartupPhases } from './performance/startupPhases'
 import { configureSaverModeActions, installSaverModeLifecycle, registerRuntimeCacheOwners } from './performance/saverMode'
-import { flushSqlDirtyChanges } from './storage/sql/sqlPersistenceRuntime'
+import { flushSqlDirtyChangesWithAudit } from './storage/sql/sqlPersistenceRuntime'
 import { isRootKeyDeferred } from './storage/sql/deferredRootKeys'
 import { ensureRootKeyHydrated } from './storage/sql/sqlRuntimeHydration'
 import { evictHydratedChats } from './storage/chatStorage'
@@ -149,7 +149,16 @@ export async function loadData() {
                 markStartupPhase('sql-metadata')
                 startupMode = existingSql?.mode
                 if (existingSql?.usingSql) {
-                    setPatchSyncBaseline(safeStructuredClone(existingSql.database))
+                    // The baseline exists for `saveDb`'s binary patch encoder,
+                    // which is the one thing metadata-first startup never runs.
+                    // Taking it there bought nothing and cost two full deep
+                    // clones of the whole database on the startup critical path
+                    // -- `setPatchSyncBaseline` clones what it is handed -- and
+                    // then pinned one of them in module scope for the rest of
+                    // the session, because `saveDb` is also its only clearer.
+                    if (startupMode !== 'metadata-first') {
+                        setPatchSyncBaseline(safeStructuredClone(existingSql.database))
+                    }
                     markStartupPhase('patch-baseline-clone')
                     setDatabase(existingSql.database)
                     markStartupPhase('set-database')
@@ -277,7 +286,11 @@ export async function loadData() {
                 MobileGUI.set(true)
             }
             loadedStore.set(true)
-            configureSaverModeActions({ flush: flushSqlDirtyChanges, evictChats: evictHydratedChats })
+            // Audit first, then flush. Saver mode flushes when the app is
+            // about to be idled or backgrounded, which is precisely when no
+            // later audit is coming -- a bare flush there commits what was
+            // already marked and drops the settings change the user just made.
+            configureSaverModeActions({ flush: flushSqlDirtyChangesWithAudit, evictChats: evictHydratedChats })
             registerRuntimeCacheOwners(clearParserRuntimeCaches, clearInlayRuntimeCache)
             installSaverModeLifecycle()
             markPerformance('first-interactive')

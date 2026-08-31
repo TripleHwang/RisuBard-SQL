@@ -1,5 +1,6 @@
 import type { Chat, Database, Message, character } from "../database.svelte";
 import { isRootKeyDeferred, refuseDeferredRootDelete } from "./deferredRootKeys";
+import { measureRelationalValue } from "./relationalNodeCodec";
 import type { DirtySnapshot } from "./dirtyRegistry";
 import {
   getSqlPosition,
@@ -122,6 +123,42 @@ export function buildSqlDirtyCommit(
    * would be dropped rather than deferred.
    */
   onRefusedChat?: (characterId: string, chatId: string) => void,
+  /**
+   * Called when a dirty root key's value cannot be encoded at all. The key is
+   * left out of this commit and named to the caller, which keeps it dirty and
+   * tells the user which setting could not be stored.
+   *
+   * This exists because the encode does not happen here -- it happens later, in
+   * `applySqliteCommit` while the commit is being turned into statements, which
+   * is INSIDE `storage.commit()` and therefore inside the one call
+   * `commitDirtyScopes` cannot contain. So a single unencodable key threw past
+   * every other scope in the flush, the registry kept all of its marks, the 5s
+   * retry rebuilt the same snapshot and threw again, and the application never
+   * persisted anything again for the rest of the session. That is what the
+   * second module import did.
+   *
+   * Checking here rather than there is deliberate: the decision to drop a key
+   * belongs with the dirty-mark bookkeeping that has to retain it, and the
+   * three storage backends must not each grow their own refusal policy.
+   */
+  onRefusedRootKey?: (key: string, error: unknown) => void,
+  /**
+   * Called when a dirty character is refused because it is still a bootstrap
+   * summary -- the exact contract `onRefusedChat` has had, on the scope that
+   * never got one.
+   *
+   * The refusal below is right; what was missing was the retain. `acknowledge`
+   * cleared the mark and the edit was gone for the session with only a
+   * `console.error`, and the reachable paths all edit characters the user has
+   * by definition never opened: `removeChar(..., 'normal')` sets `trashTime`
+   * (characters.ts), the Character Vault trashes many at once
+   * (characterVault.ts), and restore-from-trash clears `trashTime`
+   * (GridCatalog.svelte). So "delete a character you never opened" wrote the
+   * character order -- an ordinary root key, which persists -- but not the
+   * `trashTime`, and the next `checkCharOrder()` saw a character with no
+   * `trashTime` missing from the order and put it straight back.
+   */
+  onRefusedCharacter?: (characterId: string) => void,
 ): SqlCommit {
   const commit = createEmptySqlCommit(baseRevision, "dirty-sync");
 
@@ -136,8 +173,27 @@ export function buildSqlDirtyCommit(
       refuseDeferredRootDelete(key, "buildSqlDirtyCommit");
       continue;
     }
-    if (missing) commit.root.deletes.push(key);
-    else commit.root.upserts.push({ key, value });
+    if (missing) {
+      commit.root.deletes.push(key);
+      continue;
+    }
+    // `measureRelationalValue` validates precisely what the encoder validates --
+    // same traversal, same depth, cycle and type rules -- while allocating
+    // nothing, so asking it here cannot disagree with what statement building
+    // will do, and cannot be a meaningful cost on the ordinary keys.
+    //
+    // Without a callback the throw still stands and still escapes: a caller
+    // with nowhere to record a refusal must not be told a commit is complete
+    // when a key was silently dropped from it.
+    if (onRefusedRootKey) {
+      try {
+        measureRelationalValue(value);
+      } catch (error) {
+        onRefusedRootKey(key, error);
+        continue;
+      }
+    }
+    commit.root.upserts.push({ key, value });
   }
 
   for (const characterId of dirty.characterIds) {
@@ -165,6 +221,7 @@ export function buildSqlDirtyCommit(
         "its description, first message, lorebook and scripts are not loaded, so this write " +
         "would replace the stored record with a stub. The character stays as storage has it.",
       );
+      onRefusedCharacter?.(characterId);
       continue;
     }
     commit.characters.push({ id: characterId, position, data: sqlCharacterData(currentCharacter) });
