@@ -12,13 +12,30 @@ const CRC32_TABLE = (() => {
   return table;
 })();
 
+/**
+ * What a CharX archive may contain before the import refuses it.
+ *
+ * These are sized for a self-hosted server importing the user's own character
+ * files, not for an open upload endpoint. The caps that actually protect the
+ * machine keep their shape: `entries` is the zip-bomb guard and does not scale
+ * with file size, `diskHeadroomBytes` still refuses an import that would fill
+ * the disk, and the two caps on data that is buffered in memory rather than
+ * streamed to disk -- `cardBytes` and `moduleBytes` -- stay far below the ones
+ * on assets, which are written out as they arrive.
+ *
+ * `compressedBytes` matches the 2 GB body limit the upload route already
+ * enforces, so it is no longer the lower of the two: an archive that reaches
+ * the handler is one the handler will now try to read.
+ *
+ * Every value is overridable per call through `options.limits`.
+ */
 const DEFAULT_CHARX_LIMITS = Object.freeze({
-  compressedBytes: 256 * 1024 * 1024,
-  decompressedBytes: 2 * 1024 * 1024 * 1024,
+  compressedBytes: 2 * 1024 * 1024 * 1024,
+  decompressedBytes: 8 * 1024 * 1024 * 1024,
   entries: 10000,
-  cardBytes: 4 * 1024 * 1024,
-  moduleBytes: 16 * 1024 * 1024,
-  assetBytes: 50 * 1024 * 1024,
+  cardBytes: 16 * 1024 * 1024,
+  moduleBytes: 64 * 1024 * 1024,
+  assetBytes: 512 * 1024 * 1024,
   queuedWriteBytes: 8 * 1024 * 1024,
   diskHeadroomBytes: 256 * 1024 * 1024,
 });

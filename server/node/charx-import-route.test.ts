@@ -4,6 +4,7 @@ import { rateLimit } from 'express-rate-limit'
 import http from 'node:http'
 
 const { createCharXImportHandler } = require('./charx-import-route.cjs')
+const { DEFAULT_CHARX_LIMITS } = require('./charx-import.cjs')
 
 type HandlerDeps = Record<string, any>
 const servers: http.Server[] = []
@@ -84,7 +85,10 @@ describe('createCharXImportHandler', () => {
     it.each([
         ['text/plain', 415, {}, 'wrong content type'],
         ['application/x-risu-charx-not-really', 415, {}, 'lookalike content type'],
-        ['application/x-risu-charx', 413, { 'content-length': String(256 * 1024 * 1024 + 1) }, 'known oversize'],
+        // Derived from the limit rather than restated, so raising the cap
+        // cannot leave this asserting a 413 the route no longer answers --
+        // which does not fail loudly here, it hangs waiting for a body.
+        ['application/x-risu-charx', 413, { 'content-length': String(DEFAULT_CHARX_LIMITS.compressedBytes + 1) }, 'known oversize'],
     ])('returns %i for %s before importing', async (contentType, status, headers) => {
         const { server, calls } = makeApp()
         const response = await request(server, '', { 'content-type': contentType, ...headers })
