@@ -1,4 +1,5 @@
 import { derived, get, writable, type Readable } from "svelte/store"
+import { beginResidencyPin, endResidencyPin } from "../storage/sql/residencyPin"
 
 // Per-chat generation state, keyed by the REAL chat id (chat.id) — not the
 // per-request generationId that flows through request args as `chatId` (see
@@ -69,13 +70,23 @@ export function isChatGenerating(chatKey: string): boolean {
     return get(generationStates).has(chatKey)
 }
 
+// `chatKey` is the chat's own `id` (chatGenKey), which is the same key
+// residency trimming is asked about. A generation appends the user's turn and
+// the streamed reply to `chat.message` and holds indices into it across every
+// await in the pipeline; a scroll-driven page load that crossed
+// MAX_RESIDENT_MESSAGES underneath it would release exactly that tail. Pinned
+// for the lifetime of the map entry, so the pairing is the map's, not each
+// call site's -- and pinned only on the transition into the map, because
+// auto-continue and resend end and immediately restart under the same key.
 export function startGeneration(chatKey: string, generationId: string, kind: 'live' | 'background' = 'live'): void {
     const abortController = pendingAborts.get(chatKey)
+    const hadEntry = get(generationStates).has(chatKey)
     generationStates.update((m) => {
         const next = new Map(m)
         next.set(chatKey, { generationId, kind, abortController })
         return next
     })
+    if (!hadEntry) beginResidencyPin(chatKey)
     syncDoingChat()
 }
 
@@ -93,12 +104,17 @@ export function endGeneration(chatKey: string, opts?: { keepPendingAbort?: boole
     if (!opts?.keepPendingAbort) {
         pendingAborts.delete(chatKey)
     }
+    const hadEntry = get(generationStates).has(chatKey)
     generationStates.update((m) => {
         if (!m.has(chatKey)) return m
         const next = new Map(m)
         next.delete(chatKey)
         return next
     })
+    // Symmetric with startGeneration: released only when an entry was actually
+    // removed, so a duplicate end cannot unpin a generation that is still
+    // running under the same key.
+    if (hadEntry) endResidencyPin(chatKey)
     syncDoingChat()
 }
 
@@ -109,13 +125,18 @@ export function endGeneration(chatKey: string, opts?: { keepPendingAbort?: boole
 // writes concern the live send pipeline and must not orphan a running job's
 // guard (its poll loop still needs to release it).
 export function endAllGenerations(): void {
+    const cleared: string[] = []
     generationStates.update((m) => {
         const next = new Map<string, GenState>()
         for (const [key, entry] of m) {
             if (entry.kind === 'background') next.set(key, entry)
+            else cleared.push(key)
         }
         return next
     })
+    // Same pairing rule as endGeneration: one release per entry that left the
+    // map. Background entries stay, and so do their pins.
+    for (const key of cleared) endResidencyPin(key)
     const survivors = get(generationStates)
     for (const key of [...pendingAborts.keys()]) {
         if (!survivors.has(key)) pendingAborts.delete(key)

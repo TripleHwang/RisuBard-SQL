@@ -7,6 +7,7 @@ import { flushSqlDirtyChanges, isSqlMessageDirty, rebaselineHydratedRootKey } fr
 import { validateOlderMessagePage } from "../../chatWindow";
 import { isMessageMounted } from "../../chatMountRegistry";
 import { clearDeferredRootKey, isRootKeyDeferred } from "./deferredRootKeys";
+import { isResidencyPinned } from "./residencyPin";
 import {
   getSqlPosition,
   getSqlWindow,
@@ -246,6 +247,13 @@ function releaseNewestResidentMessages(
   // and its text is not yet persisted, so both guards below would already stop
   // the walk; refusing outright says so once instead of relying on that.
   if (chat.isStreaming) return window;
+  // Someone is depending on the newest end staying where it is: a generation is
+  // in flight over this chat, or the prompt preload is walking backwards
+  // through the history precisely so that generation has something to build a
+  // prompt from. Paging a long history past the bound would otherwise trim the
+  // tail the reply is about to be appended to -- the load that exists to make
+  // the send whole would be the thing that truncated it. See `residencyPin.ts`.
+  if (isResidencyPinned(chatId)) return window;
 
   let keep = messages.length;
   while (keep > RESIDENT_RELEASE_TARGET) {

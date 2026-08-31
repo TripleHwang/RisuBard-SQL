@@ -4,7 +4,7 @@ import { DBState } from '../stores.svelte';
 import { CharEmotion, selectedCharID } from "../stores.svelte";
 import { ChatTokenizer, tokenize, tokenizeNum } from "../tokenizer";
 import { language } from "../../lang";
-import { alertError, notifyError } from "../alert";
+import { alertClear, alertError, alertWait, notifyError } from "../alert";
 import { parseChatML } from "../parser/chatML";
 import { loadLoreBookV3Prompt } from "./lorebook.svelte";
 import { findCharacterbyId, getAuthorNoteDefaultText, getPersonaPrompt, getUserName, isLastCharPunctuation, trimUntilPunctuation, parseToggleSyntax, prebuiltAssetCommand } from "../util";
@@ -82,7 +82,9 @@ import {
 } from '../risubard/wikiPromptPreset';
 import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
 import { saveChatToServer } from '../storage/chatStorage';
-import { hasNewerSqlMessages, isSqlWindowPartial, replaceChatSlotCarryingSqlRuntimeFields } from '../storage/sql/sqlRuntimeWindow';
+import { replaceChatSlotCarryingSqlRuntimeFields } from '../storage/sql/sqlRuntimeWindow';
+import { ensurePromptHistoryResident } from '../storage/sql/promptHistoryPreload';
+import { capturePromptPreloadTarget, promptPreloadTargetMoved } from './promptPreloadTarget';
 import {
     createWikiRebootJob,
     nextWikiRebootBatch,
@@ -820,6 +822,45 @@ export interface requestTokenPart{
 }
 
 export { doingChat, chatProcessStage } from "./generationState"
+
+/**
+ * The token budget one request may spend, and how much of it is reserved for
+ * the reply.
+ *
+ * Factored out of `sendChat` because two things now need it: the prompt
+ * builder, which truncates the history against `maxContextTokens`, and the
+ * prompt-history preload, which pages older messages in until the resident
+ * history is worth that much. Computing it twice would let the two drift, and
+ * a preload that used a smaller budget than the builder would hand the builder
+ * a history it then had to truncate for the wrong reason.
+ */
+export function resolvePromptContextBudget(chat:Chat):{ maxContextTokens:number, maxResponseTokens:number } {
+    let maxContextTokens = DBState.db.maxContext
+    // Output-token reservation for the context budget. Defaults to the legacy
+    // global db.maxResponse (the "[채팅 봇]" max response size), overridden below
+    // when this chat is bound to a ModelPreset.
+    let maxResponseTokens = DBState.db.maxResponse
+    // When this chat is bound to a ModelPreset, use the preset's own input
+    // budget (preset.maxContext, default 65000) instead of the global
+    // db.maxContext — clamped to the model's context window when known.
+    // Without this, a small global maxContext blocks large-context presets.
+    const mainBinding = resolveChatModelBinding(chat, 'model')
+    if (mainBinding.kind === 'modelPreset') {
+        const ctxWindow = mainBinding.preset.profileSnapshot.limits?.contextWindowTokens
+        const set = mainBinding.preset.maxContext
+        const budget = set && set > 0 ? set : 65000
+        maxContextTokens = ctxWindow ? Math.min(budget, ctxWindow) : budget
+        // Reserve output tokens from the preset's own max-output setting
+        // rather than db.maxResponse — the legacy global value can be a
+        // stray figure (e.g. 65535 carried over from an imported prompt
+        // preset) that would eat the whole context window and make even the
+        // first message fail with a false "too much token" error.
+        const presetOut = resolvePresetMaxOutputTokens(mainBinding.preset)
+        if (presetOut !== undefined) maxResponseTokens = presetOut
+    }
+    return { maxContextTokens, maxResponseTokens }
+}
+
 export let requestTokenParts:{[key:string]:requestTokenPart[]} = {}
 export let previewFormated:OpenAIChat[] = []
 export let previewBody:string = ''
@@ -845,15 +886,94 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         alertError('Chat is still loading. Please wait a moment.')
         return false
     }
-    // Either end of the window can be missing: paging back loads older messages,
-    // and residency trimming releases newer ones once the resident slice passes
-    // its bound. Generating against a slice that is missing either end builds a
-    // prompt from a history the user can see is not the whole conversation.
-    if (isSqlWindowPartial(selectedConversation)) {
-        alertError(hasNewerSqlMessages(selectedConversation)
-            ? 'Jump to the latest messages before generating.'
-            : 'Load earlier messages before generating.')
-        return false
+    // Either end of the resident window can be missing: a chat opens on its
+    // newest 40 messages, so anything longer than that starts with older
+    // messages unloaded, and residency trimming can release the newest end once
+    // the resident slice passes its bound. The prompt is built from
+    // `chat.message`, so generating from either state would silently send a
+    // fraction of the conversation.
+    //
+    // This used to refuse and tell the reader to scroll. That blocked every
+    // chat longer than 40 messages on a state the application can resolve by
+    // itself, so it resolves it: restore the newest end if it was trimmed, then
+    // page older messages in until the prompt's own token budget is covered or
+    // the conversation's true start is resident. See `promptHistoryPreload.ts`
+    // for what bounds that walk and why it is not "load everything".
+    //
+    // A failure here is a refusal, never a short send. There is no path from
+    // "could not read the history" to "send what happens to be in memory".
+    if (selectedConversation) {
+        // Which chat this preload is FOR. Everything below re-reads the
+        // selected character and chat out of `DBState` (`guardChat` for the
+        // generation lock, `nowChatroom` for the prompt), and until this
+        // preload existed that re-read could not disagree with the check above:
+        // the window guard and the first `await` were in one synchronous block.
+        // Paging puts several round trips between them, and the reader is free
+        // to switch chats while they are in the air. A send that preloaded chat
+        // A and then built its prompt from chat B would be building it from B's
+        // opening 40 messages -- the exact silent truncation this guard exists
+        // to prevent -- so a switch is a refusal, not something to paper over.
+        const preloadTarget = capturePromptPreloadTarget(selected, selected.chatPage, selectedConversation)
+        const preloadTokenizer = new ChatTokenizer(
+            arg.chatAdditonalTokens ?? (DBState.db.aiModel.startsWith('gpt') ? 5 : 3),
+            DBState.db.aiModel.startsWith('gpt') ? 'noName' : 'name',
+        )
+        let progressShown = false
+        try {
+            await ensurePromptHistoryResident({
+                character: selected,
+                chatIndex: selected.chatPage,
+                budgetTokens: resolvePromptContextBudget(selectedConversation).maxContextTokens,
+                // The raw message text through the real tokenizer. The prompt
+                // charges at least this much for the same message once role
+                // names, scripts and formatting are added, so the measure is a
+                // lower bound and the walk loads at least what the prompt can
+                // use.
+                measure: async (messages) => {
+                    let total = 0
+                    for (const message of messages) {
+                        total += await preloadTokenizer.tokenizeChat({
+                            role: message.role === 'user' ? 'user' : 'assistant',
+                            content: message.data ?? '',
+                        })
+                    }
+                    return total
+                },
+                onProgress: (progress) => {
+                    // Only once a second request is actually needed. One page is
+                    // a single round trip and putting a dialog up for it would
+                    // flash on every send.
+                    if (progress.requests < 1) return
+                    progressShown = true
+                    alertWait(`${language.loading} (${progress.resident}/${progress.total})`)
+                },
+                // Stop during the preload aborts it, and an aborted preload is
+                // a refusal like any other failure -- never a short send.
+                signal: arg.signal,
+            })
+        } catch (error) {
+            console.error('[sendChat] could not load this chat\'s history for the prompt', error)
+            if (progressShown) alertClear()
+            alertError(
+                'Could not load this conversation\'s earlier messages, so the prompt would have ' +
+                'been built from only part of it. Nothing was sent. ' +
+                (error instanceof Error ? error.message : String(error)),
+            )
+            return false
+        }
+        if (progressShown) alertClear()
+        // The history that was just loaded has to be the history the rest of
+        // this function will read. See the note where the identity was
+        // captured: this is the only thing standing between "the reader
+        // switched chats mid-load" and a prompt built from an unloaded window.
+        if (promptPreloadTargetMoved(preloadTarget, DBState.db.characters[get(selectedCharID)])) {
+            alertError(
+                'The selected chat changed while this conversation\'s earlier messages were ' +
+                'loading, so the prompt would have been built from a chat whose history was ' +
+                'never loaded. Nothing was sent.',
+            )
+            return false
+        }
     }
 
     chatProcessStage.set(0)
@@ -1069,31 +1189,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     const narrativeTurnToConfirm = projectConfirmedMemoryTurn(
         currentChat.message
     )
-    let maxContextTokens = DBState.db.maxContext
-    // Output-token reservation for the context budget. Defaults to the legacy
-    // global db.maxResponse (the "[채팅 봇]" max response size), overridden below
-    // when this chat is bound to a ModelPreset.
-    let maxResponseTokens = DBState.db.maxResponse
-    // When this chat is bound to a ModelPreset, use the preset's own input
-    // budget (preset.maxContext, default 65000) instead of the global
-    // db.maxContext — clamped to the model's context window when known.
-    // Without this, a small global maxContext blocks large-context presets.
-    {
-        const mainBinding = resolveChatModelBinding(currentChat, 'model')
-        if (mainBinding.kind === 'modelPreset') {
-            const ctxWindow = mainBinding.preset.profileSnapshot.limits?.contextWindowTokens
-            const set = mainBinding.preset.maxContext
-            const budget = set && set > 0 ? set : 65000
-            maxContextTokens = ctxWindow ? Math.min(budget, ctxWindow) : budget
-            // Reserve output tokens from the preset's own max-output setting
-            // rather than db.maxResponse — the legacy global value can be a
-            // stray figure (e.g. 65535 carried over from an imported prompt
-            // preset) that would eat the whole context window and make even the
-            // first message fail with a false "too much token" error.
-            const presetOut = resolvePresetMaxOutputTokens(mainBinding.preset)
-            if (presetOut !== undefined) maxResponseTokens = presetOut
-        }
-    }
+    // Same budget the prompt-history preload used at the top of this function;
+    // see `resolvePromptContextBudget`.
+    let { maxContextTokens, maxResponseTokens } = resolvePromptContextBudget(currentChat)
 
     setGenerationStage(genKey, 1)
     stageTimings.stage1Start = Date.now()

@@ -1,0 +1,776 @@
+// @vitest-environment node
+/**
+ * The prompt-history preload, against a REAL spawned server.
+ *
+ * Node environment for the same reason as `sqlReversePageLive.svelte.test.ts`:
+ * happy-dom's `fetch` enforces the same-origin policy and cannot reach
+ * `http://127.0.0.1:<port>`.
+ *
+ * Nothing below the HTTP boundary is stubbed. `ensureChatMessageWindow`,
+ * `loadOlderChatMessages`, `loadNewestChatMessages` and the reverse-page
+ * validators are the real ones, reading real rows out of SQLite through the
+ * same storage object the app builds at boot. The only injected policy is the
+ * token `measure`, which is a caller-supplied function by design -- in the app
+ * it is the real `ChatTokenizer`.
+ *
+ * The bug this covers: a chat opens on its newest 40 messages
+ * (`hydrateRecentChatPage(chats, index, chaId, 40)`), so every conversation
+ * longer than 40 messages had `hasOlder === true` and `sendChat` refused with
+ * "Load earlier messages before generating" until the reader had scrolled all
+ * the way back to the first message.
+ */
+import { flushSync } from "svelte";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import type { Chat, Database, character } from "../database.svelte";
+
+const activeStorage = vi.hoisted(() => ({ current: null as any }));
+
+vi.mock("./sqlBootstrap", () => ({
+  getActiveSqlStorage: () => activeStorage.current,
+}));
+
+const { NodeSqliteStorage } = await import("./nodeSqliteStorage");
+const {
+  ensureChatMessageWindow,
+  loadOlderChatMessages,
+  MAX_RESIDENT_MESSAGES,
+} = await import("./sqlRuntimeHydration");
+const { getSqlPosition, getSqlWindow, isSqlWindowPartial, hasNewerSqlMessages } = await import("./sqlRuntimeWindow");
+const { isSqlMessageDirty } = await import("./sqlPersistenceRuntime");
+const { ensurePromptHistoryResident } = await import("./promptHistoryPreload");
+const {
+  beginResidencyPin,
+  endResidencyPin,
+  isResidencyPinned,
+  resetResidencyPinsForTesting,
+} = await import("./residencyPin");
+const { endAllGenerations, endGeneration, startGeneration } = await import("../../process/generationState");
+const { capturePromptPreloadTarget, promptPreloadTargetMoved } = await import("../../process/promptPreloadTarget");
+const { createClient } = await import("../../../../test/compat/helpers/client");
+const { spawnServer } = await import("../../../../test/compat/helpers/spawnServer");
+type ServerHandle = Awaited<ReturnType<typeof spawnServer>>;
+
+const CHARACTER_ID = "character-prompt-history";
+
+/** What a chat opens on. `chatStorage.ts:499` passes exactly this. */
+const OPEN_PAGE = 40;
+
+/**
+ * Deterministic stand-in for the tokenizer, applied to the same text the prompt
+ * builds its `OpenAIChat.content` from. Every seeded message is padded to the
+ * same length, so the budget arithmetic in these tests is exact.
+ */
+const TOKENS_PER_MESSAGE = 10;
+async function measure(messages: Array<{ data?: string }>): Promise<number> {
+  return messages.reduce((total, message) => total + Math.ceil((message.data ?? "").length / 4), 0);
+}
+
+/** 40 characters -> exactly TOKENS_PER_MESSAGE under `measure`. */
+function messageBody(index: number): string {
+  return `message ${String(index).padStart(4, "0")}`.padEnd(40, ".");
+}
+
+let server: ServerHandle;
+let storage: InstanceType<typeof NodeSqliteStorage>;
+let port: number;
+let password: string;
+
+interface Seed { chatId: string; length: number }
+
+function legacyDatabase(seeds: Seed[]): Database {
+  return {
+    apiType: "openai",
+    username: "reporter",
+    maxContext: 4000,
+    personas: [{ name: "Default", icon: "", personaPrompt: "" }],
+    botPresets: [],
+    botPresetsId: 0,
+    modules: [],
+    pluginCustomStorage: {},
+    characters: [{
+      chaId: CHARACTER_ID,
+      type: "character",
+      name: "Ada",
+      image: "",
+      desc: "",
+      firstMessage: "Hello, this is the greeting.",
+      alternateGreetings: [],
+      chatPage: 0,
+      chats: seeds.map(({ chatId, length }, chatIndex) => ({
+        id: chatId,
+        name: `Chat ${chatIndex}`,
+        note: "",
+        localLore: [],
+        message: Array.from({ length }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "char",
+          data: messageBody(index),
+          chatId: `${chatId}-msg-${String(index).padStart(4, "0")}`,
+        })),
+      })),
+    }],
+  } as unknown as Database;
+}
+
+/** The live database exactly as the app holds it: `$state`, chat unhydrated. */
+function reactiveDatabase(chatId: string): { db: Database; character: character } {
+  const db = $state({
+    characters: [{
+      chaId: CHARACTER_ID,
+      chatPage: 0,
+      chats: [{
+        id: chatId,
+        name: "Chat 0",
+        note: "",
+        localLore: [],
+        message: [] as any[],
+        _placeholder: true,
+        messagesLoaded: false,
+      }],
+    }],
+  });
+  return { db: db as unknown as Database, character: db.characters[0] as unknown as character };
+}
+
+/** Open a chat the way `hydrateRecentChatPage` does: newest 40, nothing else. */
+async function openChat(chatId: string, limit = OPEN_PAGE): Promise<character> {
+  const { character } = reactiveDatabase(chatId);
+  await ensureChatMessageWindow(character, 0, limit);
+  flushSync();
+  return character;
+}
+
+function residentIds(chat: Chat): string[] {
+  return (chat.message ?? []).map((message) => message.chatId!);
+}
+
+const SHORT = 10;
+const OPENED = 100;
+const LONG = 600;
+/** Comfortably past MAX_RESIDENT_MESSAGES (320), so a full walk back trims. */
+const TRIMMING = 420;
+
+describe("loading the history a prompt needs before generating", () => {
+  beforeAll(async () => {
+    server = await spawnServer();
+    port = server.port;
+    password = server.password;
+    const client = await createClient(port, password);
+    storage = new NodeSqliteStorage((input, init) => client.fetch(String(input), init));
+    expect(await storage.init()).toBe(true);
+    expect(await storage.replaceDatabase(legacyDatabase([
+      { chatId: "chat-short", length: SHORT },
+      { chatId: "chat-opened", length: OPENED },
+      { chatId: "chat-budget", length: LONG },
+      { chatId: "chat-failing", length: OPENED },
+      { chatId: "chat-restore", length: TRIMMING },
+      { chatId: "chat-bound", length: TRIMMING },
+      { chatId: "chat-untrimmed-control", length: TRIMMING },
+      { chatId: "chat-generating", length: TRIMMING },
+      { chatId: "chat-progress", length: TRIMMING },
+      { chatId: "chat-aborted", length: TRIMMING },
+      { chatId: "chat-marks", length: TRIMMING },
+      { chatId: "chat-halfway", length: TRIMMING },
+      { chatId: "chat-restore-fails", length: TRIMMING },
+      { chatId: "chat-vanishing", length: TRIMMING },
+    ]))).toBe(true);
+    activeStorage.current = storage;
+  }, 120_000);
+
+  afterEach(() => {
+    endAllGenerations();
+    resetResidencyPinsForTesting();
+    activeStorage.current = storage;
+  });
+
+  afterAll(async () => {
+    activeStorage.current = null;
+    await server?.cleanup();
+  });
+
+  // ── The failing case ────────────────────────────────────────────────────
+
+  it("makes a chat longer than the open page sendable without the user scrolling", async () => {
+    const character = await openChat("chat-opened");
+
+    // This is the state `sendChat` refused on, reproduced through the real
+    // hydrator: a normally opened chat, 40 of 100 messages resident.
+    expect(character.chats[0].message).toHaveLength(OPEN_PAGE);
+    expect(isSqlWindowPartial(character.chats[0])).toBe(true);
+    expect(getSqlWindow(character.chats[0])?.hasOlder).toBe(true);
+
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      // Larger than the whole history costs, so the walk stops only at the
+      // start of the conversation.
+      budgetTokens: OPENED * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+    });
+    flushSync();
+
+    expect(result.holdsNewestEnd).toBe(true);
+    expect(result.historySatisfied).toBe(true);
+    expect(result.reachedStartOfHistory).toBe(true);
+    expect(result.resident).toBe(OPENED);
+    // The whole conversation is resident, in order, with no duplicates.
+    const ids = residentIds(character.chats[0]);
+    expect(ids).toHaveLength(OPENED);
+    expect(new Set(ids).size).toBe(OPENED);
+    expect(ids[0]).toBe("chat-opened-msg-0000");
+    expect(ids.at(-1)).toBe(`chat-opened-msg-${String(OPENED - 1).padStart(4, "0")}`);
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+  }, 120_000);
+
+  // ── The prompt gets the history it needs, and not more ──────────────────
+
+  it("loads the history the token budget asks for, not 40 messages and not everything", async () => {
+    const character = await openChat("chat-budget");
+    expect(character.chats[0].message).toHaveLength(OPEN_PAGE);
+
+    // Room for 200 of the 600 messages.
+    const budgetTokens = 200 * TOKENS_PER_MESSAGE;
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens,
+      measure,
+      pageSize: 100,
+    });
+    flushSync();
+
+    expect(result.holdsNewestEnd).toBe(true);
+    expect(result.historySatisfied).toBe(true);
+    // Not the 40 the chat opened on...
+    expect(result.resident).toBeGreaterThan(OPEN_PAGE);
+    // ...at least what the budget can spend...
+    expect(result.measuredTokens).toBeGreaterThanOrEqual(budgetTokens);
+    expect(await measure(character.chats[0].message)).toBeGreaterThanOrEqual(budgetTokens);
+    // ...and not the whole 600-message history, which is what windowing exists
+    // to avoid.
+    expect(result.resident).toBeLessThan(LONG);
+    expect(result.reachedStartOfHistory).toBe(false);
+
+    // The resident slice is still the newest end of the conversation: the
+    // prompt truncates from the OLDEST end, so the messages that must be there
+    // are the last ones.
+    const ids = residentIds(character.chats[0]);
+    expect(ids.at(-1)).toBe(`chat-budget-msg-${String(LONG - 1).padStart(4, "0")}`);
+    expect(new Set(ids).size).toBe(ids.length);
+  }, 120_000);
+
+  it("reports progress while it pages, so a long walk is not a silent pause", async () => {
+    const character = await openChat("chat-progress", 100);
+    const seen: Array<{ phase: string; resident: number; total: number; requests: number }> = [];
+
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: TRIMMING * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+      onProgress: (progress) => seen.push({ ...progress }),
+    });
+    flushSync();
+
+    // Several round trips, and the reader is told about each of them before it
+    // is made -- not once at the end.
+    expect(result.requests).toBeGreaterThan(2);
+    expect(seen.length).toBeGreaterThan(2);
+    expect(seen.every((progress) => progress.total === TRIMMING)).toBe(true);
+    // Monotonic and finishing at the real resident count, so a progress
+    // display built from it cannot go backwards or stop short.
+    for (let index = 1; index < seen.length; index += 1) {
+      expect(seen[index].resident).toBeGreaterThanOrEqual(seen[index - 1].resident);
+      expect(seen[index].requests).toBeGreaterThanOrEqual(seen[index - 1].requests);
+    }
+    expect(seen.at(-1)!.resident).toBe(result.resident);
+  }, 120_000);
+
+  it("refuses when the send is aborted mid-walk instead of generating from what arrived", async () => {
+    const character = await openChat("chat-aborted", 100);
+    const controller = new AbortController();
+
+    await expect(ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: TRIMMING * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+      onProgress: (progress) => {
+        if (progress.requests >= 1) controller.abort();
+      },
+      signal: controller.signal,
+    })).rejects.toThrow(/cancelled/);
+
+    // Partially loaded, and still honestly marked partial.
+    expect(isSqlWindowPartial(character.chats[0])).toBe(true);
+    expect(character.chats[0].message.length).toBeLessThan(TRIMMING);
+    // The pin is released even on the abort path.
+    expect(isResidencyPinned("chat-aborted")).toBe(false);
+  }, 120_000);
+
+  // ── A chat that is already whole ────────────────────────────────────────
+
+  it("sends a chat that is already at the true start of its history without loading anything", async () => {
+    const character = await openChat("chat-short");
+    expect(character.chats[0].message).toHaveLength(SHORT);
+    expect(isSqlWindowPartial(character.chats[0])).toBe(false);
+
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: 1_000_000,
+      measure,
+      pageSize: 100,
+    });
+
+    expect(result.requests).toBe(0);
+    expect(result.reachedStartOfHistory).toBe(true);
+    expect(result.historySatisfied).toBe(true);
+    expect(result.resident).toBe(SHORT);
+  }, 120_000);
+
+  it("does nothing for a chat that was never windowed", async () => {
+    // No hydration window at all: a legacy full-load chat, or a non-SQL
+    // backend. `chat.message` is the whole history by construction.
+    const plain = {
+      chaId: CHARACTER_ID,
+      chatPage: 0,
+      chats: [{ id: "chat-unwindowed", message: [{ role: "user", data: "hi", chatId: "a" }] }],
+    } as unknown as character;
+
+    const result = await ensurePromptHistoryResident({
+      character: plain,
+      chatIndex: 0,
+      budgetTokens: 1_000_000,
+      measure,
+      pageSize: 100,
+    });
+    expect(result.requests).toBe(0);
+    expect(result.historySatisfied).toBe(true);
+    expect(result.holdsNewestEnd).toBe(true);
+  });
+
+  // ── A failed load refuses; it never sends short ─────────────────────────
+
+  it("rejects rather than generating from a short history when a page fails to load", async () => {
+    const character = await openChat("chat-failing");
+    const residentBefore = residentIds(character.chats[0]);
+    expect(residentBefore).toHaveLength(OPEN_PAGE);
+
+    // A storage whose OLDER pages fail. The newest page (no `before` cursor)
+    // still works, so the chat opens exactly as it does in the app and only
+    // the paging this preload drives is broken -- the real shape of a dropped
+    // connection mid-scrollback.
+    const client = await createClient(port, password);
+    activeStorage.current = new NodeSqliteStorage((input, init) => {
+      const url = String(input);
+      if (url.includes("/messages?") && url.includes("before=")) {
+        return Promise.resolve(new Response("nope", { status: 500 }));
+      }
+      return client.fetch(url, init);
+    });
+
+    await expect(ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: OPENED * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+      // The rejection is the transport failure itself, surfaced verbatim --
+      // not a local "no older messages" fallback that would look the same from
+      // outside while meaning something entirely different.
+    })).rejects.toThrow(/SQL message page failed \(500\)/);
+
+    // Nothing was invented and nothing was lost: the chat is exactly as the
+    // reader last saw it, and it is still marked partial so no other
+    // completeness reader is fooled either.
+    expect(residentIds(character.chats[0])).toEqual(residentBefore);
+    expect(isSqlWindowPartial(character.chats[0])).toBe(true);
+  }, 120_000);
+
+  it("rejects when the walk fails partway, rather than sending the pages that did arrive", async () => {
+    const character = await openChat("chat-halfway", 100);
+    const residentBefore = character.chats[0].message.length;
+
+    // The first older page succeeds, the second does not: a connection that
+    // drops in the middle of the walk, which is the shape that would otherwise
+    // leave a plausible-looking but short history behind.
+    let olderPages = 0;
+    const client = await createClient(port, password);
+    activeStorage.current = new NodeSqliteStorage((input, init) => {
+      const url = String(input);
+      if (url.includes("/messages?") && url.includes("before=")) {
+        olderPages += 1;
+        if (olderPages > 1) return Promise.resolve(new Response("nope", { status: 500 }));
+      }
+      return client.fetch(url, init);
+    });
+
+    await expect(ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: TRIMMING * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+    })).rejects.toThrow(/SQL message page failed \(500\)/);
+    flushSync();
+
+    // One page did land -- so this really is the partial-failure case and not
+    // the everything-failed one -- and it is still honestly marked partial.
+    expect(olderPages).toBeGreaterThan(1);
+    expect(character.chats[0].message.length).toBeGreaterThan(residentBefore);
+    expect(character.chats[0].message.length).toBeLessThan(TRIMMING);
+    expect(isSqlWindowPartial(character.chats[0])).toBe(true);
+    expect((character.chats[0] as any).messagesFullyLoaded).toBe(false);
+  }, 120_000);
+
+  it("rejects when the trimmed newest end cannot be restored", async () => {
+    const character = await openChat("chat-restore-fails", 100);
+
+    // Trim the newest end the way scroll paging does.
+    let guard = 0;
+    while (getSqlWindow(character.chats[0])?.hasOlder === true) {
+      await loadOlderChatMessages(character, 0, 100);
+      flushSync();
+      if ((guard += 1) > 20) throw new Error("reverse paging did not terminate");
+    }
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(true);
+    const residentBefore = character.chats[0].message.map((message) => message.chatId);
+
+    // The newest page (no `before` cursor) is what the restore asks for, and it
+    // is the one that fails now.
+    const client = await createClient(port, password);
+    activeStorage.current = new NodeSqliteStorage((input, init) => {
+      const url = String(input);
+      if (url.includes("/messages?") && !url.includes("before=")) {
+        return Promise.resolve(new Response("nope", { status: 500 }));
+      }
+      return client.fetch(url, init);
+    });
+
+    await expect(ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: 50 * TOKENS_PER_MESSAGE,
+      measure,
+      pageSize: 100,
+    })).rejects.toThrow();
+
+    // Refused with the chat exactly as it was, and still missing its newest
+    // end -- so no reply can be appended after the hole.
+    expect(character.chats[0].message.map((message) => message.chatId)).toEqual(residentBefore);
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(true);
+  }, 120_000);
+
+  it("rejects when the chat it was loading is gone by the time a page lands", async () => {
+    const character = await openChat("chat-vanishing", 100);
+
+    await expect(ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: TRIMMING * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+      onProgress: (progress) => {
+        // The chat is deleted underneath the walk. There is no history left to
+        // be whole, so there is nothing to generate from either.
+        if (progress.requests >= 1) character.chats.splice(0, character.chats.length);
+      },
+    })).rejects.toThrow(/hydration window|does not hold the newest end/);
+  }, 120_000);
+
+  // ── The newest end comes back on its own ────────────────────────────────
+
+  it("restores a newest end that residency trimming released, with no user action", async () => {
+    const character = await openChat("chat-restore", 100);
+
+    // Walk all the way back, which is what the reader does with the scrollback
+    // and what crosses MAX_RESIDENT_MESSAGES. Unpinned, so the trimmer runs.
+    let guard = 0;
+    while (getSqlWindow(character.chats[0])?.hasOlder === true) {
+      await loadOlderChatMessages(character, 0, 100);
+      flushSync();
+      if ((guard += 1) > 20) throw new Error("reverse paging did not terminate");
+    }
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(true);
+    const newestId = `chat-restore-msg-${String(TRIMMING - 1).padStart(4, "0")}`;
+    expect(residentIds(character.chats[0])).not.toContain(newestId);
+
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      // Small: the restored newest page already covers it, so this test is
+      // about the restore leg alone.
+      budgetTokens: 50 * TOKENS_PER_MESSAGE,
+      measure,
+      pageSize: 100,
+    });
+    flushSync();
+
+    expect(result.holdsNewestEnd).toBe(true);
+    expect(result.historySatisfied).toBe(true);
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+    expect(residentIds(character.chats[0])).toContain(newestId);
+    expect(residentIds(character.chats[0]).at(-1)).toBe(newestId);
+  }, 120_000);
+
+  // ── Residency trimming must not eat the tail the send appends to ────────
+
+  it("does not release the newest end while loading a history past MAX_RESIDENT_MESSAGES", async () => {
+    const character = await openChat("chat-bound", 100);
+
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      budgetTokens: TRIMMING * TOKENS_PER_MESSAGE * 2,
+      measure,
+      pageSize: 100,
+    });
+    flushSync();
+
+    // The load genuinely crossed the bound -- otherwise this test would pass
+    // for the wrong reason.
+    expect(result.resident).toBeGreaterThan(MAX_RESIDENT_MESSAGES);
+    expect(result.resident).toBe(TRIMMING);
+    expect(result.reachedStartOfHistory).toBe(true);
+    // ...and the tail the reply is about to be appended to is still there.
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+    expect(result.holdsNewestEnd).toBe(true);
+    const ids = residentIds(character.chats[0]);
+    expect(ids.at(-1)).toBe(`chat-bound-msg-${String(TRIMMING - 1).padStart(4, "0")}`);
+    expect(new Set(ids).size).toBe(ids.length);
+    // The pin is released again, so ordinary scroll paging trims as before.
+    expect(isResidencyPinned("chat-bound")).toBe(false);
+  }, 120_000);
+
+  it("still trims when nothing is pinned, so the test above is measuring the pin", async () => {
+    const character = await openChat("chat-untrimmed-control", 100);
+
+    let guard = 0;
+    while (getSqlWindow(character.chats[0])?.hasOlder === true) {
+      await loadOlderChatMessages(character, 0, 100);
+      flushSync();
+      if ((guard += 1) > 20) throw new Error("reverse paging did not terminate");
+    }
+
+    // The same walk over the same history, without a pin: the trimmer fires,
+    // the resident slice stays inside the bound, and the newest end is gone.
+    expect(character.chats[0].message.length).toBeLessThanOrEqual(MAX_RESIDENT_MESSAGES);
+    expect(hasNewerSqlMessages(character.chats[0])).toBe(true);
+  }, 120_000);
+
+  it("refuses to trim a chat that has a generation in flight", async () => {
+    const character = await openChat("chat-generating", 100);
+    const newestId = `chat-generating-msg-${String(TRIMMING - 1).padStart(4, "0")}`;
+
+    // `chatGenKey` is the chat's own id; the send registers under it before it
+    // touches the message array.
+    startGeneration("chat-generating", "generation-1");
+    expect(isResidencyPinned("chat-generating")).toBe(true);
+    try {
+      let guard = 0;
+      while (getSqlWindow(character.chats[0])?.hasOlder === true) {
+        await loadOlderChatMessages(character, 0, 100);
+        flushSync();
+        if ((guard += 1) > 20) throw new Error("reverse paging did not terminate");
+      }
+      expect(character.chats[0].message.length).toBeGreaterThan(MAX_RESIDENT_MESSAGES);
+      expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+      expect(residentIds(character.chats[0]).at(-1)).toBe(newestId);
+    } finally {
+      endGeneration("chat-generating");
+    }
+    expect(isResidencyPinned("chat-generating")).toBe(false);
+  }, 120_000);
+
+  // ── The runtime marks survive the paging, and nothing is written ───────
+
+  it("leaves the canonical positions and the hydration window consistent, and writes nothing", async () => {
+    const character = await openChat("chat-marks", 100);
+
+    // What storage held before the preload. Read through the real page API, so
+    // this is the persisted history, not a copy of the fixture.
+    const before = await storage.loadChatMessageReversePage("chat-marks", undefined, 1);
+
+    const result = await ensurePromptHistoryResident({
+      character,
+      chatIndex: 0,
+      // Stop on the budget rather than at the start of history, so the window
+      // is checked while it is still legitimately partial.
+      budgetTokens: 200 * TOKENS_PER_MESSAGE,
+      measure,
+      pageSize: 100,
+    });
+    flushSync();
+
+    const chat = character.chats[0];
+    const window = getSqlWindow(chat)!;
+    const messages = chat.message;
+
+    // Every resident message carries a canonical position, and they are in
+    // strictly ascending persisted order with no gaps introduced by the walk.
+    const positions = messages.map((message) => getSqlPosition(message));
+    expect(positions.every((position) => Number.isSafeInteger(position))).toBe(true);
+    for (let index = 1; index < positions.length; index += 1) {
+      expect(positions[index]!).toBeGreaterThan(positions[index - 1]!);
+    }
+    expect(positions.at(-1)! - positions[0]!).toBe(messages.length - 1);
+
+    // The window still describes the same history, and still describes it as
+    // partial -- so export, backup, merge and the idle audit keep seeing a
+    // partial history exactly as they did before the send loaded anything.
+    expect(window.total).toBe(TRIMMING);
+    expect(window.hasNewer).toBe(false);
+    expect(window.hasOlder).toBe(true);
+    expect(isSqlWindowPartial(chat)).toBe(true);
+    expect((chat as any).messagesFullyLoaded).toBe(false);
+    // `nextBefore` is the boundary for the next page back: the position of the
+    // oldest resident message, so a later scroll continues exactly where the
+    // preload stopped rather than re-reading or skipping.
+    expect(window.nextBefore).toBe(positions[0]);
+    expect(window.nextPosition).toBeGreaterThanOrEqual(positions.at(-1)! + 1);
+    expect(result.reachedStartOfHistory).toBe(false);
+
+    // Nothing was marked for writing by reading.
+    for (const message of messages) {
+      expect(isSqlMessageDirty("chat-marks", message.chatId!)).toBe(false);
+    }
+    // And storage is byte-for-byte the history it was: same count, same newest
+    // message, same next position.
+    const after = await storage.loadChatMessageReversePage("chat-marks", undefined, 1);
+    expect(after.total).toBe(before.total);
+    expect(after.nextPosition).toBe(before.nextPosition);
+    expect(after.messages[0].chatId).toBe(before.messages[0].chatId);
+    expect(after.messages[0].data).toBe(before.messages[0].data);
+  }, 120_000);
+
+  /**
+   * The window between the preload's first request and the point where `sendChat`
+   * re-reads the selection out of `DBState`.
+   *
+   * Driven against real hydrated chats rather than object literals: what the
+   * predicate compares -- `chaId`, `chatPage`, and the chat's `id` -- are exactly
+   * the fields the hydrator fills in, and a literal that happened to differ from
+   * a hydrated chat in one of them is the shape of fixture this codebase has been
+   * bitten by before.
+   */
+  describe("the chat a preload was run for", () => {
+    /** A character holding two real chats, both opened the way the app opens them. */
+    async function openTwoChats(): Promise<character> {
+      const db = $state({
+        characters: [{
+          chaId: CHARACTER_ID,
+          chatPage: 0,
+          chats: [
+            { id: "chat-opened", name: "Chat 0", note: "", localLore: [], message: [] as any[], _placeholder: true, messagesLoaded: false },
+            { id: "chat-budget", name: "Chat 1", note: "", localLore: [], message: [] as any[], _placeholder: true, messagesLoaded: false },
+          ],
+        }],
+      });
+      const character = db.characters[0] as unknown as character;
+      await ensureChatMessageWindow(character, 0, OPEN_PAGE);
+      flushSync();
+      await ensureChatMessageWindow(character, 1, OPEN_PAGE);
+      flushSync();
+      return character;
+    }
+
+    it("is unmoved when the reader stayed where they were", async () => {
+      const character = await openTwoChats();
+      const target = capturePromptPreloadTarget(character, 0, character.chats[0]);
+      expect(promptPreloadTargetMoved(target, character)).toBe(false);
+    }, 120_000);
+
+    it("has moved when the reader switched to another chat of the same character", async () => {
+      const character = await openTwoChats();
+      const target = capturePromptPreloadTarget(character, 0, character.chats[0]);
+      // Exactly what the sidebar does while the pages are in the air. Chat 1 was
+      // never preloaded: it is sitting on the 40 messages it opened with.
+      character.chatPage = 1;
+      expect(character.chats[1].message.length).toBe(OPEN_PAGE);
+      expect(isSqlWindowPartial(character.chats[1])).toBe(true);
+      expect(promptPreloadTargetMoved(target, character)).toBe(true);
+    }, 120_000);
+
+    it("has moved when the reader opened a different character", async () => {
+      const character = await openTwoChats();
+      const target = capturePromptPreloadTarget(character, 0, character.chats[0]);
+      const other = { chaId: "someone-else", chatPage: 0, chats: [{ id: "chat-opened" }] } as unknown as character;
+      expect(promptPreloadTargetMoved(target, other)).toBe(true);
+    }, 120_000);
+
+    it("has moved when the slot still exists but now holds a different chat", async () => {
+      const character = await openTwoChats();
+      const target = capturePromptPreloadTarget(character, 0, character.chats[0]);
+      // A deletion shifts the chat list under a selection that never changed.
+      character.chats.splice(0, 1);
+      expect(character.chatPage).toBe(0);
+      expect(promptPreloadTargetMoved(target, character)).toBe(true);
+    }, 120_000);
+
+    it("does not refuse a legacy chat that has no id yet", async () => {
+      // `ensureNarrativeSessionChatId` assigns one later in `sendChat`, so a chat
+      // can legitimately reach the preload without one. Refusing those would
+      // block sends that have done nothing wrong.
+      const legacy = { chaId: CHARACTER_ID, chatPage: 0, chats: [{ message: [] }] } as unknown as character;
+      const target = capturePromptPreloadTarget(legacy, 0, legacy.chats[0]);
+      expect(target.chatId).toBeUndefined();
+      expect(promptPreloadTargetMoved(target, legacy)).toBe(false);
+    });
+
+    it("has moved when there is no selected character at all", async () => {
+      const character = await openTwoChats();
+      const target = capturePromptPreloadTarget(character, 0, character.chats[0]);
+      expect(promptPreloadTargetMoved(target, undefined)).toBe(true);
+    }, 120_000);
+  });
+});
+
+describe("the residency pin", () => {
+  afterEach(() => {
+    endAllGenerations();
+    resetResidencyPinsForTesting();
+  });
+
+  it("counts, so two holders cannot unpin each other", () => {
+    beginResidencyPin("chat-a");
+    beginResidencyPin("chat-a");
+    endResidencyPin("chat-a");
+    expect(isResidencyPinned("chat-a")).toBe(true);
+    endResidencyPin("chat-a");
+    expect(isResidencyPinned("chat-a")).toBe(false);
+  });
+
+  it("survives the end/restart churn of auto-continue under one key", () => {
+    startGeneration("chat-b", "generation-1");
+    // Auto-continue: end and immediately restart under the same key.
+    endGeneration("chat-b", { keepPendingAbort: true });
+    startGeneration("chat-b", "generation-2");
+    expect(isResidencyPinned("chat-b")).toBe(true);
+    endGeneration("chat-b");
+    expect(isResidencyPinned("chat-b")).toBe(false);
+  });
+
+  it("is not double-released by a duplicate endGeneration", () => {
+    beginResidencyPin("chat-c");
+    startGeneration("chat-c", "generation-1");
+    endGeneration("chat-c");
+    endGeneration("chat-c");
+    // The preload's own pin is still held; only the generation's was released.
+    expect(isResidencyPinned("chat-c")).toBe(true);
+    endResidencyPin("chat-c");
+    expect(isResidencyPinned("chat-c")).toBe(false);
+  });
+
+  it("releases every live entry that endAllGenerations clears", () => {
+    startGeneration("chat-d", "generation-1");
+    startGeneration("chat-e", "generation-2", "background");
+    endAllGenerations();
+    expect(isResidencyPinned("chat-d")).toBe(false);
+    // A background job still holds the chat: its poll loop will append to it.
+    expect(isResidencyPinned("chat-e")).toBe(true);
+  });
+});
