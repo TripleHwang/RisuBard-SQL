@@ -39,6 +39,7 @@ const {
 const { getSqlPosition, getSqlWindow, isSqlWindowPartial, hasNewerSqlMessages } = await import("./sqlRuntimeWindow");
 const { isSqlMessageDirty } = await import("./sqlPersistenceRuntime");
 const { ensurePromptHistoryResident } = await import("./promptHistoryPreload");
+const { resolvePromptHistoryBound } = await import("../../process/promptHistoryBound");
 const {
   beginResidencyPin,
   endResidencyPin,
@@ -76,7 +77,24 @@ let storage: InstanceType<typeof NodeSqliteStorage>;
 let port: number;
 let password: string;
 
-interface Seed { chatId: string; length: number }
+/**
+ * A message that costs 88 tokens under `measure`, which is what the messages of
+ * the real 1200-message conversation this file re-measures cost through the
+ * real tokenizer. 65,000 / 88 is 739, and that is where the pre-bound walk
+ * stopped: 740 resident after 7 pages.
+ */
+const REAL_TOKENS_PER_MESSAGE = 88;
+function realisticBody(index: number): string {
+  return `message ${String(index).padStart(4, "0")} `.padEnd(REAL_TOKENS_PER_MESSAGE * 4, ".");
+}
+
+interface Seed {
+  chatId: string;
+  length: number;
+  body?: (index: number) => string;
+  /** `disabled === true`, which `makeMs` skips and the prompt never sees. */
+  disabled?: (index: number) => boolean;
+}
 
 function legacyDatabase(seeds: Seed[]): Database {
   return {
@@ -97,15 +115,16 @@ function legacyDatabase(seeds: Seed[]): Database {
       firstMessage: "Hello, this is the greeting.",
       alternateGreetings: [],
       chatPage: 0,
-      chats: seeds.map(({ chatId, length }, chatIndex) => ({
+      chats: seeds.map(({ chatId, length, body, disabled }, chatIndex) => ({
         id: chatId,
         name: `Chat ${chatIndex}`,
         note: "",
         localLore: [],
         message: Array.from({ length }, (_, index) => ({
           role: index % 2 === 0 ? "user" : "char",
-          data: messageBody(index),
+          data: (body ?? messageBody)(index),
           chatId: `${chatId}-msg-${String(index).padStart(4, "0")}`,
+          ...(disabled?.(index) ? { disabled: true } : {}),
         })),
       })),
     }],
@@ -149,6 +168,10 @@ const OPENED = 100;
 const LONG = 600;
 /** Comfortably past MAX_RESIDENT_MESSAGES (320), so a full walk back trims. */
 const TRIMMING = 420;
+/** The conversation the pre-bound walk was measured on: 740 resident, 7 pages. */
+const MEASURED = 1_200;
+/** `resolvePromptContextBudget`'s ModelPreset branch, `index.svelte.ts:851`. */
+const MODEL_PRESET_BUDGET = 65_000;
 
 describe("loading the history a prompt needs before generating", () => {
   beforeAll(async () => {
@@ -173,6 +196,10 @@ describe("loading the history a prompt needs before generating", () => {
       { chatId: "chat-halfway", length: TRIMMING },
       { chatId: "chat-restore-fails", length: TRIMMING },
       { chatId: "chat-vanishing", length: TRIMMING },
+      { chatId: "chat-measure", length: MEASURED, body: realisticBody },
+      // Two of every three recent messages disabled: the shape the raw
+      // target's "double it and add eight" guess is wrong about.
+      { chatId: "chat-disabled", length: MEASURED, disabled: (index) => index % 3 !== 0 },
     ]))).toBe(true);
     activeStorage.current = storage;
   }, 120_000);
@@ -259,6 +286,298 @@ describe("loading the history a prompt needs before generating", () => {
     expect(ids.at(-1)).toBe(`chat-budget-msg-${String(LONG - 1).padStart(4, "0")}`);
     expect(new Set(ids).size).toBe(ids.length);
   }, 120_000);
+
+  // ── The measurement this change exists for ──────────────────────────────
+
+  /**
+   * The 1200-message conversation, through the real server, at the real budget.
+   *
+   * The pre-bound walk stopped when the resident history was worth the whole
+   * request budget, which on this chat is 740 messages after 7 page requests --
+   * 2.3x `MAX_RESIDENT_MESSAGES`, re-tokenised on every subsequent send, to
+   * build a prompt whose history `selectNarrativeWorkingMessages` caps at
+   * twelve. Both figures are asserted below, so the "after" numbers are
+   * measured against a reproduced "before" rather than a remembered one.
+   */
+  describe("what a 1200-message conversation actually loads", () => {
+    /** The `resolvePromptHistoryBound` result for a given configuration. */
+    function boundFor(options: {
+      risuBardSettings?: Record<string, unknown>;
+      globalLore?: any[];
+      loreScanDepth?: number;
+    }) {
+      const character = {
+        chaId: "measure",
+        chatPage: 0,
+        globalLore: options.globalLore ?? [],
+        loreSettings: options.loreScanDepth === undefined ? undefined : { scanDepth: options.loreScanDepth },
+        chats: [{ id: "chat-measure", localLore: [], message: [], risuBardSettings: options.risuBardSettings }],
+      } as any;
+      return resolvePromptHistoryBound(
+        character,
+        character.chats[0],
+        { loreBookDepth: 5, maxContext: 4_000 } as any,
+      );
+    }
+
+    it("loaded 740 of them before this change, at the budget alone", async () => {
+      const character = await openChat("chat-measure");
+      expect(character.chats[0].message).toHaveLength(OPEN_PAGE);
+
+      // No `targetMessages`: exactly the v0.3.17 behaviour, still reachable and
+      // still what an unboundable configuration falls back to.
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      expect(result.resident).toBe(740);
+      expect(result.requests).toBe(7);
+      expect(result.targetMessages).toBeUndefined();
+      // The number this whole change is about: the memory bound, suspended.
+      expect(result.resident).toBeGreaterThan(MAX_RESIDENT_MESSAGES * 2);
+    }, 120_000);
+
+    it("loads 40 of them at default settings, in no requests at all", async () => {
+      const character = await openChat("chat-measure");
+      const bound = boundFor({});
+      expect(bound.targetMessages).toBe(40);
+
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      expect(result.resident).toBe(40);
+      expect(result.requests).toBe(0);
+      expect(result.historySatisfied).toBe(true);
+      expect(result.holdsNewestEnd).toBe(true);
+      // Not one message was tokenised to decide that: the message-count test
+      // settles it before the measure is ever called.
+      expect(result.measuredTokens).toBe(0);
+      expect(character.chats[0].message).toHaveLength(40);
+      expect(residentIds(character.chats[0]).at(-1))
+        .toBe(`chat-measure-msg-${String(MEASURED - 1).padStart(4, "0")}`);
+    }, 120_000);
+
+    it("loads what a heavy lorebook scans, and stops there", async () => {
+      const character = await openChat("chat-measure");
+      const bound = boundFor({
+        loreScanDepth: 20,
+        globalLore: [
+          { comment: "deep", key: "brackwater", content: "@@scan_depth 150\ndeep entry", mode: "normal", insertorder: 100, alwaysActive: false, secondkey: "", selective: false },
+        ],
+      });
+      expect(bound.targetMessages).toBe(150);
+
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      // Exactly the scan's reach, not a round hundred past it: the last page is
+      // sized to what is still missing.
+      expect(result.resident).toBe(150);
+      expect(result.requests).toBe(2);
+      expect(result.resident).toBeLessThanOrEqual(MAX_RESIDENT_MESSAGES);
+      // The newest end is still the newest end, and the slice is contiguous.
+      const ids = residentIds(character.chats[0]);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(ids.at(-1)).toBe(`chat-measure-msg-${String(MEASURED - 1).padStart(4, "0")}`);
+      expect(ids[0]).toBe(`chat-measure-msg-${String(MEASURED - 150).padStart(4, "0")}`);
+      expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+    }, 120_000);
+
+    it("loads what a heavy narrative working set needs, and stops there", async () => {
+      const character = await openChat("chat-measure");
+      // 100 messages of working set, doubled for the disabled headroom plus a
+      // fixed eight.
+      const bound = boundFor({
+        risuBardSettings: { risuBardResponseMessageCount: 100 },
+      });
+      expect(bound.targetMessages).toBe(208);
+
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      expect(result.resident).toBe(208);
+      expect(result.requests).toBe(2);
+      // The deliberately heavy case still sits inside the residency bound,
+      // which is the property that was lost.
+      expect(result.resident).toBeLessThanOrEqual(MAX_RESIDENT_MESSAGES);
+    }, 120_000);
+
+    it("clamps a hostile configuration to the residency bound rather than past it", async () => {
+      const character = await openChat("chat-measure");
+      // 100 in the working set with user messages filtered out of it needs 200
+      // enabled messages, and the disabled headroom doubles that again: 408,
+      // which is more resident than this application is willing to hold.
+      const bound = boundFor({
+        risuBardSettings: {
+          risuBardResponseMessageCount: 100,
+          risuBardResponseExcludeUserMessages: true,
+        },
+      });
+      expect(bound.targetMessages).toBe(MAX_RESIDENT_MESSAGES);
+
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      // At the bound and not one message past it -- the last page is sized to
+      // what is still missing, so paging cannot overshoot into a trim.
+      expect(result.resident).toBe(MAX_RESIDENT_MESSAGES);
+      expect(result.requests).toBe(3);
+      expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+    }, 120_000);
+
+    it("keeps the budget as a ceiling: a huge target never outspends it", async () => {
+      const character = await openChat("chat-measure");
+      // A target well past what 65,000 tokens can hold. The budget stops the
+      // walk first, so this can never load more than the old behaviour did.
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: 100 * REAL_TOKENS_PER_MESSAGE,
+        targetMessages: MAX_RESIDENT_MESSAGES,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      expect(result.resident).toBeLessThan(MAX_RESIDENT_MESSAGES);
+      expect(result.measuredTokens).toBeGreaterThanOrEqual(100 * REAL_TOKENS_PER_MESSAGE);
+      expect(result.historySatisfied).toBe(true);
+      expect(result.holdsNewestEnd).toBe(true);
+    }, 120_000);
+
+    it("never loads less than the window a chat opens on", async () => {
+      const character = await openChat("chat-measure");
+      // Even asked for one message, the floor in `resolvePromptHistoryBound`
+      // means a send never shrinks the window a trigger script or a
+      // `{{history}}` token sees. Passed straight through here to show the
+      // preload itself does not add a floor of its own -- the bound owns it.
+      const bound = boundFor({
+        risuBardSettings: { risuBardResponseMessageCount: 1, risuBardRecentMessageCount: 1 },
+      });
+      expect(bound.targetMessages).toBe(40);
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        measure,
+        pageSize: 100,
+      });
+      expect(result.resident).toBe(OPEN_PAGE);
+    }, 120_000);
+
+    it("keeps paging when disabled messages make the raw target optimistic", async () => {
+      // `targetMessages` is a guess -- "double the visible requirement and add
+      // eight" -- made before a single message is loaded. On a chat with two of
+      // every three recent messages disabled that guess is short by a third,
+      // and the prompt would have been built from 43 of the 60 messages the
+      // reader configured, with nothing to say so. The walk checks the guess
+      // against the messages it actually holds.
+      const bound = boundFor({ risuBardSettings: { risuBardResponseMessageCount: 60 } });
+      expect(bound.targetMessages).toBe(128);
+      expect(bound.targetEnabledMessages).toBe(60);
+
+      const visible = (chat: Chat) =>
+        (chat.message ?? []).filter((message) => message.disabled !== true).length;
+
+      // The guess alone, which is what shipped before this: short.
+      const guessOnly = await openChat("chat-disabled");
+      await ensurePromptHistoryResident({
+        character: guessOnly,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+      expect(guessOnly.chats[0].message).toHaveLength(128);
+      expect(visible(guessOnly.chats[0])).toBeLessThan(60);
+
+      // The guess plus the check on what actually arrived.
+      const character = await openChat("chat-disabled");
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        targetEnabledMessages: bound.targetEnabledMessages,
+        residentCeiling: bound.residentCeiling,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      expect(visible(character.chats[0])).toBeGreaterThanOrEqual(60);
+      // 183 resident to hold 60 visible, in two requests -- the page size is
+      // scaled by the visible density already observed. Sizing it by the raw
+      // shortfall instead filled a third of the gap each time and took ten.
+      expect(result.resident).toBe(183);
+      expect(result.requests).toBe(2);
+      // Still inside the residency bound, and still the newest end.
+      expect(result.resident).toBeLessThanOrEqual(MAX_RESIDENT_MESSAGES);
+      expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+      expect(residentIds(character.chats[0]).at(-1))
+        .toBe(`chat-disabled-msg-${String(MEASURED - 1).padStart(4, "0")}`);
+    }, 120_000);
+
+    it("stops at the residency ceiling even when the visible target is unreachable", async () => {
+      // Almost everything disabled: no resident count this application is
+      // willing to hold contains 200 visible messages. The ceiling is the
+      // answer, not an unbounded walk.
+      const bound = boundFor({ risuBardSettings: { risuBardResponseMessageCount: 200 } });
+      expect(bound.targetEnabledMessages).toBe(200);
+
+      const character = await openChat("chat-disabled");
+      const result = await ensurePromptHistoryResident({
+        character,
+        chatIndex: 0,
+        budgetTokens: MODEL_PRESET_BUDGET,
+        targetMessages: bound.targetMessages,
+        targetEnabledMessages: bound.targetEnabledMessages,
+        residentCeiling: bound.residentCeiling,
+        measure,
+        pageSize: 100,
+      });
+      flushSync();
+
+      expect(result.resident).toBe(MAX_RESIDENT_MESSAGES);
+      expect(hasNewerSqlMessages(character.chats[0])).toBe(false);
+    }, 120_000);
+  });
 
   it("reports progress while it pages, so a long walk is not a silent pause", async () => {
     const character = await openChat("chat-progress", 100);

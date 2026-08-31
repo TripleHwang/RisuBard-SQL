@@ -33,7 +33,7 @@ import { dispatchCommittedChatOutput } from "../plugins/pluginChatOutput";
 import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
-import { getModuleAssets, getModuleToggles } from "./modules";
+import { getModuleAssets, getModuleLorebooksWithSources, getModuleToggles } from "./modules";
 import { forageStorage, readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
@@ -84,6 +84,7 @@ import { resolveRisuBardChatSettings } from '../risubard/risuBardSettings';
 import { saveChatToServer } from '../storage/chatStorage';
 import { replaceChatSlotCarryingSqlRuntimeFields } from '../storage/sql/sqlRuntimeWindow';
 import { ensurePromptHistoryResident } from '../storage/sql/promptHistoryPreload';
+import { resolvePromptHistoryBound } from './promptHistoryBound';
 import { capturePromptPreloadTarget, promptPreloadTargetMoved } from './promptPreloadTarget';
 import {
     createWikiRebootJob,
@@ -914,6 +915,17 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         // opening 40 messages -- the exact silent truncation this guard exists
         // to prevent -- so a switch is a refusal, not something to paper over.
         const preloadTarget = capturePromptPreloadTarget(selected, selected.chatPage, selectedConversation)
+        // How far back this send's prompt can actually read, derived from the
+        // narrative working-set limit, the recent-memory projection and the
+        // deepest scan any activatable lorebook entry asks for. See
+        // `promptHistoryBound.ts`: the token budget below is a ceiling on this,
+        // not the target it used to be.
+        const historyBound = resolvePromptHistoryBound(
+            selected,
+            selectedConversation,
+            DBState.db,
+            getModuleLorebooksWithSources,
+        )
         const preloadTokenizer = new ChatTokenizer(
             arg.chatAdditonalTokens ?? (DBState.db.aiModel.startsWith('gpt') ? 5 : 3),
             DBState.db.aiModel.startsWith('gpt') ? 'noName' : 'name',
@@ -924,6 +936,15 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 character: selected,
                 chatIndex: selected.chatPage,
                 budgetTokens: resolvePromptContextBudget(selectedConversation).maxContextTokens,
+                targetMessages: historyBound.targetMessages,
+                // `targetMessages` is a guess at how many array slots the
+                // prompt's visible messages occupy, made before anything is
+                // loaded. These two let the walk check the guess against the
+                // messages it actually has and page further if a heavily
+                // disabled history made it optimistic -- never past the
+                // residency bound.
+                targetEnabledMessages: historyBound.targetEnabledMessages,
+                residentCeiling: historyBound.residentCeiling,
                 // The raw message text through the real tokenizer. The prompt
                 // charges at least this much for the same message once role
                 // names, scripts and formatting are added, so the measure is a

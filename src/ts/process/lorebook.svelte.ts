@@ -14,6 +14,7 @@ import { CCardLib } from "@risuai/ccardlib";
 import { v4 } from "uuid";
 import { canRunLorebookSweep, isLorebookEntryEnabled } from './lorebookActivation';
 import { ensureStableLorebookOwnerId } from '../lorebook/ownerIdentity';
+import { getSqlWindow } from '../storage/sql/sqlRuntimeWindow';
 import {
     matchesLorebookKey,
     resolveLorebookMatchingMode,
@@ -106,7 +107,22 @@ export async function loadLoreBookV3Prompt(search?: { character: character; text
         char.loreSettings?.fullWordMatching,
     )
     const matchingLocale = getCurrentLocale()
-    const chatLength = currentChat.length + 1 //includes first message
+    // The conversation's length, not the resident slice's.
+    //
+    // `@@activate_only_after N` and `@@activate_only_every N` compare against
+    // this, and both are asking about the CONVERSATION -- "once we are a
+    // hundred messages in". Reading `currentChat.length` answered with however
+    // much of the history happened to be loaded, so the same entry activated or
+    // not depending on whether the reader had scrolled, and on how far the
+    // prompt-history preload had walked. The hydration window knows the real
+    // count; `Math.max` because a chat with no window (legacy full load, or a
+    // non-SQL backend) has no `total` to consult and its resident slice IS the
+    // history. See `promptHistoryBound.ts`: these two decorators want a total
+    // rather than a depth, so no amount of preloading could have fixed them.
+    const persistedChatLength = search
+        ? currentChat.length
+        : Math.max(currentChat.length, getSqlWindow(char.chats[page])?.total ?? 0)
+    const chatLength = persistedChatLength + 1 //includes first message
     const recursiveScanning = char.loreSettings?.recursiveScanning ?? true
     const maxRecursionSteps = Math.max(0, char.loreSettings?.maxRecursionSteps ?? 0)
     let recursivePrompt:{

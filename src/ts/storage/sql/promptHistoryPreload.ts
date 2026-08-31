@@ -25,29 +25,49 @@ import { loadNewestChatMessages, loadOlderChatMessages } from "./sqlRuntimeHydra
  *
  * WHAT BOUNDS THE LOAD
  *
- * The prompt's history bound is a TOKEN budget, not a message count. Every
- * enabled message in `chat.message` is turned into an `OpenAIChat` and pushed
- * onto `chats` (process/index.svelte.ts), and what shortens that list is
- * `while (currentTokens > maxContextTokens) chats.splice(0, 1)` -- dropping
- * from the OLDEST end. When memory summarization is on, `hypaMemoryV3` takes
- * the same array and the same `maxContextTokens` and summarizes the overflow
- * instead of dropping it. There is no maximum message count anywhere in that
- * path.
+ * A MESSAGE COUNT, derived from what the prompt's consumers actually read, with
+ * the token budget kept only as a ceiling.
  *
- * So the load stops as soon as the resident history is worth at least
- * `budgetTokens` on its own. Past that point every additional older message is
- * provably discarded (or summarized, which the persisted `hypaV3Data` already
- * covers) before the request is built, so fetching it would be pure cost.
- * Loading "everything" instead would defeat the windowing this whole subsystem
- * exists for: a 20,000-message chat would be pulled entirely into memory to
- * send 65,000 tokens of it.
+ * This module used to stop when the resident history was worth the whole
+ * request budget (`maxContext`), on the reasoning that the prompt's only cap on
+ * history is `while (currentTokens > maxContextTokens) chats.splice(0, 1)`.
+ * That reasoning was wrong, and it was wrong in the direction that costs
+ * memory. Before any tokenisation happens, `process/index.svelte.ts` narrows
+ * the history to `risuBardResponseMessageCount` messages
+ * (`selectNarrativeWorkingMessages`), and THAT narrowed array is the only thing
+ * the `chats` loop, the splice loop and `hypaMemoryV3` ever see. Twelve, by
+ * default. A measured 1200-message chat was ending at 740 resident -- 2.3x
+ * `MAX_RESIDENT_MESSAGES` -- and re-tokenising ~672 of them on every send, to
+ * build a prompt that used twelve.
  *
- * The budget is deliberately an OVER-estimate of what the history may occupy:
- * `maxContextTokens` is the budget for the WHOLE request, and the history is
- * only one of its parts (description, lorebook, persona, author's note, memory
- * and the example messages all come out of the same budget). Measuring the
- * history against the whole budget therefore loads at least as much as the
- * prompt can use, never less.
+ * `targetMessages` is that derived figure; see `process/promptHistoryBound.ts`
+ * for each term and why. It is floored at the page a chat opens on, so no
+ * consumer that cannot be bounded statically -- a trigger script indexing an
+ * arbitrary message, `{{history}}` inside a lorebook entry -- ever sees a
+ * window shorter than the one it saw before this module existed. It is capped
+ * at `MAX_RESIDENT_MESSAGES`, which is the whole point: the memory bound is no
+ * longer suspended for any chat that gets sent in.
+ *
+ * `targetMessages` counts array SLOTS, and the prompt does not read slots -- it
+ * skips `disabled === true`. The bound cannot tell how many of each a chat has
+ * (it runs before the first page request), so it guesses, and
+ * `targetEnabledMessages` is what the guess was guessing at. This walk can see
+ * the messages, so it checks: a chat with two of every three recent messages
+ * disabled keeps paging past `targetMessages` until enough VISIBLE messages are
+ * resident, stopping at `residentCeiling`. Without that second figure a reader
+ * with a sixty-message working set got forty-three of them, silently.
+ *
+ * `budgetTokens` remains, as a CEILING and never as a target. The walk stops at
+ * whichever comes first, so this can never load more history than the previous
+ * behaviour would have, and a caller that passes no `targetMessages` gets
+ * exactly the previous behaviour. The budget is an OVER-estimate of what the
+ * history may occupy -- `maxContextTokens` is the budget for the WHOLE request,
+ * and the history is only one of its parts -- so as a ceiling it is never the
+ * thing that makes a load short.
+ *
+ * Loading "everything" instead of either would defeat the windowing this whole
+ * subsystem exists for: a 20,000-message chat would be pulled entirely into
+ * memory to send twelve messages of it.
  *
  * WHAT IS NOT NEGOTIABLE
  *
@@ -82,10 +102,44 @@ export interface PromptHistoryPreloadOptions {
   character: character;
   chatIndex: number;
   /**
-   * Token budget the prompt may spend in total. The load stops once the
-   * resident history is worth this much on its own.
+   * Token budget the prompt may spend in total. A CEILING, not a target: the
+   * load stops once the resident history is worth this much on its own, so it
+   * can never load more than the pre-bound behaviour did.
    */
   budgetTokens: number;
+  /**
+   * Resident messages the prompt's consumers can actually reach, from
+   * `resolvePromptHistoryBound`. The walk stops as soon as this many are
+   * resident, which at default settings is before it starts.
+   *
+   * `undefined` means "could not be bounded" -- a lorebook entry whose
+   * `@@scan_depth` does not parse scans the entire resident array -- and falls
+   * back to `budgetTokens` alone, which is the behaviour every send had before
+   * this option existed. Under-estimating here is the dangerous direction: it
+   * builds a prompt from a history shorter than it should be, and nothing
+   * downstream notices. Callers pass a figure with headroom.
+   */
+  targetMessages?: number;
+  /**
+   * Messages the prompt can SEE (`disabled === true` skipped) that must be
+   * resident, from `resolvePromptHistoryBound`.
+   *
+   * `targetMessages` is a guess at how many array slots that takes, made
+   * without reading the messages. This is the thing the guess was guessing at,
+   * and the walk can read the messages, so it checks: a chat whose recent
+   * history is mostly disabled keeps paging past `targetMessages` until this
+   * many visible messages are resident, or until `residentCeiling` stops it.
+   * Without this check a reader who asked for a 60-message working set and
+   * disabled two of every three recent messages got 43 of them, silently.
+   */
+  targetEnabledMessages?: number;
+  /**
+   * Hard stop on the walk, normally `MAX_RESIDENT_MESSAGES`. Only
+   * `targetEnabledMessages` can push the load past `targetMessages`, and this
+   * is what keeps that from pushing it past the residency bound. Ignored when
+   * there is no `targetEnabledMessages` to extend the walk.
+   */
+  residentCeiling?: number;
   /**
    * Token cost of a run of messages, measured the way the prompt measures them.
    * Called with newly arrived messages only, so the walk stays O(history).
@@ -116,11 +170,16 @@ export interface PromptHistoryPreloadResult {
    */
   holdsNewestEnd: boolean;
   /**
-   * True when nothing older can still change the prompt: either the start of
-   * the conversation is resident, or the resident history is already worth
-   * more than the whole request budget.
+   * True when nothing older can still change the prompt: the start of the
+   * conversation is resident, or enough messages for every consumer are, or
+   * the resident history is already worth more than the whole request budget.
    */
   historySatisfied: boolean;
+  /**
+   * The message target this run was given, echoed back so a caller can report
+   * what bounded the load. `undefined` when only the budget did.
+   */
+  targetMessages: number | undefined;
   /** True when `chat.message` starts at the first message of the conversation. */
   reachedStartOfHistory: boolean;
   /** Resident message count when this returned. */
@@ -208,6 +267,25 @@ export async function ensurePromptHistoryResident(
 ): Promise<PromptHistoryPreloadResult> {
   const { character, chatIndex, budgetTokens, measure, onProgress, signal } = options;
   const pageSize = Math.max(1, Math.min(100, Math.floor(options.pageSize ?? DEFAULT_PAGE_SIZE)));
+  // A target that is not a usable count is no target: fall back to the budget
+  // rather than invent one. `undefined` here and `Infinity` behave identically
+  // and both mean "the budget is the only stop", which is the old behaviour.
+  const targetMessages =
+    typeof options.targetMessages === "number" && Number.isFinite(options.targetMessages)
+      ? Math.max(1, Math.floor(options.targetMessages))
+      : undefined;
+  // Only meaningful alongside a raw target: on its own it would extend a walk
+  // that has no bound to extend from.
+  const targetEnabledMessages =
+    targetMessages !== undefined
+      && typeof options.targetEnabledMessages === "number"
+      && Number.isFinite(options.targetEnabledMessages)
+      ? Math.max(1, Math.floor(options.targetEnabledMessages))
+      : undefined;
+  const residentCeiling =
+    typeof options.residentCeiling === "number" && Number.isFinite(options.residentCeiling)
+      ? Math.max(targetMessages ?? 1, Math.floor(options.residentCeiling))
+      : (targetMessages ?? Number.POSITIVE_INFINITY);
 
   const chat = character?.chats?.[chatIndex] as Chat | undefined;
   if (!chat) {
@@ -230,6 +308,7 @@ export async function ensurePromptHistoryResident(
       total: resident,
       requests: 0,
       measuredTokens: 0,
+      targetMessages,
     };
   }
 
@@ -270,15 +349,77 @@ export async function ensurePromptHistoryResident(
     // Re-read the slot: `loadNewestChatMessages` may have replaced or moved it.
     const live = () => character.chats?.[chatIndex] as Chat | undefined;
 
-    // ── 2. Walk backwards until the prompt's budget is covered ──────────────
+    // ── 2. Walk backwards until every consumer's reach is resident ──────────
     //
-    // Measured lazily and only once. A chat that already holds the start of its
-    // history (`hasOlder === false`) is satisfied whatever it costs, and
-    // tokenizing it to find that out would put a full extra tokenizer pass on
-    // every send of every short conversation.
+    // Three stops, whichever comes first:
+    //
+    //  - `targetMessages` resident AND `targetEnabledMessages` of them visible
+    //    to the prompt. The derived bound; normally the one that fires, and
+    //    normally before the first request. The second half is what a chat with
+    //    a heavily disabled recent history needs: `targetMessages` was computed
+    //    without reading the messages, so on such a chat it is optimistic, and
+    //    the walk keeps going -- to `residentCeiling` and no further.
+    //  - a `disabled === 'allBefore'` marker resident. `makeMs` stops there, so
+    //    nothing older is reachable by the prompt at any depth.
+    //  - the resident history worth the whole request budget. The ceiling,
+    //    kept so this can never load more than it used to.
+    //
+    // The token measure is lazy and runs at most once, and the message-count
+    // test is checked first precisely so that at default settings it never runs
+    // at all. A chat that already holds the start of its history
+    // (`hasOlder === false`) is satisfied whatever it costs, and tokenizing it
+    // to find that out would put a full extra tokenizer pass on every send of
+    // every short conversation.
     let measuredTokens = 0;
     let measured = false;
+    const residentCount = () => live()?.message?.length ?? 0;
+    const enabledResidentCount = () => promptVisible(live()?.message ?? []).length;
+    /**
+     * Resident messages still missing before the count test can pass, or 0 when
+     * it already does. The enabled leg is what can exceed the raw target, and
+     * the ceiling is what stops it running away on a chat that is mostly
+     * disabled.
+     */
+    const stillMissing = () => {
+      if (targetMessages === undefined) return Number.POSITIVE_INFINITY;
+      const resident = residentCount();
+      let missing = targetMessages - resident;
+      if (targetEnabledMessages !== undefined) {
+        missing = Math.max(missing, targetEnabledMessages - enabledResidentCount());
+      }
+      return Math.max(0, Math.min(missing, residentCeiling - resident));
+    };
+    /**
+     * Size of the next page.
+     *
+     * `stillMissing` counts what is missing; on the enabled leg it counts
+     * VISIBLE messages, and asking for that many array slots on a chat that is
+     * two-thirds disabled fills a third of the gap and asks again. Measured
+     * that way: ten round trips to reach sixty visible messages. Scaling the
+     * request by the visible density already observed turns the same walk into
+     * a handful. It is a page-size estimate and nothing else -- `stillMissing`
+     * remains the stop test, so a wrong estimate costs a request, never a
+     * short load.
+     */
+    const nextPageSize = () => {
+      const missing = stillMissing();
+      if (targetMessages === undefined || missing <= 0) return pageSize;
+      const resident = residentCount();
+      const headroom = Math.max(1, residentCeiling - resident);
+      const enabledMissing = targetEnabledMessages === undefined
+        ? 0
+        : targetEnabledMessages - enabledResidentCount();
+      let wanted = missing;
+      if (enabledMissing > 0 && resident > 0) {
+        // Never below 1/resident, so a slice with nothing visible in it still
+        // asks for a whole page rather than dividing by zero.
+        const density = Math.max(enabledResidentCount(), 1) / resident;
+        wanted = Math.max(wanted, Math.ceil(enabledMissing / density));
+      }
+      return Math.max(1, Math.min(pageSize, headroom, wanted));
+    };
     const satisfied = async () => {
+      if (targetMessages !== undefined && stillMissing() <= 0) return true;
       if (residentHistoryIsCutOff(live()?.message)) return true;
       if (!measured) {
         measuredTokens = await measureAtLeast(
@@ -310,10 +451,18 @@ export async function ensurePromptHistoryResident(
         requests,
       });
 
+      // Ask for what is still missing, never for a round hundred past it. The
+      // stop test fires between pages, so a full-size final page would leave
+      // the chat holding up to `pageSize - 1` messages that no consumer reads
+      // -- and on a target set at `MAX_RESIDENT_MESSAGES` that overshoot is
+      // exactly what would put the resident slice back over the bound this
+      // whole change exists to restore.
+      const wanted = nextPageSize();
+
       requests += 1;
       // Rejections propagate untouched: `loadOlderChatMessages` throws with the
       // contiguity/identity reason, which is what a report needs to be useful.
-      await loadOlderChatMessages(character, chatIndex, pageSize);
+      await loadOlderChatMessages(character, chatIndex, wanted);
 
       const after = live();
       const nextWindow = after && getSqlWindow(after);
@@ -374,6 +523,7 @@ export async function ensurePromptHistoryResident(
       total: finalWindow.total,
       requests,
       measuredTokens,
+      targetMessages,
     };
   } finally {
     endResidencyPin(chatId);

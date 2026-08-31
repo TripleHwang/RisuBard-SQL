@@ -42,6 +42,16 @@ export function normalizeHydratedCharacter(value: character): character {
 const DEFAULT_MESSAGE_LIMIT = 40;
 
 /**
+ * The page a chat opens on, named for the readers that need to reason about it.
+ *
+ * `promptHistoryBound.ts` floors its preload target here: whatever the prompt's
+ * consumers turn out to need, a send must never leave a chat holding LESS than
+ * the window it would have had if nobody had preloaded anything. Exported so
+ * that the floor tracks this number instead of restating it.
+ */
+export const OPEN_PAGE_MESSAGES = DEFAULT_MESSAGE_LIMIT;
+
+/**
  * Upper bound on how many messages of one chat stay in memory.
  *
  * Paging back used to be a one-way ratchet: `loadOlderChatMessages` prepended a
