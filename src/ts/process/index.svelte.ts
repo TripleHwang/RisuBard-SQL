@@ -96,12 +96,18 @@ import { ensurePromptHistoryResident } from '../storage/sql/promptHistoryPreload
 import { resolvePromptHistoryBound } from './promptHistoryBound';
 import { capturePromptPreloadTarget, promptPreloadTargetMoved } from './promptPreloadTarget';
 import {
-    createWikiRebootJob,
     nextWikiRebootBatch,
     projectWikiRebootTurns,
     type WikiRebootBatchSize,
     type WikiRebootTurn,
 } from '../risubard/wikiReboot';
+import {
+    beginWikiReboot,
+    ensureWikiRebootHistoryResident,
+    recoverStalledWikiRebootJob,
+    resumeWikiReboot,
+} from './wikiRebootLifecycle';
+import { beginResidencyPin, endResidencyPin } from '../storage/sql/residencyPin';
 import {
     cleanupWikiRebootWorkspace,
     completeWikiRebootBatch,
@@ -308,6 +314,33 @@ export async function forceCurrentNarrativeWikiUpdate(): Promise<boolean> {
 
 const activeWikiReboots = new Set<string>()
 
+/**
+ * Reboots between "the job exists" and "the runner is running it".
+ *
+ * `runWikiReboot` registers its own operation id in `activeWikiReboots` before
+ * its first `await`, so while it is running that set is exact evidence of a
+ * live runner. Starting and resuming are not instantaneous, though: the job is
+ * written into the chat and then persisted, and the persist is an `await` that
+ * a Svelte effect can run inside. In that window the chat carries a `running`
+ * job that `activeWikiReboots` does not know about yet -- which is precisely
+ * the shape {@link recoverStalledCurrentWikiReboot} exists to correct, and it
+ * would correct a reboot that is one line away from starting.
+ *
+ * A second set rather than an early insert into the first: `runWikiReboot`
+ * treats its own id already being present as "someone else is running this" and
+ * returns false, so the id it uses cannot be claimed on its behalf.
+ */
+const startingWikiReboots = new Set<string>()
+
+/** True while anything in this session is running or about to run this job. */
+function wikiRebootHasRunner(operationId: string): boolean {
+    return activeWikiReboots.has(operationId) || startingWikiReboots.has(operationId)
+}
+
+function wikiRebootOperationId(characterId: string, chatId: string): string {
+    return `reboot:${characterId}:${chatId}`
+}
+
 function currentRisuBardConversation(): {
     character: character
     chat: Chat
@@ -438,7 +471,7 @@ async function runWikiReboot(
     chatIndex: number
 ): Promise<boolean> {
     const chatId = ensureNarrativeSessionChatId(chat, v4)
-    const operationId = `reboot:${character.chaId}:${chatId}`
+    const operationId = wikiRebootOperationId(character.chaId, chatId)
     if (activeWikiReboots.has(operationId)) return false
     activeWikiReboots.add(operationId)
     const generationSignal = beginWikiGeneration(operationId)
@@ -591,34 +624,139 @@ async function runWikiReboot(
     }
 }
 
+/**
+ * How a reboot reports the load of a long history.
+ *
+ * Identical in shape to the one `sendChat` raises, and for the same reason:
+ * paging a conversation back to its first message is several round trips, and a
+ * silent multi-second pause on pressing a button is its own defect. Only from
+ * the second request, so a chat that was already whole never flashes a dialog.
+ */
+function wikiRebootHistoryProgress(): {
+    onProgress: (progress: { resident: number, total: number, requests: number }) => void
+    onHistoryReady: () => void
+    clear: () => void
+} {
+    let shown = false
+    return {
+        onProgress: (progress) => {
+            if (progress.requests < 1) return
+            shown = true
+            alertWait(`${language.loading} (${progress.resident}/${progress.total})`)
+        },
+        // The load is over and the reboot itself is starting. That runs for
+        // minutes behind its own progress bar, so the dialog comes down here
+        // rather than when everything finishes.
+        onHistoryReady: () => { if (shown) { alertClear(); shown = false } },
+        clear: () => { if (shown) { alertClear(); shown = false } },
+    }
+}
+
+/**
+ * Start a reboot from `startChatIndex` in the WHOLE conversation.
+ *
+ * The ordering, the whole-history load and the rollback all live in
+ * `wikiRebootLifecycle.ts`, which is where they can be executed under test;
+ * everything here is the wiring that supplies the real conversation, the real
+ * guarded save and the real runner.
+ *
+ * `startChatIndex` is deliberately NOT range-checked here any more. It used to
+ * be checked against `current.chat.message.length`, which on a windowed chat is
+ * the resident count and not the length of the conversation -- so "rebuild from
+ * message 200" of a 400-message chat opened on its newest 40 was rejected for a
+ * reason that was not true. The check now happens after the load, against the
+ * full history.
+ */
 export async function startCurrentWikiReboot(
     batchSize: WikiRebootBatchSize,
     startChatIndex: number = 0
 ): Promise<boolean> {
     const current = currentRisuBardConversation()
     if (!current || current.chat.risuBardWikiReboot) return false
-    if (!Number.isInteger(startChatIndex) || startChatIndex < 0
-        || startChatIndex >= current.chat.message.length) return false
+    if (!Number.isInteger(startChatIndex) || startChatIndex < 0) return false
     const chatId = ensureNarrativeSessionChatId(current.chat, v4)
-    const turns = projectWikiRebootTurns(current.chat.message, startChatIndex)
-    if (turns.length === 0) return false
     const jobId = v4()
-    current.chat.risuBardWikiReboot = createWikiRebootJob({
-        jobId,
-        stagingChatId: `reboot-${jobId}`,
-        writingLanguage: resolvedRisuBardSettings(current.chat).risuBardWikiWritingLanguage,
-        batchSize,
-        targetAssistantMessageIds: turns.map((turn) =>
-            turn.assistantMessageId
-        ),
-    })
-    await saveChatToServer(
-        current.character.chaId,
-        current.chatIndex,
-        chatId,
-        current.chat
+    const preloadTarget = capturePromptPreloadTarget(
+        current.character, current.chatIndex, current.chat
     )
-    return runWikiReboot(current.character, current.chat, current.chatIndex)
+    const progress = wikiRebootHistoryProgress()
+    // Claimed for the whole start, so the recovery pass cannot see the job that
+    // is about to be handed to the runner as one nothing is running.
+    const operationId = wikiRebootOperationId(current.character.chaId, chatId)
+    startingWikiReboots.add(operationId)
+    try {
+        return await beginWikiReboot({
+            character: current.character,
+            chatIndex: current.chatIndex,
+            chatId,
+            batchSize,
+            startChatIndex,
+            jobId,
+            stagingChatId: `reboot-${jobId}`,
+            writingLanguage: resolvedRisuBardSettings(current.chat)
+                .risuBardWikiWritingLanguage,
+            saveChat: (chat) => saveChatToServer(
+                current.character.chaId, current.chatIndex, chatId, chat
+            ),
+            run: (chat) => runWikiReboot(
+                current.character, chat, current.chatIndex
+            ),
+            resolveChat: () => current.character.chats[current.chatIndex],
+            targetMoved: () => promptPreloadTargetMoved(
+                preloadTarget, DBState.db.characters[get(selectedCharID)]
+            ),
+            onProgress: progress.onProgress,
+            onHistoryReady: progress.onHistoryReady,
+        })
+    }
+    finally {
+        startingWikiReboots.delete(operationId)
+        progress.clear()
+    }
+}
+
+/**
+ * Un-wedge a job that no runner can advance.
+ *
+ * Called when a chat becomes the one on screen, which is the moment a stalled
+ * job first becomes visible and actionable: on reload for the conversation the
+ * app restores, and on every switch into one.
+ *
+ * `wikiRebootHasRunner` is the evidence, and it covers both halves of a live
+ * reboot: the runner's own registration, and the claim a start or resume holds
+ * across the awaits before the runner takes over. It is read synchronously with
+ * the status write that follows it, so no runner can appear in between. See
+ * `recoverStalledWikiRebootJob` for why `paused` is the right destination and
+ * why a reboot running in another tab is not disturbed.
+ *
+ * The persist is best-effort ON PURPOSE. The state this recovers from is
+ * frequently a chat whose history is windowed -- that is what made the original
+ * save throw -- and `saveChatToServer` rightly refuses to write one. The
+ * in-memory status is what returns the Resume and Cancel controls to the user,
+ * and both of those load the whole history before they write anything, so the
+ * recovered status reaches storage through them. Nothing here writes a partial
+ * history, and nothing here throws into a caller that is only rendering.
+ */
+export function recoverStalledCurrentWikiReboot(): boolean {
+    const current = currentRisuBardConversation()
+    const job = current?.chat.risuBardWikiReboot
+    if (!current || !job) return false
+    // The chat's own id, never `ensureNarrativeSessionChatId`: this runs from a
+    // render effect and must not mutate the chat to answer the question. A chat
+    // with no id cannot be the subject of a running reboot either, since
+    // `runWikiReboot` keys its operation on one.
+    const chatId = current.chat.id
+    if (typeof chatId !== 'string' || chatId.length === 0) return false
+    const operationId = wikiRebootOperationId(current.character.chaId, chatId)
+    if (!recoverStalledWikiRebootJob(job, wikiRebootHasRunner(operationId))) {
+        return false
+    }
+    void saveChatToServer(
+        current.character.chaId, current.chatIndex, chatId, current.chat
+    ).catch((error) => {
+        console.warn('[RisuBard wiki reboot recovery]', error)
+    })
+    return true
 }
 
 export async function stopCurrentWikiReboot(): Promise<boolean> {
@@ -637,37 +775,98 @@ export async function resumeCurrentWikiReboot(): Promise<boolean> {
     const job = current?.chat.risuBardWikiReboot
     if (!current || !job || (job.status !== 'paused'
         && job.status !== 'failed')) return false
-    job.status = 'running'
-    delete job.lastError
-    job.updatedAt = Date.now()
-    await persistWikiReboot(current.character, current.chat, current.chatIndex)
-    return runWikiReboot(current.character, current.chat, current.chatIndex)
+    const chatId = ensureNarrativeSessionChatId(current.chat, v4)
+    const preloadTarget = capturePromptPreloadTarget(
+        current.character, current.chatIndex, current.chat
+    )
+    const progress = wikiRebootHistoryProgress()
+    // Same claim as the start, for the same window: the resume writes `running`
+    // into the job and then persists it, and the recovery pass must not read
+    // that job as one nothing is running.
+    const operationId = wikiRebootOperationId(current.character.chaId, chatId)
+    startingWikiReboots.add(operationId)
+    try {
+        return await resumeWikiReboot({
+            character: current.character,
+            chatIndex: current.chatIndex,
+            chatId,
+            job,
+            saveChat: (chat) => saveChatToServer(
+                current.character.chaId, current.chatIndex, chatId, chat
+            ),
+            run: (chat) => runWikiReboot(
+                current.character, chat, current.chatIndex
+            ),
+            resolveChat: () => current.character.chats[current.chatIndex],
+            targetMoved: () => promptPreloadTargetMoved(
+                preloadTarget, DBState.db.characters[get(selectedCharID)]
+            ),
+            onProgress: progress.onProgress,
+            onHistoryReady: progress.onHistoryReady,
+        })
+    }
+    finally {
+        startingWikiReboots.delete(operationId)
+        progress.clear()
+    }
 }
 
+/**
+ * Discard a reboot and keep the existing wiki.
+ *
+ * The whole history is loaded first, and before anything is discarded. Removing
+ * the job means writing the chat, `saveChatToServer` refuses a windowed chat,
+ * and a cancel that threw at that last step used to leave the wiki forked and
+ * the workspace cleaned up with the job still on the chat -- so a chat that was
+ * only ever windowed could not be cancelled at all. Loading first also means a
+ * load that fails costs nothing: no fork is discarded and no workspace is
+ * removed, and the job is exactly as it was.
+ */
 export async function cancelCurrentWikiReboot(): Promise<boolean> {
     const current = currentRisuBardConversation()
     const job = current?.chat.risuBardWikiReboot
     if (!current || !job || (job.status !== 'paused'
         && job.status !== 'failed')) return false
-    if (job.replacementForkToken) {
-        await completeMemoryWikiFork({
+    const chatId = ensureNarrativeSessionChatId(current.chat, v4)
+    const progress = wikiRebootHistoryProgress()
+    beginResidencyPin(chatId)
+    try {
+        await ensureWikiRebootHistoryResident({
+            character: current.character,
+            chatIndex: current.chatIndex,
+            onProgress: progress.onProgress,
+            onHistoryReady: progress.onHistoryReady,
+        })
+        const chat = current.character.chats[current.chatIndex]
+        if (!chat || chat.id !== chatId || chat.risuBardWikiReboot !== job) {
+            throw new Error(
+                '리부트를 취소하는 동안 채팅이 바뀌어 취소하지 못했습니다.'
+            )
+        }
+        if (job.replacementForkToken) {
+            await completeMemoryWikiFork({
+                characterId: current.character.chaId,
+                destinationChatId: chatId,
+                forkToken: job.replacementForkToken,
+                action: 'discard',
+                fetchImpl: fetch,
+                createAuth: () => forageStorage.createAuth(),
+            })
+        }
+        await cleanupWikiRebootWorkspace({
             characterId: current.character.chaId,
-            destinationChatId: ensureNarrativeSessionChatId(current.chat, v4),
-            forkToken: job.replacementForkToken,
-            action: 'discard',
+            stagingChatId: job.stagingChatId,
             fetchImpl: fetch,
             createAuth: () => forageStorage.createAuth(),
         })
+        delete chat.risuBardWikiReboot
+        await persistWikiReboot(current.character, chat, current.chatIndex)
+        return true
     }
-    await cleanupWikiRebootWorkspace({
-        characterId: current.character.chaId,
-        stagingChatId: job.stagingChatId,
-        fetchImpl: fetch,
-        createAuth: () => forageStorage.createAuth(),
-    })
-    delete current.chat.risuBardWikiReboot
-    await persistWikiReboot(current.character, current.chat, current.chatIndex)
-    return true
+    finally {
+        progress.clear()
+        endResidencyPin(chatId)
+    }
 }
 
 export async function executeCurrentNarrativeWikiCommand(

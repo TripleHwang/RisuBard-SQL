@@ -158,6 +158,29 @@ export function isSqlWindowPartial(chat: ChatLike | null | undefined): boolean {
 }
 
 /**
+ * How many messages the CONVERSATION has, as opposed to how many are resident.
+ *
+ * `chat.message.length` answers the second question and is routinely mistaken
+ * for the first: a chat opens on its newest 40 messages, so on any long
+ * conversation the resident count is a slice. Anything that offers the reader a
+ * position in the conversation -- "rebuild the wiki from message 200" -- has to
+ * count the whole thing, or it presents a range that stops at 39 and rejects a
+ * message that is there.
+ *
+ * The window's `total` is the persisted count as of the last page. Resident can
+ * legitimately exceed it (messages added in this session are not persisted
+ * yet), so the larger of the two is the answer; a chat with no window at all is
+ * not a view of a page and its resident array is the whole history.
+ */
+export function conversationMessageCount(chat: ChatLike | null | undefined): number {
+  const resident = Array.isArray((chat as { message?: unknown })?.message)
+    ? ((chat as { message: unknown[] }).message).length
+    : 0;
+  const total = getSqlWindow(chat)?.total;
+  return typeof total === "number" && Number.isFinite(total) ? Math.max(resident, total) : resident;
+}
+
+/**
  * The canonical persisted position of a resident message, or `undefined` when
  * none has been attached.
  *

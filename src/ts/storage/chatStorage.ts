@@ -3,7 +3,8 @@ import { getDatabase, type Chat, type ChatStub, type ChatOrStub, type character,
 import { tick } from "svelte"
 import { getActiveSqlStorage } from "./sql/sqlBootstrap"
 import { ensureChatDetailsHydrated, ensureChatMessageWindow } from "./sql/sqlRuntimeHydration"
-import { getSqlWindow, isSqlWindowPartial, type SqlHydrationWindow } from "./sql/sqlRuntimeWindow"
+import { getSqlWindow, type SqlHydrationWindow } from "./sql/sqlRuntimeWindow"
+import { isChatHistoryIncomplete } from "./chatHistoryCompleteness"
 import { beginHydration, beginHydrationApply, endHydration, endHydrationApply, isHydrationActive } from "./hydrationState"
 import { flushSqlDirtyChanges, markSqlChatDirty } from "./sql/sqlPersistenceRuntime"
 import { isChatGenerating } from "../process/generationState"
@@ -430,15 +431,15 @@ export function isHydrating(chaId: string, chatId: string): boolean {
     return isHydrationActive(key)
 }
 
-/** True when the in-memory message array is not the canonical full history. */
-export function isChatHistoryIncomplete(chat: Chat | null | undefined): boolean {
-    if (!chat || chat._placeholder) return true
-    const runtime = chat as Chat & {
-        messagesLoaded?: boolean
-        messagesFullyLoaded?: boolean
-    }
-    return runtime.messagesLoaded === false || runtime.messagesFullyLoaded === false || isSqlWindowPartial(chat)
-}
+/**
+ * True when the in-memory message array is not the canonical full history.
+ *
+ * Re-exported, not re-implemented: the definition lives in
+ * `chatHistoryCompleteness.ts` so that it can be read by code and tests that
+ * cannot import this module's dependency graph. Every existing import site
+ * keeps working through here.
+ */
+export { isChatHistoryIncomplete }
 
 /**
  * Hydrate a placeholder Chat in-place on the character's chats array.

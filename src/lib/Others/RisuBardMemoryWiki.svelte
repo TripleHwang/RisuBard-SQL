@@ -33,6 +33,7 @@
     } from 'src/ts/risubard/memoryEvents'
     import { DBState } from 'src/ts/stores.svelte'
     import { saveChatToServer } from 'src/ts/storage/chatStorage'
+    import { conversationMessageCount } from 'src/ts/storage/sql/sqlRuntimeWindow'
     import {
         applyChatFindReplace,
         replaceWikiText,
@@ -178,7 +179,17 @@
             resolvedChatSettings.bardChatIncludeCharacterLorebook,
         moduleLorebook: resolvedChatSettings.bardChatIncludeModuleLorebook,
     })
-    let rebootLastChatIndex = $derived((currentChat?.message.length ?? 0) - 1)
+    /**
+     * The last position in the CONVERSATION, not in the resident window.
+     *
+     * `currentChat.message.length` is the resident count: a chat opens on its
+     * newest 40 messages, so this control used to offer "0 to 39" on a
+     * 400-message conversation and reject message 200 as out of range -- a
+     * message that was there all along. The reboot loads the whole history
+     * before it reads the index, so the range offered here is the whole
+     * conversation's.
+     */
+    let rebootLastChatIndex = $derived(conversationMessageCount(currentChat) - 1)
     let rebootStartChatIndexValid = $derived(
         Number.isInteger(rebootStartChatIndex)
         && rebootStartChatIndex >= 0

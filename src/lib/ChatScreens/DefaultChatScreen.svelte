@@ -23,6 +23,7 @@
         doingChat,
         executeCurrentNarrativeWikiCommand,
         forceCurrentNarrativeWikiUpdate,
+        recoverStalledCurrentWikiReboot,
         resumeCurrentWikiReboot,
         startCurrentWikiReboot,
         stopCurrentWikiReboot,
@@ -163,6 +164,25 @@ import { isMobile } from 'src/ts/platform'
     let wikiBlocksGeneration = $derived(
         wikiRebootBlocksGeneration || $isWikiGenerating
     )
+    /**
+     * A reboot job left claiming to be running when nothing is running it.
+     *
+     * `running` and `stop-requested` are advanced by one thing only, the loop
+     * inside `runWikiReboot`, and a job in either state with no loop behind it
+     * can never change again on its own: Stop only sets `stop-requested`, the
+     * button is disabled while it says that, and Cancel is not offered for
+     * either status. Closing the app mid-reboot leaves exactly that, and so did
+     * a start whose first save was refused. This is where the chat becomes the
+     * one on screen -- on reload for the restored conversation, and on every
+     * switch into one -- so it is where the job is moved to `paused` and its
+     * Resume and Cancel controls come back. Reading the status makes this rerun
+     * when it changes, and the recovered `paused` ends the rerun.
+     */
+    $effect(() => {
+        const status = currentChatSlot?.risuBardWikiReboot?.status
+        if (status !== 'running' && status !== 'stop-requested') return
+        recoverStalledCurrentWikiReboot()
+    })
     let currentChatReady = $derived(!!currentChatSlot && !currentChatSlot._placeholder && (currentChatSlot as ChatData & { messagesLoaded?: boolean }).messagesLoaded !== false)
 
     /**

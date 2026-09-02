@@ -141,6 +141,45 @@ export interface PromptHistoryPreloadOptions {
    */
   residentCeiling?: number;
   /**
+   * Load the WHOLE conversation: page back until `hasOlder` is false, and stop
+   * for nothing else.
+   *
+   * Everything above bounds the walk to what a PROMPT can read, and that is the
+   * right bound for a send: the prompt narrows to a working set of a dozen
+   * messages, so loading a 20,000-message chat to send twelve of them would
+   * defeat the windowing this subsystem exists for.
+   *
+   * A BardWiki reboot is not a send. It rebuilds the wiki from a chosen point
+   * in the conversation forward, one turn at a time, and it indexes
+   * `chat.message` FROM THE FRONT to find that point
+   * (`projectWikiRebootTurns(chat.message, startChatIndex)`). Every one of the
+   * bounds above would hand it a slice of the newest end, and it would index
+   * into that slice and rebuild the wiki from the wrong messages -- silently,
+   * because a short resident array looks exactly like a short conversation. Its
+   * requirement is the whole history, and nothing less is usable.
+   *
+   * So this mode turns off all three of the prompt-shaped stops:
+   *
+   *   - `targetMessages` / `targetEnabledMessages` / `residentCeiling` are
+   *     ignored. The residency bound (`MAX_RESIDENT_MESSAGES`) is not a bound
+   *     this load can honour -- a conversation longer than it must exceed it to
+   *     be whole -- so the caller MUST hold a residency pin for as long as it
+   *     needs the history, which is what stops the next page load from trimming
+   *     the newest end back off. This function pins for its own duration; a
+   *     caller that reads the history after it returns pins around the whole
+   *     operation (see `wikiRebootLifecycle.ts`);
+   *   - `budgetTokens` is ignored, and with it the tokenizer pass that answers
+   *     it. Nothing is measured that nothing reads;
+   *   - a resident `disabled === 'allBefore'` marker no longer ends the walk.
+   *     That marker means "the PROMPT reads nothing older"; the reboot's
+   *     projection has no such rule and rebuilds across it, so stopping there
+   *     would be a short load by a rule that does not apply.
+   *
+   * The walk therefore ends only at the true start of the conversation, and the
+   * result's `reachedStartOfHistory` is the caller's proof that it did.
+   */
+  loadEntireHistory?: boolean;
+  /**
    * Token cost of a run of messages, measured the way the prompt measures them.
    * Called with newly arrived messages only, so the walk stays O(history).
    *
@@ -267,11 +306,17 @@ export async function ensurePromptHistoryResident(
 ): Promise<PromptHistoryPreloadResult> {
   const { character, chatIndex, budgetTokens, measure, onProgress, signal } = options;
   const pageSize = Math.max(1, Math.min(100, Math.floor(options.pageSize ?? DEFAULT_PAGE_SIZE)));
+  // "The whole conversation" is not a bound to be balanced against the others;
+  // it replaces them. Dropping the targets here rather than special-casing each
+  // stop below means there is one place where the mode changes what the walk
+  // does, and the stop tests keep reading exactly one set of numbers.
+  const loadEntireHistory = options.loadEntireHistory === true;
   // A target that is not a usable count is no target: fall back to the budget
   // rather than invent one. `undefined` here and `Infinity` behave identically
   // and both mean "the budget is the only stop", which is the old behaviour.
-  const targetMessages =
-    typeof options.targetMessages === "number" && Number.isFinite(options.targetMessages)
+  const targetMessages = loadEntireHistory
+    ? undefined
+    : typeof options.targetMessages === "number" && Number.isFinite(options.targetMessages)
       ? Math.max(1, Math.floor(options.targetMessages))
       : undefined;
   // Only meaningful alongside a raw target: on its own it would extend a walk
@@ -419,6 +464,11 @@ export async function ensurePromptHistoryResident(
       return Math.max(1, Math.min(pageSize, headroom, wanted));
     };
     const satisfied = async () => {
+      // Nothing short of the start of the conversation satisfies a whole-history
+      // load, so none of the three stops below is consulted -- including the
+      // token measure, which would otherwise tokenize the entire resident
+      // history to answer a question this mode never asks.
+      if (loadEntireHistory) return false;
       if (targetMessages !== undefined && stillMissing() <= 0) return true;
       if (residentHistoryIsCutOff(live()?.message)) return true;
       if (!measured) {

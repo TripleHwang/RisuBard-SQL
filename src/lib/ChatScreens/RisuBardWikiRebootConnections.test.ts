@@ -5,6 +5,9 @@ import { describe, expect, test } from 'vitest'
 const processSource = readFileSync(resolve(
     process.cwd(), 'src/ts/process/index.svelte.ts'
 ), 'utf8')
+const lifecycleSource = readFileSync(resolve(
+    process.cwd(), 'src/ts/process/wikiRebootLifecycle.ts'
+), 'utf8')
 const chatSource = readFileSync(resolve(
     process.cwd(), 'src/lib/ChatScreens/DefaultChatScreen.svelte'
 ), 'utf8')
@@ -81,16 +84,101 @@ describe('BardWiki reboot connections', () => {
         expect(wikiSource).toContain('onCancelWikiReboot')
     })
 
-    test('accepts a visible chat index and starts reboot from that boundary', () => {
+    test('accepts a chat index in the whole conversation and starts from it', () => {
         expect(wikiSource).toContain('data-risubard-wiki-reboot-start-index')
         expect(wikiSource).toContain('risuBardWikiRebootStartChatIndex')
         expect(wikiSource).toContain('onStartWikiReboot?.(batchSize, rebootStartChatIndex)')
         expect(processSource).toContain('startChatIndex: number = 0')
-        expect(processSource).toContain(
-            'projectWikiRebootTurns(current.chat.message, startChatIndex)'
+        expect(lifecycleSource).toContain(
+            'projectWikiRebootTurns(chat.message, input.startChatIndex)'
+        )
+        // The index the reader picks is a position in the conversation, so the
+        // range offered is the conversation's length and not the resident
+        // window's. `chat.message.length` here offered "0 to 39" on a
+        // 400-message chat and rejected message 200 as out of range.
+        expect(wikiSource).toContain(
+            'let rebootLastChatIndex = $derived(conversationMessageCount(currentChat) - 1)'
         )
         expect(koSource).toContain('시작 챗 인덱스')
         expect(enSource).toContain('Starting chat index')
+    })
+
+    /**
+     * The three orderings from the wedge report, asserted where they are wired.
+     *
+     * The orderings themselves are executed against a real hydrated chat in
+     * `src/ts/process/wikiRebootLifecycleLive.svelte.test.ts`; these check that
+     * `index.svelte.ts` still routes through them rather than growing its own
+     * copy back.
+     */
+    test('starts a reboot through the lifecycle module, never job-first', () => {
+        const start = processSource.slice(
+            processSource.indexOf('export async function startCurrentWikiReboot'),
+            processSource.indexOf('export function recoverStalledCurrentWikiReboot')
+        )
+        expect(start).toContain('beginWikiReboot({')
+        expect(start).toContain('saveChat: (chat) => saveChatToServer(')
+        expect(start).toContain('run: (chat) => runWikiReboot(')
+        // The job is created inside the lifecycle module, between the load and
+        // the save, and rolled back if the save refuses. Assigning it here
+        // again would restore the wedge.
+        expect(start).not.toContain('createWikiRebootJob')
+        expect(start).not.toContain('risuBardWikiReboot =')
+        // Validating the start index against the resident array is what
+        // rejected a position that was in the conversation all along.
+        expect(start).not.toContain('current.chat.message.length')
+        expect(lifecycleSource).toContain('loadEntireHistory: true')
+        const begin = lifecycleSource.slice(
+            lifecycleSource.indexOf('export async function beginWikiReboot'),
+            lifecycleSource.indexOf('export interface ResumeWikiRebootInput')
+        )
+        expect(begin.indexOf('await ensureWikiRebootHistoryResident'))
+            .toBeLessThan(begin.indexOf('chat.risuBardWikiReboot = job'))
+        expect(begin.indexOf('chat.risuBardWikiReboot = job'))
+            .toBeLessThan(begin.indexOf('await input.saveChat(chat)'))
+        expect(begin).toContain('delete chat.risuBardWikiReboot')
+        // The pin covers the run, not just the load: a whole history is over
+        // the residency bound and the trim releases the newest end.
+        expect(begin).toContain('return await input.run(chat)')
+        expect(begin).toContain('endResidencyPin(input.chatId)')
+    })
+
+    test('resumes and cancels only over a whole history', () => {
+        const resume = processSource.slice(
+            processSource.indexOf('export async function resumeCurrentWikiReboot'),
+            processSource.indexOf('export async function cancelCurrentWikiReboot')
+        )
+        expect(resume).toContain('resumeWikiReboot({')
+        expect(resume).not.toContain("job.status = 'running'")
+        const cancel = processSource.slice(
+            processSource.indexOf('export async function cancelCurrentWikiReboot'),
+            processSource.indexOf('export async function executeCurrentNarrativeWikiCommand')
+        )
+        expect(cancel.indexOf('await ensureWikiRebootHistoryResident'))
+            .toBeLessThan(cancel.indexOf('completeMemoryWikiFork'))
+        expect(cancel.indexOf('await ensureWikiRebootHistoryResident'))
+            .toBeLessThan(cancel.indexOf('delete chat.risuBardWikiReboot'))
+        expect(cancel).toContain('endResidencyPin(chatId)')
+    })
+
+    test('recovers a job no runner can advance when the chat comes on screen', () => {
+        const recovery = processSource.slice(
+            processSource.indexOf('export function recoverStalledCurrentWikiReboot'),
+            processSource.indexOf('export async function stopCurrentWikiReboot')
+        )
+        // A live runner is the evidence, and it covers a reboot that is still
+        // starting as well as one already looping -- otherwise the recovery
+        // pass could pause a job during the await between assigning it and
+        // handing it to the runner. Read synchronously with the write below it.
+        expect(recovery).toContain('wikiRebootHasRunner(operationId)')
+        expect(recovery).toContain('recoverStalledWikiRebootJob(job,')
+        // The chat this recovers is frequently windowed -- that is what made the
+        // original save throw -- so the persist cannot be allowed to throw.
+        expect(recovery).toContain('.catch((error) => {')
+        expect(chatSource).toContain('recoverStalledCurrentWikiReboot()')
+        expect(chatSource).toContain(
+            "if (status !== 'running' && status !== 'stop-requested') return"
+        )
     })
 
     test('loads and refreshes the visible staging wiki during reboot', () => {
