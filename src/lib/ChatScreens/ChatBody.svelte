@@ -193,7 +193,6 @@
                 const studioManagedImage = isFirstMessageStudioManagedImage(img)
                 if (studioManagedImage) clearGenericChatImageStyles(img)
                 const name = img.getAttribute('src')?.toLocaleLowerCase() || ''
-                console.log(name)
 
                 if(
                     name.length > 200 ||
@@ -204,7 +203,6 @@
                 }
                 
                 const foundAsset = exactAssets.get(name)
-                console.log('Checking image:', name, 'Assets:', assets)
                 if(foundAsset){
                     if (!studioManagedImage) {
                         img.classList.add('root-loaded-image')

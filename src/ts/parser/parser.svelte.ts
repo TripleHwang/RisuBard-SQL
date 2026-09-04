@@ -468,9 +468,51 @@ type AssetPaths = {[key:string]:{
     ext?:string
 }}
 
+type AssetMatch = AssetPaths[string]
+
 let assetsCache: AssetPaths | null = null
 let emoAssetsCache: AssetPaths | null = null
 let assetsCacheCharacterId = ''
+
+/**
+ * Memo for `getClosestMatch`, keyed by the name that was ASKED FOR.
+ *
+ * `getClosestMatch` is a Levenshtein scan over the whole `additionalAssets`
+ * list, and it runs for every `{{asset::name}}` that missed the exact-name
+ * hash. It used to end by writing `assetPaths[closest]` -- keyed by the match,
+ * not by the query -- and `assetPaths[closest]` was already there, put by
+ * `getAssetSrc`. So the write was a no-op, the caller's next `assetPaths[name]`
+ * lookup missed again, and the same name re-scanned on every single parse,
+ * forever. Measured at 4,000 assets: ~50ms per scan, ~1s for a twenty-message
+ * screen, on every re-render.
+ *
+ * Misses are cached too. A name with no match inside `assetMaxDifference` is
+ * exactly the case that would otherwise re-scan forever, and it is the common
+ * one -- the fuzzy matcher exists because model-emitted asset names come out
+ * slightly wrong.
+ *
+ * A cached *negative* answer is only safe while the list it was computed from
+ * cannot have changed, or an asset the user has since added would keep
+ * resolving to nothing. So the memo is dropped whenever the scanned array's
+ * identity or length changes, and whenever `resetAssetsCache` runs -- and the
+ * `$effect` below reads every tuple element of `additionalAssets`, so an
+ * in-place edit of an existing entry re-fires it and lands there.
+ */
+let fuzzyMatchCache = new Map<string, {closest:string, match:AssetMatch} | null>()
+let fuzzyMatchSource: string[][] | null = null
+let fuzzyMatchSourceLength = -1
+/** The `assetMaxDifference` the cached answers were scored against. */
+let fuzzyMatchMaxDifference: number | undefined = undefined
+/** `trimmer(asset[0].toLocaleLowerCase())` per asset, built once per list. */
+let fuzzyMatchTrimmedKeys: string[] | null = null
+
+function clearFuzzyMatchCache(){
+    fuzzyMatchCache = new Map()
+    fuzzyMatchSource = null
+    fuzzyMatchSourceLength = -1
+    fuzzyMatchMaxDifference = undefined
+    fuzzyMatchTrimmedKeys = null
+}
 
 export function resetAssetsCache(charAssets: string[][], emoAssets: string[][], moduleAssets: string[][], characterId = '') {
     const assetPaths: AssetPaths = {}
@@ -483,6 +525,7 @@ export function resetAssetsCache(charAssets: string[][], emoAssets: string[][], 
     assetsCache = assetPaths
     emoAssetsCache = charEmoPaths
     assetsCacheCharacterId = characterId
+    clearFuzzyMatchCache()
 }
 
 $effect.root(() => {
@@ -622,43 +665,220 @@ async function parseAdditionalAssets(data:string, char:simpleCharacterArgument|c
     return data
 }
 
-function getClosestMatch(char: simpleCharacterArgument|character, name:string, assetPaths:AssetPaths){   
-    if(!char.additionalAssets) return null
+export function getClosestMatch(char: simpleCharacterArgument|character, name:string, assetPaths:AssetPaths){
+    const assets = char.additionalAssets
+    if(!assets) return null
 
-    let closest = ''
+    const maxDifference = DBState.db.assetMaxDifference
+
+    // The memo is only valid for the exact list it was computed from, scored
+    // against the same threshold. Identity covers the array being replaced;
+    // length covers an add or a remove in place. An in-place edit at constant
+    // length is covered by the `$effect`, which reads every tuple element and
+    // so re-fires into resetAssetsCache.
+    if(fuzzyMatchSource !== assets || fuzzyMatchSourceLength !== assets.length || fuzzyMatchMaxDifference !== maxDifference){
+        clearFuzzyMatchCache()
+        fuzzyMatchSource = assets
+        fuzzyMatchSourceLength = assets.length
+        fuzzyMatchMaxDifference = maxDifference
+    }
+
+    const memo = fuzzyMatchCache.get(name)
+    if(memo !== undefined){
+        if(memo === null){
+            return null
+        }
+        // Keep the side effect the uncached path has always had: the matched
+        // key is planted in the caller's path table.
+        assetPaths[memo.closest] = memo.match
+        return memo.match
+    }
+
+    // `trimmer` over every `asset[0]` is a large slice of one scan, and the
+    // answer does not depend on the queried name. Pay for it once per list.
+    if(!fuzzyMatchTrimmedKeys){
+        const keys = new Array<string>(assets.length)
+        for(let i = 0; i < assets.length; i++){
+            keys[i] = trimmer(assets[i][0].toLocaleLowerCase())
+        }
+        fuzzyMatchTrimmedKeys = keys
+    }
+    const trimmedKeys = fuzzyMatchTrimmedKeys
+
+    let closestIndex = -1
     let closestDist = 999999
-    let targetPath = ''
-    let targetExt = ''
+
+    // |len(a) - len(b)| is a lower bound on the edit distance between them, so
+    // a candidate whose trimmed length sits further away than the best score so
+    // far can never beat it, and one further away than `assetMaxDifference` can
+    // never be returned at all. Skipping those is exactly equivalent to scoring
+    // them: the loop keeps the FIRST candidate achieving the minimum, and no
+    // candidate that could have been returned is ever skipped.
+    //
+    // Floored, and that matters twice over. `boundedDistance` walks a band whose
+    // edges are `cap` away from the diagonal and writes its sentinels at
+    // `cap`-derived offsets, so a fractional cap indexes an Int16Array at a
+    // fractional index -- silently a no-op on write, undefined on read, and the
+    // whole scan returns garbage. A user can put 3.5 in the Asset Max Difference
+    // box: it is a bare `type="number"` with no `min`, `max` or `step`.
+    // Flooring is also exactly equivalent to not flooring, because the accept
+    // test is `dist > maxDifference` over an integer `dist`, so `dist <= 3.5`
+    // and `dist <= 3` select the same distances. The unfloored `maxDifference`
+    // is still what the final threshold compares against.
+    const acceptBound = typeof maxDifference === 'number' && Number.isFinite(maxDifference)
+        ? Math.floor(maxDifference)
+        : Infinity
 
     const trimmedName = trimmer(name)
-    for(const asset of char.additionalAssets) {
-        const key = asset[0].toLocaleLowerCase()
-        const dist = getDistance(trimmedName, trimmer(key))
+    for(let i = 0; i < assets.length; i++){
+        // The only thing this loop ever asks of a distance is "is it under
+        // `closestDist`, and could it be inside `assetMaxDifference`". Anything
+        // above that bound is interchangeable with any other value above it.
+        const cap = closestDist - 1 < acceptBound ? closestDist - 1 : acceptBound
+        if(cap < 0){
+            // An exact trimmed match is already in hand and `<` is strict, so
+            // nothing further can win.
+            break
+        }
+        const trimmedKey = trimmedKeys[i]
+        if(Math.abs(trimmedName.length - trimmedKey.length) > cap){
+            continue
+        }
+        const dist = boundedDistance(trimmedName, trimmedKey, cap)
         if(dist < closestDist){
-            closest = key
+            closestIndex = i
             closestDist = dist
-            targetPath = asset[1]
-            targetExt = asset[2]
         }
     }
-    
-    if(closestDist > DBState.db.assetMaxDifference){
+
+    if(closestDist > maxDifference){
+        fuzzyMatchCache.set(name, null)
         return null
     }
 
-    assetPaths[closest] = {
-        srcPaths: [targetPath],
-        ext: targetExt
+    // `closestIndex === -1` is the empty-list case, which the original reached
+    // with closest/targetPath/targetExt still at their '' initialisers.
+    const winner = closestIndex === -1 ? null : assets[closestIndex]
+    const closest = winner ? winner[0].toLocaleLowerCase() : ''
+    const match:AssetMatch = {
+        srcPaths: [winner ? winner[1] : ''],
+        ext: winner ? winner[2] : ''
     }
 
-    return assetPaths[closest]
+    assetPaths[closest] = match
+    fuzzyMatchCache.set(name, { closest, match })
+
+    return match
+}
+
+/**
+ * `getDistance`'s matrix. One `getClosestMatch` scan calls it once per asset,
+ * and a fresh `Int16Array(h*w)` per call was thousands of allocations per scan.
+ * Every cell in [0, h*w) is written before it is read -- row 0, column 0, then
+ * the full interior -- so a reused buffer needs no clearing. Oversized requests
+ * still allocate, so one freak long string cannot pin a huge buffer for the
+ * rest of the session.
+ */
+let distanceScratch = new Int16Array(0)
+const MAX_SCRATCH_CELLS = 1 << 16
+
+/** Stands in for "further than we care about". Kept well inside Int16. */
+const DISTANCE_CEILING = 0x3fff
+let bandScratchA = new Int16Array(0)
+let bandScratchB = new Int16Array(0)
+
+/**
+ * Levenshtein distance, exact while it is at most `cap` and saturating at
+ * `cap + 1` above that.
+ *
+ * Only cells within `cap` of the main diagonal can lie on a path costing at
+ * most `cap`, so everything outside that band is left at the ceiling instead of
+ * being computed -- O(len * (2*cap + 1)) rather than O(len * len). With the
+ * default `assetMaxDifference` of 4 that is nine cells a row instead of twenty.
+ *
+ * The saturation is safe for `getClosestMatch` because a saturated value can
+ * only ever be returned when `cap` was `assetMaxDifference` itself, and such a
+ * value is `assetMaxDifference + 1` -- above the threshold, so it can never be
+ * the answer, and it can never block a genuine match either, since any
+ * candidate scoring at or under the threshold comes back exact.
+ */
+function boundedDistance(a:string, b:string, cap:number):number{
+    const alen = a.length
+    const blen = b.length
+    if(alen - blen > cap || blen - alen > cap){
+        return cap + 1
+    }
+    if(cap >= alen && cap >= blen){
+        // The band covers the whole matrix; there is nothing to skip, and the
+        // result is guaranteed to be at or under `cap`.
+        return getDistance(a, b)
+    }
+    const width = blen + 1
+    if(bandScratchA.length < width){
+        bandScratchA = new Int16Array(width)
+        bandScratchB = new Int16Array(width)
+    }
+    let prev = bandScratchA
+    let cur = bandScratchB
+
+    const firstHi = blen < cap ? blen : cap
+    for(let j = 0; j <= firstHi; j++){
+        prev[j] = j
+    }
+    if(firstHi < blen){
+        prev[firstHi + 1] = DISTANCE_CEILING
+    }
+
+    for(let i = 1; i <= alen; i++){
+        const lo = i - cap > 0 ? i - cap : 0
+        const hi = i + cap < blen ? i + cap : blen
+        if(lo > 0){
+            // Read by `cur[j-1]` at j === lo.
+            cur[lo - 1] = DISTANCE_CEILING
+        }
+        for(let j = lo; j <= hi; j++){
+            if(j === 0){
+                cur[0] = i <= cap ? i : DISTANCE_CEILING
+                continue
+            }
+            const substitute = prev[j - 1] + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1)
+            const remove = prev[j] + 1
+            const insert = cur[j - 1] + 1
+            let best = substitute < remove ? substitute : remove
+            if(insert < best){
+                best = insert
+            }
+            cur[j] = best < DISTANCE_CEILING ? best : DISTANCE_CEILING
+        }
+        if(hi < blen){
+            // Read by `prev[j]` at j === hi + 1 on the next row, whose `hi`
+            // grows by at most one.
+            cur[hi + 1] = DISTANCE_CEILING
+        }
+        const swap = prev
+        prev = cur
+        cur = swap
+    }
+
+    const result = prev[blen]
+    return result > cap ? cap + 1 : result
 }
 
 //Levenshtein distance, new with 1d array
 export function getDistance(a:string, b:string) {
     const h = a.length + 1
     const w = b.length + 1
-    let d = new Int16Array(h * w)
+    const cells = h * w
+    let d:Int16Array
+    if(cells > MAX_SCRATCH_CELLS){
+        d = new Int16Array(cells)
+    }
+    else{
+        if(distanceScratch.length < cells){
+            distanceScratch = new Int16Array(Math.max(cells, 1024))
+        }
+        d = distanceScratch
+    }
     for(let i=0;i<h;i++){
         d[i * w] = i
     }
