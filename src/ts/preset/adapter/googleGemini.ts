@@ -2,9 +2,8 @@ import { beginGeminiCacheTurn, type GeminiCacheTurn } from '../cache/geminiCache
 import type { ModelPreset } from '../types'
 import {
     ModelPresetAdapterError,
-    extractErrorMessage,
+    deriveHttpAdapterError,
     normalizeFetchError,
-    normalizeHttpStatus,
 } from './error'
 import { prepareAdapterRequest } from './resolveCredential'
 import { parseSseStream } from './sse'
@@ -161,7 +160,7 @@ export async function sendGoogleChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpAdapterError(response)
     }
 
     let raw: unknown
@@ -208,7 +207,7 @@ export async function* streamGoogleChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpAdapterError(response)
     }
 
     if (!response.body) {
@@ -497,17 +496,6 @@ function parseToolArgs(args: string): unknown {
     }
 }
 
-async function deriveHttpError(response: Response): Promise<ModelPresetAdapterError> {
-    let bodyText = ''
-    try {
-        bodyText = await response.text()
-    } catch {
-        // ignore body read failures
-    }
-    const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
-    return normalizeHttpStatus(response.status, message)
-        ?? new ModelPresetAdapterError('unknown', message, { status: response.status })
-}
 
 // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).
 export function parseGeminiResponse(raw: unknown): AdapterChatResponse {

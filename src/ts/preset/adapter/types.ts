@@ -44,6 +44,8 @@ export interface AdapterError {
     kind: AdapterErrorKind
     message: string
     status?: number
+    /** The provider's own `Retry-After`, in milliseconds. */
+    retryAfterMs?: number
     retryable: boolean
     fallbackEligible: boolean
     cause?: unknown

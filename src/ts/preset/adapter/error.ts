@@ -1,7 +1,10 @@
 import type { AdapterError, AdapterErrorKind } from './types'
+import { parseRetryAfterMs } from '../../../../packages/risubard-core/src/modelRetry'
 
 export interface AdapterErrorOptions {
     status?: number
+    /** The provider's own `Retry-After`, in milliseconds. */
+    retryAfterMs?: number
     retryable?: boolean
     fallbackEligible?: boolean
     cause?: unknown
@@ -10,6 +13,7 @@ export interface AdapterErrorOptions {
 export class ModelPresetAdapterError extends Error {
     readonly kind: AdapterErrorKind
     readonly status?: number
+    readonly retryAfterMs?: number
     readonly retryable: boolean
     readonly fallbackEligible: boolean
 
@@ -18,6 +22,7 @@ export class ModelPresetAdapterError extends Error {
         this.name = 'ModelPresetAdapterError'
         this.kind = kind
         this.status = options.status
+        this.retryAfterMs = options.retryAfterMs
         this.retryable = options.retryable ?? defaultRetryable(kind)
         this.fallbackEligible = options.fallbackEligible ?? defaultFallbackEligible(kind)
         if (options.cause !== undefined) {
@@ -30,6 +35,7 @@ export class ModelPresetAdapterError extends Error {
             kind: this.kind,
             message: this.message,
             status: this.status,
+            retryAfterMs: this.retryAfterMs,
             retryable: this.retryable,
             fallbackEligible: this.fallbackEligible,
             cause: (this as Error & { cause?: unknown }).cause,
@@ -124,7 +130,14 @@ export function extractErrorMessage(bodyText: string): string | null {
     return null
 }
 
-export function normalizeHttpStatus(status: number, message?: string): ModelPresetAdapterError | null {
+export function normalizeHttpStatus(
+    status: number,
+    message?: string,
+    options: { retryAfterMs?: number } = {},
+): ModelPresetAdapterError | null {
+    // Retry-After is only meaningful for the statuses that mean "later" (429,
+    // 503, 3xx); attaching it to a 401 would invite a pointless wait.
+    const retry = { status, retryAfterMs: options.retryAfterMs }
     if (status >= 200 && status < 300) return null
     if (status === 401 || status === 403) {
         return new ModelPresetAdapterError('auth', message ?? `HTTP ${status}`, {
@@ -139,10 +152,10 @@ export function normalizeHttpStatus(status: number, message?: string): ModelPres
         })
     }
     if (status === 408) {
-        return new ModelPresetAdapterError('timeout', message ?? `HTTP ${status}`, { status })
+        return new ModelPresetAdapterError('timeout', message ?? `HTTP ${status}`, retry)
     }
     if (status === 429) {
-        return new ModelPresetAdapterError('rate-limit', message ?? `HTTP ${status}`, { status })
+        return new ModelPresetAdapterError('rate-limit', message ?? `HTTP ${status}`, retry)
     }
     if (status >= 400 && status < 500) {
         return new ModelPresetAdapterError('invalid-request', message ?? `HTTP ${status}`, {
@@ -151,7 +164,33 @@ export function normalizeHttpStatus(status: number, message?: string): ModelPres
         })
     }
     if (status >= 500 && status < 600) {
-        return new ModelPresetAdapterError('server', message ?? `HTTP ${status}`, { status })
+        return new ModelPresetAdapterError('server', message ?? `HTTP ${status}`, retry)
     }
     return new ModelPresetAdapterError('unknown', message ?? `HTTP ${status}`, { status })
+}
+
+/**
+ * Turn a non-2xx provider `Response` into a classified adapter error, carrying
+ * the real HTTP status and the provider's own `Retry-After` instead of leaving
+ * both to be guessed at from the error prose further up. Shared by every
+ * adapter so the three transports classify identically.
+ */
+export async function deriveHttpAdapterError(
+    response: Response,
+): Promise<ModelPresetAdapterError> {
+    let bodyText = ''
+    try {
+        bodyText = await response.text()
+    } catch {
+        // ignore body read failures; status alone is enough to classify
+    }
+    const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
+    const retryAfterMs = parseRetryAfterMs(
+        response.headers?.get?.('retry-after'),
+    )
+    return normalizeHttpStatus(response.status, message, { retryAfterMs })
+        ?? new ModelPresetAdapterError('unknown', message, {
+            status: response.status,
+            retryAfterMs,
+        })
 }

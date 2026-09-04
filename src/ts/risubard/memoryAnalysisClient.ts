@@ -20,6 +20,12 @@ import {
 } from '../../../packages/risubard-core/src/modelOutput'
 import { modelOutputRepairInstruction, readModelResponseText, runValidatedModelRequest, type ModelOutputError, type ModelResponse } from '../../../packages/risubard-core/src/modelResponse'
 import {
+    isRetryableModelStatus,
+    runWithModelRetry,
+    type ModelRetryNotice,
+    type ModelRetrySignal,
+} from '../../../packages/risubard-core/src/modelRetry'
+import {
     loadNarrativeInquiry,
 } from './narrativeContext'
 import {
@@ -73,6 +79,11 @@ export interface MemoryAnalysisModelCall {
     logPurpose?: 'bardwiki-analysis' | 'bardwiki-canonical-update'
 }
 
+export interface MemoryAnalysisRetryNotice extends ModelRetryNotice {
+    /** The session chat the waiting request belongs to, when it has one. */
+    chatId?: string
+}
+
 interface MemoryAnalysisClientOptions {
     requestModel(
         request: MemoryAnalysisModelCall,
@@ -84,6 +95,11 @@ interface MemoryAnalysisClientOptions {
     onError(error: unknown): void | Promise<void>
     getModelMode?(chatId?: string): 'memory' | 'model'
     nativeV2Analysis?: boolean
+    /**
+     * Called before each retry wait so the caller can tell the user why nothing
+     * is happening. A silent thirty-second pause is its own bug.
+     */
+    onRetryNotice?(notice: MemoryAnalysisRetryNotice): void
 }
 
 let analysisTokenizer: Tiktoken | undefined
@@ -574,14 +590,58 @@ export function projectConfirmedMemoryTurn(
 export function createStoredResponseMemoryAnalysis(
     options: MemoryAnalysisClientOptions
 ) {
+    /**
+     * Decide whether a failed model response is worth another attempt.
+     *
+     * Only a real transport status counts. `result` is provider prose (and on
+     * some paths model output), so a model that writes "429" in its answer, or
+     * a provider whose wording differs, must not decide whether the app waits.
+     * No status means no retry: erring towards failing is free, erring towards
+     * retrying spends the user's tokens on a request that cannot succeed.
+     */
+    function classifyRetryableModelFailure(
+        response: MemoryAnalysisModelResponse
+    ): ModelRetrySignal | undefined {
+        if (response.type !== 'fail') return undefined
+        // `noRetry` is the transport's own veto (aborted, streamed output
+        // already delivered, tools already executed, a blocked completion).
+        if (response.noRetry) return undefined
+        // An unset model binding is a configuration problem; the caller's own
+        // fallback to the main model handles it, and waiting cannot help.
+        if (response.bindingFailure) return undefined
+        if (!isRetryableModelStatus(response.status)) return undefined
+        return {
+            status: response.status,
+            ...(typeof response.retryAfterMs === 'number'
+                ? { retryAfterMs: response.retryAfterMs }
+                : {}),
+        }
+    }
+
+    /**
+     * The single chokepoint for every BardWiki model request: ordinary
+     * analysis, reboot batches, canonical rewrites and baseline synthesis all
+     * arrive here. Bounded retry with backoff therefore lives here rather than
+     * at any one caller.
+     */
     async function requestMemoryModel(
         request: MemoryAnalysisModelCall,
         signal?: AbortSignal
     ): Promise<MemoryAnalysisModelResponse> {
         signal?.throwIfAborted()
-        const requestWithModel = (model: 'memory' | 'model') => signal
+        const requestOnce = (model: 'memory' | 'model') => signal
             ? options.requestModel(structuredClone(request), model, signal)
             : options.requestModel(structuredClone(request), model)
+        const requestWithModel = (model: 'memory' | 'model') =>
+            runWithModelRetry<MemoryAnalysisModelResponse>({
+                run: () => requestOnce(model),
+                classify: classifyRetryableModelFailure,
+                signal,
+                onRetry: (notice) => options.onRetryNotice?.({
+                    ...notice,
+                    chatId: request.realChatId,
+                }),
+            })
         if (options.getModelMode?.(request.realChatId) === 'model') {
             return requestWithModel('model')
         }

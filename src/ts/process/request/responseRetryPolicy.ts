@@ -39,14 +39,24 @@ export function filterResponseCharacters<T extends { type: string; result: unkno
     return response
 }
 
-export function presetFailureRetryPolicy(error: unknown, aborted = false): { noRetry?: boolean; fallbackEligible?: boolean } {
+export function presetFailureRetryPolicy(error: unknown, aborted = false): { noRetry?: boolean; fallbackEligible?: boolean; status?: number; retryAfterMs?: number } {
     if (aborted || (error instanceof Error && error.name === 'AbortError')) {
         return { noRetry: true, fallbackEligible: false }
     }
     if (error instanceof ModelOutputError && !error.retryable) {
         return { noRetry: true, fallbackEligible: false }
     }
+    // The adapter already read the real HTTP status and `Retry-After` off the
+    // provider response. Carry both onto the fail so callers can wait the right
+    // amount of time instead of reading a status out of the error prose.
     return error instanceof ModelPresetAdapterError
-        ? { noRetry: !error.retryable, fallbackEligible: error.fallbackEligible }
+        ? {
+            noRetry: !error.retryable,
+            fallbackEligible: error.fallbackEligible,
+            ...(typeof error.status === 'number' ? { status: error.status } : {}),
+            ...(typeof error.retryAfterMs === 'number'
+                ? { retryAfterMs: error.retryAfterMs }
+                : {}),
+        }
         : {}
 }

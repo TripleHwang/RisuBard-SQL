@@ -57,6 +57,7 @@ import {
 } from "../risubard/narrativeContext";
 import {
     createRisuBardContextTrace,
+    formatRisuBardRetryNotice,
     publishRisuBardMemoryActivity,
     traceRecentMessagesFromPrompt,
 } from '../risubard/memoryActivity';
@@ -142,6 +143,13 @@ function findRisuBardChat(chatId?: string): Chat | undefined {
         .find((chat) => chat.id === chatId)
 }
 
+function findRisuBardCharacterId(chatId?: string): string | undefined {
+    if (!chatId) return undefined
+    return DBState.db.characters
+        .find((character) => character.chats
+            .some((chat) => chat.id === chatId))?.chaId
+}
+
 const storedResponseMemoryAnalysis = createStoredResponseMemoryAnalysis({
     requestModel: requestChatData,
     fetchImpl: fetch,
@@ -150,6 +158,20 @@ const storedResponseMemoryAnalysis = createStoredResponseMemoryAnalysis({
         resolvedRisuBardSettings(findRisuBardChat(chatId)).risuBardModelMode,
     onError(error) {
         console.warn('[RisuBard memory analysis]', error)
+    },
+    // A wait with no explanation looks like a hang, and a reboot can spend a
+    // minute of it per turn. Report it on the same live-activity channel the
+    // rest of the BardWiki run reports on (RisuBardMemoryActivity.svelte).
+    onRetryNotice(notice) {
+        const characterId = findRisuBardCharacterId(notice.chatId)
+        if (!characterId || !notice.chatId) return
+        publishRisuBardMemoryActivity({
+            characterId,
+            chatId: notice.chatId,
+            operation: 'request',
+            timestamp: Date.now(),
+            message: formatRisuBardRetryNotice(notice),
+        })
     },
     nativeV2Analysis: true,
 })

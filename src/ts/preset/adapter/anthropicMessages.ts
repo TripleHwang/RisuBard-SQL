@@ -1,9 +1,8 @@
 import type { ModelPreset } from '../types'
 import {
     ModelPresetAdapterError,
-    extractErrorMessage,
+    deriveHttpAdapterError,
     normalizeFetchError,
-    normalizeHttpStatus,
 } from './error'
 import { prepareAdapterRequest } from './resolveCredential'
 import { parseSseStream } from './sse'
@@ -81,7 +80,7 @@ export async function sendAnthropicChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpAdapterError(response)
     }
 
     let raw: unknown
@@ -116,7 +115,7 @@ export async function* streamAnthropicChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpAdapterError(response)
     }
 
     if (!response.body) {
@@ -408,17 +407,6 @@ function parseToolArgs(args: string): unknown {
     }
 }
 
-async function deriveHttpError(response: Response): Promise<ModelPresetAdapterError> {
-    let bodyText = ''
-    try {
-        bodyText = await response.text()
-    } catch {
-        // ignore body read failures; status alone is enough to classify
-    }
-    const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
-    return normalizeHttpStatus(response.status, message)
-        ?? new ModelPresetAdapterError('unknown', message, { status: response.status })
-}
 
 function deriveStreamError(data: string): ModelPresetAdapterError {
     let message = 'Anthropic stream error'

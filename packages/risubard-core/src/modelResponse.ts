@@ -4,6 +4,14 @@ export interface ModelResponse {
     finishReason?: string
     noRetry?: boolean
     toolExecuted?: boolean
+    /**
+     * HTTP status the provider answered with, when the transport surfaced one.
+     * Carried so a caller can tell a rate limit from a rejected prompt without
+     * reading `result`, which is provider prose and sometimes model output.
+     */
+    status?: number
+    /** The provider's own `Retry-After`, in milliseconds. */
+    retryAfterMs?: number
 }
 
 export class ModelOutputError extends Error {

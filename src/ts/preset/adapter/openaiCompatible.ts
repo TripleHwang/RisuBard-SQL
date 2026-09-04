@@ -1,9 +1,8 @@
 import type { ModelPreset } from '../types'
 import {
     ModelPresetAdapterError,
-    extractErrorMessage,
+    deriveHttpAdapterError,
     normalizeFetchError,
-    normalizeHttpStatus,
 } from './error'
 import { prepareAdapterRequest } from './resolveCredential'
 import { parseSseStream } from './sse'
@@ -91,7 +90,7 @@ export async function sendChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpAdapterError(response)
     }
 
     let raw: unknown
@@ -126,7 +125,7 @@ export async function* streamChatRequest(
     }
 
     if (!response.ok) {
-        throw await deriveHttpError(response)
+        throw await deriveHttpAdapterError(response)
     }
 
     if (!response.body) {
@@ -333,17 +332,6 @@ function toDataUrl(img: AdapterImagePart): string {
     return `data:${img.mime ?? 'image/png'};base64,${img.base64}`
 }
 
-async function deriveHttpError(response: Response): Promise<ModelPresetAdapterError> {
-    let bodyText = ''
-    try {
-        bodyText = await response.text()
-    } catch {
-        // ignore body read failures; status alone is enough to classify
-    }
-    const message = extractErrorMessage(bodyText) ?? `HTTP ${response.status}`
-    return normalizeHttpStatus(response.status, message)
-        ?? new ModelPresetAdapterError('unknown', message, { status: response.status })
-}
 
 // Exported (pure) for job-journal recovery replay (process/request/jobRecovery.ts).
 export function parseChatCompletion(raw: unknown): AdapterChatResponse {

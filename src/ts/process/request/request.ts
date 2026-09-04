@@ -41,6 +41,7 @@ import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterK
 import { pumpPresetStream } from "./presetStreamPump";
 import { preparePresetResponse, presetGenerationOverrides } from './presetResponse';
 import { filterResponseCharacters, isRetryableTransportError, normalizeRequestRetryLimit, presetFailureRetryPolicy } from './responseRetryPolicy';
+import { abortableDelay, isRetryableModelStatus } from '../../../../packages/risubard-core/src/modelRetry';
 import { makeJobFetch, resolveModelJobRoute } from "./jobFetch";
 import { resolveChatModelBinding, resolveRequestModelBindingTarget, resolvePresetMaxOutputTokens, buildModelPresetCredential, applyPromptPresetParams, type ModelBindingTarget } from "./modelPresetBinding";
 import { createModelAttemptOrder, hasNextModelAttempt } from "./fallbackOrder";
@@ -52,6 +53,7 @@ import {
 } from './structuredOutputFallback';
 import {
     createPluginRequestEvidenceRecorder,
+    derivePluginFailureSignal,
     formatPluginProviderFailure,
 } from './pluginRequestEvidence';
 import { requestPageFoldPreset as dispatchPageFoldPreset } from './pageFoldPreset';
@@ -145,6 +147,12 @@ export type requestDataResponse = {
         emotion?: string
     },
     failByServerError?: boolean
+    // Real transport signal for transient failures. `status` is the HTTP status
+    // the provider answered with (never parsed out of `result`), `retryAfterMs`
+    // the provider's own `Retry-After`. Both are absent when the transport had
+    // none to give — a plugin provider that throws a bare Error, for instance.
+    status?: number,
+    retryAfterMs?: number,
     model?: string
 }|{
     type: "streaming",
@@ -316,7 +324,18 @@ export async function requestChatData(arg:RequestDataArgumentExtended, model:Mod
                     trys -= 0.5 // reduce trys by 0.5, so that it will retry twice as much
                 }
             }
-            
+            else if(da.type === 'fail' && isRetryableModelStatus(da.status)){
+                // A provider that answered 429/408/5xx has said "later". Without
+                // this the loop re-issues with no gap at all, which is what turns
+                // one rate limit into a burst of them. Deliberately a flat floor,
+                // not real backoff: the caps here are the retry count alone, so a
+                // growing delay could idle for minutes. Callers that need to ride
+                // out a rate limit add bounded backoff on top (see
+                // `runWithModelRetry` in memoryAnalysisClient). Abortable, so a
+                // cancel during the pause is seen by the check at the loop head.
+                await abortableDelay(1000, abortSignal ?? undefined).catch(() => {})
+            }
+
             trys += 1
             if(trys > retryLimit){
                 if(!hasNextModelAttempt(
@@ -1933,6 +1952,7 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
         return {
             type: 'fail',
             result: failureMessage,
+            ...derivePluginFailureSignal(error),
             model: responseModel
         }
     }

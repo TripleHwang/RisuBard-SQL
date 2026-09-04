@@ -82,6 +82,29 @@ export function traceRecentMessagesFromPrompt(
     )
 }
 
+/**
+ * One live-activity line for a transient-failure wait: what went wrong, how
+ * long the pause is, and which attempt this is. Without it a 30-second backoff
+ * is indistinguishable from a hung reboot.
+ */
+export function formatRisuBardRetryNotice(notice: {
+    attempt: number
+    maxAttempts: number
+    delayMs: number
+    status?: number
+    fromRetryAfter?: boolean
+}): string {
+    const seconds = Math.max(1, Math.round(notice.delayMs / 1_000))
+    const cause = notice.status === 429
+        ? '요청 한도에 걸렸습니다'
+        : notice.status === 408
+            ? '요청이 시간 초과되었습니다'
+            : '모델 제공자가 일시적으로 응답하지 못했습니다'
+    const source = notice.fromRetryAfter ? ' · 제공자 지정 대기' : ''
+    return `${cause}(HTTP ${notice.status ?? '?'}). ${seconds}초 후 재시도합니다`
+        + ` (${notice.attempt}/${notice.maxAttempts}${source}).`
+}
+
 export function publishRisuBardMemoryActivity(
     detail: RisuBardLiveActivity
 ): void {

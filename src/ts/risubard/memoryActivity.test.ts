@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
     createRisuBardContextTrace,
+    formatRisuBardRetryNotice,
     sourceIdToWikiPath,
     traceRecentMessagesFromPrompt,
 } from './memoryActivity'
@@ -86,5 +87,28 @@ describe('RisuBard memory activity', () => {
                 message: '위키 조회 제한 시간을 초과했습니다.',
             }),
         ])
+    })
+})
+
+describe('retry notice line', () => {
+    it('names the cause, the wait and which attempt this is', () => {
+        expect(formatRisuBardRetryNotice({
+            attempt: 2,
+            maxAttempts: 4,
+            delayMs: 12_000,
+            status: 429,
+            fromRetryAfter: true,
+        })).toBe(
+            '요청 한도에 걸렸습니다(HTTP 429). 12초 후 재시도합니다 (2/4 · 제공자 지정 대기).'
+        )
+    })
+
+    it('never rounds a wait down to zero seconds', () => {
+        expect(formatRisuBardRetryNotice({
+            attempt: 1,
+            maxAttempts: 4,
+            delayMs: 400,
+            status: 503,
+        })).toContain('1초 후')
     })
 })
