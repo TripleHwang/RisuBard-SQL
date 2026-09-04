@@ -53,6 +53,42 @@ class RecordingIntersectionObserver {
     }
 }
 
+/**
+ * The browser's animation frames, stood in for the same reason its
+ * intersection reporting is.
+ *
+ * A sentinel report no longer moves the whole window in the turn that receives
+ * it. The screen mounts what one frame can afford and asks for another until
+ * the step is finished, which is what stopped a slide freezing the scroll for
+ * ninety milliseconds. happy-dom has no frames, so a test that only reported
+ * the sentinel would watch the window move by a single row and conclude it had
+ * stopped -- and never reach the oldest resident message at all.
+ */
+class RecordingAnimationFrames {
+    static pending = new Map<number, FrameRequestCallback>()
+    static next = 1
+    static request(callback: FrameRequestCallback): number {
+        const handle = RecordingAnimationFrames.next
+        RecordingAnimationFrames.next += 1
+        RecordingAnimationFrames.pending.set(handle, callback)
+        return handle
+    }
+    static cancel(handle: number) { RecordingAnimationFrames.pending.delete(handle) }
+    static reset() { RecordingAnimationFrames.pending.clear() }
+    /** Run frames, and everything they schedule, until nothing asks for another. */
+    static drain(limit = 2_000) {
+        for (let frame = 0; frame < limit; frame += 1) {
+            const next = RecordingAnimationFrames.pending.entries().next()
+            if (next.done) return frame
+            const [handle, callback] = next.value
+            RecordingAnimationFrames.pending.delete(handle)
+            callback(0)
+            flushSync()
+        }
+        throw new Error('the chat screen never stopped asking for animation frames')
+    }
+}
+
 function buildHistory(count: number) {
     return Array.from({ length: count }, (_, position) => ({
         chatId: `m-${position}`,
@@ -187,17 +223,25 @@ async function openChat(historyLength: number) {
         scrollOlder: async () => {
             observer().reportVisible(OLDER_SENTINEL)
             flushSync()
+            // The step the report started runs across frames now, so the window
+            // has not reached the oldest resident row -- and storage has not
+            // been asked for the page after it -- until these have run.
+            RecordingAnimationFrames.drain()
             await lastRequest
             flushSync()
+            RecordingAnimationFrames.drain()
         },
         /** A flick: several intersection reports before the page comes back. */
         flickOlder: async (times: number) => {
             for (let attempt = 0; attempt < times; attempt += 1) {
                 observer().reportVisible(OLDER_SENTINEL)
+                flushSync()
+                RecordingAnimationFrames.drain()
             }
             flushSync()
             await lastRequest
             flushSync()
+            RecordingAnimationFrames.drain()
         },
     }
 }
@@ -205,6 +249,9 @@ async function openChat(historyLength: number) {
 beforeEach(() => {
     RecordingIntersectionObserver.live = []
     vi.stubGlobal('IntersectionObserver', RecordingIntersectionObserver)
+    RecordingAnimationFrames.reset()
+    vi.stubGlobal('requestAnimationFrame', RecordingAnimationFrames.request)
+    vi.stubGlobal('cancelAnimationFrame', RecordingAnimationFrames.cancel)
     activeStorage.current = null
     resetMountedMessageRegistryForTesting()
 })
@@ -214,6 +261,7 @@ afterEach(() => {
     mounted = null
     host?.remove()
     host = null
+    RecordingAnimationFrames.reset()
     vi.unstubAllGlobals()
     resetMountedMessageRegistryForTesting()
     resetSqlPersistenceRuntimeForTesting()

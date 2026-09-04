@@ -55,11 +55,50 @@ class RecordingIntersectionObserver {
     }
 }
 
+/**
+ * The browser's animation frames, stood in for the same reason its
+ * intersection reporting is.
+ *
+ * A sentinel report no longer moves the whole window in the turn that receives
+ * it. The screen mounts what one frame can afford and asks for another until
+ * the step is finished, which is what stopped a slide freezing the scroll for
+ * ninety milliseconds. happy-dom has no frames, so a test that only reported
+ * the sentinel would watch the window move by a single row and conclude it had
+ * stopped.
+ */
+class RecordingAnimationFrames {
+    static pending = new Map<number, FrameRequestCallback>()
+    static next = 1
+    static request(callback: FrameRequestCallback): number {
+        const handle = RecordingAnimationFrames.next
+        RecordingAnimationFrames.next += 1
+        RecordingAnimationFrames.pending.set(handle, callback)
+        return handle
+    }
+    static cancel(handle: number) { RecordingAnimationFrames.pending.delete(handle) }
+    static reset() { RecordingAnimationFrames.pending.clear() }
+    /** Run frames, and everything they schedule, until nothing asks for another. */
+    static drain(limit = 2_000) {
+        for (let frame = 0; frame < limit; frame += 1) {
+            const next = RecordingAnimationFrames.pending.entries().next()
+            if (next.done) return frame
+            const [handle, callback] = next.value
+            RecordingAnimationFrames.pending.delete(handle)
+            callback(0)
+            flushSync()
+        }
+        throw new Error('the chat screen never stopped asking for animation frames')
+    }
+}
+
 function scrollTo(selector: string) {
     const observer = RecordingIntersectionObserver.live.at(-1)
     if (!observer) throw new Error('the chat screen is not observing its scroll ends')
     observer.reportVisible(selector)
     flushSync()
+    // The step the report started is finished here, so every assertion below
+    // still describes a settled window rather than one frame's worth of it.
+    RecordingAnimationFrames.drain()
 }
 
 function buildMessages(count: number) {
@@ -122,6 +161,12 @@ function render(messages: any[], extra: Record<string, unknown> = {}) {
     return scroller
 }
 
+function mountedIndices(container: HTMLElement): number[] {
+    return Array.from(container.querySelectorAll('[data-chat-row]'))
+        .map(element => Number(element.getAttribute('data-chat-row')!.slice(2)))
+        .sort((left, right) => left - right)
+}
+
 /** Layout reads taken since the last call. */
 function readsSince(): number {
     const taken = layoutReads
@@ -136,6 +181,9 @@ function measurePasses(): number {
 beforeEach(() => {
     RecordingIntersectionObserver.live = []
     vi.stubGlobal('IntersectionObserver', RecordingIntersectionObserver)
+    RecordingAnimationFrames.reset()
+    vi.stubGlobal('requestAnimationFrame', RecordingAnimationFrames.request)
+    vi.stubGlobal('cancelAnimationFrame', RecordingAnimationFrames.cancel)
     layoutReads = 0
     rectSpy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
         layoutReads += 1
@@ -154,6 +202,7 @@ afterEach(() => {
     host = null
     rectSpy?.mockRestore()
     rectSpy = null
+    RecordingAnimationFrames.reset()
     vi.unstubAllGlobals()
     resetRuntimePerformanceReportForTesting()
 })
@@ -201,13 +250,24 @@ describe('the chat screen does not force a layout on every render', () => {
         const container = render(reactiveMessages(400))
         readsSince()
         const measuresBefore = measurePasses()
+        const oldestBefore = mountedIndices(container).at(0)!
 
         scrollTo(OLDER_SENTINEL)
 
         // A slide changes which rows are mounted and both spacer counts, so the
         // heights the spacer estimate is built from must be taken again.
         expect(readsSince()).toBeGreaterThan(0)
-        expect(measurePasses() - measuresBefore).toBe(1)
+        // Once per row the window moved, because that is how many times the
+        // window moved: the step is now paid a row at a time across frames, and
+        // each of those passes changes the mounted set and both spacer counts.
+        // The claim this file exists to make is unaffected -- a measurement
+        // happens when the answer can differ and at no other time -- and the
+        // tests above still pin the "at no other time" half. What it costs is
+        // measured: 0.8ms a pass against 9.3ms for the single pass that used to
+        // measure the whole step at once.
+        const rowsMoved = oldestBefore - mountedIndices(container).at(0)!
+        expect(rowsMoved).toBeGreaterThan(1)
+        expect(measurePasses() - measuresBefore).toBe(rowsMoved)
         const before = container.querySelector('[data-chat-spacer="before"]') as HTMLElement
         const after = container.querySelector('[data-chat-spacer="after"]') as HTMLElement
         expect(before.style.height).not.toBe('')

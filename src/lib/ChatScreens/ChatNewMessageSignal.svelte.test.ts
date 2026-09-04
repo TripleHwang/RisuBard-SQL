@@ -41,11 +41,50 @@ class RecordingIntersectionObserver {
     }
 }
 
+/**
+ * The browser's animation frames, stood in for the same reason its
+ * intersection reporting is.
+ *
+ * A sentinel report no longer moves the whole window in the turn that receives
+ * it. The screen mounts what one frame can afford and asks for another until
+ * the step is finished, which is what stopped a slide freezing the scroll for
+ * ninety milliseconds. happy-dom has no frames, so a test that only reported
+ * the sentinel would watch the window move by a single row and conclude it had
+ * stopped.
+ */
+class RecordingAnimationFrames {
+    static pending = new Map<number, FrameRequestCallback>()
+    static next = 1
+    static request(callback: FrameRequestCallback): number {
+        const handle = RecordingAnimationFrames.next
+        RecordingAnimationFrames.next += 1
+        RecordingAnimationFrames.pending.set(handle, callback)
+        return handle
+    }
+    static cancel(handle: number) { RecordingAnimationFrames.pending.delete(handle) }
+    static reset() { RecordingAnimationFrames.pending.clear() }
+    /** Run frames, and everything they schedule, until nothing asks for another. */
+    static drain(limit = 2_000) {
+        for (let frame = 0; frame < limit; frame += 1) {
+            const next = RecordingAnimationFrames.pending.entries().next()
+            if (next.done) return frame
+            const [handle, callback] = next.value
+            RecordingAnimationFrames.pending.delete(handle)
+            callback(0)
+            flushSync()
+        }
+        throw new Error('the chat screen never stopped asking for animation frames')
+    }
+}
+
 function scrollTo(selector: string) {
     const observer = RecordingIntersectionObserver.live.at(-1)
     if (!observer) throw new Error('the chat screen is not observing its scroll ends')
     observer.reportVisible(selector)
     flushSync()
+    // The step the report started is finished here, so every assertion below
+    // still describes a settled window rather than one frame's worth of it.
+    RecordingAnimationFrames.drain()
 }
 
 /**
@@ -147,6 +186,9 @@ beforeEach(() => {
     readerAtBottom = false
     newMessageButtonShown = false
     vi.stubGlobal('IntersectionObserver', RecordingIntersectionObserver)
+    RecordingAnimationFrames.reset()
+    vi.stubGlobal('requestAnimationFrame', RecordingAnimationFrames.request)
+    vi.stubGlobal('cancelAnimationFrame', RecordingAnimationFrames.cancel)
     stubScrollGeometry()
     DBState.db.autoScrollToNewMessage = true
     DBState.db.alwaysScrollToNewMessage = false
@@ -158,10 +200,16 @@ afterEach(() => {
     host?.remove()
     host = null
     Element.prototype.getBoundingClientRect = nativeGetBoundingClientRect
+    RecordingAnimationFrames.reset()
     vi.unstubAllGlobals()
 })
 
 describe('the new-message button means a message arrived', () => {
+    /**
+     * Explicit timeout: each `scrollBack` reports the sentinel several times
+     * and a report now mounts its step a row at a time across frames, so this
+     * drives hundreds of renders of a four-hundred-message reactive array.
+     */
     it('stays off while the reader scrolls back through page after page of older history', () => {
         const messages = reactiveMessages(400)
         const container = render(messages)
@@ -180,7 +228,7 @@ describe('the new-message button means a message arrived', () => {
 
         expect(messages.length).toBe(490)
         expect(newMessageButtonShown).toBe(false)
-    })
+    }, 30_000)
 
     it('comes on when a char message is appended while the reader is scrolled back', () => {
         const messages = reactiveMessages(400)

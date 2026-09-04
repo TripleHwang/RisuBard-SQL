@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>chat slide probe</title>
+    <style>
+      body { margin: 0; background: #111827; color: #e5e7eb; font: 13px/1.5 monospace; }
+      #scroller { height: 720px; width: 900px; overflow-y: auto; border: 1px solid #374151; }
+      #out { white-space: pre; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="scroller"></div>
+    <div id="out">booting…</div>
+    <script type="module" src="/scripts/perf/browser/chat-slide.ts"></script>
+  </body>
+</html>

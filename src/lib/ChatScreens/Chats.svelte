@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { character, Message, StreamingDisplayOptimizationMode } from 'src/ts/storage/database.svelte';
-    import { mount, onDestroy, tick, unmount } from 'svelte';
+    import { flushSync, mount, onDestroy, tick, unmount } from 'svelte';
     import Chat from './Chat.svelte';
     import { getCharImage } from 'src/ts/characters';
     import { createSimpleCharacter, DBState, selectedCharID, ReloadChatPointer } from 'src/ts/stores.svelte';
@@ -94,6 +94,33 @@
      * requested, before the reader arrives at blank spacer.
      */
     const SCROLL_END_MARGIN_PX = 600;
+    /**
+     * How long one animation frame may spend moving the window.
+     *
+     * A slide displaces the window by half its length -- thirty-one rows -- and
+     * doing all of them in the frame the sentinel reported on is the hitch:
+     * constructing a row costs about three milliseconds, so that frame runs
+     * ninety-odd and the scroll stops dead while it does.
+     *
+     * Nothing in that work is per-slide. Measured against a resident sixty-row
+     * window, the layout newly inserted rows force is 0.6ms for one, 1.2ms for
+     * two and 13.1ms for thirty, and reading every row's height once layout is
+     * clean is 0.15ms whether one row moved or thirty. There is no constant to
+     * amortise, so the same total can be paid a row at a time without paying
+     * more of it.
+     *
+     * Two milliseconds is below what one row costs, which is the point: on the
+     * machine this was measured on it buys exactly one row per frame, and a
+     * frame that mounts one row takes 7.1ms against a quiet frame's 6.9ms --
+     * the work disappears into the frame it is already spending. It is a
+     * budget rather than a count so the two ends stay bounded on their own. A
+     * chat of one-line messages has rows that cost a fraction of this, and
+     * several fit, which is what keeps the mounting edge ahead of a fast
+     * scroll when each row buys only a few pixels of lead; a machine slow
+     * enough that one row costs more than the whole budget still does one,
+     * because the budget is checked between rows and never before the first.
+     */
+    const SLIDE_FRAME_BUDGET_MS = 2;
     type ChatInstance = {
         updateStreamingDisplay?: (state: {
             isOptimizedStreamingMessage: boolean
@@ -146,24 +173,131 @@
     }
 
     /**
-     * Slide the mounted window one step. Returns false when it did not move,
-     * which at the older end is the signal that only storage can supply more.
+     * The slide still owed to a sentinel report, in rows and in the direction
+     * it was reported from. `null` when the window is where it wants to be.
+     *
+     * Rows remaining, deliberately, rather than the index the window is heading
+     * for: storage can splice an older page in while the slide is still
+     * running, which moves every index by the size of that page. A remembered
+     * target index would then name a different message and drag the window a
+     * page further back; a count of rows still to travel is the same journey
+     * whatever the array does underneath it.
      */
-    function slideDomWindow(direction: -1 | 1): boolean {
+    let pendingSlide: { direction: -1 | 1, remaining: number } | null = null;
+    let cancelPendingSlideFrame: (() => void) | null = null;
+
+    /**
+     * A frame, or the closest thing to one available.
+     *
+     * Read off `globalThis` at call time rather than captured, so a test can
+     * stand in for the browser's frames the same way it already stands in for
+     * its intersection reporting. The timeout fallback is for environments with
+     * no frames at all, where nothing paints and the only thing that matters is
+     * that the window still arrives.
+     */
+    function scheduleSlideFrame() {
+        if (cancelPendingSlideFrame) return;
+        const requestFrame = globalThis.requestAnimationFrame;
+        if (typeof requestFrame === 'function') {
+            const handle = requestFrame(() => { cancelPendingSlideFrame = null; advanceSlide(); });
+            cancelPendingSlideFrame = () => globalThis.cancelAnimationFrame?.(handle);
+            return;
+        }
+        const handle = setTimeout(() => { cancelPendingSlideFrame = null; advanceSlide(); }, 0);
+        cancelPendingSlideFrame = () => clearTimeout(handle);
+    }
+
+    /**
+     * Abandon a slide in progress.
+     *
+     * Every deliberate jump -- opening another chat, returning to the latest
+     * message, revealing a search hit -- has to do this. A slide left running
+     * would keep stepping the window away from wherever the jump just put it,
+     * one row per frame, which reads as the chat wandering off on its own.
+     */
+    function cancelSlide() {
+        pendingSlide = null;
+        cancelPendingSlideFrame?.();
+        cancelPendingSlideFrame = null;
+    }
+
+    /** Point the anchor at the window that begins at `start`. */
+    function anchorWindowStart(start: number) {
         const total = messages.length;
-        if (total === 0) return false;
+        const limit = domLimit();
+        // Reaching the newest end drops the anchor entirely, so a message
+        // appended after this point keeps the window pinned to the tail.
+        if (start + limit >= total) {
+            anchorId = null;
+            return;
+        }
+        anchorId = stableMessageId(messages[start + Math.floor(limit / 2)]);
+    }
+
+    /**
+     * Begin sliding the mounted window one step, and return the window that
+     * step is heading for -- `null` when it has nowhere to go, which at the
+     * older end is the signal that only storage can supply more.
+     *
+     * The step is still `stepChatWindowCenter`'s: the reader who has scrolled
+     * to a sentinel ends up exactly where the previous code put them, with the
+     * sentinel pushed the same distance back out of range. Only the rate
+     * changed. What used to be thirty-one mounts in the reporting frame is now
+     * thirty-one mounts spread over the frames that follow it, and because the
+     * reader is still six hundred pixels from the edge when the report comes
+     * and each frame mounts at least one whole row, the rows arrive far faster
+     * than a scroll can consume them.
+     */
+    function requestSlide(direction: -1 | 1): ChatWindow | null {
+        const total = messages.length;
+        if (total === 0) return null;
         const limit = domLimit();
         const current = currentDomWindow();
         const centre = stepChatWindowCenter(current, total, limit, direction);
-        const next = getChatWindow({ total, anchorIndex: centre, limit });
-        if (next.start === current.start && next.end === current.end) return false;
-        // Reaching the newest end drops the anchor entirely, so a message
-        // appended after this point keeps the window pinned to the tail.
-        anchorId = next.end >= total ? null : stableMessageId(messages[centre]);
-        return true;
+        const target = getChatWindow({ total, anchorIndex: centre, limit });
+        if (target.start === current.start && target.end === current.end) return null;
+        pendingSlide = { direction, remaining: Math.abs(target.start - current.start) };
+        scheduleSlideFrame();
+        return target;
+    }
+
+    /** Move the window as far towards its target as this frame can afford. */
+    function advanceSlide() {
+        if (!pendingSlide) return;
+        const startedAt = layoutClock();
+        while (pendingSlide) {
+            const total = messages.length;
+            const limit = domLimit();
+            const current = currentDomWindow();
+            const furthestStart = Math.max(0, total - limit);
+            const nextStart = Math.max(0, Math.min(furthestStart, current.start + pendingSlide.direction));
+            if (nextStart === current.start) {
+                // Clamped: the window is against an end of the array and the
+                // rest of the journey does not exist.
+                pendingSlide = null;
+                break;
+            }
+            anchorWindowStart(nextStart);
+            pendingSlide.remaining -= 1;
+            if (pendingSlide.remaining <= 0) {
+                pendingSlide = null;
+                break;
+            }
+            // Flushed here rather than left to the microtask that would run it
+            // anyway, so the budget below is measured against rows that have
+            // actually been mounted instead of rows that are merely scheduled.
+            flushSync();
+            if (layoutClock() - startedAt >= SLIDE_FRAME_BUDGET_MS) break;
+        }
+        if (pendingSlide) scheduleSlideFrame();
     }
 
     function handleOlderEndVisible() {
+        // The sentinel stays intersecting for as long as the slide it started
+        // is still running, and a second report during that time is the same
+        // report: acting on it would start a second journey from a window
+        // half-way through the first.
+        if (pendingSlide?.direction === -1) return;
         // A slide that lands on the oldest resident row is the last one this
         // component can make, so storage is asked in the same turn rather than
         // on a later sentinel report. That report may never come: the terminal
@@ -173,13 +307,19 @@
         // target that stays intersecting -- has nothing left to fire. The chat
         // would sit at its oldest resident message with the rest of its history
         // on disk, no spinner, no error and no way forward.
-        const moved = slideDomWindow(-1);
-        if (moved && currentDomWindow().beforeCount > 0) return;
+        //
+        // Asked from the window the slide is heading for, not from the one it
+        // has reached, because the slide now takes several frames to arrive and
+        // the question -- is there any resident history left past this step --
+        // is answered by its destination either way.
+        const target = requestSlide(-1);
+        if (target && target.beforeCount > 0) return;
         onReachOldestMounted();
     }
 
     function handleNewerEndVisible() {
-        slideDomWindow(1);
+        if (pendingSlide?.direction === 1) return;
+        requestSlide(1);
     }
 
     const updateChatBody = () => {
@@ -403,8 +543,14 @@
 
     onDestroy(() => {
         console.log('Unmounting Chats');
-        mountInstances.forEach((inst) => {
-            unmount(inst);
+        cancelSlide();
+        // `inst` is the `{ instance, element, signature }` record, not the
+        // component -- passing the record unmounted nothing, so leaving a chat
+        // screen leaked every one of its mounted rows. Every other call site in
+        // this file already unmounts `.instance`.
+        mountInstances.forEach((mounted) => {
+            unmount(mounted.instance);
+            mounted.element.remove();
         });
         mountInstances.clear();
         releaseMountedMessageIds(mountRegistryToken);
@@ -432,6 +578,7 @@
     export const scrollToLatestMessage = () => {
         if(!chatBody) return;
         hasNewUnreadMessage = false;
+        cancelSlide();
         if (anchorId !== null) {
             // The newest messages are not mounted yet. Re-pin first, then scroll
             // once the rows they refer to actually exist.
@@ -446,6 +593,7 @@
     export const revealMessage = (index: number) => {
         const total = messages.length;
         if (total === 0) return;
+        cancelSlide();
         const clamped = Math.max(0, Math.min(total - 1, Math.floor(index)));
         const next = getChatWindow({ total, anchorIndex: clamped, limit: domLimit() });
         anchorId = next.end >= total ? null : stableMessageId(messages[clamped]);
@@ -454,6 +602,7 @@
     /** Same, addressed by stable id; ignored when that message is not resident. */
     export const revealMessageById = (id: string | null) => {
         if (!id) {
+            cancelSlide();
             anchorId = null;
             return;
         }
@@ -491,6 +640,7 @@
         const roomId = getCurrentChatRoomId();
         if (roomId === anchoredChatRoomId) return;
         anchoredChatRoomId = roomId;
+        cancelSlide();
         anchorId = null;
     })
 

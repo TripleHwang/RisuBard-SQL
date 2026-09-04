@@ -43,11 +43,50 @@ class RecordingIntersectionObserver {
     }
 }
 
+/**
+ * The browser's animation frames, stood in for the same reason its
+ * intersection reporting is.
+ *
+ * A sentinel report no longer moves the whole window in the turn that receives
+ * it. The screen mounts what one frame can afford and asks for another until
+ * the step is finished, which is what stopped a slide freezing the scroll for
+ * ninety milliseconds. happy-dom has no frames, so a test that only reported
+ * the sentinel would watch the window move by a single row and conclude it had
+ * stopped.
+ */
+class RecordingAnimationFrames {
+    static pending = new Map<number, FrameRequestCallback>()
+    static next = 1
+    static request(callback: FrameRequestCallback): number {
+        const handle = RecordingAnimationFrames.next
+        RecordingAnimationFrames.next += 1
+        RecordingAnimationFrames.pending.set(handle, callback)
+        return handle
+    }
+    static cancel(handle: number) { RecordingAnimationFrames.pending.delete(handle) }
+    static reset() { RecordingAnimationFrames.pending.clear() }
+    /** Run frames, and everything they schedule, until nothing asks for another. */
+    static drain(limit = 2_000) {
+        for (let frame = 0; frame < limit; frame += 1) {
+            const next = RecordingAnimationFrames.pending.entries().next()
+            if (next.done) return frame
+            const [handle, callback] = next.value
+            RecordingAnimationFrames.pending.delete(handle)
+            callback(0)
+            flushSync()
+        }
+        throw new Error('the chat screen never stopped asking for animation frames')
+    }
+}
+
 function scrollTo(selector: string) {
     const observer = RecordingIntersectionObserver.live.at(-1)
     if (!observer) throw new Error('the chat screen is not observing its scroll ends')
     observer.reportVisible(selector)
     flushSync()
+    // The step the report started is finished here, so every assertion below
+    // still describes a settled window rather than one frame's worth of it.
+    RecordingAnimationFrames.drain()
 }
 
 function buildMessages(count: number) {
@@ -130,6 +169,9 @@ function mountedIndices(container: HTMLElement): number[] {
 beforeEach(() => {
     RecordingIntersectionObserver.live = []
     vi.stubGlobal('IntersectionObserver', RecordingIntersectionObserver)
+    RecordingAnimationFrames.reset()
+    vi.stubGlobal('requestAnimationFrame', RecordingAnimationFrames.request)
+    vi.stubGlobal('cancelAnimationFrame', RecordingAnimationFrames.cancel)
 })
 
 afterEach(() => {
@@ -137,6 +179,7 @@ afterEach(() => {
     mounted = null
     host?.remove()
     host = null
+    RecordingAnimationFrames.reset()
     vi.unstubAllGlobals()
 })
 
@@ -174,6 +217,138 @@ describe('the chat screen follows the scroll instead of a page number', () => {
         expect(after.length).toBeLessThanOrEqual(60)
     })
 
+    it('mounts the step a frame at a time instead of all of it in the frame that reported', () => {
+        const container = render(reactiveMessages(400))
+        const before = mountedIndices(container).at(0)!
+
+        // The report on its own, with no frame granted.
+        RecordingIntersectionObserver.live.at(-1)!.reportVisible(OLDER_SENTINEL)
+        flushSync()
+        expect(mountedIndices(container).at(0)!).toBe(before)
+
+        // Constructing a row costs about three milliseconds and a step is
+        // thirty-one of them, which is the ninety-millisecond frozen frame the
+        // reader felt as a hitch. Doing them across frames is what removed it,
+        // so a single frame must never be allowed to do the lot.
+        const frames = RecordingAnimationFrames.drain()
+        const moved = before - mountedIndices(container).at(0)!
+        expect(moved).toBeGreaterThan(1)
+        expect(frames).toBeGreaterThan(1)
+        // And the destination is the one the old code jumped to in one go: the
+        // reader ends up exactly where they used to, and the sentinel is pushed
+        // the same distance back out of range.
+        expect(moved).toBe(31)
+    })
+
+    it('holds a contiguous window in conversation order on every frame of a step', () => {
+        const container = render(reactiveMessages(400))
+        RecordingIntersectionObserver.live.at(-1)!.reportVisible(OLDER_SENTINEL)
+        flushSync()
+
+        /**
+         * The rows as the DOM actually holds them, unsorted.
+         *
+         * `mountedIndices` sorts, which cannot tell a window in conversation
+         * order from the same sixty rows shuffled -- and a step that mounts a
+         * row at a time has thirty-one intermediate states where a row could be
+         * inserted against the wrong neighbour and be sorted back into place by
+         * the assertion meant to catch it.
+         */
+        const domOrder = () => Array.from(container.querySelectorAll('[data-chat-row]'))
+            .map(element => Number(element.getAttribute('data-chat-row')!.slice(2)))
+
+        let frames = 0
+        while (RecordingAnimationFrames.pending.size > 0) {
+            const [handle, runFrame] = RecordingAnimationFrames.pending.entries().next().value!
+            RecordingAnimationFrames.pending.delete(handle)
+            runFrame(0)
+            flushSync()
+            frames += 1
+            const order = domOrder()
+            // Newest first, one message apart, no gaps and no repeats: the row
+            // in each position is the message that belongs there.
+            expect(new Set(order).size).toBe(order.length)
+            expect(order).toEqual(Array.from({ length: order.length }, (_, i) => order[0] - i))
+            expect(order.length).toBe(60)
+        }
+        expect(frames).toBeGreaterThan(1)
+    })
+
+    it('abandons a slide in progress when the screen is sent somewhere else', () => {
+        const container = render(reactiveMessages(400))
+        RecordingIntersectionObserver.live.at(-1)!.reportVisible(OLDER_SENTINEL)
+        flushSync()
+
+        // Mid-slide, the reader asks for the latest messages. A step left
+        // running would keep walking the window backwards, one row per frame,
+        // away from where they just asked to be.
+        mounted!.scrollToLatestMessage()
+        flushSync()
+        RecordingAnimationFrames.drain()
+
+        expect(mountedIndices(container).at(-1)).toBe(399)
+        expect(mounted!.getAnchorId()).toBeNull()
+    })
+
+    it('abandons a slide in progress when another chat is opened', () => {
+        const container = render(reactiveMessages(400))
+        RecordingIntersectionObserver.live.at(-1)!.reportVisible(OLDER_SENTINEL)
+        flushSync()
+
+        // The reader opens a different conversation while a step is still
+        // running. A step left running would keep walking the new chat's window
+        // backwards, one row per frame, from the newest messages it opened on.
+        DBState.db.characters[0].chats[0].id = 'chat-2'
+        flushSync()
+        RecordingAnimationFrames.drain()
+
+        expect(mountedIndices(container).at(-1)).toBe(399)
+        expect(mounted!.getAnchorId()).toBeNull()
+    })
+
+    it('treats a second report of the same sentinel during a step as the same report', () => {
+        const container = render(reactiveMessages(400))
+        const before = mountedIndices(container).at(0)!
+        const observer = RecordingIntersectionObserver.live.at(-1)!
+
+        // The sentinel goes on intersecting until the rows this step mounts
+        // push it back out of range, which now takes several frames rather than
+        // one -- so the same sentinel can be reported again while the step it
+        // started is already part-way done. One frame of it, then the report.
+        observer.reportVisible(OLDER_SENTINEL)
+        flushSync()
+        const [handle, runFrame] = RecordingAnimationFrames.pending.entries().next().value!
+        RecordingAnimationFrames.pending.delete(handle)
+        runFrame(0)
+        flushSync()
+        expect(mountedIndices(container).at(0)!).toBeLessThan(before)
+        observer.reportVisible(OLDER_SENTINEL)
+        flushSync()
+        RecordingAnimationFrames.drain()
+
+        // One step, not two. A second journey begun from a window half-way
+        // through the first carries the window past the destination the reader
+        // was heading for, and every further report during the step carries it
+        // further still.
+        expect(before - mountedIndices(container).at(0)!).toBe(31)
+    })
+
+    it('lands where revealMessage sent it, even when a step was already running', () => {
+        const container = render(reactiveMessages(400))
+        RecordingIntersectionObserver.live.at(-1)!.reportVisible(OLDER_SENTINEL)
+        flushSync()
+
+        // A search hit, or the memory panel, jumping the reader somewhere while
+        // a step is running. The step has to be abandoned, not resumed from
+        // wherever the jump landed.
+        mounted!.revealMessage(120)
+        flushSync()
+        RecordingAnimationFrames.drain()
+
+        expect(mountedIndices(container).at(0)).toBe(90)
+        expect(mountedIndices(container).at(-1)).toBe(149)
+    })
+
     it('slides back towards the newest messages when the newer end comes into view', () => {
         const container = render(reactiveMessages(400))
         scrollTo(OLDER_SENTINEL)
@@ -185,6 +360,13 @@ describe('the chat screen follows the scroll instead of a page number', () => {
         expect(mountedIndices(container).at(-1)!).toBeGreaterThan(scrolledBack.at(-1)!)
     })
 
+    /**
+     * Explicit timeout for the same reason the return-to-latest test below
+     * carries one, and more so: a step is now mounted a row at a time across
+     * frames, so a hundred sentinel reports drive thirty-one renders each
+     * instead of one. Comfortable alone, past the default five seconds when
+     * the whole suite is competing for the machine.
+     */
     it('asks for an older page only once the oldest resident message is mounted', () => {
         const onReachOldestMounted = vi.fn()
         const container = render(reactiveMessages(400), { onReachOldestMounted })
@@ -200,8 +382,15 @@ describe('the chat screen follows the scroll instead of a page number', () => {
         }
         expect(mountedIndices(container)).toContain(0)
         expect(onReachOldestMounted).toHaveBeenCalled()
-    })
+    }, 30_000)
 
+    /**
+     * Explicit timeout for the same reason the return-to-latest test below
+     * carries one, and more so: a step is now mounted a row at a time across
+     * frames, so a hundred sentinel reports drive thirty-one renders each
+     * instead of one. Comfortable alone, past the default five seconds when
+     * the whole suite is competing for the machine.
+     */
     it('asks storage on the slide that reaches the oldest resident message, not on a later report', () => {
         const onReachOldestMounted = vi.fn()
         // 400 messages, a 60-row window sliding by 31: the slide that finally
@@ -221,8 +410,15 @@ describe('the chat screen follows the scroll instead of a page number', () => {
         expect(mountedIndices(container)).toContain(0)
         // Called by the slide itself, with no further scroll signal needed.
         expect(onReachOldestMounted).toHaveBeenCalledTimes(1)
-    })
+    }, 30_000)
 
+    /**
+     * Explicit timeout for the same reason the return-to-latest test below
+     * carries one, and more so: a step is now mounted a row at a time across
+     * frames, so a hundred sentinel reports drive thirty-one renders each
+     * instead of one. Comfortable alone, past the default five seconds when
+     * the whole suite is competing for the machine.
+     */
     it('reports which end of the history is on screen', () => {
         const onWindowChange = vi.fn()
         const container = render(reactiveMessages(400), { onWindowChange })
@@ -235,7 +431,7 @@ describe('the chat screen follows the scroll instead of a page number', () => {
         // This is what tells the screen to draw the greeting, and to offer the
         // way back to the latest messages.
         expect(onWindowChange).toHaveBeenLastCalledWith({ atOldestEnd: true, atNewestEnd: false })
-    })
+    }, 30_000)
 
     it('keeps the way back to the latest messages while a reply streams', () => {
         const onWindowChange = vi.fn()
