@@ -67,6 +67,14 @@ function createClient() {
                 ? Response.json(result)
                 : Response.json({ error: "Root key not found", key, present: false }, { status: 404 });
         }
+        if (path === "/api/sql/plugin-storage") return Response.json(server.listPluginStorageKeys());
+        if (path.startsWith("/api/sql/plugin-storage/")) {
+            const key = decodeURIComponent(path.slice("/api/sql/plugin-storage/".length));
+            const result = server.loadPluginStorageKey(key);
+            return result.present
+                ? Response.json(result)
+                : Response.json({ error: "Plugin storage key not found", key, present: false }, { status: 404 });
+        }
         if (path === "/api/sql/snapshot") return Response.json(server.dump());
         if (path === "/api/sql/commit") {
             try {
@@ -131,7 +139,17 @@ describe("the reads a revision conflict makes", () => {
         expect(await client.loadBotPreset("no-such-preset")).toBeNull();
     });
 
-    it("reads one plugin storage key without the bootstrap", async () => {
+    /**
+     * This read was fixed twice. It first indexed the bootstrap projection,
+     * which withholds `pluginCustomStorage`, so it answered `undefined` for
+     * every key no matter what was stored. Pointing it at
+     * `/api/sql/root-keys/pluginCustomStorage` made it correct and made it
+     * enormous: the whole map, downloaded once per dirty key, on the exact
+     * store -- hundreds of megabytes of long-term-memory data -- that the
+     * deferral exists to keep out of the bootstrap. A rebase with twenty dirty
+     * keys was twenty full downloads.
+     */
+    it("reads one plugin storage key from its own route, not the whole map", async () => {
         const { client, requests, server } = createClient();
         await client.replaceDatabase(seedDatabase());
         await client.init();
@@ -140,6 +158,34 @@ describe("the reads a revision conflict makes", () => {
         const value = await client.loadPluginCustomStorageKey("plugin-a");
 
         expect(value).toEqual({ count: 1 });
+        expect(requests).toEqual(["/api/sql/plugin-storage/plugin-a"]);
+        expect(bootstrapFetches(requests)).toBe(0);
+        expect(requests).not.toContain("/api/sql/root-keys/pluginCustomStorage");
+    });
+
+    it("costs one request per dirty key, not one whole-map download per dirty key", async () => {
+        const { client, requests, server } = createClient();
+        await client.replaceDatabase(seedDatabase());
+        await client.init();
+        requests.splice(0);
+
+        await client.loadPluginCustomStorageKey("plugin-a");
+        await client.loadPluginCustomStorageKey("plugin-b");
+
+        expect(requests).toEqual([
+            "/api/sql/plugin-storage/plugin-a",
+            "/api/sql/plugin-storage/plugin-b",
+        ]);
+    });
+
+    it("lists plugin storage keys without their values", async () => {
+        const { client, requests, server } = createClient();
+        await client.replaceDatabase(seedDatabase());
+        await client.init();
+        requests.splice(0);
+
+        expect(await client.listPluginCustomStorageKeys()).toEqual(["plugin-a", "plugin-b"]);
+        expect(requests).toEqual(["/api/sql/plugin-storage"]);
         expect(bootstrapFetches(requests)).toBe(0);
     });
 

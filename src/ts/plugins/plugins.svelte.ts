@@ -17,6 +17,8 @@ import { loadBuiltInPageFoldPlugin, PAGEFOLD_PLUGIN_NAME } from "../builtin/page
 import { PluginChatOutputListeners, V2_CHAT_OUTPUT_OWNER, createV2ChatOutputApi } from "./pluginChatOutput";
 import { isRootKeyDeferred } from "../storage/sql/deferredRootKeys";
 import { isSqlWindowPartial } from "../storage/sql/sqlRuntimeWindow";
+import { markSqlPluginStorageDirty } from "../storage/sql/sqlPersistenceRuntime";
+import { planPluginStorageLoad, tryEnablePerKeyPluginStorage } from "./pluginStorageAccess";
 
 export const customProviderStore = writable([] as string[])
 export const pluginLoadingStore = writable(false)
@@ -635,31 +637,6 @@ export async function loadPlugins() {
     console.log('Loading plugins...')
     let db = getDatabase()
 
-    // Plugin storage is withheld from the SQL bootstrap and loaded here, before
-    // a single line of plugin code runs. The plugin storage APIs are
-    // synchronous and cannot wait, so this is the one place that can.
-    //
-    // A failure is not smoothed over: the key stays deferred, so every storage
-    // read a plugin attempts throws instead of reporting an empty map. Plugins
-    // that never touch storage still load.
-    //
-    // Dynamically imported: this module is pulled in by `bootstrap`, which the
-    // SQL hydration path reaches back into, and a static edge here closes that
-    // cycle.
-    if (isRootKeyDeferred('pluginCustomStorage')) {
-        try {
-            const { ensureRootKeyHydrated } = await import('../storage/sql/sqlRuntimeHydration')
-            await ensureRootKeyHydrated(db, 'pluginCustomStorage')
-        } catch (error) {
-            console.error(
-                '[Plugin] could not load pluginCustomStorage. It stays marked as unloaded, so '
-                + 'plugin storage reads will throw rather than report the user\'s stored keys as '
-                + 'missing. Plugins that use storage will fail until it loads.',
-                error,
-            )
-        }
-    }
-
     // Backfill install identities for a database written before they existed.
     // This runs on every load and is a no-op once every record has one; it is
     // deliberately here rather than in a bootstrap step so that a plugin list
@@ -689,6 +666,51 @@ export async function loadPlugins() {
             p.enabled && !isBuiltInPluginName(p.name)
         ),
     ]
+    // Plugin storage is withheld from the SQL bootstrap, and this is the one
+    // place that can load it: the v2 storage API is synchronous and cannot wait
+    // for HTTP, so a legacy plugin's storage has to be resident before its first
+    // line runs.
+    //
+    // Deliberately AFTER `enabledPlugins`, not before. Hydrating first meant
+    // downloading and parsing the whole map on every launch regardless of what
+    // was installed -- hundreds of megabytes for a user with no enabled plugins
+    // at all, and for a user whose plugins are all v3 and never touch the
+    // synchronous surface. What is needed is decided from `version`, which
+    // `importPlugin` records and which is knowable before any plugin executes.
+    //
+    // A failure is not smoothed over: the key stays deferred, so every storage
+    // read a plugin attempts throws instead of reporting an empty map. Plugins
+    // that never touch storage still load.
+    //
+    // Dynamically imported: this module is pulled in by `bootstrap`, which the
+    // SQL hydration path reaches back into, and a static edge here closes that
+    // cycle.
+    if (isRootKeyDeferred('pluginCustomStorage')) {
+        const plan = planPluginStorageLoad(enabledPlugins)
+        // Per-key mode needs a backend that can serve one row at a time. If it
+        // cannot be entered, fall through to the whole-map load rather than
+        // leaving v3 plugins with a storage API that has no way to answer.
+        const lazy = plan === 'per-key' && tryEnablePerKeyPluginStorage()
+        if (!lazy) {
+            try {
+                const { ensureRootKeyHydrated } = await import('../storage/sql/sqlRuntimeHydration')
+                await ensureRootKeyHydrated(db, 'pluginCustomStorage')
+            } catch (error) {
+                console.error(
+                    '[Plugin] could not load pluginCustomStorage. It stays marked as unloaded, so '
+                    + 'plugin storage reads will throw rather than report the user\'s stored keys as '
+                    + 'missing. Plugins that use storage will fail until it loads.',
+                    error,
+                )
+            }
+        } else if (lazy) {
+            console.info(
+                '[Plugin] every enabled plugin uses the async v3 API, so plugin storage is served '
+                + 'one key at a time and the whole map is never loaded.',
+            )
+        }
+    }
+
     const pluginV2 = enabledPlugins.filter((a: RisuPlugin) => a.version === 2 || a.version === '2.1')
     const pluginV3 = enabledPlugins.filter((a: RisuPlugin) => a.version === '3.0')
 
@@ -977,6 +999,7 @@ export const getV2PluginAPIs = () => {
                         console.log('Setting custom db property', prop.toString(), value);
                         target.pluginCustomStorage ??= {}
                         target.pluginCustomStorage[prop.toString()] = value;
+                        markSqlPluginStorageDirty(prop.toString())
                         return true;
                     }
                 },
@@ -1011,16 +1034,23 @@ export const getV2PluginAPIs = () => {
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 db.pluginCustomStorage[key] = value;
+                markSqlPluginStorageDirty(key)
             },
             removeItem: (key: string) => {
                 assertPluginStorageResident(`pluginStorage.removeItem(${JSON.stringify(key)})`);
                 const db = getDatabase();
                 db.pluginCustomStorage ??= {}
                 delete db.pluginCustomStorage[key];
+                markSqlPluginStorageDirty(key)
             },
             clear: () => {
                 assertPluginStorageResident('pluginStorage.clear()');
                 const db = getDatabase();
+                // Marked BEFORE the map is replaced. Afterwards there is
+                // nothing left to enumerate, and a key nobody marked is a row
+                // the commit builder never visits -- the clear would look like
+                // it worked and leave every row in SQLite.
+                for (const key of Object.keys(db.pluginCustomStorage ?? {})) markSqlPluginStorageDirty(key)
                 db.pluginCustomStorage = {};
             },
             key: (index: number) => {
@@ -1054,6 +1084,7 @@ export const getV2PluginAPIs = () => {
                 }
                 else{
                     db.pluginCustomStorage[key] = newDb[key];
+                    markSqlPluginStorageDirty(key)
                 }
             }
             DBState.db = db;
@@ -1074,6 +1105,7 @@ export const getV2PluginAPIs = () => {
                 }
                 else{
                     db.pluginCustomStorage[key] = newDb[key];
+                    markSqlPluginStorageDirty(key)
                 }
             }
             setDatabase(db);

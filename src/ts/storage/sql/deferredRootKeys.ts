@@ -16,6 +16,8 @@
  * read as reactive at every call site while failing to notify anything.
  */
 
+import { resetPluginStorageOverlay } from './pluginStorageOverlay'
+
 const deferredKeys = new Set<string>()
 
 export type DeferredRootDeleteRefusal = {
@@ -94,4 +96,10 @@ export function deferredRootDeleteRefusals(): readonly DeferredRootDeleteRefusal
 export function resetDeferredRootKeys(): void {
     deferredKeys.clear()
     refusals.length = 0
+    // The per-key plugin storage overlay only means anything while
+    // `pluginCustomStorage` is deferred; it caches values read from a store this
+    // reset says we are starting over on. Left behind, it would answer the next
+    // session's reads from the previous database. Imported for its state only --
+    // the module has no imports of its own, so this closes no cycle.
+    resetPluginStorageOverlay()
 }

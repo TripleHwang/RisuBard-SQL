@@ -214,6 +214,22 @@ function sorted(rows: Record<string, unknown>[], key = "position") {
 export const DEFERRED_BOOTSTRAP_ROOT_KEYS: readonly string[] = ["pluginCustomStorage"];
 
 /**
+ * What the per-key plugin storage route will accept as a path parameter.
+ *
+ * Mirrors `normalizeSqlReadKey` on the server (and `requireBoundedReadKey` in
+ * the storage layer) exactly. It is a bound on the ROUTE, not on the data:
+ * plugin storage keys reach SQLite as bind parameters through the commit path
+ * and are not length-checked there, so a stored key can be longer than this.
+ * Such a key is read through the whole map instead -- slow, but the answer is
+ * the same one it has always given, which is what matters.
+ */
+const MAX_PER_KEY_STORAGE_KEY_LENGTH = 256;
+
+function isPerKeyReadableStorageKey(key: string): boolean {
+  return typeof key === "string" && key.trim().length > 0 && key.length <= MAX_PER_KEY_STORAGE_KEY_LENGTH;
+}
+
+/**
  * Statements per request when a legacy-to-SQL migration is too big to send at
  * once.
  *
@@ -1872,24 +1888,129 @@ export class NodeSqliteStorage implements SqlBootstrapStorage {
     return (await this.current()).pluginCustomStorage ?? null;
   }
 
+  /**
+   * Every plugin storage key, and no values.
+   *
+   * This used to index the bootstrap projection, which for a deferred
+   * `pluginCustomStorage` does not carry the map at all -- so it answered "no
+   * keys" for a store of any size. Enumeration answering an empty list is the
+   * worst shape this bug could take: `pluginStorage.keys()` means "these are
+   * all of them", and a plugin that believes it re-initialises over everything
+   * it has. The dedicated route reads the key column and nothing else.
+   */
   async listPluginCustomStorageKeys(): Promise<string[]> {
-    return Object.keys((await this.current()).pluginCustomStorage ?? {});
+    const response = await this.request("/api/sql/plugin-storage");
+    if (!response.ok) {
+      throw new SqlHttpError(
+        `SQL plugin storage key list failed (${response.status}); the key list is unknown, not empty`,
+        response.status,
+      );
+    }
+    const payload = await response.json() as Record<string, unknown> | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+      !Number.isSafeInteger(payload.revision) || (payload.revision as number) < 0 ||
+      !Array.isArray(payload.keys) || !payload.keys.every((key) => typeof key === "string")) {
+      throw new Error("Invalid SQL plugin storage key list payload");
+    }
+    this.acceptReadRevision(payload.revision as number);
+    return payload.keys as string[];
   }
 
   /**
    * One plugin storage key, read from the server.
    *
-   * This was not merely slow through `this.current()`, it was blind:
-   * `pluginCustomStorage` is in the default defer set, so the bootstrap
-   * projection this used to index into deliberately does not carry the map at
-   * all, and every read of it answered `undefined` regardless of what is
-   * stored. The `pluginCustomStorage` root route reads the
-   * `plugin_custom_storage` table and nothing else.
+   * Two bugs deep. It first indexed `this.current()`, the bootstrap projection,
+   * which deliberately does not carry `pluginCustomStorage` at all while that
+   * key is deferred -- so every read answered `undefined` no matter what was
+   * stored. The fix for that pointed it at the `pluginCustomStorage` root
+   * route, which is correct but fetches the ENTIRE map to return one value: on
+   * a conflict rebase with N dirty keys that is N whole-store downloads, and
+   * the store this whole deferral exists for is hundreds of megabytes.
+   *
+   * `/api/sql/plugin-storage/:key` is a primary-key lookup on the same table.
+   * A 404 is reported as absent rather than thrown, matching `readRootKey`:
+   * the rebase discards what it reads and only a dirty mark decides what is
+   * written, so absence here can never become a deletion.
    */
   async loadPluginCustomStorageKey(key: string): Promise<unknown> {
+    if (!key) throw new Error("SQL plugin storage read requires a non-empty key");
+    const { present, value } = await this.readPluginStorageKey(key);
+    return present ? value : undefined;
+  }
+
+  /**
+   * The same read, with existence kept as its own fact.
+   *
+   * `loadPluginCustomStorageKey` flattens a stored `null` and an absent row
+   * into the same `undefined`, which is right for the rebase and wrong for
+   * anything that must not overwrite. Per-key plugin storage reads use this
+   * one, so a stored null stays a value.
+   */
+  async readPluginStorageKey(key: string): Promise<{ present: boolean; value: unknown }> {
+    // The per-key route bounds its key exactly as every other SQL read route
+    // does (`normalizeSqlReadKey`: non-blank, at most 256 characters). Plugin
+    // storage keys are NOT bounded that way on the way in -- they are written
+    // as raw SQL bind parameters through the commit path -- so a plugin can
+    // store a key this route will not accept, and did so before this route
+    // existed. Sending it anyway earns a 400, which this method would report as
+    // "value unknown" and the plugin would see as a hard failure on a key it
+    // has been reading successfully for as long as it has been installed.
+    //
+    // The value is not unknown; it is simply not reachable one row at a time.
+    // Fall back to the whole-map read that served this key before, and let the
+    // caller's overlay cache it so the cost is paid once. An empty key takes
+    // the same path deliberately: `/api/sql/plugin-storage/` is the key-LIST
+    // route, and asking it for a value would parse a key list as a row.
+    if (!isPerKeyReadableStorageKey(key)) return await this.readPluginStorageKeyFromWholeMap(key);
+    const response = await this.request(`/api/sql/plugin-storage/${encodeURIComponent(key)}`);
+    // Same fallback for a server that rejects the key for any reason of its
+    // own: a 400 is a statement about the ROUTE, never about the row.
+    if (response.status === 400) return await this.readPluginStorageKeyFromWholeMap(key);
+    if (response.status === 404) return { present: false, value: undefined };
+    if (!response.ok) {
+      throw new SqlHttpError(
+        `SQL plugin storage key "${key}" load failed (${response.status}); its value is unknown, not absent`,
+        response.status,
+      );
+    }
+    const payload = await response.json() as Record<string, unknown> | null;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+      !Number.isSafeInteger(payload.revision) || (payload.revision as number) < 0 ||
+      payload.present !== true ||
+      (payload.key !== undefined && payload.key !== key) ||
+      !Object.prototype.hasOwnProperty.call(payload, "value") ||
+      payload.value === undefined) {
+      throw new Error(`Invalid SQL plugin storage payload for "${key}"`);
+    }
+    this.acceptReadRevision(payload.revision as number);
+    return { present: true, value: payload.value };
+  }
+
+  /**
+   * The pre-per-key read, kept for keys the per-key route cannot address.
+   *
+   * Expensive by construction -- it is the entire map -- which is why it is
+   * reached only when the cheap route is unusable. It still keeps existence and
+   * value apart: a key absent from a map that WAS read is a real absence, while
+   * a map that could not be read rejects.
+   */
+  private async readPluginStorageKeyFromWholeMap(key: string): Promise<{ present: boolean; value: unknown }> {
+    console.warn(
+      `[SQL] plugin storage key ${JSON.stringify(key.slice(0, 64))}${key.length > 64 ? "..." : ""} ` +
+      `(length ${key.length}) cannot be addressed by the per-key route, so the whole plugin storage ` +
+      "map is being read to answer it.",
+    );
     const { present, value } = await this.readRootKey("pluginCustomStorage");
-    if (!present || !value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    return (value as Record<string, unknown>)[key];
+    if (!present || !value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(
+        `SQL plugin storage key "${key}" could not be read: the whole-map fallback returned no map, ` +
+        "so its value is unknown, not absent.",
+      );
+    }
+    const map = value as Record<string, unknown>;
+    return Object.prototype.hasOwnProperty.call(map, key)
+      ? { present: true, value: map[key] }
+      : { present: false, value: undefined };
   }
 
   async loadSettingKey(key: string): Promise<unknown> {

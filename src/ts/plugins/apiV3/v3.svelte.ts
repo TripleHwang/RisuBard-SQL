@@ -4,6 +4,15 @@ import { getDatabase, normalizeChat } from "src/ts/storage/database.svelte";
 import { SafeLocalPluginStorage, tagWhitelist } from "../pluginSafeClass";
 import { bindPluginRequestStatusStorage } from "../providerRequestStatus";
 import { recordOwner, removeOwner, clearOwners } from "../pluginStorageMeta";
+import { isRootKeyDeferred } from "src/ts/storage/sql/deferredRootKeys";
+import {
+    clearPluginStorageLazily,
+    isPluginStoragePerKeyMode,
+    listPluginStorageKeysLazily,
+    readPluginStorageKeyLazily,
+    removePluginStorageKeyLazily,
+    writePluginStorageKeyLazily,
+} from "../pluginStorageAccess";
 import DOMPurify from 'dompurify';
 import { additionalChatMenu, additionalFloatingActionButtons, additionalHamburgerMenu, additionalSettingsMenu, bodyIntercepterStore, chatPanelStore, DBState, selectedCharID, type MenuDef } from "src/ts/stores.svelte";
 import { findOwnedMenuIndex, makeFabLayoutKey } from "../floatingActionButtonLayout";
@@ -969,9 +978,21 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             let liteDB = {}
             // `pluginCustomStorage` is one of `allowedDbKeys`, so a withheld map
             // would be snapshotted as `undefined` and handed to the plugin as
-            // "you have no stored data". Refuse instead; `loadPlugins` hydrates
-            // it before plugin code runs, so this only fires when that failed.
+            // "you have no stored data".
+            //
+            // `includeOnly` defaults to `'all'`, so `risuai.getDatabase()` --
+            // the common idiom -- asks for the map whether or not the plugin
+            // wants it. Under per-key mode that one line would otherwise defeat
+            // the whole thing by throwing. This is async, so it can do the
+            // honest thing and load the map; per-key mode ends here, the
+            // overlay is folded in by `ensureRootKeyHydrated`, and a plugin that
+            // never calls this never pays for it.
             if (includeOnly === 'all' || includeOnly.includes('pluginCustomStorage')) {
+                if (isRootKeyDeferred('pluginCustomStorage')) {
+                    const { ensureRootKeyHydrated } = await import('src/ts/storage/sql/sqlRuntimeHydration')
+                    await ensureRootKeyHydrated(db, 'pluginCustomStorage')
+                }
+                // Still deferred means the load failed, not that it is empty.
                 assertPluginStorageResident('getDatabase()')
             }
             for(const key of allowedDbKeys){
@@ -1452,24 +1473,59 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             
             return v;
         },
-        _getPluginStorage: oldApis.pluginStorage.getItem,
+        /*
+         * Plugin storage, v3 side.
+         *
+         * Every one of these crosses the sandbox bridge, which awaits whatever
+         * the host returns and whose guest-visible contract in `risuai.d.ts` is
+         * already Promise-returning. So a v3 plugin cannot tell a value that was
+         * resident from one that was fetched -- which is the entire reason
+         * per-key mode is allowed to exist for v3 and not for v2.
+         *
+         * When the whole map IS resident these fall through to the same
+         * synchronous v2 functions as before, value for value.
+         */
+        _getPluginStorage: async (key: string) => {
+            if (isPluginStoragePerKeyMode()) return await readPluginStorageKeyLazily(key)
+            return oldApis.pluginStorage.getItem(key)
+        },
         // Wrapped (not aliased) so we can record the originating plugin into the
-        // sidecar meta map. The value write is unchanged; reads stay aliased.
-        _setPluginStorage: (key: string, value: any) => {
-            oldApis.pluginStorage.setItem(key, value)
+        // sidecar meta map. The value write is unchanged.
+        _setPluginStorage: async (key: string, value: any) => {
+            if (isPluginStoragePerKeyMode()) writePluginStorageKeyLazily(key, value)
+            else oldApis.pluginStorage.setItem(key, value)
             recordOwner('save', key, plugin.name)
         },
-        _removePluginStorage: (key: string) => {
-            oldApis.pluginStorage.removeItem(key)
+        _removePluginStorage: async (key: string) => {
+            if (isPluginStoragePerKeyMode()) removePluginStorageKeyLazily(key)
+            else oldApis.pluginStorage.removeItem(key)
             removeOwner('save', key)
         },
-        _clearPluginStorage: () => {
-            oldApis.pluginStorage.clear()
+        _clearPluginStorage: async () => {
+            // `clearPluginStorageLazily` reports false when the whole map
+            // arrived while it was fetching the key list. The resident clear is
+            // then the one that means anything -- skipping it would leave every
+            // row in place after telling the plugin the store was emptied.
+            const cleared = isPluginStoragePerKeyMode() && await clearPluginStorageLazily()
+            if (!cleared) oldApis.pluginStorage.clear()
             clearOwners('save')
         },
-        _keyPluginStorage: oldApis.pluginStorage.key,
-        _keysPluginStorage: oldApis.pluginStorage.keys,
-        _lengthPluginStorage: oldApis.pluginStorage.length,
+        // Enumeration is all-or-nothing: each of these means "this is all of
+        // them" where the plugin calls it, so per-key mode answers them from the
+        // full key list the server holds, never from the keys this session
+        // happened to touch.
+        _keyPluginStorage: async (index: number) => {
+            if (!isPluginStoragePerKeyMode()) return oldApis.pluginStorage.key(index)
+            return (await listPluginStorageKeysLazily())[index] ?? null
+        },
+        _keysPluginStorage: async () => {
+            if (!isPluginStoragePerKeyMode()) return oldApis.pluginStorage.keys()
+            return await listPluginStorageKeysLazily()
+        },
+        _lengthPluginStorage: async () => {
+            if (!isPluginStoragePerKeyMode()) return oldApis.pluginStorage.length()
+            return (await listPluginStorageKeysLazily()).length
+        },
         _getSafeLocalStorage: oldApis.safeLocalStorage.getItem,
         _setSafeLocalStorage: (key: string, value: string) => {
             oldApis.safeLocalStorage.setItem(key, value)

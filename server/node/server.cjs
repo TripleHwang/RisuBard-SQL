@@ -48,7 +48,12 @@ const {
     normalizeSqlReadKey,
     normalizeSqlAncillaryPageQuery,
 } = require('./sql-read-route-params.cjs');
-const { createSqlBootstrapHandler, createSqlRootKeyHandler } = require('./sql-root-key-route.cjs');
+const {
+    createSqlBootstrapHandler,
+    createSqlRootKeyHandler,
+    createSqlPluginStorageKeyHandler,
+    createSqlPluginStorageKeyListHandler,
+} = require('./sql-root-key-route.cjs');
 const { buildLegacyDatabaseFromSql, sqlBootstrapIsCanonical } = require('./sql-legacy-database.cjs');
 const { createSqlCommitHandler } = require('./sql-commit-route.cjs');
 const { createExpressErrorResponder } = require('./express-error-response.cjs');
@@ -3932,6 +3937,21 @@ app.get('/api/sql/bootstrap', sqlReadLimiter, createSqlBootstrapHandler({
 // Hydrates one deferred root key. `present` is reported in the body of both the
 // 200 and the 404 so an absent key is never confused with a stored null.
 app.get('/api/sql/root-keys/:rootKey', sqlReadLimiter, createSqlRootKeyHandler({
+    auth: checkAuth,
+    relationalSql,
+}));
+
+// Per-key plugin storage. `pluginCustomStorage` is the one root key this build
+// defers, and it is the one whose whole-map hydrate costs hundreds of
+// megabytes; these two routes are what let a caller that needs one key, or only
+// the key list, stop paying for all of it. `present` is in the body of both
+// answers, exactly as on the root-key route.
+app.get('/api/sql/plugin-storage', sqlReadLimiter, createSqlPluginStorageKeyListHandler({
+    auth: checkAuth,
+    relationalSql,
+}));
+
+app.get('/api/sql/plugin-storage/:storageKey', sqlReadLimiter, createSqlPluginStorageKeyHandler({
     auth: checkAuth,
     relationalSql,
 }));

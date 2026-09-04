@@ -235,4 +235,19 @@ export interface SqlBootstrapStorage extends ISqlStorage {
    * never collapse into a value that reads as empty.
    */
   loadRootKeyHydration(key: string): Promise<unknown>;
+  /**
+   * Read one plugin storage row, keeping existence and value apart.
+   *
+   * `{ present: false }` means the row is not in the table. It is the only
+   * answer that may be read as "the plugin never stored this"; a transport
+   * failure rejects instead, because a plugin told "you have nothing" writes a
+   * fresh empty state over the rows it could not see.
+   *
+   * Distinct from {@link loadRootKeyHydration}: that one installs a whole
+   * deferred root key into the live database and clears its deferred mark. This
+   * one hands back a single value and installs nothing, so
+   * `pluginCustomStorage` stays deferred and every whole-map reader keeps
+   * refusing rather than reading a partial map as a complete one.
+   */
+  readPluginStorageKey(key: string): Promise<{ present: boolean; value: unknown }>;
 }

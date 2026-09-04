@@ -8,6 +8,7 @@ import { validateOlderMessagePage } from "../../chatWindow";
 import { isMessageMounted } from "../../chatMountRegistry";
 import { clearDeferredRootKey, isRootKeyDeferred } from "./deferredRootKeys";
 import { isResidencyPinned } from "./residencyPin";
+import { drainPluginStorageOverlay, isPluginStoragePerKeyMode } from "./pluginStorageOverlay";
 import {
   getSqlPosition,
   getSqlWindow,
@@ -140,13 +141,35 @@ export async function ensureRootKeyHydrated(db: Database, key: string): Promise<
       );
     }
     record[key] = value;
+    // Per-key mode ends here, and what it was holding has to survive the
+    // transition. The map that just arrived is the server's, read before this
+    // session's unflushed writes; the overlay holds those writes and the
+    // removals a plugin has already been told succeeded. Installing the
+    // server's map alone would silently revert every one of them -- the plugin
+    // would have written, been told nothing was wrong, and then read its old
+    // value back. So the overlay is applied ON TOP, and only then is the
+    // baseline taken (below), which is what keeps the still-dirty keys
+    // committing.
+    if (key === "pluginCustomStorage" && isPluginStoragePerKeyMode()) {
+      const map = (record[key] ?? {}) as Record<string, unknown>;
+      for (const [storageKey, entry] of drainPluginStorageOverlay()) {
+        if (entry.present) map[storageKey] = entry.value;
+        else delete map[storageKey];
+      }
+      record[key] = map;
+    }
     clearDeferredRootKey(key);
     // Same synchronous step as the install: the audit baseline must adopt what
     // storage returned, before any caller can mutate it. Left to the next idle
     // audit instead, the unknown -> known transition would adopt the mutated
     // value as the baseline and drop those writes.
     rebaselineHydratedRootKey(db, key);
-    return value;
+    // What is installed, not what storage returned. For plugin storage those
+    // differ by exactly this session's unflushed writes, and a caller that used
+    // the returned value would be reading the map from before them -- the same
+    // silent revert the merge above exists to prevent, one indirection out.
+    // Today's callers all read back through `db`; this keeps the next one safe.
+    return record[key];
   })();
   rootKeyHydrations.set(key, hydration);
   // Freed on settle, not in a `finally` inside the body: a synchronous throw

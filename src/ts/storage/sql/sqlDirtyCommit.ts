@@ -1,5 +1,6 @@
 import type { Chat, Database, Message, character } from "../database.svelte";
 import { isRootKeyDeferred, refuseDeferredRootDelete } from "./deferredRootKeys";
+import { readPluginStorageOverlay } from "./pluginStorageOverlay";
 import { measureRelationalValue } from "./relationalNodeCodec";
 import type { DirtySnapshot } from "./dirtyRegistry";
 import {
@@ -362,11 +363,46 @@ export function buildSqlDirtyCommit(
     for (const key of dirty.pluginStorageKeys) {
       // A value we can actually see is committed either way: a write that
       // landed while the map was deferred is still the user's own edit.
-      if (Object.prototype.hasOwnProperty.call(storage, key)) {
+      //
+      // `undefined` is NOT such a value, and the own-key check alone does not
+      // exclude it. `pluginStorage.removeItem` does `delete
+      // db.pluginCustomStorage[key]`, and `db` is a Svelte `$state` proxy whose
+      // `deleteProperty` leaves the own key in place holding `undefined`. The
+      // row column is `TEXT NOT NULL CHECK (json_valid(value))`, and
+      // `JSON.stringify(undefined)` is `undefined`, so this bound SQL NULL and
+      // the whole commit failed the constraint -- taking every unrelated change
+      // batched with it. Falling through to the branches below instead is what
+      // a removal means: a DELETE when the map is known, and a refusal when it
+      // is not, which is the same answer they give for a key that is simply
+      // not there.
+      if (Object.prototype.hasOwnProperty.call(storage, key) && storage[key] !== undefined) {
         upserts.push({ key, value: storage[key] });
         continue;
       }
       if (pluginStorageDeferred) {
+        // Per-key mode never populates the map, so the overlay is where a v3
+        // plugin's write actually lives. Consulting it BEFORE the deferral
+        // refusal is what makes those writes persist at all: without this the
+        // guard below would refuse every one of them as "absence from a
+        // deferred map", and the plugin's data would never leave the tab. A
+        // removal is a definite `present: false` recorded by the plugin calling
+        // `removeItem`/`clear`, which is a real deletion and not an inference
+        // from partial knowledge -- so it becomes a DELETE even while deferred.
+        //
+        // Scoped to the deferred case ON PURPOSE. The overlay is meaningful
+        // only while the map is not resident: once `ensureRootKeyHydrated`
+        // folds it into the map and clears the mark, the map is the truth, and
+        // an entry left in the overlay is stale by definition. A per-key read
+        // that was in flight across that hydrate lands afterwards and caches
+        // its answer into an overlay nobody drains again -- consulting that
+        // here turned a later `removeItem` into an upsert of the pre-removal
+        // value, silently resurrecting a row the plugin had been told was gone.
+        const overlaid = readPluginStorageOverlay(key);
+        if (overlaid) {
+          if (overlaid.present) upserts.push({ key, value: overlaid.value });
+          else deletes.push(key);
+          continue;
+        }
         refuseDeferredRootDelete(`pluginCustomStorage[${key}]`, "buildSqlDirtyCommit:pluginStorage");
         continue;
       }

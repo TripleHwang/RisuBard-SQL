@@ -346,6 +346,53 @@ function createRelationalSqlite(options) {
         return pluginCustomStorage;
     }
 
+    /**
+     * One plugin storage row, by primary key.
+     *
+     * Existence and value are separate facts here for the same reason
+     * `loadRootKey` keeps them separate: `present: true` with `value: null` is
+     * a stored null, and `present: false` is the only answer that means the row
+     * is not in the table. A caller that collapses the two writes over data it
+     * simply did not read.
+     */
+    function loadPluginStorageKey(key) {
+        return inReadTransaction(() => {
+            const storageKey = requireBoundedReadKey(key, 'plugin storage key');
+            const currentRevision = revision();
+            const row = database.prepare(
+                'SELECT value FROM plugin_custom_storage WHERE key = ?',
+            ).get(storageKey);
+            if (!row) {
+                return { revision: currentRevision, key: storageKey, present: false };
+            }
+            return {
+                revision: currentRevision,
+                key: storageKey,
+                present: true,
+                value: parseCanonicalJson(row.value, `plugin custom storage ${storageKey}`),
+            };
+        });
+    }
+
+    /**
+     * Every plugin storage key, and no values.
+     *
+     * Enumeration is all-or-nothing by contract: `pluginStorage.keys()`,
+     * `length()` and `key(index)` all answer "these are all the keys there
+     * are", and a short list is indistinguishable from a complete one at the
+     * call site. So this is deliberately unpaginated -- the key column of a few
+     * thousand rows is kilobytes, while the values it omits are the hundreds of
+     * megabytes this route exists to avoid.
+     */
+    function listPluginStorageKeys() {
+        return inReadTransaction(() => ({
+            revision: revision(),
+            keys: database.prepare(
+                'SELECT key FROM plugin_custom_storage ORDER BY key',
+            ).all().map((row) => row.key),
+        }));
+    }
+
     function readCharacterSummaries() {
         const chatsByCharacter = new Map();
         for (const row of loadChatSummaryRows()) {
@@ -1022,7 +1069,8 @@ function createRelationalSqlite(options) {
     }
 
     return {
-        databasePath, revision, dump, bootstrap, loadRootKey, loadCharacter, loadChat, loadChatMessages,
+        databasePath, revision, dump, bootstrap, loadRootKey, loadPluginStorageKey, listPluginStorageKeys,
+        loadCharacter, loadChat, loadChatMessages,
         getChatDraft, listChatDraftKeys, getColdStorageItem, listColdStorageItems, listRevisions,
         searchMessages, searchCharactersByName, searchCharactersByTag,
         commit, migrationState, checkpoint, reset, close,
